@@ -16,3 +16,11 @@ psycopg2-binary==2.9.10
 # Dışa aktarma (Excel + PDF)
 openpyxl==3.1.5
 reportlab==4.2.5
+
+# Uretim WSGI sunucusu (systemd servisi bunu kullanir)
+gunicorn==23.0.0
+
+# Belge PDF uretimi (PI/PL/CI e-posta ekleri)
+# NOT: sistem paketleri de gerekli:
+#   sudo apt install libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libcairo2
+weasyprint>=60.0
