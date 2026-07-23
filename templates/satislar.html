@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Satışlar{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'satislar')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-satislar">
+    <button onclick="disaAktar('satislar','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('satislar','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk)}
+  .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
+  .suz{margin-left:auto}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:220px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  tbody tr{cursor:pointer}
+  .marj-cubuk{height:5px;background:var(--notr-bg);border-radius:3px;overflow:hidden;margin-top:4px;width:70px;margin-left:auto}
+  .marj-cubuk i{display:block;height:100%;border-radius:3px}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Satışlar</h1>
+<p class="g-alt">Her satış kaydı: ne sattın, kaça, ne kâr ettin. Faturasızları buradan faturalandır.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler" style="grid-template-columns:repeat(4,1fr)">
+  <div class="kpi"><label>Toplam Ciro</label><div class="deger" id="kCiro">—</div><div class="ek" id="kCiroEk">satış</div></div>
+  <div class="kpi"><label>Toplam Kâr</label><div class="deger" id="kKar">—</div><div class="ek" id="kKarEk">—</div></div>
+  <div class="kpi"><label>Ortalama Marj</label><div class="deger" id="kMarj">—</div><div class="ek">tüm satışlar</div></div>
+  <div class="kpi"><label>Faturasız</label><div class="deger" id="kFatursuz">—</div><div class="ek" id="kFatursuzEk">faturalandırılmadı</div></div>
+</div>
+
+<div class="arac-cubugu">
+  <button class="cip aktif" data-f="">Tümü</button>
+  <button class="cip" data-f="faturali">Faturalı</button>
+  <button class="cip" data-f="faturasiz">Faturasız</button>
+  <button class="cip" data-f="dusuk">Düşük marj (&lt;%15)</button>
+  <div class="suz"><input id="ara" placeholder="Müşteri, cins, fatura no ara…" autocomplete="off"></div>
+</div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead>
+      <tr>
+        <th>Satış</th><th>Müşteri</th><th>Ürün</th>
+        <th class="sag">Tutar</th><th class="sag">Maliyet</th><th class="sag">Kâr</th><th class="sag">Marj</th>
+      </tr>
+    </thead>
+    <tbody id="govde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ SATIŞLAR ═══
+   /api/satislar                  → {data:[…], ozet, meta}
+   POST /api/satislar/<id>/fatura → faturasız satıştan fatura oluştur
+   Satış kaydı, fatura "Kesildi" olduğunda otomatik oluşur; sıcak satışta da düşer. */
+
+let TUM = [], OZET = {}, FILTRE = '', ARA = '';
+
+async function yukle() {
+  try {
+    const d = await api('/api/satislar?per_page=300');
+    TUM = d.data || [];
+    OZET = d.ozet || {};
+  } catch (e) {
+    document.getElementById('govde').innerHTML = '<tr><td colspan="7" class="bos">Satış verisi alınamadı.</td></tr>';
+    return;
+  }
+  kpiCiz(); ciz();
+}
+
+function marjBul(s) {
+  if (s.marj_yuzde != null) return s.marj_yuzde;
+  const t = s.tutar_usd || 0;
+  return t > 0 ? (s.kar_usd || 0) / t * 100 : 0;
+}
+
+function kpiCiz() {
+  const ciro = TUM.reduce((a, s) => a + (s.tutar_usd || 0), 0);
+  const kar = TUM.reduce((a, s) => a + (s.kar_usd || 0), 0);
+  const marj = ciro > 0 ? kar / ciro * 100 : 0;
+  const fatursuz = TUM.filter(s => !s.fatura_no);
+  document.getElementById('kCiro').innerHTML = para(ciro).replace(' $', '<small>$</small>');
+  document.getElementById('kCiroEk').textContent = TUM.length + ' satış';
+  document.getElementById('kKar').innerHTML = para(kar).replace(' $', '<small>$</small>');
+  document.getElementById('kKarEk').textContent = 'maliyet ' + para(ciro - kar);
+  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1);
+  document.getElementById('kFatursuz').textContent = fatursuz.length;
+  const ek = document.getElementById('kFatursuzEk');
+  ek.textContent = fatursuz.length
+    ? para(fatursuz.reduce((a, s) => a + (s.tutar_usd || 0), 0)) + ' faturalandırılmadı'
+    : 'hepsi faturalı';
+  ek.className = 'ek ' + (fatursuz.length ? 'kotu' : 'iyi');
+}
+
+function ciz() {
+  const s = ARA.toLocaleLowerCase('tr');
+  let liste = TUM.filter(x => {
+    if (FILTRE === 'faturali' && !x.fatura_no) return false;
+    if (FILTRE === 'faturasiz' && x.fatura_no) return false;
+    if (FILTRE === 'dusuk' && marjBul(x) >= 15) return false;
+    if (s && ![x.id, x.musteri, x.cins, x.fatura_no, x.stok_tip].filter(Boolean)
+              .join(' ').toLocaleLowerCase('tr').includes(s)) return false;
+    return true;
+  });
+  liste.sort((a, b) => (b.satis_tarihi || '').localeCompare(a.satis_tarihi || ''));
+
+  const g = document.getElementById('govde');
+  g.innerHTML = liste.length ? liste.map(x => {
+    const m = marjBul(x);
+    const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+    return `
+    <tr style="border-left-color:var(${renk})" onclick="detayAc('${kacar(x.id)}')">
+      <td class="mono" style="font-size:.8rem">${kacar(x.id)}
+        <div class="ikincil">${x.fatura_no
+          ? kacar(x.fatura_no)
+          : '<span style="color:var(--kehribar);font-weight:600">faturasız</span>'}</div></td>
+      <td><strong>${kacar(x.musteri || '—')}</strong>
+        ${x.musteri_ulke ? '<div class="ikincil">' + kacar(x.musteri_ulke) + '</div>' : ''}</td>
+      <td>${kacar(x.cins || '—')}
+        <div class="ikincil">${kacar(x.stok_tip || '')} · ${(x.miktar || 0).toLocaleString('tr-TR')} ${kacar(x.birim || '')}</div></td>
+      <td class="sag mono" style="font-weight:600">${para(x.tutar_usd)}</td>
+      <td class="sag mono" style="color:var(--soluk)">${para(x.maliyet_usd)}</td>
+      <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(x.kar_usd)}</td>
+      <td class="sag">
+        <div class="mono" style="font-weight:600">%${m.toFixed(1)}</div>
+        <div class="marj-cubuk"><i style="width:${Math.max(0, Math.min(100, m))}%;background:var(${renk})"></i></div>
+      </td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="bos">Satış kaydı yok.</td></tr>';
+}
+
+function detayAc(id) {
+  const x = TUM.find(s => s.id === id);
+  if (!x) return;
+  const m = marjBul(x);
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+  const olcu = [x.boy && x.yukseklik ? `${x.boy}×${x.yukseklik}` : null,
+                x.kalinlik ? x.kalinlik + ' cm' : null].filter(Boolean).join(' · ');
+  const govde = `
+    <div class="alan-grid">
+      ${alan('Tutar', para2(x.tutar_usd), true)}
+      ${alan('Maliyet', para2(x.maliyet_usd), true)}
+      ${alan('Kâr', `<span style="color:var(--verde);font-weight:700">${para2(x.kar_usd)}</span>`)}
+      ${alan('Marj', `<span style="font-weight:700;color:var(${m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi'})">%${m.toFixed(1)}</span>`)}
+      ${alan('Ürün', kacar(x.cins || '—') + (x.ozellik ? ' · ' + kacar(x.ozellik) : ''))}
+      ${alan('Miktar', (x.miktar || 0).toLocaleString('tr-TR') + ' ' + kacar(x.birim || ''), true)}
+      ${olcu ? alan('Ölçü', kacar(olcu), true) : ''}
+      ${alan('Birim Fiyat', x.birim_fiyat ? para2(x.birim_fiyat, x.doviz) : '—', true)}
+      ${alan('Satış Tarihi', kacar(x.satis_tarihi || '—'), true)}
+      ${alan('Fatura', x.fatura_no
+        ? kacar(x.fatura_no)
+        : '<span class="rozet rz-kehribar">Faturasız</span>')}
+      ${x.siparis_id ? alan('Sipariş', kacar(x.siparis_id), true) : ''}
+      ${(x.stok_no || x.stok_id) ? alan('Stok', kacar(x.stok_no || x.stok_id), true) : ''}
+    </div>`;
+
+  const eylem = [];
+  if (!x.fatura_no && yazabilir('fatura'))
+    eylem.push(`<button class="blok-btn birincil" onclick="faturaOlustur('${kacar(id)}')">Fatura oluştur</button>`);
+  if (x.siparis_id)
+    eylem.push(`<button class="blok-btn" onclick="location.href='/siparis'">Siparişi aç</button>`);
+  eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+  cekmeceAc(kacar(x.musteri || id), `${x.id} · ${x.satis_tarihi || ''}`, govde, eylem.join(''));
+}
+
+async function faturaOlustur(id) {
+  if (!confirm('Bu satış için fatura oluşturulsun mu? Fatura taslak olarak açılır, no girip kesmen gerekir.')) return;
+  try {
+    const d = await api(`/api/satislar/${encodeURIComponent(id)}/fatura`, {
+      method: 'POST', body: JSON.stringify({})
+    });
+    bildir(d.mesaj || 'Fatura oluşturuldu · ' + (d.id || ''));
+    cekmeceKapat(); await yukle();
+    setTimeout(() => { if (confirm('Fatura ekranına gidilsin mi?')) location.href = '/fatura'; }, 600);
+  } catch (e) { /* */ }
+}
+
+document.querySelectorAll('.cip').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.cip').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif'); FILTRE = b.dataset.f; ciz();
+});
+let araZaman;
+document.getElementById('ara').addEventListener('input', e => {
+  clearTimeout(araZaman);
+  araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
+});
+
+yukle();
+</script>
+{% endblock %}

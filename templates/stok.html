@@ -1,0 +1,1155 @@
+{% extends "base.html" %}
+{% block title %}Depo{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'stok')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-stok">
+    <button onclick="disaAktar('stok','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('stok','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% if menu_admin or menu_yetki.get('stok') == 'yazma' %}
+<button class="disa-btn" onclick="topluAc()" title="Excel'den kopyala-yapıştır ile toplu plaka girişi">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M12 21V9M8 13l4-4 4 4M4 5V3a2 2 0 012-2h12a2 2 0 012 2v2"/></svg>
+  Toplu İçe Aktar
+</button>
+<button class="btn-yeni" onclick="yeniAc()">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+  Yeni Stok
+</button>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .parcali{display:flex;background:var(--notr-bg);border-radius:var(--r-kucuk);padding:3px}
+  .parcali button{border:0;background:transparent;padding:7px 15px;border-radius:6px;font-weight:600;font-size:.84rem;color:var(--soluk)}
+  .parcali button.aktif{background:var(--yuzey);color:var(--murekkep);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk)}
+  .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
+  .cip-fatura{cursor:pointer}
+  .cip-fatura.aktif{border-color:var(--kehribar);background:var(--kehribar-bg);color:var(--kehribar);font-weight:600}
+  .fatura-isaret{margin-left:5px;font-size:.85rem;opacity:.8}
+  .suz{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:210px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  tbody tr{cursor:pointer}
+  .zaman-cizgi{border-left:2px solid var(--cizgi);margin:6px 0 0 5px;padding-left:16px}
+  .zc-madde{position:relative;padding-bottom:14px;font-size:.84rem}
+  .zc-madde::before{content:'';position:absolute;left:-21.5px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--cizgi-koyu)}
+  .zc-madde.simdi::before{background:var(--verde)}
+  .zc-madde .zc-tarih{font-size:.72rem;color:var(--soluk);font-family:var(--mono)}
+  .sayfalama{display:flex;align-items:center;gap:10px;justify-content:flex-end;margin-top:14px;font-size:.85rem;color:var(--soluk)}
+  .sayfalama button{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:6px;padding:5px 12px;font-weight:600}
+  .sayfalama button:disabled{opacity:.4;cursor:default}
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:720px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto}
+  .form-satir{display:grid;gap:12px;margin-bottom:12px}
+  .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr} .f4{grid-template-columns:1fr 1fr 1fr 1fr}
+  .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .form-alan input[readonly]{background:var(--notr-bg);font-family:var(--mono);font-weight:600}
+  .onay{display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:12px}
+  .onay input{width:auto}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
+  .ozet-kutu{background:var(--notr-bg);border-radius:var(--r-kucuk);padding:12px 14px;display:flex;gap:22px;flex-wrap:wrap;font-size:.85rem}
+  .ozet-kutu b{font-family:var(--mono)}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Depo</h1>
+<p class="g-alt">Blok, plaka ve ebatlı stoklar. Satıra tıkla — detay, geçmiş ve işlemler sağ panelde açılır.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler" style="grid-template-columns:repeat(3,1fr)">
+  <div class="kpi"><label>Toplam Stok Değeri</label><div class="deger" id="kDeger">—</div><div class="ek" id="kDegerEk">yükleniyor</div></div>
+  <div class="kpi"><label>Serbest</label><div class="deger" id="kSerbest">—</div><div class="ek" id="kSerbestEk">satışa hazır</div></div>
+  <div class="kpi"><label>Rezerve</label><div class="deger" id="kRezerve">—</div><div class="ek" id="kRezerveEk">siparişe ayrılmış</div></div>
+</div>
+
+<div class="arac-cubugu">
+  <div class="parcali" id="tipSecim">
+    <button class="aktif" data-tip="BLOK">Blok</button>
+    <button data-tip="PLAKA">Plaka</button>
+    <button data-tip="EBATLI">Ebatlı</button>
+  </div>
+  <button class="cip aktif" data-durum="">Tümü</button>
+  <button class="cip" data-durum="Serbest">Serbest</button>
+  <button class="cip" data-durum="Rezerve">Rezerve</button>
+  <button class="cip" data-durum="Satildi">Satıldı</button>
+  <button class="cip" data-durum="Sevkedildi">Sevk edildi</button>
+  <button class="cip" data-durum="Teslim Edildi">Teslim edildi</button>
+  <button class="cip" data-durum="Tukendi">Tükendi</button>
+  <span style="width:1px;height:20px;background:var(--cizgi-koyu);margin:0 4px;align-self:center"></span>
+  <button class="cip cip-fatura" data-fatura="faturasiz" title="Mal geldi, tedarikçi faturası bekleniyor">⏳ Faturasız</button>
+  <button class="cip cip-fatura" data-fatura="mal_bekliyor" title="Fatura kesildi, mal henüz gelmedi">📦 Mal bekleniyor</button>
+  <div class="suz">
+    <input id="ara" placeholder="Cins, blok no, üretici ara…" autocomplete="off">
+  </div>
+</div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead>
+      <tr>
+        <th>Stok</th>
+        <th>Cins · Özellik</th>
+        <th>Ölçü / Miktar</th>
+        <th>Durum</th>
+        <th class="sag">Birim Maliyet</th>
+        <th class="sag">Toplam</th>
+      </tr>
+    </thead>
+    <tbody id="govde">
+      <tr><td colspan="6" class="yukleniyor">Yükleniyor…</td></tr>
+    </tbody>
+  </table>
+</div>
+<div class="sayfalama" id="sayfalama"></div>
+
+<!-- Faturalandırma modalı -->
+<div class="modal-ortu" id="fatModal" onclick="if(event.target===this)faturalandirKapat()">
+  <div class="modal" style="width:480px" role="dialog" aria-label="Faturalandır">
+    <div class="modal-bas">
+      <h3>Stoğu Faturalandır</h3>
+      <p id="fatAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div style="background:var(--verde-acik);color:var(--verde);border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:14px">
+        Fatura no girilince <strong>tedarikçi cariye alış faturası borcu</strong> oluşur.
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Fatura No <span style="color:var(--kirmizi)">*</span></label><input id="fatNo" placeholder="AKD-2026-118"></div>
+        <div class="form-alan"><label>Alış Tarihi</label><input id="fatTarih" type="date"></div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="faturalandirKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="fatKaydet" onclick="faturalandirKaydet()">Faturalandır</button>
+    </div>
+  </div>
+</div>
+
+<!-- Maliyet ekleme modalı (stok çekmecesinden açılır) -->
+<div class="modal-ortu" id="malModal" onclick="if(event.target===this)maliyetKapat()">
+  <div class="modal" style="width:520px" role="dialog" aria-label="Maliyet ekle">
+    <div class="modal-bas">
+      <h3>Maliyet Ekle</h3>
+      <p id="malAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div style="background:var(--kagit);border:1px solid var(--cizgi);border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:14px;color:var(--soluk)">
+        Bu tutar stoğun <strong>birim maliyetine</strong> eklenir ve kârlılığa yansır.
+        Tedarikçi seçilirse cariye borç yazılır.
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Maliyet Tipi</label>
+          <select id="malTip">
+            <option>Nakliye (Ocak-Fabrika)</option>
+            <option>Gümrük/Liman Masrafı</option>
+            <option>Kesim / Fason / Üretim</option>
+            <option>Komisyon</option>
+            <option>Diğer</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Fatura No</label>
+          <input id="malFaturaNo" data-buyuk-harf="hayir" placeholder="NKL-2026-001"></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Tutar <span style="color:var(--kirmizi)">*</span></label>
+          <input id="malTutar" type="number" step="0.01" min="0" placeholder="0"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="malDoviz"><option>TRY</option><option>USD</option><option>EUR</option></select></div>
+        <div class="form-alan"><label>KDV Oranı</label>
+          <select id="malKdvSec" onchange="malKdvDegisti()">
+            <option value="20" selected>%20 — genel</option>
+            <option value="10">%10 — indirimli</option>
+            <option value="1">%1</option>
+            <option value="0">%0 — istisna</option>
+            <option value="diger">Diğer…</option>
+          </select>
+          <div id="malKdvSerbest" style="display:none;align-items:center;gap:5px;margin-top:6px">
+            <input id="malKdv" type="number" step="0.1" min="0" max="100" value="20"
+                   data-buyuk-harf="hayir" style="width:78px;text-align:right">
+            <span style="color:var(--soluk);font-weight:600">%</span>
+          </div></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Tedarikçi (cari)</label>
+          <select id="malCari"><option value="">— yok —</option></select></div>
+        <div class="form-alan" style="display:flex;align-items:flex-end">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
+            <input id="malKdvDahil" type="checkbox" style="width:16px;height:16px"> Tutar KDV dahil
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="maliyetKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="malKaydet" onclick="maliyetKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stok düzenleme modalı -->
+<div class="modal-ortu" id="duzModal" onclick="if(event.target===this)duzenleKapat()">
+  <div class="modal" style="width:600px" role="dialog" aria-label="Stok düzenle">
+    <div class="modal-bas">
+      <h3>Stoğu Düzenle</h3>
+      <p id="duzAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Cins</label><input id="duzCins"></div>
+        <div class="form-alan"><label>Yüzey / Özellik</label><input id="duzOzellik"></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Üretici</label>
+          <input id="duzUretici" list="dl-ureticiler">
+          <datalist id="dl-ureticiler"></datalist>
+        </div>
+        <div class="form-alan"><label id="duzNoLabel">Blok No</label><input id="duzBlokNo"></div>
+        <div class="form-alan"><label>Konum</label><input id="duzKonum" placeholder="Depo 2"></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Durum</label>
+          <select id="duzDurum">
+            <option>Serbest</option><option>Rezerve</option><option>Satildi</option><option>Hasarlı</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Alış Fiyatı</label><input id="duzFiyat" type="number" step="0.01"></div>
+      </div>
+      <div class="form-alan"><label>Açıklama</label>
+        <textarea id="duzAciklama" rows="2" placeholder="Stoğa ait notlar" style="width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;resize:vertical"></textarea>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="duzenleKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="duzKaydet" onclick="duzenleKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toplu içe aktarma modalı -->
+<div class="modal-ortu" id="topluModal" onclick="if(event.target===this)topluKapat()">
+  <div class="modal" style="width:900px" role="dialog" aria-label="Toplu içe aktarma">
+    <div class="modal-bas">
+      <h3>Toplu Plaka İçe Aktarma</h3>
+      <p>Excel'den satırları kopyala (Ctrl+C), aşağıya yapıştır (Ctrl+V). Her satır bir plaka olur.</p>
+    </div>
+    <div class="modal-gov">
+      <div style="background:var(--verde-acik);color:var(--verde);border-radius:var(--r-kucuk);padding:10px 12px;font-size:.8rem;margin-bottom:12px">
+        <strong>Sütun sırası:</strong> Cins · Blok No · Boy(cm) · Yükseklik(cm) · Kalınlık(cm) · Yüzey · Alış Fiyatı · Üretici
+        <div style="margin-top:5px;opacity:.8">Örnek: <code>CARRARA WHITE&nbsp;&nbsp;K-77&nbsp;&nbsp;280&nbsp;&nbsp;160&nbsp;&nbsp;2&nbsp;&nbsp;POLISHED&nbsp;&nbsp;32&nbsp;&nbsp;Akdağ Ocak</code></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Döviz</label>
+          <select id="tDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
+        <div class="form-alan"><label>Fiyat Birimi</label>
+          <select id="tFiyatBirim"><option value="m2">$/m²</option><option value="sqft">$/sqft</option></select>
+        </div>
+        <div class="form-alan"><label>Konum (opsiyonel)</label><input id="tKonum" placeholder="Depo 2"></div>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>Excel verisi (sekmeyle ayrılmış)</label>
+        <textarea id="tVeri" rows="7" oninput="topluOnizle()"
+          style="width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:10px 11px;font-family:var(--mono);font-size:.82rem;resize:vertical"
+          placeholder="CARRARA WHITE	K-77	280	160	2	POLISHED	32	Akdağ Ocak&#10;CARRARA WHITE	K-77	275	158	2	POLISHED	32	Akdağ Ocak"></textarea>
+      </div>
+      <div id="tOnizleme"><div class="bos" style="padding:14px">Veri yapıştırınca önizleme burada görünür.</div></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="topluKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="tKaydet" onclick="topluKaydet()" disabled>İçe Aktar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Yeni stok modalı -->
+<div class="modal-ortu" id="modal" onclick="if(event.target===this)modalKapat()">
+  <div class="modal" role="dialog" aria-label="Yeni stok">
+    <div class="modal-bas">
+      <h3>Yeni Stok Girişi</h3>
+      <p>Depoya blok, plaka veya ebatlı ürün ekle. Plakada adet kadar ayrı kayıt oluşur.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Ürün Tipi</label>
+          <select id="sTip" onchange="tipDegisti()">
+            <option value="BLOK">Blok</option>
+            <option value="PLAKA">Plaka</option>
+            <option value="EBATLI">Ebatlı</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Üretici / Ocak</label><select id="sUretici"></select></div>
+        <div class="form-alan"><label>Cins <span style="color:var(--kirmizi)">*</span></label><input id="sCins" placeholder="Emperador Dark"></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label id="sNoLabel">Blok No</label><input id="sBlokNo" placeholder="B-100"></div>
+        <div class="form-alan"><label>Yüzey / Özellik</label><input id="sOzellik" placeholder="Ham / Cilalı"></div>
+        <div class="form-alan"><label>Giriş Tarihi</label><input id="sTarih" type="date"></div>
+      </div>
+
+      <!-- Ölçüler -->
+      <div class="form-satir f4" id="olcuSatir">
+        <div class="form-alan"><label>Boy (cm)</label><input id="sBoy" type="number" oninput="hesapla()"></div>
+        <div class="form-alan"><label>Yükseklik (cm)</label><input id="sYuk" type="number" oninput="hesapla()"></div>
+        <div class="form-alan" id="enAlan"><label>En (cm)</label><input id="sEn" type="number" oninput="hesapla()"></div>
+        <div class="form-alan" id="kalAlan" style="display:none"><label>Kalınlık (cm)</label><input id="sKal" type="number" step="0.1" value="2" oninput="hesapla()"></div>
+      </div>
+
+      <!-- Miktar -->
+      <div class="form-satir f3">
+        <div class="form-alan" id="tonajAlan"><label>Tonaj</label><input id="sTonaj" type="number" step="0.01" oninput="hesapla()"></div>
+        <div class="form-alan" id="adetAlan" style="display:none"><label>Adet</label><input id="sAdet" type="number" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="kasaAdediAlan" style="display:none"><label>Kasa Adedi</label><input id="sKasaAdedi" type="number" min="1" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="kasaIciAlan" style="display:none"><label>Kasa İçi Adet</label><input id="sKasaIci" type="number" min="1" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="basNoAlan" style="display:none"><label id="basNoLabel">Başlangıç Slab No</label><input id="sBasNo" type="number" value="1"></div>
+        <div class="form-alan"><label id="olcuLabel">Hacim (m³)</label><input id="sOlcu" readonly></div>
+      </div>
+
+      <!-- Fiyat -->
+      <div class="form-satir f4">
+        <div class="form-alan"><label>Alış Fiyatı</label><input id="sFiyat" type="number" step="0.01" oninput="hesapla()"></div>
+        <div class="form-alan"><label>Fiyat Birimi</label>
+          <select id="sFiyatBirim" onchange="hesapla()">
+            <option value="ton">$/ton</option>
+            <option value="m3">$/m³</option>
+            <option value="m2">$/m²</option>
+            <option value="sqft">$/sqft</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="sDoviz" onchange="hesapla()"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
+        <div class="form-alan"><label>Alış Tipi</label>
+          <select id="sAlisTipi" onchange="alisTipiDegisti()">
+            <option value="yurtici_kdvli">Yurt içi (KDV'li)</option>
+            <option value="yurtici_kdvsiz">Yurt içi (KDV'siz)</option>
+            <option value="ithalat">İthalat</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Fatura Durumu</label>
+          <select id="sFaturaDurum" onchange="faturaDurumDegisti()">
+            <option value="faturali">Faturalı (mal + fatura geldi)</option>
+            <option value="faturasiz">Faturasız (mal geldi, fatura bekliyor)</option>
+            <option value="mal_bekliyor">Mal bekleniyor (fatura kesildi, mal yok)</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Fatura No</label><input id="sFaturaNo" placeholder="AKD-2026-118"></div>
+        <div class="form-alan"><label>Alış / Fatura Tarihi</label><input id="sAlisTarih" type="date"></div>
+      </div>
+      <div id="fdNot" style="background:var(--notr-bg);border-radius:7px;padding:9px 12px;font-size:.8rem;color:var(--soluk);margin-bottom:12px">
+        Mal ve fatura birlikte geldi — tedarikçi cariye borç işlenir.
+      </div>
+
+      <div class="form-satir f3" id="kdvSatir">
+        <div class="form-alan"><label>KDV Oranı (%)</label><input id="sKdv" type="number" value="20" oninput="hesapla()"></div>
+        <div class="form-alan" style="display:flex;align-items:flex-end">
+          <div class="onay" style="margin:0">
+            <input type="checkbox" id="sKdvDahil" onchange="hesapla()">
+            <label for="sKdvDahil" style="margin:0;text-transform:none;letter-spacing:0;font-weight:500;font-size:.85rem;color:var(--murekkep)">Fiyata KDV dahil</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-alan" style="margin-bottom:12px"><label>Açıklama</label>
+        <textarea id="sAciklama" rows="2" placeholder="Stoğa ait notlar — opsiyonel" style="width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;resize:vertical"></textarea>
+      </div>
+
+      <div class="ozet-kutu">
+        <span>Miktar: <b id="ozMiktar">—</b></span>
+        <span>Birim maliyet: <b id="ozBirim">—</b></span>
+        <span style="margin-left:auto">Toplam: <b id="ozToplam">—</b></span>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="modalKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="sKaydet" onclick="stokKaydet()">Stoğu Ekle</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ DEPO ═══
+   /api/stok?tip=BLOK|PLAKA|EBATLI&durum=&page= → {data:[…], meta:{page,per_page,total}}
+   Satır tıklama → /api/stok/<id>/gecmis ile zaman çizgisi + duruma göre işlemler.
+   Sunucuda serbest-metin araması yok; sayfadaki kayıtlar üzerinde anlık süzülür. */
+
+let TIP = 'BLOK', DURUM = '', FATURA_DURUM = '', SAYFA = 1, ARA = '';
+let SON = { data: [], meta: {} };
+
+const RAY = { 'Serbest':'ray-yesil', 'Rezerve':'ray-kehribar', 'Satildi':'ray-mavi',
+              'Satıldı':'ray-mavi', 'Sevkedildi':'ray-mavi', 'Teslim Edildi':'ray-gri',
+              'Teslim':'ray-gri', 'Tukendi':'ray-gri', 'Kesildi':'ray-mavi', 'Hasarlı':'ray-kirmizi' };
+const ROZET = { 'Serbest':'rz-yesil', 'Rezerve':'rz-kehribar', 'Satildi':'rz-mavi',
+                'Satıldı':'rz-mavi', 'Sevkedildi':'rz-mavi', 'Teslim Edildi':'rz-gri',
+                'Teslim':'rz-gri', 'Tukendi':'rz-gri', 'Kesildi':'rz-mavi', 'Hasarlı':'rz-kirmizi' };
+// Durum → okunur etiket (Türkçe gösterim)
+const DURUM_AD = { 'Serbest':'Serbest', 'Rezerve':'Rezerve', 'Satildi':'Satıldı',
+                   'Sevkedildi':'Sevk edildi', 'Teslim Edildi':'Teslim edildi',
+                   'Tukendi':'Tükendi (kesildi)', 'Hasarlı':'Hasarlı' };
+/* Kullanıcıya gösterilecek anlamlı stok numarası.
+   Sistem ID'leri (BLK-xxx) rastgele kombinasyonlardır, akılda tutulamaz —
+   bunun yerine blok no / kasa no / slab no gösterilir. ID arka planda kalır. */
+function stokNo(x) {
+  if (!x) return '—';
+  if (x.tip === 'EBATLI') return x.kasa_no || x.blok_no || x.id;
+  if (x.tip === 'PLAKA')  return x.slab_no ? `${x.blok_no || ''}#${x.slab_no}`.replace(/^#/, '')
+                                           : (x.blok_no || x.id);
+  return x.blok_no || x.id;
+}
+const RENK = { 'ray-yesil':'--verde', 'ray-kehribar':'--kehribar', 'ray-mavi':'--mavi',
+               'ray-gri':'--cizgi-koyu', 'ray-kirmizi':'--kirmizi' };
+
+function olcu(s) {
+  if (s.tip === 'BLOK') {
+    const ol = (s.boy && s.yukseklik && s.en) ? `${s.boy}×${s.yukseklik}×${s.en}` : null;
+    const tn = s.tonaj ? s.tonaj.toLocaleString('tr-TR') + ' ton' : null;
+    return [ol, tn].filter(Boolean).join(' · ') || '—';
+  }
+  const ol = `${s.boy || '?'}×${s.yukseklik || '?'}`;
+  const kl = s.kalinlik ? s.kalinlik + ' cm' : null;
+  const m2 = s.m2 ? s.m2.toLocaleString('tr-TR') + ' m²' : null;
+  return [ol, kl, m2].filter(Boolean).join(' · ');
+}
+
+async function listeyiCiz() {
+  const govde = document.getElementById('govde');
+  govde.innerHTML = '<tr><td colspan="6" class="yukleniyor">Yükleniyor…</td></tr>';
+  try {
+    const q = new URLSearchParams({ tip: TIP, page: SAYFA, per_page: 50 });
+    if (DURUM) q.set('durum', DURUM);
+    if (FATURA_DURUM) q.set('fatura_durumu', FATURA_DURUM);
+    SON = await api('/api/stok?' + q);
+  } catch (e) {
+    govde.innerHTML = '<tr><td colspan="6" class="bos">Stok verisi alınamadı.</td></tr>';
+    document.getElementById('sayfalama').innerHTML = '';
+    return;
+  }
+  const s = ARA.toLocaleLowerCase('tr');
+  const satirlar = (SON.data || []).filter(x => !s ||
+    [x.cins, x.blok_no, x.uretici, x.id, x.ozellik, x.konum]
+      .filter(Boolean).join(' ').toLocaleLowerCase('tr').includes(s));
+
+  if (!satirlar.length) {
+    govde.innerHTML = `<tr><td colspan="6" class="bos">${ARA ? 'Aramaya uyan kayıt yok.' : 'Bu filtrede stok yok.'}</td></tr>`;
+  } else {
+    govde.innerHTML = satirlar.map(x => {
+      const r = RAY[x.durum] || 'ray-gri';
+      return `
+      <tr class="${r}" style="border-left-color:var(${RENK[r]})" onclick="detayAc('${kacar(x.id)}')">
+        <td><span class="mono">${kacar(stokNo(x))}</span>${
+              x.konum ? '<div class="ikincil">' + kacar(x.konum) + '</div>' : ''}</td>
+        <td>${kacar(x.cins || '—')}<div class="ikincil">${kacar(x.ozellik || x.uretici || '')}</div></td>
+        <td class="mono" style="font-size:.8rem">${kacar(olcu(x))}</td>
+        <td><span class="rozet ${ROZET[x.durum] || 'rz-gri'}">${kacar(DURUM_AD[x.durum] || x.durum || '—')}</span>${
+          x.fatura_durumu === 'faturasiz' ? '<span class="fatura-isaret" title="Tedarikçi faturası bekleniyor">⏳</span>'
+          : (x.fatura_durumu === 'mal_bekliyor' ? '<span class="fatura-isaret" title="Mal bekleniyor">📦</span>' : '')
+        }</td>
+        <td class="sag mono">${x.birim_maliyet_usd ? para2(x.birim_maliyet_usd) + '/' + (x.birim_ad || '') : '—'}</td>
+        <td class="sag mono" style="font-weight:600">${x.toplam_maliyet_usd ? para(x.toplam_maliyet_usd) : '—'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const m = SON.meta || {};
+  const sonSayfa = Math.max(1, Math.ceil((m.total || 0) / (m.per_page || 50)));
+  document.getElementById('sayfalama').innerHTML = (m.total || 0) > (m.per_page || 50)
+    ? `<button onclick="sayfaGit(${SAYFA - 1})" ${SAYFA <= 1 ? 'disabled' : ''}>← Önceki</button>
+       <span>Sayfa ${SAYFA} / ${sonSayfa} · ${m.total} kayıt</span>
+       <button onclick="sayfaGit(${SAYFA + 1})" ${SAYFA >= sonSayfa ? 'disabled' : ''}>Sonraki →</button>`
+    : `<span>${m.total || 0} kayıt</span>`;
+}
+function sayfaGit(n) { SAYFA = n; listeyiCiz(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+
+async function kpiYukle() {
+  try {
+    const d = await api('/api/rapor/stok_durum');
+    const t = d.tip_ozet || {}, du = d.durum_ozet || {};
+    document.getElementById('kDeger').innerHTML = para(d.toplam_deger_usd || 0).replace(' $', '<small>$</small>');
+    document.getElementById('kDegerEk').textContent =
+      Object.keys(t).map(k => t[k].adet + ' ' + k.toLowerCase()).join(' · ') || 'stok yok';
+    const ser = du['Serbest'] || { adet: 0, deger_usd: 0 };
+    const rez = du['Rezerve'] || { adet: 0, deger_usd: 0 };
+    document.getElementById('kSerbest').textContent = ser.adet;
+    document.getElementById('kSerbestEk').textContent = para(ser.deger_usd) + ' · satışa hazır';
+    document.getElementById('kRezerve').textContent = rez.adet;
+    document.getElementById('kRezerveEk').textContent = para(rez.deger_usd) + ' · siparişe ayrılmış';
+  } catch (e) { /* yetkisizse sessiz */ }
+}
+
+async function detayAc(id) {
+  const s = (SON.data || []).find(x => x.id === id);
+  if (!s) return;
+  const alan = (l, d, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${d || '—'}</div></div>`;
+  // Alış birim fiyatı: maliyetler GİYDİRİLMEMİŞ ham alım fiyatı (kendi dövizinde).
+  // "Birim Maliyet" ise ek maliyetler dahil edilmiş hali (USD) — ikisi ayrı bilgi.
+  const alisBirim = s.alis_fiyati
+    ? para2(s.alis_fiyati, s.doviz || 'USD') + ' / ' + (s.fiyat_birim || '')
+    : '—';
+  const govde = `
+    <div class="alan-grid">
+      ${alan('Durum', `<span class="rozet ${ROZET[s.durum] || 'rz-gri'}">${kacar(DURUM_AD[s.durum] || s.durum || '—')}</span>`)}
+      ${alan('Konum', kacar(s.konum || '—'))}
+      ${alan('Ölçü / Miktar', kacar(olcu(s)), true)}
+      ${alan('Alış Fiyatı', alisBirim, true)}
+      ${alan('Ek Maliyet', s.ek_maliyet_toplam ? para(s.ek_maliyet_toplam) : '—', true)}
+      ${alan('Birim Maliyet', s.birim_maliyet_usd ? para2(s.birim_maliyet_usd) + ' / ' + (s.birim_ad || '') : '—', true)}
+      ${alan('Toplam Maliyet', s.toplam_maliyet_usd ? para(s.toplam_maliyet_usd) : '—', true)}
+      ${alan('Üretici', kacar(s.uretici || '—'))}
+      ${alan('Fatura No', s.fatura_durumu === 'faturasiz'
+          ? '<span class="rozet rz-kehribar">Faturasız — fatura bekliyor</span>'
+          : (s.fatura_durumu === 'mal_bekliyor'
+            ? '<span class="rozet rz-mavi">Mal bekleniyor</span>'
+            : kacar(s.fatura_no || 'Faturalı')))}
+      ${alan('Giriş Tarihi', kacar(s.giris_tarihi || '—'), true)}
+      ${s.ozellik ? alan('Yüzey', kacar(s.ozellik)) : ''}
+      ${s.aciklama ? alan('Açıklama', kacar(s.aciklama)) : ''}
+    </div>
+    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px">Geçmiş</h4>
+    <div id="gecmis"><div class="yukleniyor" style="padding:10px 0">Yükleniyor…</div></div>`;
+
+  const eylem = [];
+  // Fatura durumu akışları:
+  //   faturasiz    → mal geldi, fatura yok  → Faturalandır (tedarikçiye borç oluşur)
+  //   mal_bekliyor → fatura var, mal yok    → Mal teslim al
+  if (s.fatura_durumu === 'faturasiz' && yazabilir('stok'))
+    eylem.push(`<button class="blok-btn birincil" onclick="faturalandirAc('${kacar(s.id)}','${kacar(s.tip)}','${kacar(s.cins || '')}')">Faturalandır</button>`);
+  if (s.fatura_durumu === 'mal_bekliyor' && yazabilir('stok'))
+    eylem.push(`<button class="blok-btn birincil" onclick="malTeslimAl('${kacar(s.id)}','${kacar(s.tip)}')">Mal teslim al</button>`);
+  if (s.durum === 'Serbest' && yazabilir('rezervasyon'))
+    eylem.push(`<button class="blok-btn ${s.fatura_durumu === 'faturasiz' ? '' : 'birincil'}" onclick="rezerveEt('${kacar(s.id)}','${kacar(s.tip)}')">Rezerve et</button>`);
+  if (s.durum === 'Serbest' && s.tip !== 'EBATLI' && yazabilir('kesim'))
+    eylem.push(`<button class="blok-btn" onclick="kesimeGonder('${kacar(s.id)}','${kacar(s.tip)}')">${s.tip === 'BLOK' ? 'Kesime gönder' : 'Ebatlıya kes'}</button>`);
+  if (yazabilir('stok'))
+    eylem.push(`<button class="blok-btn" onclick="duzenleAc('${kacar(s.id)}')">Düzenle</button>`);
+  // Maliyet ekle — maliyetler sayfasına gitmeden, bu stoğa doğrudan
+  if (yazabilir('maliyet'))
+    eylem.push(`<button class="blok-btn" onclick="maliyetAc('${kacar(s.id)}','${kacar(s.tip)}','${kacar(stokNo(s))}','${kacar(s.cins || '')}')">Maliyet ekle</button>`);
+  if (s.durum === 'Serbest' && yazabilir('stok'))
+    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="stokSil('${kacar(s.id)}','${kacar(s.tip)}','${kacar(stokNo(s))}')">Sil</button>`);
+  eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+
+  cekmeceAc(s.cins || stokNo(s), `${stokNo(s)} · ${s.tip}`, govde, eylem.join(''));
+
+  try {
+    const g = await api(`/api/stok/${encodeURIComponent(id)}/gecmis`);
+    const olaylar = g.olaylar || [];
+    const el = document.getElementById('gecmis');
+    if (!el) return;
+    el.innerHTML = olaylar.length
+      ? `<div class="zaman-cizgi">${olaylar.map((o, i) => `
+          <div class="zc-madde ${i === 0 ? 'simdi' : ''}">
+            <div class="zc-tarih">${kacar(o.tarih || '')}</div>
+            <strong>${kacar(o.baslik || '')}</strong>
+            ${o.aciklama ? '<div style="color:var(--soluk);font-size:.8rem;margin-top:2px">' + kacar(o.aciklama) + '</div>' : ''}
+          </div>`).join('')}</div>`
+      : '<div class="bos" style="padding:12px">Hareket kaydı yok.</div>';
+  } catch (e) {
+    const el = document.getElementById('gecmis');
+    if (el) el.innerHTML = '<div class="bos" style="padding:12px">Geçmiş alınamadı.</div>';
+  }
+}
+
+async function rezerveEt(id, tip) {
+  const musteri = prompt('Hangi müşteri için rezerve edilsin?');
+  if (!musteri) return;
+  try {
+    await api('/api/rezervasyon', {
+      method: 'POST',
+      body: JSON.stringify({ stok_idler: [id], stok_tip: tip, musteri: musteri })
+    });
+    bildir('Rezerve edildi · ' + musteri);
+    cekmeceKapat();
+    listeyiCiz(); kpiYukle();
+  } catch (e) { /* api() zaten bildirdi */ }
+}
+
+document.querySelectorAll('#tipSecim button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tipSecim button').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif'); TIP = b.dataset.tip; SAYFA = 1; listeyiCiz();
+});
+document.querySelectorAll('.cip[data-durum]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.cip[data-durum]').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif'); DURUM = b.dataset.durum; SAYFA = 1; listeyiCiz();
+});
+// Fatura durumu çipleri: bağımsız toggle (durum filtresiyle birlikte çalışır)
+document.querySelectorAll('.cip-fatura').forEach(b => b.onclick = () => {
+  const secili = b.classList.contains('aktif');
+  document.querySelectorAll('.cip-fatura').forEach(x => x.classList.remove('aktif'));
+  if (!secili) { b.classList.add('aktif'); FATURA_DURUM = b.dataset.fatura; }
+  else { FATURA_DURUM = ''; }
+  SAYFA = 1; listeyiCiz();
+});
+let araZaman;
+document.getElementById('ara').addEventListener('input', e => {
+  clearTimeout(araZaman);
+  araZaman = setTimeout(() => { ARA = e.target.value; listeyiCiz(); }, 220);
+});
+
+/* ═══ YENİ STOK ═══
+   POST /api/stok/ekle {tip, uretici, cins, blok_no, ozellik, boy, yukseklik, en,
+                        kalinlik, tonaj, adet, baslangic_no, fiyat, fiyat_birim,
+                        doviz, kdv_oran, kdv_dahil_mi, alis_tipi, fatura_no, giris_tarihi}
+   BLOK  → tek kayıt (boy×yükseklik×en → m³; tonaj ayrı)
+   PLAKA → 'adet' kadar ayrı kayıt (slab no'ları baslangic_no'dan artar)
+   EBATLI→ kasa kaydı (boy×yükseklik×kalınlık) */
+
+let URETICILER = [];
+
+async function yeniAc() {
+  // Cins/yüzey alanları Ayarlar > Listeler'den beslenir, girilen değer BÜYÜK HARF olur
+  listeyeBagla('sCins', 'cins');
+  listeyeBagla('sOzellik', 'ozellik');
+  document.getElementById('modal').classList.add('acik');
+  // Modal, listede seçili olan sekmeyle açılır (Plaka sekmesindeysen Plaka gelir)
+  document.getElementById('sTip').value = TIP;
+  ['sCins','sBlokNo','sOzellik','sBoy','sYuk','sEn','sTonaj','sFiyat','sFaturaNo','sOlcu','sAciklama'].forEach(i => {
+    const el = document.getElementById(i); if (el) el.value = '';
+  });
+  document.getElementById('sAdet').value = 1;
+  document.getElementById('sKasaAdedi').value = 1;
+  document.getElementById('sKasaIci').value = 1;
+  document.getElementById('sBasNo').value = 1;
+  document.getElementById('sKal').value = 2;
+  document.getElementById('sKdv').value = 20;
+  document.getElementById('sKdvDahil').checked = false;
+  document.getElementById('sTarih').valueAsDate = new Date();
+  document.getElementById('sAlisTarih').valueAsDate = new Date();
+  document.getElementById('sFaturaDurum').value = 'faturali';
+  faturaDurumDegisti();
+  // Üreticiler (ürün tedarikçisi olan cariler)
+  if (!URETICILER.length) {
+    try {
+      const d = await api('/api/cari?per_page=300');
+      URETICILER = (d.data || []).filter(cariUreticiMi);   // Tedarikçi + Üretici
+    } catch (e) { URETICILER = []; }
+  }
+  document.getElementById('sUretici').innerHTML = URETICILER.length
+    ? URETICILER.map(c => `<option value="${kacar(c.unvan)}">${kacar(c.unvan)}</option>`).join('')
+    : '<option value="">— tedarikçi yok, Cari ekranından ekle —</option>';
+  tipDegisti();
+}
+function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
+
+function tipDegisti() {
+  const t = document.getElementById('sTip').value;
+  const blok = t === 'BLOK', plaka = t === 'PLAKA', ebatli = t === 'EBATLI';
+  document.getElementById('enAlan').style.display = blok ? '' : 'none';
+  document.getElementById('kalAlan').style.display = blok ? 'none' : '';
+  document.getElementById('tonajAlan').style.display = blok ? '' : 'none';
+  document.getElementById('adetAlan').style.display = plaka ? '' : 'none';
+  document.getElementById('kasaAdediAlan').style.display = ebatli ? '' : 'none';
+  document.getElementById('kasaIciAlan').style.display = ebatli ? '' : 'none';
+  document.getElementById('basNoAlan').style.display = plaka ? '' : 'none';
+  document.getElementById('sNoLabel').textContent = blok ? 'Blok No' : (plaka ? 'Blok No (kesildiği blok)' : 'Kasa No (ilk kasa, ops.)');
+  document.getElementById('olcuLabel').textContent = blok ? 'Hacim (m³)' : 'Toplam m²';
+  // Fiyat birimi varsayılanı
+  const fb = document.getElementById('sFiyatBirim');
+  fb.innerHTML = blok
+    ? '<option value="ton">$/ton</option><option value="m3">$/m³</option>'
+    : '<option value="m2">$/m²</option><option value="sqft">$/sqft</option>';
+  hesapla();
+}
+
+function faturaDurumDegisti() {
+  const d = document.getElementById('sFaturaDurum').value;
+  const not = document.getElementById('fdNot');
+  const noEl = document.getElementById('sFaturaNo');
+  if (d === 'faturasiz') {
+    not.style.background = 'var(--kehribar-bg)'; not.style.color = 'var(--kehribar)';
+    not.innerHTML = 'Mal geldi ama fatura henüz yok. <strong>Cariye borç işlenmez.</strong> Fatura gelince Depo → stok → "Faturalandır" ile eklersin.';
+    noEl.value = ''; noEl.disabled = true; noEl.placeholder = 'fatura gelince girilecek';
+  } else if (d === 'mal_bekliyor') {
+    not.style.background = 'var(--mavi-bg)'; not.style.color = 'var(--mavi)';
+    not.innerHTML = 'Fatura kesildi, <strong>cariye borç işlenir</strong>, ama mal henüz gelmedi. Mal gelince "Mal teslim al" dersin.';
+    noEl.disabled = false; noEl.placeholder = 'AKD-2026-118';
+  } else {
+    not.style.background = 'var(--notr-bg)'; not.style.color = 'var(--soluk)';
+    not.textContent = 'Mal ve fatura birlikte geldi — tedarikçi cariye borç işlenir.';
+    noEl.disabled = false; noEl.placeholder = 'AKD-2026-118';
+  }
+}
+
+function alisTipiDegisti() {
+  const kdvli = document.getElementById('sAlisTipi').value === 'yurtici_kdvli';
+  document.getElementById('kdvSatir').style.display = kdvli ? '' : 'none';
+  if (!kdvli) { document.getElementById('sKdv').value = 0; document.getElementById('sKdvDahil').checked = false; }
+  else document.getElementById('sKdv').value = 20;
+  hesapla();
+}
+
+function hesapla() {
+  const t = document.getElementById('sTip').value;
+  const boy = parseFloat(document.getElementById('sBoy').value) || 0;
+  const yuk = parseFloat(document.getElementById('sYuk').value) || 0;
+  const en = parseFloat(document.getElementById('sEn').value) || 0;
+  const adet = parseFloat(document.getElementById('sAdet').value) || 1;
+  const tonaj = parseFloat(document.getElementById('sTonaj').value) || 0;
+  const fiyat = parseFloat(document.getElementById('sFiyat').value) || 0;
+  const fb = document.getElementById('sFiyatBirim').value;
+  const dov = document.getElementById('sDoviz').value;
+  const kdvOran = parseFloat(document.getElementById('sKdv').value) || 0;
+  const kdvDahil = document.getElementById('sKdvDahil').checked;
+
+  let olcu = 0, miktar = 0, miktarAd = '';
+  if (t === 'BLOK') {
+    olcu = (boy * yuk * en) / 1000000;                    // m³
+    document.getElementById('sOlcu').value = olcu ? olcu.toFixed(3) + ' m³' : '';
+    miktar = fb === 'ton' ? tonaj : olcu;
+    miktarAd = fb === 'ton' ? 'ton' : 'm³';
+  } else if (t === 'EBATLI') {
+    const kasaAdedi = parseInt(document.getElementById('sKasaAdedi').value) || 1;
+    const kasaIci = parseInt(document.getElementById('sKasaIci').value) || 1;
+    const m2Birim = (boy * yuk) / 10000;                  // tek parça m²
+    olcu = m2Birim * kasaIci * kasaAdedi;                 // toplam m² (tüm kasalar)
+    document.getElementById('sOlcu').value = olcu ? olcu.toFixed(2) + ' m² · ' + kasaAdedi + ' kasa' : '';
+    miktar = fb === 'm2' ? olcu : olcu * 10.7639;         // sqft
+    miktarAd = fb === 'm2' ? 'm²' : 'sqft';
+  } else {
+    const m2Birim = (boy * yuk) / 10000;                  // tek parça m²
+    olcu = m2Birim * adet;
+    document.getElementById('sOlcu').value = olcu ? olcu.toFixed(2) + ' m²' : '';
+    miktar = fb === 'm2' ? olcu : olcu * 10.7639;         // sqft
+    miktarAd = fb === 'm2' ? 'm²' : 'sqft';
+  }
+  // KDV hariç matrah (backend de böyle saklıyor)
+  const netFiyat = kdvDahil && kdvOran > 0 ? fiyat / (1 + kdvOran / 100) : fiyat;
+  const toplam = netFiyat * miktar;
+
+  document.getElementById('ozMiktar').textContent = miktar ? miktar.toLocaleString('tr-TR', {maximumFractionDigits: 2}) + ' ' + miktarAd : '—';
+  document.getElementById('ozBirim').textContent = netFiyat ? para2(netFiyat, dov) + ' /' + miktarAd : '—';
+  document.getElementById('ozToplam').textContent = toplam ? para(toplam, dov) + (kdvDahil ? ' (KDV hariç)' : '') : '—';
+}
+
+async function stokKaydet() {
+  const t = document.getElementById('sTip').value;
+  const cins = document.getElementById('sCins').value.trim();
+  const fiyat = parseFloat(document.getElementById('sFiyat').value) || 0;
+  if (!cins) { bildir('Cins zorunlu.', true); return; }
+  if (fiyat <= 0) { bildir('Alış fiyatı girilmeli.', true); return; }
+  if (t === 'BLOK' && !(parseFloat(document.getElementById('sTonaj').value) > 0)
+      && document.getElementById('sFiyatBirim').value === 'ton') {
+    bildir('Tonaj girilmeli (fiyat $/ton).', true); return;
+  }
+  const btn = document.getElementById('sKaydet');
+  btn.disabled = true; btn.textContent = 'Ekleniyor…';
+  try {
+    const d = await api('/api/stok/ekle', {
+      method: 'POST',
+      body: JSON.stringify({
+        tip: t,
+        uretici: document.getElementById('sUretici').value,
+        cins,
+        blok_no: document.getElementById('sBlokNo').value,
+        ozellik: document.getElementById('sOzellik').value,
+        boy: parseFloat(document.getElementById('sBoy').value) || 0,
+        yukseklik: parseFloat(document.getElementById('sYuk').value) || 0,
+        en: t === 'BLOK' ? (parseFloat(document.getElementById('sEn').value) || 0) : 0,
+        kalinlik: t !== 'BLOK' ? (parseFloat(document.getElementById('sKal').value) || 0) : 0,
+        tonaj: parseFloat(document.getElementById('sTonaj').value) || 0,
+        adet: t === 'PLAKA' ? (parseInt(document.getElementById('sAdet').value) || 1) : 1,
+        kasa_adedi: t === 'EBATLI' ? (parseInt(document.getElementById('sKasaAdedi').value) || 1) : 1,
+        kasa_ici_adet: t === 'EBATLI' ? (parseInt(document.getElementById('sKasaIci').value) || 1) : 1,
+        baslangic_no: parseInt(document.getElementById('sBasNo').value) || 1,
+        aciklama: document.getElementById('sAciklama').value,
+        fiyat,
+        fiyat_birim: document.getElementById('sFiyatBirim').value,
+        doviz: document.getElementById('sDoviz').value,
+        alis_tipi: document.getElementById('sAlisTipi').value,
+        kdv_oran: parseFloat(document.getElementById('sKdv').value) || 0,
+        kdv_dahil_mi: document.getElementById('sKdvDahil').checked,
+        fatura_durumu: document.getElementById('sFaturaDurum').value,
+        fatura_no: document.getElementById('sFaturaNo').value,
+        alis_tarihi: document.getElementById('sAlisTarih').value || null,
+        giris_tarihi: document.getElementById('sTarih').value || null
+      })
+    });
+    bildir(d.mesaj || 'Stok eklendi');
+    modalKapat();
+    // Eklenen tipe geç ve tazele
+    TIP = t; SAYFA = 1;
+    document.querySelectorAll('#tipSecim button').forEach(x => x.classList.toggle('aktif', x.dataset.tip === t));
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* api() bildirdi */ }
+  finally { btn.disabled = false; btn.textContent = 'Stoğu Ekle'; }
+}
+
+/* ═══ TOPLU İÇE AKTARMA ═══
+   POST /api/stok/toplu_import {plakalar:[{cins, blok_no, boy, yukseklik, kalinlik,
+     ozellik, alis_fiyati, uretici, doviz, konum}]}
+   Kaynak: Excel'den kopyalanan sekmeyle ayrılmış satırlar. */
+
+let TOPLU = [];
+
+function topluAc() {
+  document.getElementById('topluModal').classList.add('acik');
+  document.getElementById('tVeri').value = '';
+  document.getElementById('tKonum').value = '';
+  TOPLU = [];
+  topluOnizle();
+  setTimeout(() => document.getElementById('tVeri').focus(), 100);
+}
+function topluKapat() { document.getElementById('topluModal').classList.remove('acik'); }
+
+function topluOnizle() {
+  const ham = document.getElementById('tVeri').value.trim();
+  const kok = document.getElementById('tOnizleme');
+  const btn = document.getElementById('tKaydet');
+  TOPLU = [];
+  if (!ham) {
+    kok.innerHTML = '<div class="bos" style="padding:14px">Veri yapıştırınca önizleme burada görünür.</div>';
+    btn.disabled = true;
+    return;
+  }
+  const hatalar = [];
+  ham.split(/\r?\n/).forEach((satir, i) => {
+    if (!satir.trim()) return;
+    // Sekme veya 2+ boşlukla ayrılmış
+    const s = satir.split(/\t|\s{2,}/).map(x => x.trim());
+    const [cins, blokNo, boy, yuk, kal, ozellik, fiyat, uretici] = s;
+    const b = parseFloat((boy || '').replace(',', '.'));
+    const y = parseFloat((yuk || '').replace(',', '.'));
+    if (!cins || !(b > 0) || !(y > 0)) {
+      hatalar.push(`Satır ${i + 1}: cins/boy/yükseklik eksik veya geçersiz`);
+      return;
+    }
+    TOPLU.push({
+      cins: cins.toUpperCase(),
+      blok_no: blokNo || '',
+      boy: b, yukseklik: y,
+      kalinlik: parseFloat((kal || '').replace(',', '.')) || null,
+      ozellik: (ozellik || '').toUpperCase(),
+      alis_fiyati: parseFloat((fiyat || '').replace(',', '.')) || 0,
+      uretici: uretici || '',
+      _m2: (b * y) / 10000
+    });
+  });
+
+  const toplamM2 = TOPLU.reduce((a, p) => a + p._m2, 0);
+  const toplamTutar = TOPLU.reduce((a, p) => a + p._m2 * (p.alis_fiyati || 0), 0);
+  const dov = document.getElementById('tDoviz').value;
+
+  kok.innerHTML = `
+    ${hatalar.length ? `<div style="background:var(--kirmizi-bg);color:var(--kirmizi);border-radius:7px;padding:9px 12px;font-size:.8rem;margin-bottom:10px">
+      ${hatalar.length} satır atlandı:<br>${hatalar.slice(0, 3).map(kacar).join('<br>')}${hatalar.length > 3 ? '<br>…' : ''}
+    </div>` : ''}
+    ${TOPLU.length ? `
+    <div style="background:var(--notr-bg);border-radius:7px;padding:10px 13px;font-size:.85rem;display:flex;gap:20px;margin-bottom:10px">
+      <span><strong>${TOPLU.length}</strong> plaka</span>
+      <span><strong class="mono">${toplamM2.toLocaleString('tr-TR', {maximumFractionDigits: 2})}</strong> m²</span>
+      <span style="margin-left:auto">Toplam maliyet: <strong class="mono">${para(toplamTutar, dov)}</strong></span>
+    </div>
+    <div class="tablo-kutu" style="max-height:170px;overflow-y:auto">
+      <table>
+        <thead><tr><th>Cins</th><th>Blok</th><th>Ölçü</th><th>Yüzey</th><th class="sag">m²</th><th class="sag">Fiyat</th></tr></thead>
+        <tbody>
+          ${TOPLU.slice(0, 40).map(p => `
+            <tr>
+              <td>${kacar(p.cins)}</td>
+              <td class="mono" style="font-size:.8rem">${kacar(p.blok_no || '—')}</td>
+              <td class="mono" style="font-size:.8rem">${p.boy}×${p.yukseklik}${p.kalinlik ? '×' + p.kalinlik : ''}</td>
+              <td style="font-size:.82rem">${kacar(p.ozellik || '—')}</td>
+              <td class="sag mono">${p._m2.toFixed(2)}</td>
+              <td class="sag mono">${p.alis_fiyati ? para2(p.alis_fiyati, dov) : '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    ${TOPLU.length > 40 ? `<div style="font-size:.78rem;color:var(--soluk);margin-top:6px">…ve ${TOPLU.length - 40} satır daha</div>` : ''}`
+    : '<div class="bos" style="padding:14px">Geçerli satır bulunamadı.</div>'}`;
+  btn.disabled = !TOPLU.length;
+}
+
+async function topluKaydet() {
+  if (!TOPLU.length) return;
+  if (!confirm(`${TOPLU.length} plaka stoğa eklenecek. Devam edilsin mi?`)) return;
+  const btn = document.getElementById('tKaydet');
+  btn.disabled = true; btn.textContent = 'Aktarılıyor…';
+  const dov = document.getElementById('tDoviz').value;
+  const konum = document.getElementById('tKonum').value;
+  try {
+    const d = await api('/api/stok/toplu_import', {
+      method: 'POST',
+      body: JSON.stringify({
+        plakalar: TOPLU.map(p => ({
+          cins: p.cins, blok_no: p.blok_no, boy: p.boy, yukseklik: p.yukseklik,
+          kalinlik: p.kalinlik, ozellik: p.ozellik, alis_fiyati: p.alis_fiyati,
+          uretici: p.uretici, doviz: dov, konum: konum
+        }))
+      })
+    });
+    bildir(d.mesaj || (TOPLU.length + ' plaka içe aktarıldı'));
+    topluKapat();
+    TIP = 'PLAKA'; SAYFA = 1;
+    document.querySelectorAll('#tipSecim button').forEach(x => x.classList.toggle('aktif', x.dataset.tip === 'PLAKA'));
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'İçe Aktar'; }
+}
+
+/* ═══ FATURALANDIRMA / MAL TESLİM / DÜZENLE / SİL ═══
+   POST   /api/stok/<tip>/<id>/faturalandir {fatura_no, alis_tarihi}
+          → faturasız stoğa fatura atar, tedarikçi cariye ALIŞ borcu oluşturur
+   POST   /api/stok/<tip>/<id>/mal_teslim {giris_tarihi}
+          → faturası kesilmiş ama gelmemiş malı teslim alındı işaretler
+   PUT    /api/stok/<id>            → alan güncelleme
+   DELETE /api/stok/<tip>/<id>      → silme (sadece Serbest) */
+
+let FAT_STOK = null, DUZ_STOK = null;
+
+function faturalandirAc(id, tip, cins) {
+  FAT_STOK = { id, tip };
+  cekmeceKapat();
+  document.getElementById('fatAlt').textContent = `${cins || ''} · ${id}`;
+  document.getElementById('fatNo').value = '';
+  document.getElementById('fatTarih').valueAsDate = new Date();
+  document.getElementById('fatModal').classList.add('acik');
+}
+function faturalandirKapat() { document.getElementById('fatModal').classList.remove('acik'); }
+
+async function faturalandirKaydet() {
+  const no = document.getElementById('fatNo').value.trim();
+  if (!no) { bildir('Fatura no zorunlu.', true); return; }
+  const btn = document.getElementById('fatKaydet');
+  btn.disabled = true; btn.textContent = 'İşleniyor…';
+  try {
+    const d = await api(`/api/stok/${encodeURIComponent(FAT_STOK.tip)}/${encodeURIComponent(FAT_STOK.id)}/faturalandir`, {
+      method: 'POST',
+      body: JSON.stringify({
+        fatura_no: no,
+        alis_tarihi: document.getElementById('fatTarih').value || null
+      })
+    });
+    bildir(d.mesaj || 'Stok faturalandırıldı · ' + no);
+    faturalandirKapat();
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Faturalandır'; }
+}
+
+async function malTeslimAl(id, tip) {
+  if (!confirm('Mal teslim alındı olarak işaretlensin mi? (Borç zaten oluşmuştu, sadece stok girişi yapılır.)')) return;
+  try {
+    const d = await api(`/api/stok/${encodeURIComponent(tip)}/${encodeURIComponent(id)}/mal_teslim`, {
+      method: 'POST',
+      body: JSON.stringify({ giris_tarihi: new Date().toISOString().slice(0, 10) })
+    });
+    bildir(d.mesaj || 'Mal teslim alındı');
+    cekmeceKapat();
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* */ }
+}
+
+function duzenleAc(id) {
+  const s = (SON.data || []).find(x => x.id === id);
+  if (!s) return;
+  DUZ_STOK = s;
+  cekmeceKapat();
+  document.getElementById('duzAlt').textContent = `${s.id} · ${s.tip}`;
+  document.getElementById('duzCins').value = s.cins || '';
+  document.getElementById('duzOzellik').value = s.ozellik || '';
+  document.getElementById('duzUretici').value = s.uretici || '';
+  document.getElementById('duzBlokNo').value = s.blok_no || s.kasa_no || '';
+  document.getElementById('duzKonum').value = s.konum || '';
+  document.getElementById('duzDurum').value = s.durum || 'Serbest';
+  document.getElementById('duzFiyat').value = s.alis_fiyati || '';
+  document.getElementById('duzAciklama').value = s.aciklama || '';
+  document.getElementById('duzNoLabel').textContent = s.tip === 'EBATLI' ? 'Kasa No' : 'Blok No';
+  listeyeBagla('duzCins', 'cins');
+  listeyeBagla('duzOzellik', 'ozellik');
+  ureticiOnerileriDoldur();
+  document.getElementById('duzModal').classList.add('acik');
+}
+function duzenleKapat() { document.getElementById('duzModal').classList.remove('acik'); }
+
+/* Üretici önerileri — Cari'deki Tedarikçi/Üretici kayıtlarından */
+async function ureticiOnerileriDoldur() {
+  if (!URETICILER.length) {
+    try {
+      const d = await api('/api/cari?per_page=300');
+      URETICILER = (d.data || []).filter(cariUreticiMi);
+    } catch (e) { URETICILER = []; }
+  }
+  const dl = document.getElementById('dl-ureticiler');
+  if (dl) dl.innerHTML = URETICILER.map(c => `<option value="${kacar(c.unvan)}">`).join('');
+}
+
+async function duzenleKaydet() {
+  const btn = document.getElementById('duzKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api(`/api/stok/${encodeURIComponent(DUZ_STOK.id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        tip: DUZ_STOK.tip,
+        cins: document.getElementById('duzCins').value,
+        ozellik: document.getElementById('duzOzellik').value,
+        uretici: document.getElementById('duzUretici').value,
+        blok_no: document.getElementById('duzBlokNo').value,
+        kasa_no: document.getElementById('duzBlokNo').value,
+        konum: document.getElementById('duzKonum').value,
+        durum: document.getElementById('duzDurum').value,
+        alis_fiyati: parseFloat(document.getElementById('duzFiyat').value) || null,
+        aciklama: document.getElementById('duzAciklama').value
+      })
+    });
+    bildir(d.mesaj || 'Stok güncellendi');
+    duzenleKapat();
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+/* ═══ KESİME GÖNDER ═══
+   BLOK  → hedef sorulur (plaka mı, ebatlı mı) → /kesim?kaynak=<id>&yon=BLOK_PLAKA|BLOK_EBATLI
+   PLAKA → tek yön var → /kesim?kaynak=<id>&yon=PLAKA_EBATLI
+   Kesim ekranı kaynağı otomatik seçer ve cins/yüzey bilgilerini doldurur. */
+function kesimeGonder(id, tip) {
+  if (tip === 'PLAKA') {
+    location.href = `/kesim?kaynak=${encodeURIComponent(id)}&yon=PLAKA_EBATLI`;
+    return;
+  }
+  // BLOK → hedef tipi sor
+  const s = (SON.data || []).find(x => x.id === id);
+  cekmeceAc(
+    'Kesim hedefi',
+    `${(s && s.cins) || ''} · ${id}`,
+    `<p style="font-size:.9rem;color:var(--soluk);margin-bottom:16px">
+       Bu blok neye kesilecek? Seçimine göre kesim formu hazır açılır.
+     </p>
+     <div style="display:grid;gap:10px">
+       <button class="blok-btn birincil" style="text-align:left;padding:14px"
+               onclick="location.href='/kesim?kaynak=${encodeURIComponent(id)}&yon=BLOK_PLAKA'">
+         <strong style="display:block;font-size:.95rem">Plakaya kes</strong>
+         <small style="color:rgba(255,255,255,.75)">Blok → dilimlenmiş plakalar (m²)</small>
+       </button>
+       <button class="blok-btn" style="text-align:left;padding:14px"
+               onclick="location.href='/kesim?kaynak=${encodeURIComponent(id)}&yon=BLOK_EBATLI'">
+         <strong style="display:block;font-size:.95rem">Ebatlıya kes</strong>
+         <small style="color:var(--soluk)">Blok → ölçülü ebatlı ürün (kasa)</small>
+       </button>
+     </div>`,
+    `<button class="blok-btn" onclick="cekmeceKapat()">Vazgeç</button>`
+  );
+}
+
+async function stokSil(id, tip, no) {
+  const ad = no || id;
+  if (!confirm(`${ad} silinsin mi?\n\nBu stoğa ait maliyet kayıtları ve cari hareketler de temizlenir. Bu işlem geri alınamaz.`)) return;
+  try {
+    const d = await api(`/api/stok/${encodeURIComponent(tip)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Stok silindi');
+    cekmeceKapat();
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* */ }
+}
+
+/* ═══ MALİYET EKLE (stok çekmecesinden) ═══
+   Kullanıcı maliyetler sayfasına gitmeden, açık olan stoğa doğrudan
+   maliyet ekleyebilsin. Stok zaten seçili gelir. */
+let MAL_STOK = null;
+/* Maliyet KDV oranı: hazır seçim veya serbest giriş */
+function malKdvDegisti() {
+  const sec = document.getElementById('malKdvSec');
+  const kutu = document.getElementById('malKdvSerbest');
+  const inp = document.getElementById('malKdv');
+  if (sec.value === 'diger') { kutu.style.display = 'flex'; inp.focus(); inp.select(); }
+  else { kutu.style.display = 'none'; inp.value = sec.value; }
+}
+function malKdvOraniAl() {
+  const sec = document.getElementById('malKdvSec');
+  if (!sec) return 0;
+  return sec.value === 'diger'
+    ? (parseFloat(document.getElementById('malKdv').value) || 0)
+    : (parseFloat(sec.value) || 0);
+}
+async function maliyetAc(id, tip, no, cins) {
+  MAL_STOK = { id, tip };
+  document.getElementById('malAlt').textContent =
+    `${no || id}${cins ? ' · ' + cins : ''} · ${tip}`;
+  document.getElementById('malTutar').value = '';
+  document.getElementById('malFaturaNo').value = '';
+  document.getElementById('malKdvSec').value = '20';
+  document.getElementById('malKdv').value = 20;
+  document.getElementById('malKdvSerbest').style.display = 'none';
+  document.getElementById('malKdvDahil').checked = false;
+  document.getElementById('malDoviz').value = 'TRY';
+  document.getElementById('malModal').classList.add('acik');
+  // Tedarikçi listesini doldur (bir kez)
+  const sec = document.getElementById('malCari');
+  if (sec.options.length <= 1) {
+    try {
+      const d = await api('/api/cari?per_page=300');
+      (d.data || []).forEach(c => {
+        const o = document.createElement('option');
+        o.value = c.id; o.textContent = c.unvan;
+        sec.appendChild(o);
+      });
+    } catch (e) { /* cari yetkisi yoksa boş kalır */ }
+  }
+  setTimeout(() => document.getElementById('malTutar').focus(), 60);
+}
+function maliyetKapat() {
+  document.getElementById('malModal').classList.remove('acik');
+  MAL_STOK = null;
+}
+async function maliyetKaydet() {
+  if (!MAL_STOK) return;
+  const tutar = parseFloat(document.getElementById('malTutar').value);
+  if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar gir.', true); return; }
+  const btn = document.getElementById('malKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api('/api/maliyet', {
+      method: 'POST',
+      body: JSON.stringify({
+        maliyet_tip: document.getElementById('malTip').value,
+        baglanti_tip: 'stok',
+        baglanti_id: MAL_STOK.id,
+        tutar,
+        doviz: document.getElementById('malDoviz').value,
+        kdv_oran: malKdvOraniAl(),
+        kdv_dahil_mi: document.getElementById('malKdvDahil').checked,
+        fatura_no: document.getElementById('malFaturaNo').value,
+        cari_id: document.getElementById('malCari').value || null
+      })
+    });
+    bildir(d.mesaj || 'Maliyet eklendi');
+    const _id = MAL_STOK.id;
+    maliyetKapat();
+    await listeyiCiz();
+    detayAc(_id);          // çekmeceyi tazele — yeni maliyet görünsün
+  } catch (e) { /* hata api() içinde gösterilir */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+kpiYukle();
+listeyiCiz();
+</script>
+{% endblock %}

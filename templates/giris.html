@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giriş · Milestone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --taban:#F6F6F3; --yuzey:#FFFFFF; --murekkep:#191C1A; --soluk:#68706C;
+  --cizgi:#E5E5DF; --cizgi-koyu:#D6D6CE;
+  --verde:#0C4F38; --verde-koyu:#093D2B; --verde-acik:#E3EFE8;
+  --kirmizi:#B23A2E; --kirmizi-bg:#FAEAE7;
+  --govde:'Instrument Sans',system-ui,sans-serif;
+  --baslik:'Archivo',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--govde);background:var(--taban);color:var(--murekkep);
+  min-height:100vh;display:grid;grid-template-columns:1fr 1fr;
+  -webkit-font-smoothing:antialiased;
+}
+:focus-visible{outline:2px solid var(--verde);outline-offset:2px}
+
+/* Sol: taşın kendisi — damarlı mermer yüzeyi */
+.taraf{
+  background:var(--murekkep);color:#fff;padding:48px;
+  display:flex;flex-direction:column;justify-content:space-between;
+  position:relative;overflow:hidden;
+}
+.taraf::before{ /* damar dokusu */
+  content:'';position:absolute;inset:0;opacity:.5;
+  background:
+    linear-gradient(118deg,transparent 38%,rgba(12,79,56,.75) 39.2%,transparent 40.4%),
+    linear-gradient(104deg,transparent 55%,rgba(255,255,255,.10) 56%,transparent 57.4%),
+    linear-gradient(126deg,transparent 68%,rgba(12,79,56,.45) 69%,transparent 70.2%),
+    linear-gradient(97deg,transparent 22%,rgba(255,255,255,.06) 23%,transparent 24.6%);
+}
+.taraf > *{position:relative}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-tas{
+  width:40px;height:40px;border-radius:9px;
+  background:linear-gradient(135deg,#F2F2EE 0%,#DDDDD5 100%);
+  position:relative;overflow:hidden;
+}
+.logo-tas::after{content:'';position:absolute;inset:0;background:
+  linear-gradient(115deg,transparent 42%,rgba(12,79,56,.55) 43.5%,transparent 45%),
+  linear-gradient(100deg,transparent 60%,rgba(25,28,26,.22) 61%,transparent 62.5%)}
+.logo span{font-family:var(--baslik);font-weight:700;font-size:1.05rem;letter-spacing:.01em}
+.soz{max-width:420px}
+.soz h1{font-family:var(--baslik);font-weight:800;font-size:2.5rem;line-height:1.1;letter-spacing:-.03em}
+.soz p{color:#A8B0AC;margin-top:14px;font-size:1rem;line-height:1.55}
+.alt-not{color:#6E7773;font-size:.8rem}
+
+/* Sağ: giriş */
+.form-taraf{display:grid;place-items:center;padding:40px}
+.kutu{width:100%;max-width:352px}
+.kutu h2{font-family:var(--baslik);font-weight:700;font-size:1.6rem;letter-spacing:-.02em}
+.kutu .ust-not{color:var(--soluk);font-size:.9rem;margin-top:5px;margin-bottom:26px}
+.alan{margin-bottom:15px}
+.alan label{display:block;font-size:.74rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px}
+.alan input{
+  width:100%;border:1px solid var(--cizgi-koyu);border-radius:7px;
+  padding:11px 13px;font-family:var(--govde);font-size:.95rem;background:var(--yuzey);
+  transition:border-color .15s,box-shadow .15s;
+}
+.alan input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+.gir{
+  width:100%;border:0;background:var(--verde);color:#fff;
+  border-radius:7px;padding:12px;font-family:var(--govde);
+  font-weight:600;font-size:.95rem;cursor:pointer;margin-top:8px;
+  transition:background .15s;
+}
+.gir:hover{background:var(--verde-koyu)}
+.hata{
+  background:var(--kirmizi-bg);color:var(--kirmizi);border-radius:7px;
+  padding:10px 13px;font-size:.86rem;font-weight:500;margin-bottom:18px;
+}
+@media (max-width:880px){
+  body{grid-template-columns:1fr}
+  .taraf{display:none}
+  .form-taraf{padding:28px}
+}
+</style>
+</head>
+<body>
+  <aside class="taraf">
+    <div class="logo"><div class="logo-tas"></div><span>Milestone</span></div>
+    <div class="soz">
+      <h1>Taşın yolculuğu, tek ekranda.</h1>
+      <p>Ocaktan bloğa, plakadan konteynere — stok, sipariş, sevkiyat ve tahsilat aynı yerde.</p>
+    </div>
+    <div class="alt-not">Milestone Mermer San. ve Tic. Ltd. Şti. · Denizli</div>
+  </aside>
+
+  <main class="form-taraf">
+    <div class="kutu">
+      <h2>Giriş yap</h2>
+      <p class="ust-not">Devam etmek için hesabınla giriş yap.</p>
+
+      {% with mesajlar = get_flashed_messages() %}
+        {% if mesajlar %}
+          {% for m in mesajlar %}<div class="hata">{{ m }}</div>{% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <form method="POST" action="/giris">
+        <div class="alan">
+          <label for="kullanici">Kullanıcı adı</label>
+          <input id="kullanici" name="kullanici" required autofocus autocomplete="username">
+        </div>
+        <div class="alan">
+          <label for="sifre">Şifre</label>
+          <input id="sifre" name="sifre" type="password" required autocomplete="current-password">
+        </div>
+        <button class="gir" type="submit">Giriş yap</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

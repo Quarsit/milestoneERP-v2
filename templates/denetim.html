@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Denetim{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'denetim')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-denetim">
+    <button onclick="disaAktar('denetim','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('denetim','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk)}
+  .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
+  .arac-cubugu select,.arac-cubugu input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;background:var(--yuzey)}
+  .arac-cubugu select:focus,.arac-cubugu input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .suz{margin-left:auto}
+  tbody tr{cursor:pointer}
+  .fark{font-family:var(--mono);font-size:.78rem;line-height:1.5}
+  .fark-satir{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--cizgi)}
+  .fark-satir:last-child{border-bottom:0}
+  .fark-satir .a{color:var(--soluk);min-width:110px}
+  .fark-satir .e{color:var(--kirmizi);text-decoration:line-through;opacity:.75}
+  .fark-satir .y{color:var(--verde);font-weight:600}
+  .sayfalama{display:flex;align-items:center;gap:10px;justify-content:flex-end;margin-top:14px;font-size:.85rem;color:var(--soluk)}
+  .sayfalama button{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:6px;padding:5px 12px;font-weight:600}
+  .sayfalama button:disabled{opacity:.4;cursor:default}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Denetim Kaydı</h1>
+<p class="g-alt">Kim, ne zaman, neyi değiştirdi. Satıra tıkla — değişen alanların öncesi/sonrası sağ panelde.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="arac-cubugu">
+  <button class="cip aktif" data-i="">Tüm işlemler</button>
+  <button class="cip" data-i="EKLE">Ekleme</button>
+  <button class="cip" data-i="GUNCELLE">Güncelleme</button>
+  <button class="cip" data-i="SIL">Silme</button>
+  <button class="cip" data-i="GIRIS">Giriş</button>
+  <select id="fKullanici" onchange="filtrele()"><option value="">Tüm kullanıcılar</option></select>
+  <select id="fTablo" onchange="filtrele()"><option value="">Tüm tablolar</option></select>
+  <input id="fBas" type="date" onchange="filtrele()" title="Başlangıç">
+  <input id="fSon" type="date" onchange="filtrele()" title="Bitiş">
+</div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead><tr><th>Zaman</th><th>Kullanıcı</th><th>İşlem</th><th>Tablo / Kayıt</th><th>Değişiklik</th></tr></thead>
+    <tbody id="govde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+  </table>
+</div>
+<div class="sayfalama" id="sayfalama"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ DENETİM ═══
+   /api/denetim?islem=&kullanici=&tablo=&bas_tarih=&son_tarih=&page=&per_page=
+     → {data:[{id, tarih, kullanici, islem, tablo, kayit_id, eski, yeni, ip}], meta:{page,pages,total}}
+   /api/denetim/lookup → filtre için kullanıcı ve tablo listeleri
+   eski/yeni: JSON — değişen alanlar öncesi/sonrası karşılaştırılır. */
+
+const RZ = { 'EKLE':'rz-yesil', 'GUNCELLE':'rz-mavi', 'SIL':'rz-kirmizi',
+             'GIRIS':'rz-gri', 'CIKIS':'rz-gri' };
+const RENK = { 'EKLE':'--verde', 'GUNCELLE':'--mavi', 'SIL':'--kirmizi',
+               'GIRIS':'--cizgi-koyu', 'CIKIS':'--cizgi-koyu' };
+const AD = { 'EKLE':'Ekleme', 'GUNCELLE':'Güncelleme', 'SIL':'Silme',
+             'GIRIS':'Giriş', 'CIKIS':'Çıkış' };
+
+let ISLEM = '', SAYFA = 1, SON = { data: [], meta: {} };
+
+function coz(v) {
+  if (!v) return null;
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(v); } catch (e) { return null; }
+}
+
+async function yukle() {
+  const g = document.getElementById('govde');
+  g.innerHTML = '<tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr>';
+  const q = new URLSearchParams({ page: SAYFA, per_page: 50 });
+  if (ISLEM) q.set('islem', ISLEM);
+  const k = document.getElementById('fKullanici').value;
+  const t = document.getElementById('fTablo').value;
+  const b = document.getElementById('fBas').value;
+  const s = document.getElementById('fSon').value;
+  if (k) q.set('kullanici', k);
+  if (t) q.set('tablo', t);
+  if (b) q.set('bas_tarih', b);
+  if (s) q.set('son_tarih', s);
+
+  try { SON = await api('/api/denetim?' + q); }
+  catch (e) {
+    g.innerHTML = '<tr><td colspan="5" class="bos">Denetim kaydı alınamadı.</td></tr>';
+    document.getElementById('sayfalama').innerHTML = '';
+    return;
+  }
+  const rows = SON.data || [];
+  g.innerHTML = rows.length ? rows.map((r, i) => {
+    const eski = coz(r.eski), yeni = coz(r.yeni);
+    let ozet = '—';
+    if (r.islem === 'GUNCELLE' && eski && yeni) {
+      const degisen = Object.keys(yeni).filter(k2 => JSON.stringify(eski[k2]) !== JSON.stringify(yeni[k2]));
+      ozet = degisen.length ? degisen.slice(0, 3).join(', ') + (degisen.length > 3 ? ` +${degisen.length - 3}` : '') : 'değişiklik yok';
+    } else if (r.islem === 'EKLE' && yeni) {
+      ozet = Object.keys(yeni).length + ' alan';
+    } else if (r.islem === 'SIL') {
+      ozet = 'kayıt silindi';
+    } else if (r.islem === 'GIRIS' || r.islem === 'CIKIS') {
+      ozet = r.ip || '—';
+    }
+    return `
+    <tr style="border-left-color:var(${RENK[r.islem] || '--cizgi-koyu'})" onclick="detayAc(${i})">
+      <td class="mono" style="font-size:.8rem">${kacar((r.tarih || '').slice(0, 16))}</td>
+      <td><strong>${kacar(r.kullanici || '—')}</strong></td>
+      <td><span class="rozet ${RZ[r.islem] || 'rz-gri'}">${kacar(AD[r.islem] || r.islem || '—')}</span></td>
+      <td>${kacar(r.tablo || '—')}
+        ${r.kayit_id ? '<div class="ikincil mono">' + kacar(r.kayit_id) + '</div>' : ''}</td>
+      <td style="color:var(--soluk);font-size:.83rem">${kacar(ozet)}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="bos">Kayıt yok.</td></tr>';
+
+  const m = SON.meta || {};
+  const son = m.pages || 1;
+  document.getElementById('sayfalama').innerHTML = son > 1
+    ? `<button onclick="sayfaGit(${SAYFA - 1})" ${SAYFA <= 1 ? 'disabled' : ''}>← Önceki</button>
+       <span>Sayfa ${SAYFA} / ${son} · ${m.total || 0} kayıt</span>
+       <button onclick="sayfaGit(${SAYFA + 1})" ${SAYFA >= son ? 'disabled' : ''}>Sonraki →</button>`
+    : `<span>${m.total || rows.length} kayıt</span>`;
+}
+function sayfaGit(n) { SAYFA = n; yukle(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+function filtrele() { SAYFA = 1; yukle(); }
+
+function detayAc(i) {
+  const r = (SON.data || [])[i];
+  if (!r) return;
+  const eski = coz(r.eski), yeni = coz(r.yeni);
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+
+  let farkHTML = '';
+  if (r.islem === 'GUNCELLE' && eski && yeni) {
+    const degisen = Object.keys(yeni).filter(k => JSON.stringify(eski[k]) !== JSON.stringify(yeni[k]));
+    farkHTML = degisen.length ? `<div class="fark">${degisen.map(k => `
+      <div class="fark-satir">
+        <span class="a">${kacar(k)}</span>
+        <span class="e">${kacar(String(eski[k] ?? '—')).slice(0, 30)}</span>
+        <span>→</span>
+        <span class="y">${kacar(String(yeni[k] ?? '—')).slice(0, 30)}</span>
+      </div>`).join('')}</div>` : '<div class="bos" style="padding:12px">Değişen alan yok.</div>';
+  } else if (yeni) {
+    farkHTML = `<div class="fark">${Object.entries(yeni).slice(0, 14).map(([k, v]) => `
+      <div class="fark-satir">
+        <span class="a">${kacar(k)}</span>
+        <span class="y">${kacar(String(v ?? '—')).slice(0, 40)}</span>
+      </div>`).join('')}</div>`;
+  } else if (eski) {
+    farkHTML = `<div class="fark">${Object.entries(eski).slice(0, 14).map(([k, v]) => `
+      <div class="fark-satir">
+        <span class="a">${kacar(k)}</span>
+        <span class="e">${kacar(String(v ?? '—')).slice(0, 40)}</span>
+      </div>`).join('')}</div>`;
+  } else {
+    farkHTML = '<div class="bos" style="padding:12px">Detay kaydı yok.</div>';
+  }
+
+  const govde = `
+    <div class="alan-grid">
+      ${alan('İşlem', `<span class="rozet ${RZ[r.islem] || 'rz-gri'}">${kacar(AD[r.islem] || r.islem)}</span>`)}
+      ${alan('Kullanıcı', kacar(r.kullanici || '—'))}
+      ${alan('Tablo', kacar(r.tablo || '—'))}
+      ${alan('Kayıt', kacar(r.kayit_id || '—'), true)}
+      ${alan('Zaman', kacar(r.tarih || '—'), true)}
+      ${alan('IP', kacar(r.ip || '—'), true)}
+    </div>
+    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:8px">
+      ${r.islem === 'GUNCELLE' ? 'Değişen alanlar' : r.islem === 'SIL' ? 'Silinen kayıt' : 'Alanlar'}</h4>
+    ${farkHTML}`;
+  cekmeceAc(kacar(AD[r.islem] || r.islem), `${r.tablo || ''} · ${r.kayit_id || ''}`, govde,
+    `<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+}
+
+/* Filtre listeleri */
+async function lookupYukle() {
+  try {
+    const d = await api('/api/denetim/lookup');
+    const ks = d.kullanicilar || d.kullanici_listesi || [];
+    const ts = d.tablolar || d.tablo_listesi || [];
+    document.getElementById('fKullanici').innerHTML = '<option value="">Tüm kullanıcılar</option>' +
+      ks.map(k => `<option value="${kacar(k)}">${kacar(k)}</option>`).join('');
+    document.getElementById('fTablo').innerHTML = '<option value="">Tüm tablolar</option>' +
+      ts.map(t => `<option value="${kacar(t)}">${kacar(t)}</option>`).join('');
+  } catch (e) { /* */ }
+}
+
+document.querySelectorAll('.cip').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.cip').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif'); ISLEM = b.dataset.i; SAYFA = 1; yukle();
+});
+
+lookupYukle();
+yukle();
+</script>
+{% endblock %}

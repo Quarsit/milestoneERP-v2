@@ -1,0 +1,473 @@
+{% extends "base.html" %}
+{% block title %}Sevkiyat{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'sevkiyat')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-sevkiyat">
+    <button onclick="disaAktar('sevkiyat','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('sevkiyat','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% if menu_admin or menu_yetki.get('sevkiyat') == 'yazma' %}
+<button class="btn-yeni" onclick="yeniAc()">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+  Yeni Sevkiyat
+</button>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+  .hat{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;align-items:start}
+  .hat-kolon{background:var(--notr-bg);border-radius:var(--r);padding:10px;min-height:130px}
+  .hat-kolon h4{font-size:.76rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);display:flex;align-items:baseline;gap:7px;padding:2px 6px 10px}
+  .hat-kolon h4 .adet{font-family:var(--mono);font-weight:500}
+  .kart{background:var(--yuzey);border:1px solid var(--cizgi);border-left-width:3px;border-radius:var(--r-kucuk);padding:11px 12px;margin-bottom:9px;cursor:pointer;transition:box-shadow .15s,transform .12s}
+  .kart:hover{box-shadow:var(--golge);transform:translateY(-1px)}
+  .kart .no{font-family:var(--mono);font-size:.72rem;color:var(--soluk)}
+  .kart .musteri{font-weight:600;font-size:.9rem;margin:3px 0 2px}
+  .kart .rota{font-size:.78rem;color:var(--soluk)}
+  .kart .alt{display:flex;align-items:center;margin-top:8px;gap:8px}
+  .kart .alt .knt{font-family:var(--mono);font-size:.74rem;color:var(--soluk)}
+  .kart .alt .yas{margin-left:auto;font-size:.72rem;color:var(--soluk)}
+  .kart .alt .yas.uyari{color:var(--kehribar);font-weight:600}
+  .kolon-bos{color:var(--soluk);font-size:.8rem;text-align:center;padding:16px 8px}
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+  .suz{margin-left:auto}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:220px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .gorunum-sec{display:flex;background:var(--notr-bg);border-radius:var(--r-kucuk);padding:3px}
+  .gorunum-sec button{border:0;background:transparent;padding:7px 15px;border-radius:6px;font-weight:600;font-size:.84rem;color:var(--soluk)}
+  .gorunum-sec button.aktif{background:var(--yuzey);color:var(--murekkep);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .zaman-cizgi{border-left:2px solid var(--cizgi);margin:6px 0 0 5px;padding-left:16px}
+  .zc-madde{position:relative;padding-bottom:13px;font-size:.84rem}
+  .zc-madde::before{content:'';position:absolute;left:-21.5px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--cizgi-koyu)}
+  .zc-madde.simdi::before{background:var(--verde)}
+  .zc-madde.simdi strong{color:var(--verde)}
+  .zc-madde.gelecek{opacity:.45}
+  .zc-madde .zc-tarih{font-size:.72rem;color:var(--soluk);font-family:var(--mono)}
+  #liste tbody tr{cursor:pointer}
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:600px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto}
+  .form-satir{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+  .form-alan label{display:block;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
+  .not{background:var(--verde-acik);color:var(--verde);border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:14px}
+  @media (max-width:1100px){ .hat{grid-template-columns:1fr;gap:16px} }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Sevkiyat</h1>
+<p class="g-alt">Konteyner ve teslimat takibi. Karta tıkla — durum, belgeler ve işlemler sağ panelde.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="arac-cubugu">
+  <div class="gorunum-sec" id="gSec">
+    <button class="aktif" data-g="hat">Hat</button>
+    <button data-g="liste">Liste</button>
+  </div>
+  <div class="suz"><input id="ara" placeholder="Müşteri, konteyner, sevkiyat no…" autocomplete="off"></div>
+</div>
+
+<div id="hatGorunum">
+  <div class="hat" id="hat"><div class="kolon-bos">Yükleniyor…</div></div>
+</div>
+
+<div id="listeGorunum" style="display:none">
+  <div class="tablo-kutu">
+    <table id="liste">
+      <thead><tr><th>Sevkiyat</th><th>Müşteri</th><th>Rota</th><th>Konteyner</th><th>Durum</th><th class="sag">Yaş</th></tr></thead>
+      <tbody id="listeGovde"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Yeni sevkiyat modalı -->
+<div class="modal-ortu" id="modal" onclick="if(event.target===this)modalKapat()">
+  <div class="modal" role="dialog" aria-label="Yeni sevkiyat">
+    <div class="modal-bas">
+      <h3>Yeni Sevkiyat</h3>
+      <p>Hazır siparişi seç — müşteri ve rota otomatik gelir.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="not" id="mNot" style="display:none"></div>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>Sipariş</label>
+        <select id="fSiparis" onchange="siparisSecildi()"><option value="">— siparişsiz sevkiyat —</option></select>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Müşteri</label>
+          <input id="fMusteri" placeholder="Müşteri ünvanı" list="dl-musteriler">
+          <datalist id="dl-musteriler"></datalist>
+        </div>
+        <div class="form-alan"><label>Sevk Tipi</label>
+          <select id="fTip"><option value="ihracat">İhracat</option><option value="yurtici">Yurt içi</option></select>
+        </div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Çıkış Noktası</label><input id="fCikis" value="Denizli"></div>
+        <div class="form-alan"><label>Varış Noktası</label><input id="fVaris" placeholder="New York"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Nakliye Firması</label><input id="fFirma" placeholder="MSC, Maersk…"></div>
+        <div class="form-alan"><label>Konteyner No</label><input id="fKonteyner" placeholder="MSCU1234567"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Araç Plakası / Vagon No</label><input id="fPlaka" placeholder="20 ABC 123"></div>
+        <div class="form-alan"><label>Şoför Adı Soyadı</label><input id="fSoforAd" placeholder="Kara nakliyesi için"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Şoför Telefon / TC</label><input id="fSoforKimlik" placeholder="opsiyonel"></div>
+        <div class="form-alan"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Belge Tipi</label>
+          <select id="fBelgeTip">
+            <option value="">—</option>
+            <option>Bill of Lading</option><option>CMR</option><option>İrsaliye</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Belge No</label><input id="fBelgeNo" placeholder="opsiyonel"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Tah. Yükleme</label><input id="fYukleme" type="date"></div>
+        <div class="form-alan"><label>Tah. Teslim</label><input id="fTeslim" type="date"></div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="modalKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="fKaydet" onclick="sevkiyatKaydet()">Oluştur</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ SEVKİYAT ═══
+   /api/sevkiyat  → liste
+   POST /api/sevkiyat {sevk_tip, musteri, siparis_id?, cikis_noktasi, varis_noktasi,
+                       nakliye_firma, konteyner_no, belge_tip, belge_no, tah_yukleme, tah_teslim}
+   POST /api/sevkiyat/<id>/durum {durum}
+   Geçiş kuralları (backend ile birebir):
+     Hazirlaniyor → Yolda | Iptal
+     Yolda        → Gumrukte | Teslim Edildi | Iptal
+     Gumrukte     → Teslim Edildi | Yolda | Iptal
+     Teslim Edildi→ Gumrukte (geri alma)
+   NOT: sevkiyat "Teslim Edildi" olunca bağlı sipariş de otomatik teslim edilir. */
+
+const KOLONLAR = [
+  { d: 'Hazirlaniyor',  ad: 'Hazırlanıyor', renk: '--verde' },
+  { d: 'Yolda',         ad: 'Yolda',        renk: '--mavi' },
+  { d: 'Gumrukte',      ad: 'Gümrükte',     renk: '--kehribar' },
+  { d: 'Teslim Edildi', ad: 'Teslim',       renk: '--cizgi-koyu' },
+];
+const GECIS_A = {   // Yüklemede teslim (FOB/CIF/EXW...): tek adım
+  'Hazirlaniyor':  ['Sevk Edildi', 'Iptal'],
+  'Sevk Edildi':   ['Hazirlaniyor'],
+  'Iptal':         ['Hazirlaniyor'],
+};
+const GECIS_B = {   // Varışta teslim (DAP/DDP/DPU): iki aşamalı
+  'Hazirlaniyor':  ['Yolda', 'Iptal'],
+  'Yolda':         ['Gumrukte', 'Teslim Edildi', 'Hazirlaniyor', 'Iptal'],
+  'Gumrukte':      ['Teslim Edildi', 'Yolda', 'Iptal'],
+  'Teslim Edildi': ['Gumrukte'],
+  'Iptal':         ['Hazirlaniyor'],
+};
+// Geriye uyum: eski GECIS referansları B'ye düşer (güvenli)
+const GECIS = GECIS_B;
+const AD = { 'Hazirlaniyor':'Hazırlanıyor', 'Sevk Edildi':'Sevk Edildi', 'Yolda':'Yolda', 'Gumrukte':'Gümrükte',
+             'Teslim Edildi':'Teslim Edildi', 'Iptal':'İptal' };
+const RZ = { 'Hazirlaniyor':'rz-yesil', 'Sevk Edildi':'rz-gri', 'Yolda':'rz-mavi', 'Gumrukte':'rz-kehribar',
+             'Teslim Edildi':'rz-gri', 'Iptal':'rz-kirmizi' };
+/* Bu durumda bu kadar günden fazla beklerse ⚠ */
+const SABIR = { 'Hazirlaniyor': 5, 'Sevk Edildi': 9999, 'Yolda': 35, 'Gumrukte': 10, 'Teslim Edildi': 9999 };
+
+let TUM = [], ARA = '', GORUNUM = 'hat', HAZIR_SIPARISLER = [];
+
+function yas(s) {
+  return gunFarki(s.cikis_tarihi || s.sevk_tarihi || s.hazirlama_tarihi);
+}
+
+async function yukle() {
+  try {
+    const d = await api('/api/sevkiyat');
+    const liste = Array.isArray(d) ? d : (d.data || []);
+    TUM = liste.map(s => ({ ...s, gun: yas(s) }));
+  } catch (e) {
+    document.getElementById('hat').innerHTML = '<div class="kolon-bos">Sevkiyat verisi alınamadı.</div>';
+    return;
+  }
+  ciz();
+}
+
+function suzulmus() {
+  const s = ARA.toLocaleLowerCase('tr');
+  return TUM.filter(x => !s ||
+    [x.id, x.musteri, x.konteyner_no, x.varis_noktasi, x.nakliye_firma]
+      .filter(Boolean).join(' ').toLocaleLowerCase('tr').includes(s));
+}
+
+function ciz() {
+  const veri = suzulmus();
+  if (GORUNUM === 'hat') hatCiz(veri); else listeCiz(veri);
+}
+
+function hatCiz(veri) {
+  document.getElementById('hat').innerHTML = KOLONLAR.map(k => {
+    // Grup A "Sevk Edildi" = teslim → Teslim Edildi kolonunda göster
+    const kartlar = veri.filter(s =>
+      s.durum === k.d || (k.d === 'Teslim Edildi' && s.durum === 'Sevk Edildi')
+    ).sort((a, b) => b.gun - a.gun);
+    return `<div class="hat-kolon">
+      <h4>${k.ad} <span class="adet">${kartlar.length}</span></h4>
+      ${kartlar.length ? kartlar.map(s => {
+        const gec = s.gun > (SABIR[s.durum] || 9999);
+        return `
+        <div class="kart" style="border-left-color:var(${k.renk})" onclick="detayAc('${kacar(s.id)}')">
+          <div class="no">${kacar(s.id)}</div>
+          <div class="musteri">${kacar(s.musteri || '—')}</div>
+          <div class="rota">${kacar(s.cikis_noktasi || '?')} → ${kacar(s.varis_noktasi || '?')}</div>
+          <div class="alt">
+            <span class="knt">${kacar(s.konteyner_no || s.nakliye_firma || '')}</span>
+            <span class="yas ${gec ? 'uyari' : ''}">${gec ? '⚠ ' : ''}${s.gun} gün</span>
+          </div>
+        </div>`;
+      }).join('') : '<div class="kolon-bos">—</div>'}
+    </div>`;
+  }).join('');
+}
+
+function listeCiz(veri) {
+  const sirali = [...veri].sort((a, b) => b.gun - a.gun);
+  document.getElementById('listeGovde').innerHTML = sirali.length ? sirali.map(s => {
+    const k = KOLONLAR.find(x => x.d === s.durum) || { renk: '--cizgi-koyu' };
+    const gec = s.gun > (SABIR[s.durum] || 9999);
+    return `
+    <tr style="border-left-color:var(${k.renk})" onclick="detayAc('${kacar(s.id)}')">
+      <td class="mono">${kacar(s.id)}</td>
+      <td>${kacar(s.musteri || '—')}</td>
+      <td style="font-size:.83rem">${kacar(s.cikis_noktasi || '?')} → ${kacar(s.varis_noktasi || '?')}</td>
+      <td class="mono" style="font-size:.8rem">${kacar(s.konteyner_no || s.arac_plaka || '—')}<div class="ikincil">${kacar(s.nakliye_firma || '')}</div></td>
+      <td><span class="rozet ${RZ[s.durum] || 'rz-gri'}">${kacar(AD[s.durum] || s.durum)}</span></td>
+      <td class="sag mono" style="${gec ? 'color:var(--kehribar);font-weight:600' : 'color:var(--soluk)'}">${gec ? '⚠ ' : ''}${s.gun} gün</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="bos">Sevkiyat yok.</td></tr>';
+}
+
+/* ── Çekmece ── */
+async function detayAc(id) {
+  const s = TUM.find(x => x.id === id);
+  if (!s) return;
+  cekmeceAc(kacar(s.musteri || id), `${s.id} · ${AD[s.durum] || s.durum}`,
+    '<div class="yukleniyor">Yükleniyor…</div>', '');
+
+  let d = {};
+  try { d = await api(`/api/sevkiyat/${encodeURIComponent(id)}`); } catch (e) { return; }
+  const sv = d.sevkiyat || s;
+  const kalemler = d.kalemler || [];
+
+  // ═══ INCOTERM AKIŞI: Grup A (yüklemede teslim) tek adım, Grup B iki aşamalı ═══
+  const varisTakibi = d.varis_takibi !== false;  // undefined/true → B (güvenli)
+  const GECIS_AKTIF = varisTakibi ? GECIS_B : GECIS_A;
+  const KOLONLAR_AKTIF = varisTakibi
+    ? KOLONLAR
+    : [ { d: 'Hazirlaniyor', ad: 'Hazırlanıyor', renk: '--verde' },
+        { d: 'Sevk Edildi',  ad: 'Sevk Edildi',  renk: '--cizgi-koyu' } ];
+  const incotermNot = varisTakibi
+    ? ''
+    : `<div style="font-size:.78rem;color:var(--soluk);margin:8px 0;padding:7px 10px;background:var(--kagit);border-radius:7px">Teslim şekli <b>${kacar(d.teslim_sekli || '—')}</b> · yüklemede teslim: "Sevk Edildi" ile satış tamamlanır.</div>`;
+
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+  const govde = `
+    <div class="alan-grid">
+      ${alan('Rota', kacar(sv.cikis_noktasi || '?') + ' → ' + kacar(sv.varis_noktasi || '?'))}
+      ${alan('Bu durumda', s.gun + ' gündür')}
+      ${alan('Konteyner', kacar(sv.konteyner_no || '—'), true)}
+      ${alan('Nakliye', kacar(sv.nakliye_firma || '—'))}
+      ${alan('Araç Plakası', kacar(sv.arac_plaka || '—'), true)}
+      ${alan('Şoför', kacar(sv.sofor_adi ? sv.sofor_adi + (sv.sofor_tc ? ' · ' + sv.sofor_tc : '') : '—'))}
+      ${alan('Belge', kacar(sv.belge_tip ? sv.belge_tip + ' · ' + (sv.belge_no || '—') : '—'))}
+      ${alan('Sipariş', sv.siparis_id ? kacar(sv.siparis_id) : '—', true)}
+      ${alan('Tah. Yükleme', kacar(sv.tah_yukleme || '—'), true)}
+      ${alan('Tah. Teslim', kacar(sv.tah_teslim || '—'), true)}
+    </div>
+    ${kalemler.length ? `
+      <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">Yük · ${kalemler.length} kalem</h4>
+      <div style="margin-bottom:18px">
+        ${kalemler.map(k => `
+          <div style="display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem">
+            <span class="rozet rz-gri">${kacar(k.stok_tip || k.urun_tip || '?')}</span>
+            <span>${kacar(k.cins || '—')}</span>
+            <span class="mono" style="margin-left:auto">${(k.miktar || 0).toLocaleString('tr-TR')} ${kacar(k.birim || '')}</span>
+          </div>`).join('')}
+      </div>` : ''}
+    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px">Süreç</h4>
+    ${incotermNot}
+    <div class="zaman-cizgi">
+      ${KOLONLAR_AKTIF.map(k => {
+        const suan = KOLONLAR_AKTIF.findIndex(x => x.d === sv.durum);
+        const bu = KOLONLAR_AKTIF.findIndex(x => x.d === k.d);
+        const simdi = k.d === sv.durum;
+        return `<div class="zc-madde ${simdi ? 'simdi' : ''} ${bu > suan ? 'gelecek' : ''}">
+          ${simdi ? '<div class="zc-tarih">şu an · ' + s.gun + ' gündür</div>' : ''}
+          <strong>${k.ad}</strong>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  const izinli = GECIS_AKTIF[sv.durum] || [];
+  const eylem = [];
+  if (yazabilir('sevkiyat')) {
+    izinli.filter(g => g !== 'Iptal').forEach((g, i) => {
+      // !! ile boolean'a zorla — aksi halde siparis_id string'i tirnaksiz gomulur
+      const uyari = !!((g === 'Teslim Edildi' || g === 'Sevk Edildi') && sv.siparis_id);
+      eylem.push(`<button class="blok-btn ${i === 0 ? 'birincil' : ''}" onclick="durumGecir('${kacar(id)}','${g}',${uyari})">${AD[g]} yap</button>`);
+    });
+    if (izinli.includes('Iptal'))
+      eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="durumGecir('${kacar(id)}','Iptal',false)">İptal et</button>`);
+    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="sevkiyatSil('${kacar(id)}','${kacar(sv.konteyner_no || sv.belge_no || sv.musteri || '')}')">Sil</button>`);
+  }
+  if (!eylem.length) eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+
+  cekmeceAc(kacar(sv.musteri || id), `${sv.id} · ${AD[sv.durum] || sv.durum}`, govde, eylem.join(''));
+}
+
+/* DELETE /api/sevkiyat/<id> */
+async function sevkiyatSil(id, ad) {
+  if (!confirm(`${ad || id} sevkiyatı silinsin mi? Bu işlem geri alınamaz.`)) return;
+  try {
+    const d = await api(`/api/sevkiyat/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Sevkiyat silindi');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* */ }
+}
+
+async function durumGecir(id, yeni, siparisUyari) {
+  if (yeni === 'Iptal' && !confirm('Sevkiyat iptal edilsin mi?')) return;
+  if (siparisUyari && !confirm((yeni === 'Sevk Edildi'
+      ? 'Mal sevk edilecek (yüklemede teslim). Bağlı sipariş "Teslim Edildi" olacak ve satış kaydı oluşacak. Onaylıyor musun?'
+      : 'Sevkiyat teslim edilecek. Bağlı sipariş de otomatik "Teslim Edildi" olacak. Onaylıyor musun?'))) return;
+  try {
+    const d = await api(`/api/sevkiyat/${encodeURIComponent(id)}/durum`, {
+      method: 'POST', body: JSON.stringify({ durum: yeni })
+    });
+    bildir(d.mesaj || (AD[yeni] + ' yapıldı'));
+    cekmeceKapat();
+    await yukle();
+  } catch (e) { /* api() bildirdi */ }
+}
+
+/* ── Yeni sevkiyat ── */
+let SEVK_CARILER = [];
+
+async function yeniAc() {
+  document.getElementById('modal').classList.add('acik');
+  // Müşteri önerileri (Cari'den)
+  if (!SEVK_CARILER.length) {
+    try {
+      const d = await api('/api/cari?per_page=300');
+      SEVK_CARILER = (d.data || []).filter(cariMusteriMi);
+    } catch (e) { SEVK_CARILER = []; }
+  }
+  const dl = document.getElementById('dl-musteriler');
+  if (dl) dl.innerHTML = SEVK_CARILER.map(c => `<option value="${kacar(c.unvan)}">`).join('');
+  ['fMusteri','fVaris','fFirma','fKonteyner','fBelgeNo','fYukleme','fTeslim'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('fCikis').value = 'Denizli';
+  document.getElementById('mNot').style.display = 'none';
+  const sel = document.getElementById('fSiparis');
+  sel.innerHTML = '<option value="">— siparişsiz sevkiyat —</option>';
+  try {
+    const d = await api('/api/siparis?per_page=200');
+    HAZIR_SIPARISLER = (d.data || []).filter(s => s.durum === 'Hazir');
+    HAZIR_SIPARISLER.forEach(s => {
+      sel.innerHTML += `<option value="${s.id}">${kacar(s.id)} · ${kacar(s.musteri || '')} · ${para(s.toplam_tutar, s.doviz)}</option>`;
+    });
+    if (!HAZIR_SIPARISLER.length) {
+      const n = document.getElementById('mNot');
+      n.style.display = ''; n.style.background = 'var(--kehribar-bg)'; n.style.color = 'var(--kehribar)';
+      n.textContent = '“Hazır” durumda sipariş yok. Siparişsiz sevkiyat oluşturabilirsin.';
+    }
+  } catch (e) { /* sipariş yetkisi yoksa siparişsiz devam */ }
+}
+function siparisSecildi() {
+  const s = HAZIR_SIPARISLER.find(x => x.id === document.getElementById('fSiparis').value);
+  const n = document.getElementById('mNot');
+  if (s) {
+    document.getElementById('fMusteri').value = s.musteri || '';
+    n.style.display = ''; n.style.background = 'var(--verde-acik)'; n.style.color = 'var(--verde)';
+    n.textContent = 'Sevkiyat teslim edildiğinde bu sipariş de otomatik “Teslim Edildi” olur.';
+  } else {
+    n.style.display = 'none';
+  }
+}
+function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
+
+async function sevkiyatKaydet() {
+  const musteri = document.getElementById('fMusteri').value.trim();
+  if (!musteri) { bildir('Müşteri zorunlu.', true); return; }
+  const btn = document.getElementById('fKaydet');
+  btn.disabled = true; btn.textContent = 'Oluşturuluyor…';
+  try {
+    const d = await api('/api/sevkiyat', {
+      method: 'POST',
+      body: JSON.stringify({
+        sevk_tip: document.getElementById('fTip').value,
+        musteri,
+        siparis_id: document.getElementById('fSiparis').value || null,
+        cikis_noktasi: document.getElementById('fCikis').value,
+        varis_noktasi: document.getElementById('fVaris').value,
+        nakliye_firma: document.getElementById('fFirma').value,
+        konteyner_no: document.getElementById('fKonteyner').value,
+        arac_plaka: document.getElementById('fPlaka').value,
+        sofor_adi: document.getElementById('fSoforAd').value,
+        sofor_kimlik: document.getElementById('fSoforKimlik').value,
+        belge_tip: document.getElementById('fBelgeTip').value,
+        belge_no: document.getElementById('fBelgeNo').value,
+        tah_yukleme: document.getElementById('fYukleme').value || null,
+        tah_teslim: document.getElementById('fTeslim').value || null,
+        durum: 'Hazirlaniyor'
+      })
+    });
+    bildir(d.mesaj || 'Sevkiyat oluşturuldu');
+    modalKapat();
+    await yukle();
+  } catch (e) { /* api() bildirdi */ }
+  finally { btn.disabled = false; btn.textContent = 'Oluştur'; }
+}
+
+/* ── Görünüm + arama ── */
+document.querySelectorAll('#gSec button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#gSec button').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif');
+  GORUNUM = b.dataset.g;
+  document.getElementById('hatGorunum').style.display = GORUNUM === 'hat' ? '' : 'none';
+  document.getElementById('listeGorunum').style.display = GORUNUM === 'liste' ? '' : 'none';
+  ciz();
+});
+let araZaman;
+document.getElementById('ara').addEventListener('input', e => {
+  clearTimeout(araZaman);
+  araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
+});
+
+yukle();
+</script>
+{% endblock %}

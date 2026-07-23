@@ -1,0 +1,887 @@
+{% extends "base.html" %}
+{% block title %}Ayarlar{% endblock %}
+
+{% block head %}
+<style>
+  .sekmeler{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--cizgi);flex-wrap:wrap}
+  .sekme{padding:9px 15px;font-size:.88rem;font-weight:500;color:var(--soluk);border:0;background:transparent;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .sekme:hover{color:var(--murekkep)}
+  .sekme.aktif{color:var(--verde);border-bottom-color:var(--verde);font-weight:600}
+  .bolum{display:none} .bolum.aktif{display:block;animation:belirme .18s ease}
+  @keyframes belirme{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .form-satir{display:grid;gap:12px;margin-bottom:12px}
+  .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr}
+  .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .yetki-tablo{width:100%;border-collapse:collapse;font-size:.85rem}
+  .yetki-tablo th{text-align:left;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);padding:8px 10px;border-bottom:1px solid var(--cizgi)}
+  .yetki-tablo td{padding:7px 10px;border-bottom:1px solid var(--cizgi)}
+  .yetki-tablo tr:last-child td{border-bottom:0}
+  .yetki-sec{display:flex;background:var(--notr-bg);border-radius:6px;padding:2px;width:fit-content}
+  .yetki-sec button{border:0;background:transparent;padding:4px 10px;border-radius:5px;font-size:.76rem;font-weight:600;color:var(--soluk)}
+  .yetki-sec button.aktif{background:var(--yuzey);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .yetki-sec button.aktif[data-y="gizli"]{color:var(--kirmizi)}
+  .yetki-sec button.aktif[data-y="okuma"]{color:var(--mavi)}
+  .yetki-sec button.aktif[data-y="yazma"]{color:var(--verde)}
+  .lookup-satir{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--cizgi);font-size:.88rem}
+  .lookup-satir:last-child{border-bottom:0}
+  .lookup-satir .k{font-family:var(--mono);font-size:.78rem;color:var(--soluk);margin-left:auto}
+  .sil-btn{border:0;background:transparent;color:var(--kirmizi);font-size:1rem;cursor:pointer;padding:0 4px}
+  .satir-ekle{display:flex;gap:8px;margin-top:12px}
+  .satir-ekle input{flex:1;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:8px 11px;font-family:var(--govde);font-size:.88rem}
+  .satir-ekle input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:640px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
+  .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--kehribar-bg);color:var(--kehribar)}
+  .izgara-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:900px){ .izgara-2{grid-template-columns:1fr} }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Ayarlar</h1>
+<p class="g-alt">Kullanıcılar ve yetkiler, firma bilgileri, liste tanımları.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="sekmeler">
+  <button class="sekme aktif" data-b="kullanici">Kullanıcılar</button>
+  <button class="sekme" data-b="firma">Firma</button>
+  <button class="sekme" data-b="eposta">E-posta</button>
+  <button class="sekme" data-b="listeler">Listeler</button>
+  <button class="sekme" data-b="banka">Bankalar</button>
+  <button class="sekme" data-b="yedek">Yedekleme</button>
+</div>
+
+<!-- KULLANICILAR -->
+<section class="bolum aktif" id="b-kullanici">
+  <div class="tablo-kutu">
+    <table>
+      <thead><tr><th>Kullanıcı</th><th>Rol</th><th>Yetkili Modüller</th><th>Durum</th><th class="sag" style="width:150px"></th></tr></thead>
+      <tbody id="kullaniciGovde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+    </table>
+  </div>
+  <div style="margin-top:14px">
+    <button class="btn-yeni" onclick="kullaniciAc()">+ Yeni Kullanıcı</button>
+  </div>
+</section>
+
+<!-- FİRMA -->
+<section class="bolum" id="b-firma">
+  <div class="izgara-2">
+    <div class="panel">
+      <h4>Firma Bilgileri</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Proforma ve fatura belgelerinde görünür.</p>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>Satıcı Firma Ünvanı</label>
+        <input id="fFirma" placeholder="Milestone Mermer San. ve Tic. Ltd. Şti.">
+      </div>
+      <div class="form-alan" style="margin-bottom:14px">
+        <label>Kısaltma (stok kodlarında)</label>
+        <input id="fKisaltma" placeholder="MST">
+      </div>
+      <button class="btn-yeni" onclick="firmaKaydet()">Kaydet</button>
+
+      <div style="border-top:1px solid var(--cizgi);margin-top:18px;padding-top:16px">
+        <h4 style="margin-bottom:6px">Firma Logosu</h4>
+        <p style="color:var(--soluk);font-size:.83rem;margin-bottom:12px">
+          Proforma, Packing List, Commercial Invoice ve ekstre belgelerinin
+          üst kısmında görünür. Değiştirdiğinizde tüm belgeler anında güncellenir.
+        </p>
+        <div id="logoOnizleme" style="display:none;margin-bottom:12px;padding:14px;
+             background:#fff;border:1px solid var(--cizgi);border-radius:var(--r-kucuk);text-align:center">
+          <img id="logoResim" style="max-height:70px;max-width:100%;object-fit:contain">
+          <div id="logoBilgi" style="font-size:.75rem;color:var(--soluk);margin-top:8px"></div>
+        </div>
+        <div id="logoYokNot" style="padding:14px;background:var(--kagit);border:1px dashed var(--cizgi-koyu);
+             border-radius:var(--r-kucuk);text-align:center;color:var(--soluk);font-size:.85rem;margin-bottom:12px">
+          Henüz logo yüklenmedi — belgelerde firma adı yazı olarak görünüyor.
+        </div>
+        <input type="file" id="logoDosya" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+               style="display:none" onchange="logoSecildi(event)">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="blok-btn" onclick="document.getElementById('logoDosya').click()">
+            Logo seç ve yükle</button>
+          <button class="blok-btn" id="logoSilBtn" style="color:var(--kirmizi);display:none"
+                  onclick="logoSil()">Logoyu kaldır</button>
+        </div>
+        <div style="font-size:.75rem;color:var(--soluk);margin-top:8px">
+          PNG, JPG, SVG veya WEBP · en fazla 500 KB · şeffaf arka planlı PNG önerilir
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h4>Vergi</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Yurt içi faturalarda varsayılan KDV oranı.</p>
+      <div class="form-alan" style="margin-bottom:14px">
+        <label>KDV Oranı (%)</label>
+        <input id="fKdv" type="number" step="0.1" placeholder="20">
+      </div>
+      <button class="btn-yeni" onclick="kdvKaydet()">Kaydet</button>
+    </div>
+    <div class="panel">
+      <h4>Üretim Ödeme Kapısı</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Onaylı sipariş üretime geçmeden önce gereken minimum avans oranı. <b>0 = kapalı</b> (ödeme kontrolü yapılmaz). Yönetici kapıyı zorla geçebilir.</p>
+      <div class="form-alan" style="margin-bottom:14px">
+        <label>Minimum Avans (%)</label>
+        <input id="fAvans" type="number" step="1" min="0" max="100" placeholder="0">
+      </div>
+      <button class="btn-yeni" onclick="avansKaydet()">Kaydet</button>
+    </div>
+  </div>
+</section>
+
+<!-- E-POSTA (SMTP) -->
+<section class="bolum" id="b-eposta">
+  <div class="izgara-2">
+    <div class="panel">
+      <h4>SMTP Sunucu Ayarları</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Proforma belgelerini müşteriye e-posta ile göndermek için kurumsal mail sunucu bilgileri. Şifre güvenli saklanır, ekranda gösterilmez.</p>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>SMTP Sunucu</label>
+        <input id="sSunucu" data-buyuk-harf="hayir" placeholder="mail.milestonemermer.com">
+      </div>
+      <div class="izgara-2" style="gap:12px;margin-bottom:12px">
+        <div class="form-alan">
+          <label>Port</label>
+          <input id="sPort" type="number" placeholder="587">
+        </div>
+        <div class="form-alan">
+          <label>Güvenlik</label>
+          <select id="sGuvenlik">
+            <option value="tls">TLS (587)</option>
+            <option value="ssl">SSL (465)</option>
+            <option value="yok">Yok</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>Kullanıcı adı (e-posta)</label>
+        <input id="sKullanici" data-buyuk-harf="hayir" placeholder="satis@milestonemermer.com">
+      </div>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>Şifre <span id="sSifreNot" style="color:var(--soluk);font-size:.78rem"></span></label>
+        <input id="sSifre" type="password" placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <button class="btn-yeni" onclick="smtpKaydet()">Kaydet</button>
+    </div>
+    <div class="panel">
+      <h4>Gönderen Bilgisi & Test</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Müşteriye giden e-postada görünecek gönderen adı ve adresi.</p>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>Gönderen Adı</label>
+        <input id="sGonderenAd" placeholder="Milestone Mermer">
+      </div>
+      <div class="form-alan" style="margin-bottom:14px">
+        <label>Gönderen E-posta</label>
+        <input id="sGonderenEmail" data-buyuk-harf="hayir" placeholder="satis@milestonemermer.com">
+      </div>
+      <div style="border-top:1px solid var(--cizgi);padding-top:14px;margin-top:4px">
+        <p style="color:var(--soluk);font-size:.83rem;margin-bottom:10px">Ayarları kaydettikten sonra bir test e-postası gönderin.</p>
+        <div class="form-alan" style="margin-bottom:10px">
+          <label>Test alıcı adresi</label>
+          <input id="sTestAlici" type="email" placeholder="kendi@adresiniz.com">
+        </div>
+        <button class="blok-btn" onclick="smtpTest()">Test e-postası gönder</button>
+        <div id="smtpDiyalog" style="display:none;margin-top:12px;padding:11px 13px;background:var(--kagit);border:1px solid var(--cizgi);border-radius:8px;max-height:280px;overflow-y:auto"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- LİSTELER -->
+<section class="bolum" id="b-listeler">
+  <div class="izgara-2" id="lookupIzgara">
+    <div class="panel"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+</section>
+
+<!-- BANKALAR -->
+<section class="bolum" id="b-banka">
+  <div class="tablo-kutu">
+    <table>
+      <thead><tr><th>Banka</th><th>Şube</th><th>Hesap No</th><th>IBAN</th><th>SWIFT</th><th>Döviz</th><th class="sag" style="width:140px"></th></tr></thead>
+      <tbody id="bankaGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+    </table>
+  </div>
+  <div style="margin-top:14px">
+    <button class="btn-yeni" onclick="bankaAc()">+ Yeni Banka Hesabı</button>
+  </div>
+</section>
+
+<!-- YEDEKLEME -->
+<section class="bolum" id="b-yedek">
+  <div class="izgara-2">
+    <div class="panel">
+      <h4>Yedek Al</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+        Veritabanının tam kopyasını alır. Sistem her gün otomatik yedek de alıyor.
+      </p>
+      <div id="taniKutu" style="background:var(--notr-bg);border-radius:7px;padding:10px 12px;font-size:.8rem;color:var(--soluk);margin-bottom:14px">
+        Durum kontrol ediliyor…
+      </div>
+      <button class="btn-yeni" id="yAlBtn" onclick="yedekAl()">Şimdi Yedek Al</button>
+    </div>
+    <div class="panel">
+      <h4>Yedekten Geri Yükle</h4>
+      <div class="not" style="background:var(--kirmizi-bg);color:var(--kirmizi);border-radius:7px;padding:10px 12px;font-size:.8rem;margin-bottom:14px">
+        <strong>Dikkat:</strong> Geri yükleme mevcut tüm verinin üzerine yazar.
+        İşlemden önce sistem otomatik olarak güvenlik yedeği alır.
+      </div>
+      <p style="color:var(--soluk);font-size:.83rem">
+        Aşağıdaki listeden bir yedek seç ve <strong>Geri Yükle</strong>'ye bas.
+      </p>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h4>Yedekler <span id="yedekAdet" style="color:var(--soluk);font-weight:400"></span></h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Dosya</th><th>Tip</th><th>Tarih</th><th class="sag">Boyut</th><th class="sag" style="width:230px"></th></tr></thead>
+        <tbody id="yedekGovde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Banka modalı -->
+<div class="modal-ortu" id="bankaModal" onclick="if(event.target===this)bankaKapat()">
+  <div class="modal" style="width:620px" role="dialog" aria-label="Banka">
+    <div class="modal-bas">
+      <h3 id="bBaslik">Yeni Banka Hesabı</h3>
+      <p>Proforma ve faturalarda ödeme bilgisi olarak kullanılır.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Banka Adı <span style="color:var(--kirmizi)">*</span></label><input id="bAd" placeholder="İş Bankası"></div>
+        <div class="form-alan"><label>Şube</label><input id="bSube" placeholder="Denizli Merkez"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="bDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Hesap No</label><input id="bHesap" placeholder="1234-5678901"></div>
+        <div class="form-alan"><label>SWIFT / BIC</label><input id="bSwift" placeholder="ISBKTRIS"></div>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px">
+        <label>IBAN</label>
+        <input id="bIban" placeholder="TR00 0000 0000 0000 0000 0000 00" style="font-family:var(--mono)">
+      </div>
+      <div class="form-alan" style="margin-bottom:12px"><label>Açıklama</label><input id="bAciklama" placeholder="opsiyonel"></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:.85rem">
+        <input type="checkbox" id="bVarsayilan" style="width:auto">
+        <label for="bVarsayilan" style="margin:0;text-transform:none;letter-spacing:0;font-weight:500;color:var(--murekkep)">
+          Varsayılan hesap (belgelerde bu görünür)
+        </label>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="bankaKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="bKaydet" onclick="bankaKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Kullanıcı modalı -->
+<div class="modal-ortu" id="modal" onclick="if(event.target===this)modalKapat()">
+  <div class="modal" role="dialog" aria-label="Kullanıcı">
+    <div class="modal-bas">
+      <h3 id="mBaslik">Yeni Kullanıcı</h3>
+      <p>Rol ve modül bazında yetkiler. Admin tüm modüllere erişir.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Kullanıcı Adı</label><input id="uAd" autocomplete="off"></div>
+        <div class="form-alan"><label id="uSifreLabel">Şifre</label><input id="uSifre" type="password" autocomplete="new-password"></div>
+        <div class="form-alan"><label>Rol</label>
+          <select id="uRol" onchange="rolDegisti()">
+            <option value="PERSONEL">Personel</option>
+            <option value="MUDUR">Müdür</option>
+            <option value="ADMIN">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div class="not" id="adminNot" style="display:none">Admin rolü tüm modüllere tam erişir; ayrı yetki seçimi gerekmez.</div>
+      <div id="yetkiKutu">
+        <div style="display:flex;align-items:center;margin-bottom:8px">
+          <h5 style="font-size:.75rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)">Modül Yetkileri</h5>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="mini-btn" onclick="hepsi('okuma')">Hepsi okuma</button>
+            <button class="mini-btn" onclick="hepsi('gizli')">Hepsi gizli</button>
+          </div>
+        </div>
+        <div style="border:1px solid var(--cizgi);border-radius:var(--r-kucuk);max-height:290px;overflow-y:auto">
+          <table class="yetki-tablo">
+            <thead><tr><th>Modül</th><th style="width:210px">Yetki</th></tr></thead>
+            <tbody id="yetkiGovde"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="modalKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="uKaydet" onclick="kullaniciKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ AYARLAR ═══
+   Kullanıcı: /api/ayarlar/kullanici (GET/POST), /<id> (PUT/DELETE)
+   Firma    : /api/ayarlar/firma (GET/POST) — satici_firma, kisaltma
+   KDV      : /api/ayarlar/kdv_oran (GET/POST)
+   Listeler : /api/ayarlar/lookup?kategori= (GET/POST), /<id> (PUT/DELETE)
+   NOT: lookup POST/PUT/DELETE yalnızca ADMIN rolüne açıktır (backend kuralı). */
+
+const MODULLER = [
+  ['dashboard','Bugün'], ['stok','Stok'], ['siparis','Siparişler'], ['rezervasyon','Rezervasyonlar'],
+  ['kesim','Kesim'], ['maliyet','Maliyetler'], ['proforma','Proforma'], ['fatura','Faturalar'],
+  ['sevkiyat','Sevkiyat'], ['satislar','Satışlar'], ['cari','Cari'], ['kasa','Kasa & Çek'],
+  ['karlilik','Karlılık'], ['raporlar','Raporlar'], ['ayarlar','Ayarlar'], ['denetim','Denetim'],
+];
+/* Üreticiler/ocaklar BURADA DEĞİL — Cari modülünden yönetilir
+   (cari_tip = Üretici/Tedarikçi). Tek kaynak ilkesi. */
+/* Bankalar ARTIK BURADA DEĞİL — kendi tablosu var (hesap no, IBAN, şube…),
+   "Bankalar" sekmesinden yönetilir. */
+const LOOKUPLAR = [
+  ['cins', 'Mermer Cinsleri'], ['ozellik', 'Yüzey İşlemleri'],
+  ['ulke', 'Ülkeler'],
+];
+
+let KULLANICILAR = [], DUZENLENEN = null, YETKILER = {}, PROFORMA_ONAY_YETKI = false;
+
+/* ── Kullanıcılar ── */
+async function kullaniciYukle() {
+  try {
+    const d = await api('/api/ayarlar/kullanici');
+    KULLANICILAR = Array.isArray(d) ? d : (d.data || []);
+  } catch (e) {
+    document.getElementById('kullaniciGovde').innerHTML =
+      '<tr><td colspan="5" class="bos">Kullanıcı listesi alınamadı (admin yetkisi gerekir).</td></tr>';
+    return;
+  }
+  const g = document.getElementById('kullaniciGovde');
+  g.innerHTML = KULLANICILAR.length ? KULLANICILAR.map(u => {
+    let y = {};
+    try { y = typeof u.yetkiler === 'string' ? JSON.parse(u.yetkiler || '{}') : (u.yetkiler || {}); } catch (e) { y = {}; }
+    const admin = (u.rol || '').toUpperCase() === 'ADMIN';
+    const acik = Object.entries(y).filter(([, v]) => v !== 'gizli');
+    return `
+    <tr style="border-left-color:var(${u.aktif === false ? '--cizgi-koyu' : '--verde'})">
+      <td><strong>${kacar(u.ad)}</strong></td>
+      <td><span class="rozet ${admin ? 'rz-yesil' : 'rz-gri'}">${kacar(u.rol || 'PERSONEL')}</span></td>
+      <td style="font-size:.83rem;color:var(--soluk)">
+        ${admin ? '<span style="color:var(--verde);font-weight:600">Tüm modüller</span>'
+          : (acik.length ? acik.slice(0, 4).map(([k, v]) =>
+              `<span class="rozet ${v === 'yazma' ? 'rz-verde' : 'rz-mavi'}" style="margin-right:3px">${kacar(k)}</span>`).join('')
+              + (acik.length > 4 ? ` +${acik.length - 4}` : '')
+            : '<span style="color:var(--kirmizi)">yetki yok</span>')}
+      </td>
+      <td><span class="rozet ${u.aktif === false ? 'rz-kirmizi' : 'rz-yesil'}">${u.aktif === false ? 'Pasif' : 'Aktif'}</span></td>
+      <td class="sag">
+        <button class="mini-btn" onclick="kullaniciAc(${u.id})">Düzenle</button>
+        ${u.ad !== '{{ session.get("kullanici","") }}'
+          ? `<button class="mini-btn" style="color:var(--kirmizi)" onclick="kullaniciSil(${u.id}, '${kacar(u.ad)}')">Sil</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="bos">Kullanıcı yok.</td></tr>';
+}
+
+function kullaniciAc(id) {
+  DUZENLENEN = id ? KULLANICILAR.find(u => u.id === id) : null;
+  document.getElementById('mBaslik').textContent = DUZENLENEN ? 'Kullanıcıyı Düzenle' : 'Yeni Kullanıcı';
+  document.getElementById('uSifreLabel').textContent = DUZENLENEN ? 'Şifre (boş bırak = değişmez)' : 'Şifre';
+  document.getElementById('uAd').value = DUZENLENEN ? DUZENLENEN.ad : '';
+  document.getElementById('uSifre').value = '';
+  document.getElementById('uRol').value = DUZENLENEN ? (DUZENLENEN.rol || 'PERSONEL') : 'PERSONEL';
+  YETKILER = {};
+  PROFORMA_ONAY_YETKI = DUZENLENEN ? !!DUZENLENEN.proforma_onay : false;
+  if (DUZENLENEN) {
+    try {
+      YETKILER = typeof DUZENLENEN.yetkiler === 'string'
+        ? JSON.parse(DUZENLENEN.yetkiler || '{}') : (DUZENLENEN.yetkiler || {});
+    } catch (e) { YETKILER = {}; }
+  }
+  yetkiCiz(); rolDegisti();
+  document.getElementById('modal').classList.add('acik');
+}
+function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
+
+function rolDegisti() {
+  const admin = document.getElementById('uRol').value === 'ADMIN';
+  document.getElementById('adminNot').style.display = admin ? '' : 'none';
+  document.getElementById('yetkiKutu').style.display = admin ? 'none' : '';
+}
+
+function yetkiCiz() {
+  document.getElementById('yetkiGovde').innerHTML = MODULLER.map(([k, ad]) => {
+    const mevcut = YETKILER[k] || 'gizli';
+    return `
+    <tr>
+      <td>${ad} <span style="color:var(--soluk);font-family:var(--mono);font-size:.75rem">${k}</span></td>
+      <td>
+        <div class="yetki-sec">
+          ${['gizli', 'okuma', 'yazma'].map(y => `
+            <button class="${mevcut === y ? 'aktif' : ''}" data-y="${y}" onclick="yetkiSec('${k}','${y}')">
+              ${y === 'gizli' ? 'Gizli' : y === 'okuma' ? 'Okuma' : 'Yazma'}
+            </button>`).join('')}
+        </div>
+      </td>
+    </tr>`;
+  }).join('') + `
+    <tr style="border-top:2px solid var(--cizgi-koyu)">
+      <td>Proforma İç Onay <span style="color:var(--soluk);font-family:var(--mono);font-size:.75rem">özel</span>
+        <div style="color:var(--soluk);font-size:.74rem;margin-top:2px">Hazırlanan proformaları onaylayabilir/reddedebilir (çift kontrol)</div>
+      </td>
+      <td>
+        <label style="display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:.86rem">
+          <input type="checkbox" id="uProformaOnay" ${PROFORMA_ONAY_YETKI ? 'checked' : ''} onchange="PROFORMA_ONAY_YETKI = this.checked">
+          Onay yetkisi ver
+        </label>
+      </td>
+    </tr>`;
+}
+function yetkiSec(modul, yetki) { YETKILER[modul] = yetki; yetkiCiz(); }
+function hepsi(yetki) { MODULLER.forEach(([k]) => YETKILER[k] = yetki); yetkiCiz(); }
+
+async function kullaniciKaydet() {
+  const ad = document.getElementById('uAd').value.trim();
+  const sifre = document.getElementById('uSifre').value;
+  const rol = document.getElementById('uRol').value;
+  if (!ad) { bildir('Kullanıcı adı zorunlu.', true); return; }
+  if (!DUZENLENEN && !sifre) { bildir('Şifre zorunlu.', true); return; }
+  const btn = document.getElementById('uKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  const yetkilerGovde = rol === 'ADMIN' ? {} : { ...YETKILER };
+  // Özel yetki: proforma iç onay (admin zaten hepsine sahip)
+  if (rol !== 'ADMIN' && PROFORMA_ONAY_YETKI) yetkilerGovde.proforma_onay = true;
+  const govde = { ad, rol, yetkiler: yetkilerGovde };
+  if (sifre) govde.sifre = sifre;
+  try {
+    if (DUZENLENEN) {
+      await api(`/api/ayarlar/kullanici/${DUZENLENEN.id}`, { method: 'PUT', body: JSON.stringify(govde) });
+      bildir('Kullanıcı güncellendi · ' + ad);
+    } else {
+      await api('/api/ayarlar/kullanici', { method: 'POST', body: JSON.stringify(govde) });
+      bildir('Kullanıcı oluşturuldu · ' + ad);
+    }
+    modalKapat(); await kullaniciYukle();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+async function kullaniciSil(id, ad) {
+  if (!confirm(`"${ad}" kullanıcısı silinsin mi?`)) return;
+  try {
+    await api(`/api/ayarlar/kullanici/${id}`, { method: 'DELETE' });
+    bildir('Kullanıcı silindi');
+    await kullaniciYukle();
+  } catch (e) { /* */ }
+}
+
+/* ── Firma + KDV ── */
+/* ═══ FİRMA LOGOSU ═══
+   Logo veritabanında saklanır; yüklendiği an tüm belgelerde kullanılır.
+   Değiştirmek için yeni dosya seçmek yeterli — eskisi otomatik değişir. */
+async function logoYukle() {
+  try {
+    const d = await api('/api/ayarlar/logo');
+    const onizle = document.getElementById('logoOnizleme');
+    const yokNot = document.getElementById('logoYokNot');
+    const silBtn = document.getElementById('logoSilBtn');
+    if (d.var_mi && d.logo) {
+      document.getElementById('logoResim').src = d.logo;
+      document.getElementById('logoBilgi').textContent =
+        `${d.dosya_adi || 'logo'} · ${d.boyut_kb} KB · belgelerde kullanılıyor`;
+      onizle.style.display = ''; yokNot.style.display = 'none'; silBtn.style.display = '';
+    } else {
+      onizle.style.display = 'none'; yokNot.style.display = ''; silBtn.style.display = 'none';
+    }
+  } catch (e) { /* yetkisiz veya hata */ }
+}
+
+function logoSecildi(olay) {
+  const dosya = olay.target.files && olay.target.files[0];
+  if (!dosya) return;
+  // Boyut ön kontrolü — sunucuya boşuna yollamayalım
+  if (dosya.size > 500 * 1024) {
+    bildir(`Logo çok büyük (${Math.round(dosya.size/1024)} KB). En fazla 500 KB olmalı.`, true);
+    olay.target.value = ''; return;
+  }
+  const okuyucu = new FileReader();
+  okuyucu.onload = async () => {
+    try {
+      const d = await api('/api/ayarlar/logo', {
+        method: 'POST',
+        body: JSON.stringify({ logo: okuyucu.result, dosya_adi: dosya.name })
+      });
+      bildir(d.mesaj || 'Logo kaydedildi');
+      logoYukle();
+    } catch (e) { /* hata api() içinde gösterilir */ }
+    finally { olay.target.value = ''; }
+  };
+  okuyucu.onerror = () => { bildir('Dosya okunamadı.', true); olay.target.value = ''; };
+  okuyucu.readAsDataURL(dosya);
+}
+
+async function logoSil() {
+  if (!confirm('Logo kaldırılsın mı?\n\nBelgelerde tekrar firma adı yazısı görünecek.')) return;
+  try {
+    const d = await api('/api/ayarlar/logo', { method: 'DELETE' });
+    bildir(d.mesaj || 'Logo kaldırıldı');
+    logoYukle();
+  } catch (e) { /* */ }
+}
+
+async function firmaYukle() {
+  try {
+    const d = await api('/api/ayarlar/firma');
+    document.getElementById('fFirma').value = d.satici_firma || '';
+    document.getElementById('fKisaltma').value = d.kisaltma || '';
+  } catch (e) { /* */ }
+  logoYukle();
+  try {
+    const k = await api('/api/ayarlar/kdv_oran');
+    document.getElementById('fKdv').value = k.oran != null ? k.oran : '';
+  } catch (e) { /* */ }
+  try {
+    const a = await api('/api/ayarlar/uretim_avans');
+    document.getElementById('fAvans').value = a.yuzde != null ? a.yuzde : 0;
+  } catch (e) { /* */ }
+}
+async function avansKaydet() {
+  let yuzde = parseFloat(document.getElementById('fAvans').value);
+  if (isNaN(yuzde)) yuzde = 0;
+  yuzde = Math.max(0, Math.min(100, yuzde));
+  try {
+    const d = await api('/api/ayarlar/uretim_avans', { method: 'POST', body: JSON.stringify({ yuzde }) });
+    bildir(d.mesaj || ('Üretim avans eşiği %' + yuzde));
+  } catch (e) { /* */ }
+}
+
+async function smtpYukle() {
+  try {
+    const d = await api('/api/ayarlar/smtp');
+    if (!d.ok) return;
+    document.getElementById('sSunucu').value = d.sunucu || '';
+    document.getElementById('sPort').value = d.port || '587';
+    document.getElementById('sKullanici').value = d.kullanici || '';
+    document.getElementById('sGonderenAd').value = d.gonderen_ad || '';
+    document.getElementById('sGonderenEmail').value = d.gonderen_email || '';
+    document.getElementById('sGuvenlik').value = d.guvenlik || 'tls';
+    document.getElementById('sSifreNot').textContent = d.sifre_kayitli
+      ? '(kayıtlı — değiştirmek için yeni şifre girin)' : '(henüz girilmedi)';
+  } catch (e) { /* */ }
+}
+async function smtpKaydet() {
+  const body = {
+    sunucu: document.getElementById('sSunucu').value.trim(),
+    port: document.getElementById('sPort').value.trim() || '587',
+    kullanici: document.getElementById('sKullanici').value.trim(),
+    gonderen_ad: document.getElementById('sGonderenAd').value.trim(),
+    gonderen_email: document.getElementById('sGonderenEmail').value.trim(),
+    guvenlik: document.getElementById('sGuvenlik').value,
+  };
+  const sifre = document.getElementById('sSifre').value;
+  if (sifre) body.sifre = sifre;  // sadece dolu ise gönder
+  try {
+    const d = await api('/api/ayarlar/smtp', { method: 'POST', body: JSON.stringify(body) });
+    bildir(d.mesaj || 'SMTP ayarları kaydedildi');
+    document.getElementById('sSifre').value = '';
+    smtpYukle();
+  } catch (e) { /* */ }
+}
+async function smtpTest() {
+  const alici = document.getElementById('sTestAlici').value.trim();
+  if (!alici || !alici.includes('@')) { bildir('Geçerli bir test adresi girin.', true); return; }
+  const kutu = document.getElementById('smtpDiyalog');
+  if (kutu) { kutu.style.display = 'block'; kutu.textContent = 'Sunucuya bağlanılıyor…'; }
+  bildir('Test e-postası gönderiliyor…');
+  try {
+    const d = await api('/api/ayarlar/smtp/test', { method: 'POST', body: JSON.stringify({ alici }) });
+    bildir(d.mesaj || (d.ok ? 'Test gönderildi' : 'Test başarısız'), !d.ok);
+    // SMTP diyaloğunu göster (sunucunun tam yanıtları)
+    if (kutu) {
+      const satirlar = (d.diyalog || []).filter(s => s && s.trim());
+      kutu.innerHTML = `<div style="font-weight:600;margin-bottom:6px;color:${d.ok?'var(--verde)':'var(--kirmizi)'}">${d.ok?'✓':'✕'} ${d.mesaj}</div>`
+        + (satirlar.length ? `<pre style="margin:0;white-space:pre-wrap;font-size:.72rem;line-height:1.5">${satirlar.map(s=>s.replace(/</g,'&lt;')).join('\n')}</pre>` : '');
+    }
+  } catch (e) {
+    if (kutu) kutu.textContent = 'Test isteği başarısız oldu.';
+  }
+}
+async function firmaKaydet() {
+  try {
+    await api('/api/ayarlar/firma', {
+      method: 'POST',
+      body: JSON.stringify({
+        satici_firma: document.getElementById('fFirma').value,
+        kisaltma: document.getElementById('fKisaltma').value
+      })
+    });
+    bildir('Firma bilgileri kaydedildi');
+  } catch (e) { /* */ }
+}
+async function kdvKaydet() {
+  const oran = parseFloat(document.getElementById('fKdv').value);
+  if (isNaN(oran)) { bildir('Geçerli bir oran gir.', true); return; }
+  try {
+    await api('/api/ayarlar/kdv_oran', { method: 'POST', body: JSON.stringify({ oran }) });
+    bildir('KDV oranı kaydedildi · %' + oran);
+  } catch (e) { /* */ }
+}
+
+/* ── Lookup listeleri ── */
+async function lookupYukle() {
+  const kok = document.getElementById('lookupIzgara');
+  kok.innerHTML = LOOKUPLAR.map(([k, ad]) => `
+    <div class="panel">
+      <h4>${ad}</h4>
+      <div id="lk-${k}"><div class="yukleniyor" style="padding:10px">Yükleniyor…</div></div>
+      <div class="satir-ekle">
+        <input id="lkAd-${k}" placeholder="Yeni ${ad.toLowerCase()}…" onkeydown="if(event.key==='Enter')lookupEkle('${k}')">
+        <button class="mini-btn dolu" onclick="lookupEkle('${k}')">Ekle</button>
+      </div>
+    </div>`).join('');
+  for (const [k] of LOOKUPLAR) await lookupCiz(k);
+}
+
+async function lookupCiz(kategori) {
+  const kok = document.getElementById('lk-' + kategori);
+  if (!kok) return;
+  let rows = [];
+  try {
+    const d = await api(`/api/ayarlar/lookup?kategori=${encodeURIComponent(kategori)}`);
+    rows = Array.isArray(d) ? d : (d.data || []);
+  } catch (e) {
+    kok.innerHTML = '<div class="bos" style="padding:12px">Alınamadı.</div>';
+    return;
+  }
+  kok.innerHTML = rows.length ? rows.map(r => `
+    <div class="lookup-satir">
+      <span>${kacar(r.deger)}</span>
+      ${r.kisaltma ? `<span class="k">${kacar(r.kisaltma)}</span>` : '<span class="k"></span>'}
+      ${window.ADMIN ? `<button class="sil-btn" onclick="lookupSil(${r.id}, '${kacar(kategori)}')" title="Sil">✕</button>` : ''}
+    </div>`).join('') : '<div class="bos" style="padding:12px">Kayıt yok.</div>';
+}
+
+async function lookupEkle(kategori) {
+  const el = document.getElementById('lkAd-' + kategori);
+  // Tüm liste değerleri BÜYÜK HARF. Türkçe locale KULLANILMAZ:
+  // 'i' harfini 'İ' yapar (PIETRA → PİETRA), mermer isimleri İngilizce.
+  const deger = el.value.trim().toUpperCase();
+  if (!deger) return;
+  try {
+    await api('/api/ayarlar/lookup', {
+      method: 'POST', body: JSON.stringify({ kategori, deger })
+    });
+    el.value = '';
+    bildir('Eklendi · ' + deger);
+    await lookupCiz(kategori);
+  } catch (e) { /* api() 403 mesajını gösterir */ }
+}
+
+async function lookupSil(id, kategori) {
+  if (!confirm('Kayıt silinsin mi?')) return;
+  try {
+    await api(`/api/ayarlar/lookup/${id}`, { method: 'DELETE' });
+    bildir('Silindi');
+    await lookupCiz(kategori);
+  } catch (e) { /* */ }
+}
+
+/* ═══ BANKALAR ═══
+   /api/banka (GET/POST) · /api/banka/<id> (PUT/DELETE)
+   Alanlar: banka_adi, sube, hesap_no, iban, swift, doviz, aciklama, varsayilan */
+let BANKALAR = [], DUZ_BANKA = null;
+
+async function bankaYukle() {
+  const g = document.getElementById('bankaGovde');
+  try {
+    const d = await api('/api/banka');
+    BANKALAR = Array.isArray(d) ? d : (d.data || d.bankalar || []);
+  } catch (e) {
+    g.innerHTML = '<tr><td colspan="7" class="bos">Banka listesi alınamadı.</td></tr>';
+    return;
+  }
+  g.innerHTML = BANKALAR.length ? BANKALAR.map(b => `
+    <tr style="border-left-color:var(${b.varsayilan ? '--verde' : '--cizgi-koyu'})">
+      <td><strong>${kacar(b.banka_adi)}</strong>
+        ${b.varsayilan ? '<span class="rozet rz-yesil" style="margin-left:6px">Varsayılan</span>' : ''}</td>
+      <td>${kacar(b.sube || '—')}</td>
+      <td class="mono" style="font-size:.82rem">${kacar(b.hesap_no || '—')}</td>
+      <td class="mono" style="font-size:.78rem">${kacar(b.iban || '—')}</td>
+      <td class="mono" style="font-size:.82rem">${kacar(b.swift || '—')}</td>
+      <td><span class="rozet rz-gri">${kacar(b.doviz || '—')}</span></td>
+      <td class="sag">
+        <button class="mini-btn" onclick="bankaAc(${b.id})">Düzenle</button>
+        <button class="mini-btn" style="color:var(--kirmizi)" onclick="bankaSil(${b.id}, '${kacar(b.banka_adi)}')">Sil</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="7" class="bos">Banka hesabı tanımlı değil.</td></tr>';
+}
+
+function bankaAc(id) {
+  DUZ_BANKA = id ? BANKALAR.find(b => b.id === id) : null;
+  const b = DUZ_BANKA;
+  document.getElementById('bBaslik').textContent = b ? 'Banka Hesabını Düzenle' : 'Yeni Banka Hesabı';
+  document.getElementById('bAd').value = b ? (b.banka_adi || '') : '';
+  document.getElementById('bSube').value = b ? (b.sube || '') : '';
+  document.getElementById('bHesap').value = b ? (b.hesap_no || '') : '';
+  document.getElementById('bIban').value = b ? (b.iban || '') : '';
+  document.getElementById('bSwift').value = b ? (b.swift || '') : '';
+  document.getElementById('bDoviz').value = b ? (b.doviz || 'USD') : 'USD';
+  document.getElementById('bAciklama').value = b ? (b.aciklama || '') : '';
+  document.getElementById('bVarsayilan').checked = b ? !!b.varsayilan : false;
+  document.getElementById('bankaModal').classList.add('acik');
+}
+function bankaKapat() { document.getElementById('bankaModal').classList.remove('acik'); }
+
+async function bankaKaydet() {
+  const ad = document.getElementById('bAd').value.trim();
+  if (!ad) { bildir('Banka adı zorunlu.', true); return; }
+  const btn = document.getElementById('bKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  const govde = {
+    banka_adi: ad,
+    sube: document.getElementById('bSube').value,
+    hesap_no: document.getElementById('bHesap').value,
+    iban: document.getElementById('bIban').value.replace(/\s+/g, ' ').trim(),
+    swift: document.getElementById('bSwift').value.toUpperCase(),
+    doviz: document.getElementById('bDoviz').value,
+    aciklama: document.getElementById('bAciklama').value,
+    varsayilan: document.getElementById('bVarsayilan').checked
+  };
+  try {
+    if (DUZ_BANKA) {
+      await api(`/api/banka/${DUZ_BANKA.id}`, { method: 'PUT', body: JSON.stringify(govde) });
+      bildir('Banka güncellendi · ' + ad);
+    } else {
+      await api('/api/banka', { method: 'POST', body: JSON.stringify(govde) });
+      bildir('Banka eklendi · ' + ad);
+    }
+    bankaKapat();
+    await bankaYukle();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+async function bankaSil(id, ad) {
+  if (!confirm(`"${ad}" banka hesabı silinsin mi?`)) return;
+  try {
+    await api(`/api/banka/${id}`, { method: 'DELETE' });
+    bildir('Banka silindi');
+    await bankaYukle();
+  } catch (e) { /* */ }
+}
+
+/* ── Yedekleme ── */
+const YTIP = { auto: 'Otomatik', manual: 'Elle', pre_restore: 'Geri yükleme öncesi' };
+const YRZ  = { auto: 'rz-gri', manual: 'rz-yesil', pre_restore: 'rz-kehribar' };
+
+async function yedekYukle() {
+  // Ortam tanısı (pg_dump var mı, klasör yazılabilir mi)
+  try {
+    const t = await api('/api/yedek/tani');
+    const bilgi = t.tani || {};
+    const el = document.getElementById('taniKutu');
+    const satirlar = Object.entries(bilgi).map(([k, v]) =>
+      `${kacar(k)}: <strong>${kacar(String(v))}</strong>`).join(' · ');
+    el.innerHTML = satirlar || 'Yedekleme hazır.';
+  } catch (e) {
+    document.getElementById('taniKutu').textContent = 'Tanı bilgisi alınamadı.';
+  }
+  await yedekListe();
+}
+
+async function yedekListe() {
+  const g = document.getElementById('yedekGovde');
+  let liste = [];
+  try {
+    const d = await api('/api/yedek/liste');
+    liste = d.yedekler || [];
+  } catch (e) {
+    g.innerHTML = '<tr><td colspan="5" class="bos">Yedek listesi alınamadı (admin yetkisi gerekir).</td></tr>';
+    return;
+  }
+  document.getElementById('yedekAdet').textContent = liste.length ? '· ' + liste.length + ' dosya' : '';
+  g.innerHTML = liste.length ? liste.map(y => `
+    <tr style="border-left-color:var(${y.tip === 'manual' ? '--verde' : y.tip === 'pre_restore' ? '--kehribar' : '--cizgi-koyu'})">
+      <td class="mono" style="font-size:.8rem">${kacar(y.dosya)}</td>
+      <td><span class="rozet ${YRZ[y.tip] || 'rz-gri'}">${kacar(YTIP[y.tip] || y.tip)}</span></td>
+      <td class="mono" style="font-size:.82rem;color:var(--soluk)">${kacar(y.tarih || '—')}</td>
+      <td class="sag mono">${(y.boyut_kb || 0).toLocaleString('tr-TR')} KB</td>
+      <td class="sag">
+        <button class="mini-btn" onclick="yedekIndir('${kacar(y.dosya)}')">İndir</button>
+        <button class="mini-btn" style="color:var(--kehribar)" onclick="yedekGeriYukle('${kacar(y.dosya)}')">Geri Yükle</button>
+        <button class="mini-btn" style="color:var(--kirmizi)" onclick="yedekSil('${kacar(y.dosya)}')">Sil</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5" class="bos">Henüz yedek yok.</td></tr>';
+}
+
+async function yedekAl() {
+  const btn = document.getElementById('yAlBtn');
+  btn.disabled = true; btn.textContent = 'Yedek alınıyor…';
+  try {
+    const d = await api('/api/yedek/al', { method: 'POST', body: JSON.stringify({}) });
+    bildir(d.mesaj || ('Yedek alındı · ' + (d.dosya || '')));
+    await yedekListe();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Şimdi Yedek Al'; }
+}
+
+function yedekIndir(dosya) {
+  bildir('İndiriliyor…');
+  window.open('/api/yedek/indir/' + encodeURIComponent(dosya), '_blank');
+}
+
+async function yedekGeriYukle(dosya) {
+  if (!confirm(`"${dosya}" yedeğinden geri yüklensin mi?\n\nMEVCUT TÜM VERİ SİLİNİR ve bu yedekteki hâliyle değiştirilir.\nİşlem öncesi güvenlik yedeği alınacak.`)) return;
+  if (!confirm('Emin misin? Bu işlem geri alınamaz.')) return;
+  bildir('Geri yükleniyor, lütfen bekle…');
+  try {
+    const d = await api('/api/yedek/geri_yukle', {
+      method: 'POST', body: JSON.stringify({ dosya })
+    });
+    bildir(d.mesaj || 'Geri yükleme tamam. Sayfa yenileniyor…');
+    setTimeout(() => location.reload(), 1800);
+  } catch (e) { /* */ }
+}
+
+async function yedekSil(dosya) {
+  if (!confirm(`"${dosya}" silinsin mi?`)) return;
+  try {
+    const d = await api('/api/yedek/sil', { method: 'POST', body: JSON.stringify({ dosya }) });
+    bildir(d.mesaj || 'Yedek silindi');
+    await yedekListe();
+  } catch (e) { /* */ }
+}
+
+/* ── Sekmeler ── */
+const yuklendi = { kullanici: false, firma: false, listeler: false, banka: false, yedek: false };
+const yukleyici = { kullanici: kullaniciYukle, firma: firmaYukle, listeler: lookupYukle,
+                    banka: bankaYukle, yedek: yedekYukle, eposta: smtpYukle };
+document.querySelectorAll('.sekme').forEach(s => s.onclick = () => {
+  const ad = s.dataset.b;
+  document.querySelectorAll('.bolum').forEach(b => b.classList.remove('aktif'));
+  document.getElementById('b-' + ad).classList.add('aktif');
+  document.querySelectorAll('.sekme').forEach(x => x.classList.toggle('aktif', x.dataset.b === ad));
+  if (!yuklendi[ad]) { yuklendi[ad] = true; yukleyici[ad](); }
+});
+
+yuklendi.kullanici = true;
+kullaniciYukle();
+</script>
+{% endblock %}

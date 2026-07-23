@@ -1,0 +1,18 @@
+# Milestone ERP — Pardus 25 için minimal gereksinimler
+# Sadece uygulamanın gerçekten import ettiği paketler.
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.7
+SQLAlchemy==2.0.50
+Werkzeug==3.0.6
+Jinja2==3.1.6
+fastapi==0.110.1
+uvicorn==0.25.0
+a2wsgi==1.10.7
+starlette==0.37.2
+python-dotenv==1.2.2
+requests==2.34.2
+psycopg2-binary==2.9.10
+# Dışa aktarma (Excel + PDF)
+openpyxl==3.1.5
+reportlab==4.2.5

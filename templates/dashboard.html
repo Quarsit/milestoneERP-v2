@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Bugün{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik" id="selam">Merhaba</h1>
+<p class="g-alt" id="ozetSatir">Gün özeti hazırlanıyor…</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler" id="kpiler">
+  <div class="kpi"><label>Bu Ay Ciro</label><div class="deger"><span class="iskelet" style="display:block;width:100px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
+  <div class="kpi"><label>Açık Sipariş</label><div class="deger"><span class="iskelet" style="display:block;width:60px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
+  <div class="kpi"><label>Stok Değeri</label><div class="deger"><span class="iskelet" style="display:block;width:100px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
+  <div class="kpi"><label>Vadesi Geçen</label><div class="deger"><span class="iskelet" style="display:block;width:100px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
+</div>
+
+<div class="dikkat-izgara">
+  <div class="dikkat">
+    <div class="dikkat-bas"><span class="nokta" style="background:var(--kirmizi)"></span><h3>Vadesi geçen alacaklar</h3><span class="ozet" id="ozAlacak">—</span></div>
+    <div id="lAlacak"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+
+  <div class="dikkat">
+    <div class="dikkat-bas"><span class="nokta" style="background:var(--kehribar)"></span><h3>Vadesi yaklaşan çekler</h3><span class="ozet" id="ozCek">—</span></div>
+    <div id="lCek"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+
+  <div class="dikkat">
+    <div class="dikkat-bas"><span class="nokta" style="background:var(--mavi)"></span><h3>Takılı siparişler</h3><span class="ozet" id="ozSiparis">—</span></div>
+    <div id="lSiparis"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+
+  <div class="dikkat">
+    <div class="dikkat-bas"><span class="nokta" style="background:var(--verde)"></span><h3>Yolda olan sevkiyatlar</h3><span class="ozet" id="ozSevk">—</span></div>
+    <div id="lSevk"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ BUGÜN: gerçek API'lerden beslenen iş kuyruğu ═══
+   Kaynaklar:
+     KPI          → /api/dashboard/satis_istatistik + /api/rapor/stok_durum + /api/siparis
+     Alacaklar    → /api/rapor/yaslandirilmis_cari  (yaşlandırma kovaları, TRY → kur_usd ile USD)
+     Çekler       → /api/cek/ozet                    (yaklasan_alinan, USD)
+     Siparişler   → /api/siparis                     (durumda bekleme süresi hesaplanır)
+     Sevkiyatlar  → /api/sevkiyat                    (Yolda / Gumrukte)
+   Her kart, yetkisi yoksa sessizce "erişim yok" der; sayfa çökmez. */
+
+const gorunur = m => window.ADMIN || (window.YETKI[m] || 'gizli') !== 'gizli';
+const bosMesaj = t => `<div class="bos">${t}</div>`;
+
+function selamla() {
+  const s = new Date().getHours();
+  const k = '{{ session.get("kullanici","") }}';
+  const g = s < 6 ? 'İyi geceler' : s < 12 ? 'Günaydın' : s < 18 ? 'İyi günler' : 'İyi akşamlar';
+  document.getElementById('selam').textContent = g + (k ? ', ' + k : '');
+}
+
+/* ── KPI şeridi ── */
+async function kpiYukle() {
+  const kutular = document.querySelectorAll('#kpiler .kpi');
+  const yaz = (i, deger, ek, sinif = '') => {
+    kutular[i].querySelector('.deger').innerHTML = deger;
+    const e = kutular[i].querySelector('.ek');
+    e.textContent = ek; e.className = 'ek ' + sinif;
+  };
+  // Ciro + kâr
+  if (gorunur('karlilik') || gorunur('satislar')) {
+    try {
+      const d = await api('/api/dashboard/satis_istatistik');
+      const ay = d.bu_ay || {};
+      const aylik = d.aylik || [];
+      const oncekiAy = aylik.length > 1 ? aylik[aylik.length - 2].satis_usd : 0;
+      const fark = oncekiAy > 0 ? Math.round(((ay.satis || 0) - oncekiAy) / oncekiAy * 100) : null;
+      yaz(0, para(ay.satis || 0).replace(' $', '<small>$</small>'),
+          (ay.adet || 0) + ' satış · kâr ' + para(ay.kar || 0),
+          fark === null ? '' : (fark >= 0 ? 'iyi' : 'kotu'));
+      if (fark !== null) kutular[0].querySelector('.ek').textContent =
+        (fark >= 0 ? '▲ %' : '▼ %') + Math.abs(fark) + ' geçen aya göre · kâr ' + para(ay.kar || 0);
+    } catch (e) { yaz(0, '—', 'veri alınamadı'); }
+  } else yaz(0, '—', 'yetki yok');
+
+  // Açık sipariş
+  if (gorunur('siparis')) {
+    try {
+      const d = await api('/api/siparis?per_page=300');
+      const acik = (d.data || []).filter(s => !['Teslim Edildi', 'Iptal Edildi'].includes(s.durum));
+      const toplam = acik.reduce((a, s) => a + (s.toplam_tutar || 0), 0);
+      yaz(1, String(acik.length), para(toplam) + ' tutarında');
+    } catch (e) { yaz(1, '—', 'veri alınamadı'); }
+  } else yaz(1, '—', 'yetki yok');
+
+  // Stok değeri
+  if (gorunur('stok') || gorunur('raporlar')) {
+    try {
+      const d = await api('/api/rapor/stok_durum');
+      const t = d.tip_ozet || {};
+      const parca = Object.keys(t).map(k => t[k].adet + ' ' + k.toLowerCase()).join(' · ');
+      yaz(2, para(d.toplam_deger_usd || 0).replace(' $', '<small>$</small>'), parca || 'stok yok');
+    } catch (e) { yaz(2, '—', 'veri alınamadı'); }
+  } else yaz(2, '—', 'yetki yok');
+}
+
+/* ── Vadesi geçen alacaklar ── */
+async function alacakYukle() {
+  const kok = document.getElementById('lAlacak');
+  const ozet = document.getElementById('ozAlacak');
+  const kpi = document.querySelectorAll('#kpiler .kpi')[3];
+  if (!gorunur('raporlar') && !gorunur('cari')) {
+    kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = '';
+    kpi.querySelector('.deger').textContent = '—'; kpi.querySelector('.ek').textContent = 'yetki yok';
+    return;
+  }
+  try {
+    const d = await api('/api/rapor/yaslandirilmis_cari');
+    const kur = d.kur_usd || 1;
+    // Yaşlandırma kovaları = vadesi geçmiş borçlar (müşteri bize borçlu)
+    const gecikmis = (d.cariler || [])
+      .map(c => {
+        const gecen = (c.g_0_30_try || 0) + (c.g_31_60_try || 0) + (c.g_61_90_try || 0) + (c.g_90_plus_try || 0);
+        let kova = '', gun = 0;
+        if ((c.g_90_plus_try || 0) > 0) { kova = '90+ gün'; gun = 90; }
+        else if ((c.g_61_90_try || 0) > 0) { kova = '61-90 gün'; gun = 61; }
+        else if ((c.g_31_60_try || 0) > 0) { kova = '31-60 gün'; gun = 31; }
+        else if ((c.g_0_30_try || 0) > 0) { kova = '0-30 gün'; gun = 1; }
+        return { ...c, gecen_usd: gecen / kur, kova, gun };
+      })
+      .filter(c => c.gecen_usd > 1 && cariMusteriMi(c))
+      .sort((a, b) => b.gecen_usd - a.gecen_usd);
+
+    const toplam = gecikmis.reduce((a, c) => a + c.gecen_usd, 0);
+    kpi.querySelector('.deger').innerHTML = para(toplam).replace(' $', '<small>$</small>');
+    kpi.querySelector('.ek').textContent = gecikmis.length + ' cari gecikmede';
+    kpi.querySelector('.ek').className = 'ek ' + (toplam > 0 ? 'kotu' : '');
+    ozet.textContent = gecikmis.length + ' cari · ' + para(toplam);
+
+    if (!gecikmis.length) { kok.innerHTML = bosMesaj('Vadesi geçen alacak yok. Tahsilatlar güncel.'); return; }
+    kok.innerHTML = gecikmis.slice(0, 6).map(c => `
+      <div class="d-satir ray-kirmizi">
+        <div>
+          <div class="kim">${kacar(c.unvan)}</div>
+          <div class="detay">${c.kova} gecikmiş${c.ulke ? ' · ' + kacar(c.ulke) : ''}</div>
+        </div>
+        <span class="tutar">${para(c.gecen_usd)}</span>
+        <a class="mini-btn dolu" href="/cari?cari=${encodeURIComponent(c.cari_id)}">Tahsilat gir</a>
+      </div>`).join('');
+  } catch (e) {
+    kok.innerHTML = bosMesaj('Alacak verisi alınamadı.');
+  }
+}
+
+/* ── Vadesi yaklaşan çekler ── */
+async function cekYukle() {
+  const kok = document.getElementById('lCek'), ozet = document.getElementById('ozCek');
+  if (!gorunur('kasa')) { kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = ''; return; }
+  try {
+    const d = await api('/api/cek/ozet');
+    const cekler = (d.yaklasan_alinan || []).slice(0, 6);
+    const toplam = {};
+    cekler.forEach(c => { toplam[c.doviz] = (toplam[c.doviz] || 0) + (c.tutar || 0); });
+    ozet.textContent = cekler.length
+      ? cekler.length + ' çek · ' + Object.keys(toplam).map(k => para(toplam[k], k)).join(' + ')
+      : '';
+    if (!cekler.length) { kok.innerHTML = bosMesaj('Yakın vadeli çek yok.'); return; }
+    kok.innerHTML = cekler.map(c => {
+      const gecmis = (c.kalan_gun || 0) < 0;
+      return `
+      <div class="d-satir ${gecmis ? 'ray-kirmizi' : 'ray-kehribar'}">
+        <div>
+          <div class="kim">${kacar(c.cek_no || '—')} · ${kacar(c.banka_adi || '')}</div>
+          <div class="detay">${gecmis ? Math.abs(c.kalan_gun) + ' gün geçti' : c.kalan_gun + ' gün kaldı'} · ${kacar(c.cari_unvan || '')}</div>
+        </div>
+        <span class="tutar">${para(c.tutar, c.doviz)}</span>
+        <a class="mini-btn dolu" href="/cek">Tahsile ver</a>
+      </div>`;
+    }).join('');
+  } catch (e) { kok.innerHTML = bosMesaj('Çek verisi alınamadı.'); }
+}
+
+/* ── Takılı siparişler ── */
+async function siparisYukle() {
+  const kok = document.getElementById('lSiparis'), ozet = document.getElementById('ozSiparis');
+  if (!gorunur('siparis')) { kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = ''; return; }
+  try {
+    const d = await api('/api/siparis?per_page=300');
+    // Takılı = Hazır ama sevk edilmemiş (3+ gün) veya Onaylandı'da bekleyen (7+ gün)
+    const takili = (d.data || [])
+      .map(s => ({ ...s, bekleme: gunFarki(s.tarih) }))
+      .filter(s => (s.durum === 'Hazir' && s.bekleme >= 3) || (s.durum === 'Onaylandi' && s.bekleme >= 7)
+                || (s.durum === 'Uretimde' && s.bekleme >= 10))
+      .sort((a, b) => b.bekleme - a.bekleme);
+    ozet.textContent = takili.length ? takili.length + ' sipariş bekliyor' : '';
+    if (!takili.length) { kok.innerHTML = bosMesaj('Bekleyen sipariş yok. Hat akıyor.'); return; }
+    kok.innerHTML = takili.slice(0, 6).map(s => `
+      <div class="d-satir ray-mavi">
+        <div>
+          <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || '')}</div>
+          <div class="detay">${s.bekleme} gündür “${kacar(s.durum)}” — ${s.durum === 'Hazir' ? 'sevkiyat bekliyor' : 'ilerlemedi'}</div>
+        </div>
+        <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
+        <a class="mini-btn dolu" href="${s.durum === 'Hazir' ? '/sevkiyat' : '/siparis'}">${s.durum === 'Hazir' ? 'Sevkiyat oluştur' : 'Aç'}</a>
+      </div>`).join('');
+  } catch (e) { kok.innerHTML = bosMesaj('Sipariş verisi alınamadı.'); }
+}
+
+/* ── Yolda olan sevkiyatlar ── */
+async function sevkYukle() {
+  const kok = document.getElementById('lSevk'), ozet = document.getElementById('ozSevk');
+  if (!gorunur('sevkiyat')) { kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = ''; return; }
+  try {
+    const d = await api('/api/sevkiyat');
+    const liste = Array.isArray(d) ? d : (d.data || []);
+    const yolda = liste
+      .filter(s => ['Yolda', 'Gumrukte', 'Hazirlaniyor'].includes(s.durum))
+      .map(s => ({ ...s, bekleme: gunFarki(s.cikis_tarihi || s.tarih) }))
+      .sort((a, b) => b.bekleme - a.bekleme);
+    ozet.textContent = yolda.length ? yolda.length + ' sevkiyat açık' : '';
+    if (!yolda.length) { kok.innerHTML = bosMesaj('Yolda sevkiyat yok.'); return; }
+    kok.innerHTML = yolda.slice(0, 6).map(s => {
+      const gec = s.bekleme >= 21;
+      return `
+      <div class="d-satir ${gec ? 'ray-kehribar' : 'ray-yesil'}">
+        <div>
+          <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || s.varis_noktasi || '')}</div>
+          <div class="detay">${kacar(s.durum)}${s.bekleme ? ' · ' + s.bekleme + ' gündür' : ''}${s.konteyner_no ? ' · ' + kacar(s.konteyner_no) : ''}</div>
+        </div>
+        <a class="mini-btn ${gec ? 'dolu' : ''}" href="/sevkiyat">${gec ? 'Durum güncelle' : 'Aç'}</a>
+      </div>`;
+    }).join('');
+  } catch (e) { kok.innerHTML = bosMesaj('Sevkiyat verisi alınamadı.'); }
+}
+
+/* ── Gün özeti satırı ── */
+function ozetYaz() {
+  const sayilar = ['lAlacak', 'lCek', 'lSiparis', 'lSevk']
+    .map(id => document.getElementById(id).querySelectorAll('.d-satir').length);
+  const toplam = sayilar.reduce((a, b) => a + b, 0);
+  const el = document.getElementById('ozetSatir');
+  el.innerHTML = toplam
+    ? `Bugün dikkatini bekleyen <strong>${toplam} iş</strong> var.`
+    : 'Bekleyen iş yok — her şey güncel. İyi bir gün.';
+}
+
+selamla();
+Promise.all([kpiYukle(), alacakYukle(), cekYukle(), siparisYukle(), sevkYukle()]).then(ozetYaz);
+</script>
+{% endblock %}

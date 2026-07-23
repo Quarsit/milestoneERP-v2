@@ -1,0 +1,27 @@
+{
+  "name": "Milestone ERP",
+  "short_name": "Milestone",
+  "description": "Mermer ihracat yönetim sistemi",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F2F2EE",
+  "theme_color": "#0C4F38",
+  "lang": "tr",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "/static/ikon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/ikon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
