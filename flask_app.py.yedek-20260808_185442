@@ -2710,44 +2710,26 @@ def create_app():
                 for currency in root.findall('Currency'):
                     kod = currency.get('CurrencyCode')
                     if kod == 'USD':
-                        # K10: alis VE satis AYRI tutulur.
-                        # Eskiden ikisi de okunuyor ama tek degiskende
-                        # eziliyordu; spread kayboluyordu.
                         alis = currency.find('ForexBuying').text
                         satis = currency.find('ForexSelling').text
-                        _bn = currency.find('BanknoteSelling')
-                        _bns = _bn.text if _bn is not None else None
-                        usd_alis = float(alis) if alis else None
-                        usd_satis = float(satis) if satis else None
-                        usd_efektif = (float(_bns) if _bns
-                                       else (usd_satis or usd_alis))
-                        # usd_kur: geriye uyumluluk — asagidaki kod ve
-                        # varsayilan/yedek dallar bunu kullaniyor.
-                        usd_kur = usd_efektif
+                        if satis and satis != '':
+                            usd_kur = float(satis)
+                        elif alis and alis != '':
+                            usd_kur = float(alis)
                     elif kod == 'EUR':
-                        # K10: alis VE satis AYRI tutulur (bkz. USD)
                         alis = currency.find('ForexBuying').text
                         satis = currency.find('ForexSelling').text
-                        _bn = currency.find('BanknoteSelling')
-                        _bns = _bn.text if _bn is not None else None
-                        eur_alis = float(alis) if alis else None
-                        eur_satis = float(satis) if satis else None
-                        eur_efektif = (float(_bns) if _bns
-                                       else (eur_satis or eur_alis))
-                        eur_kur = eur_efektif
+                        if satis and satis != '':
+                            eur_kur = float(satis)
+                        elif alis and alis != '':
+                            eur_kur = float(alis)
                 
                 print(f"TCMB'den kur çekildi - USD: {usd_kur}, EUR: {eur_kur}")
         except Exception as e:
             print(f"TCMB'den kur çekilemedi: {e}")
         
         if usd_kur:
-            # K10: XML'den okunan GERCEK alis/satis yazilir.
-            # locals().get(...) — XML okunamayip varsayilana dusuldugunde
-            # bu degiskenler tanimli olmaz; o durumda usd_kur'a duseriz.
-            yeni_usd = DovizKur(doviz='USD',
-                                alis=locals().get('usd_alis') or usd_kur,
-                                satis=locals().get('usd_satis') or usd_kur,
-                                efektif=usd_kur, tarih=date.today())
+            yeni_usd = DovizKur(doviz='USD', alis=usd_kur, satis=usd_kur, efektif=usd_kur, tarih=date.today())
             db.session.add(yeni_usd)
         else:
             son_usd = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
@@ -2759,10 +2741,7 @@ def create_app():
                 db.session.add(yeni_usd)
         
         if eur_kur:
-            yeni_eur = DovizKur(doviz='EUR',
-                                alis=locals().get('eur_alis') or eur_kur,
-                                satis=locals().get('eur_satis') or eur_kur,
-                                efektif=eur_kur, tarih=date.today())   # K10
+            yeni_eur = DovizKur(doviz='EUR', alis=eur_kur, satis=eur_kur, efektif=eur_kur, tarih=date.today())
             db.session.add(yeni_eur)
         else:
             son_eur = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
