@@ -1,0 +1,74 @@
+# ══════════════════════════════════════════════════════════════
+#  Milestone ERP — git tarafından yok sayılacak dosyalar
+#
+#  Buradaki desenlere uyan dosyalar depoya ASLA gönderilmez.
+#  Konum: proje ana klasörü (flask_app.py ile aynı dizin)
+# ══════════════════════════════════════════════════════════════
+
+# ── GİZLİ BİLGİLER ────────────────────────────────────────────
+# Veritabanı şifresi ve SECRET_KEY içerir.
+# Depo herkese açık — bu dosya sızarsa oturum sahteciliği yapılabilir.
+.env
+.env.*
+!.env.ornek
+
+# ── SANAL ORTAM ───────────────────────────────────────────────
+# 155 MB. Her makinede requirements_pardus.txt ile yeniden kurulur.
+venv/
+.venv/
+env/
+
+# ── PYTHON DERLEME ÇIKTILARI ──────────────────────────────────
+# Python bunları kendi üretir; depoda durmaları gereksiz ve kafa karıştırıcı.
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ── VERİTABANI YEDEKLERİ ──────────────────────────────────────
+# Uygulamanın otomatik yedekleri ve pg_dump çıktıları.
+# Yedekler diskte ve ~/yedekler klasöründe tutulur, kod deposunda değil.
+backups/
+yedekler/
+*.dump
+*.sql
+*.sql.gz
+*.db
+*.sqlite
+*.sqlite3
+
+# ── ELLE ALINAN YEDEKLER ──────────────────────────────────────
+*.yedek
+*.yedek-*
+*.bak
+*.old
+*.orig
+*~
+
+# ── EDİTÖR VE İDE ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── İŞLETİM SİSTEMİ ARTIKLARI ────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── GEÇİCİ VE GÜNLÜK ──────────────────────────────────────────
+*.log
+*.tmp
+tmp/
+.pytest_cache/
+
+# ── FLASK INSTANCE KLASÖRÜ ────────────────────────────────────
+# DATABASE_URL ayarlı değilken uygulama buraya SQLite yaratıyor
+# (flask_app.py:213). *.db onu zaten yok sayar ama klasörde
+# yapılandırma dosyası da tutulabilir — tamamını dışlıyoruz.
+instance/
+
+# ── YAMA VE FARK DOSYALARI ────────────────────────────────────
+# Dışarıdan gelen yama paketleri geçici — depoda durmamalı.
+*.diff
+*.patch
