@@ -1,0 +1,544 @@
+{% extends "base.html" %}
+{% block title %}Analiz{% endblock %}
+
+{% block head %}
+<style>
+  .sekmeler{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--cizgi);flex-wrap:wrap}
+  .sekme{padding:9px 15px;font-size:.88rem;font-weight:500;color:var(--soluk);border:0;background:transparent;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .sekme:hover{color:var(--murekkep)}
+  .sekme.aktif{color:var(--verde);border-bottom-color:var(--verde);font-weight:600}
+  .bolum{display:none}
+  .bolum.aktif{display:block;animation:belirme .18s ease}
+  @keyframes belirme{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .izgara-2{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;margin-bottom:14px}
+  .izgara-esit{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  /* Sütun grafiği — saf SVG, kütüphane yok */
+  .grafik{width:100%;height:210px;display:block}
+  .grafik .cubuk-satis{fill:var(--verde);opacity:.85}
+  .grafik .cubuk-kar{fill:var(--verde);opacity:.35}
+  .grafik text{font-family:var(--mono);font-size:9px;fill:var(--soluk)}
+  .grafik .kilavuz{stroke:var(--cizgi);stroke-width:1}
+  .aciklama{display:flex;gap:16px;font-size:.78rem;color:var(--soluk);margin-top:10px}
+  .aciklama span{display:flex;align-items:center;gap:6px}
+  .aciklama i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .marj-cubuk{height:5px;background:var(--notr-bg);border-radius:3px;overflow:hidden;margin-top:4px;width:78px}
+  .marj-cubuk i{display:block;height:100%;background:var(--verde);border-radius:3px}
+  .yas-satir{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--cizgi)}
+  .yas-satir:last-child{border-bottom:0}
+  .yas-satir .kova{font-weight:600;font-size:.88rem;width:100px}
+  .yas-satir .bar{flex:1;height:9px;background:var(--notr-bg);border-radius:5px;overflow:hidden}
+  .yas-satir .bar i{display:block;height:100%;border-radius:5px}
+  .yas-satir .tut{font-family:var(--mono);font-weight:600;font-size:.86rem;width:100px;text-align:right}
+  @media (max-width:1000px){ .izgara-2,.izgara-esit{grid-template-columns:1fr} }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Analiz</h1>
+<p class="g-alt">Rapor sekmeleri yerine cevaplar: ciro nereye gidiyor, kâr kimden geliyor, para nerede sıkışmış.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler">
+  <div class="kpi"><label>Bu Ay Ciro</label><div class="deger" id="kCiro">—</div><div class="ek" id="kCiroEk">yükleniyor</div></div>
+  <div class="kpi"><label>Bu Ay Kâr</label><div class="deger" id="kKar">—</div><div class="ek" id="kKarEk">—</div></div>
+  <div class="kpi"><label>Ortalama Marj</label><div class="deger" id="kMarj">—</div><div class="ek" id="kMarjEk">—</div></div>
+  <div class="kpi"><label>Stok Değeri</label><div class="deger" id="kStok">—</div><div class="ek" id="kStokEk">—</div></div>
+</div>
+
+<div class="sekmeler" id="sekmeler">
+  <button class="sekme aktif" data-b="genel">Genel Bakış</button>
+  <button class="sekme" data-b="karlilik">Kârlılık</button>
+  <button class="sekme" data-b="stok">Stok</button>
+  <button class="sekme" data-b="cari">Cari Yaşlandırma</button>
+  <button class="sekme" data-b="sevkiyat">Konteyner</button>
+  <button class="sekme" data-b="performans">Satış Performansı</button>
+  <button class="sekme" data-b="maliyetanaliz">Maliyet Analizi</button>
+</div>
+
+<!-- GENEL BAKIŞ -->
+<section class="bolum aktif" id="b-genel">
+  <div class="izgara-2">
+    <div class="panel">
+      <h4>Aylık ciro ve kâr — son 6 ay</h4>
+      <div id="grafik"><div class="yukleniyor">Yükleniyor…</div></div>
+      <div class="aciklama">
+        <span><i style="background:var(--verde);opacity:.85"></i> Ciro</span>
+        <span><i style="background:var(--verde);opacity:.35"></i> Kâr</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h4>En kârlı</h4>
+      <div id="enKarli"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- KÂRLILIK -->
+<section class="bolum" id="b-karlilik">
+  <div class="izgara-esit">
+    <div class="panel">
+      <h4>Müşteri bazında kâr</h4>
+      <div id="musteriOzet"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+    <div class="panel">
+      <h4>Cins bazında kâr</h4>
+      <div id="cinsOzet"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <h4>Satış kayıtları</h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Satış</th><th>Müşteri</th><th>Ürün</th><th class="sag">Tutar</th><th class="sag">Maliyet</th><th class="sag">Kâr</th><th class="sag">Marj</th></tr></thead>
+        <tbody id="satisGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- STOK -->
+<section class="bolum" id="b-stok">
+  <div class="izgara-esit">
+    <div class="panel">
+      <h4>Tip bazında dağılım</h4>
+      <div id="stokTip"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+    <div class="panel">
+      <h4>Durum bazında dağılım</h4>
+      <div id="stokDurum"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <h4>Cins bazında envanter</h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Cins</th><th>Tip</th><th class="sag">Adet</th><th class="sag">Miktar</th><th class="sag">Değer</th></tr></thead>
+        <tbody id="stokGovde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- CARİ YAŞLANDIRMA -->
+<section class="bolum" id="b-cari">
+  <div class="izgara-2">
+    <div class="panel">
+      <h4>Alacak yaşlandırma</h4>
+      <div id="yaslandirma"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+    <div class="panel">
+      <h4>En riskli cariler</h4>
+      <div id="riskli"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SATIŞ PERFORMANSI -->
+<section class="bolum" id="b-performans">
+  <div class="izgara-esit">
+    <div class="panel">
+      <h4>Ülke bazında satış</h4>
+      <div id="pfUlke"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+    <div class="panel">
+      <h4>Müşteri bazında satış</h4>
+      <div id="pfMusteri"><div class="yukleniyor">Yükleniyor…</div></div>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <h4>Ürün bazında performans</h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Cins</th><th>Tip</th><th class="sag">Adet</th><th class="sag">Ciro</th><th class="sag">Maliyet</th><th class="sag">Kâr</th><th class="sag">Marj</th></tr></thead>
+        <tbody id="pfCins"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- MALİYET ANALİZİ -->
+<section class="bolum" id="b-maliyetanaliz">
+  <div class="kpiler" id="maKpi" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+    <div class="kpi"><label>Sipariş Adedi</label><div class="deger" id="maAdet">—</div><div class="ek">maliyetlendirilmiş</div></div>
+    <div class="kpi"><label>Toplam Satış</label><div class="deger" id="maSatis">—</div><div class="ek">USD</div></div>
+    <div class="kpi"><label>Toplam Maliyet</label><div class="deger" id="maMaliyet">—</div><div class="ek">stok + ek maliyet</div></div>
+    <div class="kpi"><label>Ortalama Marj</label><div class="deger" id="maMarj">—</div><div class="ek" id="maMarjEk">—</div></div>
+  </div>
+  <div class="panel">
+    <h4>Sipariş bazında maliyet kırılımı <span style="color:var(--soluk);font-weight:400;font-size:.83rem">· düşük marj üstte</span></h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Sipariş</th><th>Müşteri</th><th>Ürün</th><th class="sag">Satış</th><th class="sag">Maliyet</th><th class="sag">Kâr</th><th class="sag">Marj</th></tr></thead>
+        <tbody id="maGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- KONTEYNER -->
+<section class="bolum" id="b-sevkiyat">
+  <div class="panel">
+    <h4>Konteyner takip</h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Konteyner</th><th>Müşteri</th><th>Rota</th><th>Durum</th><th class="sag">Çıkış</th></tr></thead>
+        <tbody id="konteynerGovde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ ANALİZ ═══
+   Kaynaklar:
+     KPI + aylık grafik → /api/dashboard/satis_istatistik
+     Kârlılık           → /api/karlilik, /api/karlilik/musteri_ozet, /api/karlilik/cins_ozet
+     Stok               → /api/rapor/stok_durum
+     Yaşlandırma        → /api/rapor/yaslandirilmis_cari
+     Konteyner          → /api/rapor/konteyner_takip
+   Grafik saf SVG — dış kütüphane yok. */
+
+const bos = t => `<div class="bos">${t}</div>`;
+const gorunur = m => window.ADMIN || (window.YETKI[m] || 'gizli') !== 'gizli';
+
+/* ── KPI + aylık grafik ── */
+async function genelYukle() {
+  if (!gorunur('karlilik') && !gorunur('raporlar')) {
+    document.getElementById('grafik').innerHTML = bos('Bu bilgiyi görme yetkin yok.');
+    return;
+  }
+  let d;
+  try { d = await api('/api/dashboard/satis_istatistik'); }
+  catch (e) { document.getElementById('grafik').innerHTML = bos('Veri alınamadı.'); return; }
+
+  const ay = d.bu_ay || {}, aylik = d.aylik || [], genel = d.genel || {};
+  const marj = (ay.satis || 0) > 0 ? (ay.kar || 0) / ay.satis * 100 : 0;
+
+  document.getElementById('kCiro').innerHTML = para(ay.satis || 0).replace(' $', '<small>$</small>');
+  document.getElementById('kCiroEk').textContent = (ay.adet || 0) + ' satış';
+  document.getElementById('kKar').innerHTML = para(ay.kar || 0).replace(' $', '<small>$</small>');
+  const onceki = aylik.length > 1 ? (aylik[aylik.length - 2].kar_usd || 0) : 0;
+  const fark = onceki > 0 ? Math.round(((ay.kar || 0) - onceki) / onceki * 100) : null;
+  const kEk = document.getElementById('kKarEk');
+  kEk.textContent = fark === null ? 'geçen ay veri yok' : (fark >= 0 ? '▲ %' : '▼ %') + Math.abs(fark) + ' geçen aya göre';
+  kEk.className = 'ek ' + (fark === null ? '' : fark >= 0 ? 'iyi' : 'kotu');
+  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1);
+  document.getElementById('kMarjEk').textContent = 'genel: %' + (genel.marj || 0).toFixed(1);
+
+  // Sütun grafiği
+  const kok = document.getElementById('grafik');
+  const enB = Math.max(...aylik.map(a => a.satis_usd || 0), 1);
+  const G = 560, Y = 210, alt = 30, ust = 12, kolon = G / Math.max(aylik.length, 1);
+  const cw = Math.min(kolon * 0.42, 36);
+  kok.innerHTML = `
+    <svg class="grafik" viewBox="0 0 ${G} ${Y}" preserveAspectRatio="none">
+      ${[0, .25, .5, .75, 1].map(o => {
+        const y = ust + (Y - ust - alt) * (1 - o);
+        return `<line class="kilavuz" x1="0" y1="${y}" x2="${G}" y2="${y}"/>`;
+      }).join('')}
+      ${aylik.map((a, i) => {
+        const x = i * kolon + kolon / 2;
+        const h = (Y - ust - alt) * ((a.satis_usd || 0) / enB);
+        const hk = (Y - ust - alt) * ((a.kar_usd || 0) / enB);
+        return `
+          <rect class="cubuk-satis" x="${x - cw}" y="${Y - alt - h}" width="${cw - 2}" height="${Math.max(h, 1)}" rx="3"/>
+          <rect class="cubuk-kar"   x="${x + 1}"  y="${Y - alt - hk}" width="${cw - 2}" height="${Math.max(hk, 1)}" rx="3"/>
+          <text x="${x}" y="${Y - 14}" text-anchor="middle">${(a.ay || '').split(' ')[0]}</text>
+          <text x="${x}" y="${Y - 3}" text-anchor="middle">${Math.round((a.satis_usd || 0) / 1000)}k</text>`;
+      }).join('')}
+    </svg>`;
+
+  // En kârlı
+  const ek = document.getElementById('enKarli');
+  // API liste döndürür — ilk eleman en kârlı olandır
+  const mk = (d.en_karli_musteri || [])[0];
+  const ck = (d.en_karli_cins || [])[0];
+  ek.innerHTML = (mk || ck) ? `
+    ${mk ? `<div style="margin-bottom:16px">
+      <div style="font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)">Müşteri</div>
+      <div style="font-family:var(--baslik);font-weight:700;font-size:1.1rem;margin-top:3px">${kacar(mk.musteri || mk.ad || '—')}</div>
+      <div class="mono" style="color:var(--verde);font-weight:600">${para(mk.kar_usd)} kâr</div>
+    </div>` : ''}
+    ${ck ? `<div>
+      <div style="font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)">Cins</div>
+      <div style="font-family:var(--baslik);font-weight:700;font-size:1.1rem;margin-top:3px">${kacar(ck.cins || '—')}</div>
+      <div class="mono" style="color:var(--verde);font-weight:600">${para(ck.kar_usd)} kâr</div>
+    </div>` : ''}` : bos('Henüz satış yok.');
+}
+
+/* ── Kârlılık ── */
+function ozetListe(satirlar, ad) {
+  if (!satirlar.length) return bos('Kayıt yok.');
+  const enB = Math.max(...satirlar.map(x => x.kar_usd || 0), 1);
+  return satirlar.slice(0, 8).map(x => `
+    <div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--cizgi)">
+      <div style="flex:1">
+        <div style="font-size:.88rem;font-weight:500">${kacar(x[ad] || '—')}</div>
+        <div class="marj-cubuk"><i style="width:${Math.max(0, Math.min(100, (x.kar_usd || 0) / enB * 100))}%"></i></div>
+      </div>
+      <div style="text-align:right">
+        <div class="mono" style="font-weight:600;color:var(--verde)">${para(x.kar_usd)}</div>
+        <div style="font-size:.74rem;color:var(--soluk)">%${(x.marj || 0).toFixed(1)} marj · ${para(x.satis_usd)}</div>
+      </div>
+    </div>`).join('');
+}
+async function karlilikYukle() {
+  if (!gorunur('karlilik')) {
+    ['musteriOzet','cinsOzet'].forEach(i => document.getElementById(i).innerHTML = bos('Yetkin yok.'));
+    document.getElementById('satisGovde').innerHTML = '<tr><td colspan="7" class="bos">Yetkin yok.</td></tr>';
+    return;
+  }
+  try {
+    const [m, c, k] = await Promise.all([
+      api('/api/karlilik/musteri_ozet'), api('/api/karlilik/cins_ozet'), api('/api/karlilik')
+    ]);
+    const ml = (Array.isArray(m) ? m : m.data || []).sort((a, b) => (b.kar_usd || 0) - (a.kar_usd || 0));
+    const cl = (Array.isArray(c) ? c : c.data || []).sort((a, b) => (b.kar_usd || 0) - (a.kar_usd || 0));
+    document.getElementById('musteriOzet').innerHTML = ozetListe(ml, 'musteri');
+    document.getElementById('cinsOzet').innerHTML = ozetListe(cl, 'cins');
+
+    const rows = (k.data || []).slice().sort((a, b) => (b.kar_usd || 0) - (a.kar_usd || 0));
+    document.getElementById('satisGovde').innerHTML = rows.length ? rows.slice(0, 30).map(s => {
+      const satis = s.satis_usd || 0;
+      const marj = s.marj != null ? s.marj : (satis > 0 ? (s.kar_usd || 0) / satis * 100 : 0);
+      const ray = marj >= 25 ? '--verde' : marj >= 10 ? '--kehribar' : '--kirmizi';
+      return `
+      <tr style="border-left-color:var(${ray})">
+        <td class="mono" style="font-size:.8rem">${kacar(s.id)}${s.fatura_no ? '<div class="ikincil">' + kacar(s.fatura_no) + '</div>' : ''}</td>
+        <td>${kacar(s.musteri || '—')}</td>
+        <td>${kacar(s.cins || '—')}<div class="ikincil">${(s.miktar || 0).toLocaleString('tr-TR')} ${kacar(s.birim || '')}</div></td>
+        <td class="sag mono">${para(satis)}</td>
+        <td class="sag mono" style="color:var(--soluk)">${para(s.maliyet_usd)}</td>
+        <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(s.kar_usd)}</td>
+        <td class="sag mono" style="font-weight:600">%${marj.toFixed(1)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="7" class="bos">Satış kaydı yok.</td></tr>';
+  } catch (e) { /* api() bildirdi */ }
+}
+
+/* ── Stok ── */
+function dagilim(obj, toplam) {
+  const anahtar = Object.keys(obj || {});
+  if (!anahtar.length) return bos('Kayıt yok.');
+  const renkler = ['--verde', '--mavi', '--kehribar', '--cizgi-koyu'];
+  return anahtar.map((k, i) => {
+    const v = obj[k], deger = v.deger_usd || 0;
+    const yuzde = toplam > 0 ? deger / toplam * 100 : 0;
+    return `
+      <div class="yas-satir">
+        <span class="kova">${kacar(k)}</span>
+        <div class="bar"><i style="width:${yuzde.toFixed(1)}%;background:var(${renkler[i % 4]})"></i></div>
+        <span class="tut">${para(deger)}</span>
+        <span style="font-size:.76rem;color:var(--soluk);width:52px;text-align:right">${v.adet || 0} ad.</span>
+      </div>`;
+  }).join('');
+}
+async function stokYukle() {
+  if (!gorunur('stok') && !gorunur('raporlar')) {
+    ['stokTip','stokDurum'].forEach(i => document.getElementById(i).innerHTML = bos('Yetkin yok.'));
+    return;
+  }
+  try {
+    const d = await api('/api/rapor/stok_durum');
+    const toplam = d.toplam_deger_usd || 0;
+    document.getElementById('kStok').innerHTML = para(toplam).replace(' $', '<small>$</small>');
+    document.getElementById('kStokEk').textContent = (d.toplam_stok_adedi || 0) + ' kalem stok';
+    document.getElementById('stokTip').innerHTML = dagilim(d.tip_ozet, toplam);
+    document.getElementById('stokDurum').innerHTML = dagilim(d.durum_ozet, toplam);
+
+    const cl = (d.cins_listesi || []).sort((a, b) => (b.deger_usd || 0) - (a.deger_usd || 0));
+    document.getElementById('stokGovde').innerHTML = cl.length ? cl.map(c => `
+      <tr>
+        <td><strong>${kacar(c.cins || '—')}</strong></td>
+        <td><span class="rozet rz-gri">${kacar(c.tip || c.stok_tip || '—')}</span></td>
+        <td class="sag mono">${c.adet || 0}</td>
+        <td class="sag mono">${(c.miktar || 0).toLocaleString('tr-TR')} ${kacar(c.birim || '')}</td>
+        <td class="sag mono" style="font-weight:600">${para(c.deger_usd)}</td>
+      </tr>`).join('') : '<tr><td colspan="5" class="bos">Stok kaydı yok.</td></tr>';
+  } catch (e) { /* */ }
+}
+
+/* ── Cari yaşlandırma ── */
+async function cariYukle() {
+  if (!gorunur('raporlar') && !gorunur('cari')) {
+    ['yaslandirma','riskli'].forEach(i => document.getElementById(i).innerHTML = bos('Yetkin yok.'));
+    return;
+  }
+  try {
+    const d = await api('/api/rapor/yaslandirilmis_cari');
+    const kur = d.kur_usd || 1, g = d.toplam_gruplar || {};
+    const kovalar = [
+      { ad: 'Vadesi gelmemiş', v: (g.vadesiz || {}).borc || 0, renk: '--verde' },
+      { ad: '0-30 gün',        v: (g.g_0_30 || {}).borc || 0,  renk: '--kehribar' },
+      { ad: '31-60 gün',       v: (g.g_31_60 || {}).borc || 0, renk: '--kehribar' },
+      { ad: '61-90 gün',       v: (g.g_61_90 || {}).borc || 0, renk: '--kirmizi' },
+      { ad: '90+ gün',         v: (g.g_90_plus || {}).borc || 0, renk: '--kirmizi' },
+    ];
+    const enB = Math.max(...kovalar.map(k => k.v), 1);
+    document.getElementById('yaslandirma').innerHTML = kovalar.some(k => k.v > 0)
+      ? kovalar.map(k => `
+        <div class="yas-satir">
+          <span class="kova">${k.ad}</span>
+          <div class="bar"><i style="width:${(k.v / enB * 100).toFixed(1)}%;background:var(${k.renk})"></i></div>
+          <span class="tut">${para(k.v / kur)}</span>
+        </div>`).join('')
+      : bos('Açık alacak yok.');
+
+    const riskli = (d.cariler || [])
+      .map(c => {
+        const gecen = (c.g_0_30_try || 0) + (c.g_31_60_try || 0) + (c.g_61_90_try || 0) + (c.g_90_plus_try || 0);
+        let kova = '';
+        if ((c.g_90_plus_try || 0) > 0) kova = '90+ gün';
+        else if ((c.g_61_90_try || 0) > 0) kova = '61-90 gün';
+        else if ((c.g_31_60_try || 0) > 0) kova = '31-60 gün';
+        else if ((c.g_0_30_try || 0) > 0) kova = '0-30 gün';
+        return { ...c, gecen_usd: gecen / kur, kova };
+      })
+      .filter(c => c.gecen_usd > 1)
+      .sort((a, b) => b.gecen_usd - a.gecen_usd);
+    document.getElementById('riskli').innerHTML = riskli.length ? riskli.slice(0, 7).map(c => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--cizgi)">
+        <div style="flex:1">
+          <div style="font-size:.88rem;font-weight:500">${kacar(c.unvan)}</div>
+          <div style="font-size:.75rem;color:var(--soluk)">${c.kova} gecikmiş</div>
+        </div>
+        <span class="mono" style="font-weight:600;color:var(--kirmizi)">${para(c.gecen_usd)}</span>
+        <a class="mini-btn" href="/kasa">Aç</a>
+      </div>`).join('') : bos('Gecikmiş alacak yok.');
+  } catch (e) { /* */ }
+}
+
+/* ── Konteyner ── */
+async function konteynerYukle() {
+  if (!gorunur('sevkiyat') && !gorunur('raporlar')) {
+    document.getElementById('konteynerGovde').innerHTML = '<tr><td colspan="5" class="bos">Yetkin yok.</td></tr>';
+    return;
+  }
+  try {
+    const d = await api('/api/rapor/konteyner_takip');
+    const liste = d.konteyner_listesi || [];
+    const RZ = { 'Yolda':'rz-mavi', 'Gumrukte':'rz-kehribar', 'Teslim Edildi':'rz-gri', 'Hazirlaniyor':'rz-yesil' };
+    document.getElementById('konteynerGovde').innerHTML = liste.length ? liste.map(k => {
+      const ilkSevk = (k.sevkiyatlar || [])[0] || {};
+      const musteriler = (k.musteri_listesi || []).join(', ');
+      return `
+      <tr>
+        <td class="mono">${kacar(k.konteyner_no || '—')}<div class="ikincil">${kacar(k.nakliye_firma || '')}${k.sevkiyat_sayisi > 1 ? ' · ' + k.sevkiyat_sayisi + ' sevkiyat' : ''}</div></td>
+        <td>${kacar(musteriler || '—')}</td>
+        <td style="font-size:.83rem">${kacar(ilkSevk.cikis_noktasi || '?')} → ${kacar(k.varis_noktasi || '?')}</td>
+        <td><span class="rozet ${RZ[k.son_durum] || 'rz-gri'}">${kacar(k.son_durum || '—')}</span></td>
+        <td class="sag mono" style="font-size:.8rem">${kacar(k.son_tarih || '—')}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="5" class="bos">Konteyner kaydı yok.</td></tr>';
+  } catch (e) { /* */ }
+}
+
+/* ── Satış Performansı ── */
+function pfListe(kok, satirlar, adAlan) {
+  const el = document.getElementById(kok);
+  if (!satirlar.length) { el.innerHTML = bos('Kayıt yok.'); return; }
+  const enB = Math.max(...satirlar.map(x => x.satis_usd || 0), 1);
+  el.innerHTML = satirlar.slice(0, 8).map(x => {
+    const m = x.marj || 0;
+    const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+    return `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--cizgi)">
+      <div style="flex:1">
+        <div style="font-size:.88rem;font-weight:500">${kacar(x[adAlan] || '—')}</div>
+        <div class="marj-cubuk"><i style="width:${((x.satis_usd || 0) / enB * 100).toFixed(0)}%;background:var(${renk})"></i></div>
+      </div>
+      <div style="text-align:right">
+        <div class="mono" style="font-weight:600">${para(x.satis_usd)}</div>
+        <div style="font-size:.74rem;color:var(--soluk)">%${m.toFixed(1)} marj · ${x.adet || 0} satış</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function performansYukle() {
+  if (!gorunur('raporlar') && !gorunur('karlilik')) {
+    ['pfUlke','pfMusteri'].forEach(i => document.getElementById(i).innerHTML = bos('Yetkin yok.'));
+    return;
+  }
+  try {
+    const d = await api('/api/rapor/satis_performans');
+    pfListe('pfUlke', (d.ulke_listesi || []).sort((a, b) => b.satis_usd - a.satis_usd), 'ulke');
+    pfListe('pfMusteri', (d.musteri_listesi || []).sort((a, b) => b.satis_usd - a.satis_usd), 'musteri');
+    const cl = (d.cins_listesi || []).sort((a, b) => b.satis_usd - a.satis_usd);
+    document.getElementById('pfCins').innerHTML = cl.length ? cl.map(c => {
+      const m = c.marj || 0;
+      const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+      return `
+      <tr style="border-left-color:var(${renk})">
+        <td><strong>${kacar(c.cins || '—')}</strong></td>
+        <td><span class="rozet rz-gri">${kacar(c.stok_tip || '—')}</span></td>
+        <td class="sag mono">${c.adet || 0}</td>
+        <td class="sag mono" style="font-weight:600">${para(c.satis_usd)}</td>
+        <td class="sag mono" style="color:var(--soluk)">${para(c.maliyet_usd)}</td>
+        <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(c.kar_usd)}</td>
+        <td class="sag mono" style="font-weight:600">%${m.toFixed(1)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="7" class="bos">Satış yok.</td></tr>';
+  } catch (e) { /* */ }
+}
+
+/* ── Maliyet Analizi ── */
+async function maliyetAnalizYukle() {
+  if (!gorunur('raporlar') && !gorunur('maliyet')) {
+    document.getElementById('maGovde').innerHTML = '<tr><td colspan="7" class="bos">Yetkin yok.</td></tr>';
+    return;
+  }
+  try {
+    const d = await api('/api/rapor/maliyet_analiz');
+    const g = d.genel || {};
+    document.getElementById('maAdet').textContent = g.siparis_adedi || 0;
+    document.getElementById('maSatis').innerHTML = para(g.toplam_satis_usd || 0).replace(' $', '<small>$</small>');
+    document.getElementById('maMaliyet').innerHTML = para(g.toplam_maliyet_usd || 0).replace(' $', '<small>$</small>');
+    document.getElementById('maMarj').innerHTML = '%' + (g.ort_marj || 0).toFixed(1);
+    document.getElementById('maMarjEk').textContent = 'kâr ' + para(g.toplam_kar_usd || 0);
+
+    const sl = (d.siparisler || []).slice().sort((a, b) => (a.marj || 0) - (b.marj || 0));
+    document.getElementById('maGovde').innerHTML = sl.length ? sl.map(s => {
+      const m = s.marj || 0;
+      const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+      const ek = (s.maliyet_kalemleri || []).length;
+      return `
+      <tr style="border-left-color:var(${renk})">
+        <td class="mono" style="font-size:.8rem">${kacar(s.siparis_id || '—')}
+          ${s.satis_tarihi ? '<div class="ikincil">' + kacar(String(s.satis_tarihi).slice(0, 10)) + '</div>' : ''}</td>
+        <td>${kacar(s.musteri || '—')}
+          ${s.musteri_ulke ? '<div class="ikincil">' + kacar(s.musteri_ulke) + '</div>' : ''}</td>
+        <td>${kacar(s.cins || '—')}
+          <div class="ikincil">${kacar(s.stok_tip || '')} · ${s.stok_adedi || 0} stok${ek ? ' · ' + ek + ' ek maliyet' : ''}</div></td>
+        <td class="sag mono" style="font-weight:600">${para(s.satis_usd)}</td>
+        <td class="sag mono" style="color:var(--soluk)">${para(s.maliyet_usd)}</td>
+        <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(s.kar_usd)}</td>
+        <td class="sag mono" style="font-weight:600">%${m.toFixed(1)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="7" class="bos">Maliyetlendirilmiş sipariş yok.</td></tr>';
+  } catch (e) { /* */ }
+}
+
+/* ── Sekmeler (tembel yükleme) ── */
+const yuklendi = { genel: false, karlilik: false, stok: false, cari: false, sevkiyat: false,
+                   performans: false, maliyetanaliz: false };
+const yukleyici = { genel: genelYukle, karlilik: karlilikYukle, stok: stokYukle, cari: cariYukle,
+                    sevkiyat: konteynerYukle, performans: performansYukle, maliyetanaliz: maliyetAnalizYukle };
+function bolumAc(ad) {
+  document.querySelectorAll('.bolum').forEach(b => b.classList.remove('aktif'));
+  document.getElementById('b-' + ad).classList.add('aktif');
+  document.querySelectorAll('.sekme').forEach(s => s.classList.toggle('aktif', s.dataset.b === ad));
+  if (!yuklendi[ad]) { yuklendi[ad] = true; yukleyici[ad](); }
+}
+document.querySelectorAll('.sekme').forEach(s => s.onclick = () => bolumAc(s.dataset.b));
+
+// İlk açılış: genel + stok KPI'ı (KPI şeridi her sekmede görünür)
+yuklendi.genel = true; genelYukle();
+yuklendi.stok = true;  stokYukle();
+</script>
+{% endblock %}

@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% block title %}Karlılık{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'karlilik')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-karlilik">
+    <button onclick="disaAktar('karlilik','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('karlilik','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;background:var(--yuzey);border:1px solid var(--cizgi);border-radius:var(--r);padding:12px 14px}
+  .arac-cubugu label{font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);display:block;margin-bottom:4px}
+  .arac-cubugu input,.arac-cubugu select{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;background:var(--yuzey)}
+  .arac-cubugu input:focus,.arac-cubugu select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .hizli{display:flex;gap:6px}
+  .hizli button{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 12px;font-size:.78rem;font-weight:600;color:var(--soluk)}
+  .hizli button.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde)}
+  .izgara-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  .ozet-satir{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--cizgi)}
+  .ozet-satir:last-child{border-bottom:0}
+  .ozet-satir .ad{flex:1;font-size:.88rem;font-weight:500}
+  .ozet-satir .bar{width:90px;height:6px;background:var(--notr-bg);border-radius:3px;overflow:hidden}
+  .ozet-satir .bar i{display:block;height:100%;border-radius:3px}
+  .ozet-satir .deg{text-align:right;min-width:96px}
+  .ozet-satir .deg .k{font-family:var(--mono);font-weight:600;color:var(--verde)}
+  .ozet-satir .deg .m{font-size:.74rem;color:var(--soluk)}
+  .marj-cubuk{height:5px;background:var(--notr-bg);border-radius:3px;overflow:hidden;margin-top:4px;width:70px;margin-left:auto}
+  .marj-cubuk i{display:block;height:100%;border-radius:3px}
+  tbody tr{cursor:default}
+  @media (max-width:900px){ .izgara-2{grid-template-columns:1fr} }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Karlılık</h1>
+<p class="g-alt">Dönem, müşteri ve cins bazında kâr analizi. Hangi işten para kazanıyorsun, hangisinden değil.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="arac-cubugu">
+  <div class="hizli" id="hizli">
+    <button data-g="30">Son 30 gün</button>
+    <button data-g="90">Son 3 ay</button>
+    <button data-g="365">Son 1 yıl</button>
+    <button class="aktif" data-g="">Tümü</button>
+  </div>
+  <div><label>Başlangıç</label><input id="fBas" type="date" onchange="elleTarih()"></div>
+  <div><label>Bitiş</label><input id="fSon" type="date" onchange="elleTarih()"></div>
+  <div><label>Müşteri</label><select id="fMusteri" onchange="yukle()"><option value="">Tümü</option></select></div>
+  <div><label>Cins</label><select id="fCins" onchange="yukle()"><option value="">Tümü</option></select></div>
+</div>
+
+<div class="kpiler">
+  <div class="kpi"><label>Ciro</label><div class="deger" id="kCiro">—</div><div class="ek" id="kCiroEk">—</div></div>
+  <div class="kpi"><label>Maliyet</label><div class="deger" id="kMaliyet">—</div><div class="ek">satılan malın maliyeti</div></div>
+  <div class="kpi"><label>Kâr</label><div class="deger" id="kKar">—</div><div class="ek" id="kKarEk">—</div></div>
+  <div class="kpi"><label>Ortalama Marj</label><div class="deger" id="kMarj">—</div><div class="ek" id="kMarjEk">—</div></div>
+</div>
+
+<div class="izgara-2">
+  <div class="panel">
+    <h4>Müşteri bazında</h4>
+    <div id="musteriOzet"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+  <div class="panel">
+    <h4>Cins bazında</h4>
+    <div id="cinsOzet"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h4>Satış detayı <span id="satisAdet" style="color:var(--soluk);font-weight:400"></span></h4>
+  <div class="tablo-kutu" style="border:0">
+    <table>
+      <thead>
+        <tr><th>Tarih</th><th>Müşteri</th><th>Ürün</th>
+            <th class="sag">Tutar</th><th class="sag">Maliyet</th><th class="sag">Kâr</th><th class="sag">Marj</th></tr>
+      </thead>
+      <tbody id="satisGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ KARLILIK ═══
+   /api/karlilik?baslangic=&bitis=&musteri=&cins=  → {data:[…], ozet:{…}}
+   /api/karlilik/musteri_ozet · /api/karlilik/cins_ozet
+   Analiz ekranındaki genel bakışın filtreli/derin sürümü. */
+
+let SATISLAR = [], TUM_MUSTERI = [], TUM_CINS = [];
+
+function marjBul(s) {
+  if (s.marj != null) return s.marj;
+  if (s.marj_yuzde != null) return s.marj_yuzde;
+  const t = s.satis_usd || s.tutar_usd || 0;
+  return t > 0 ? (s.kar_usd || 0) / t * 100 : 0;
+}
+function tutarBul(s) { return s.satis_usd != null ? s.satis_usd : (s.tutar_usd || 0); }
+
+async function yukle() {
+  const q = new URLSearchParams();
+  const b = document.getElementById('fBas').value;
+  const s = document.getElementById('fSon').value;
+  const m = document.getElementById('fMusteri').value;
+  const c = document.getElementById('fCins').value;
+  if (b) q.set('baslangic', b);
+  if (s) q.set('bitis', s);
+  if (m) q.set('musteri', m);
+  if (c) q.set('cins', c);
+
+  let d;
+  try { d = await api('/api/karlilik?' + q); }
+  catch (e) {
+    document.getElementById('satisGovde').innerHTML = '<tr><td colspan="7" class="bos">Veri alınamadı.</td></tr>';
+    return;
+  }
+  SATISLAR = d.data || [];
+
+  // Filtre seçenekleri (ilk yüklemede doldur)
+  if (!TUM_MUSTERI.length) {
+    TUM_MUSTERI = [...new Set(SATISLAR.map(x => x.musteri).filter(Boolean))].sort((a, b2) => a.localeCompare(b2, 'tr'));
+    TUM_CINS = [...new Set(SATISLAR.map(x => x.cins).filter(Boolean))].sort((a, b2) => a.localeCompare(b2, 'tr'));
+    document.getElementById('fMusteri').innerHTML = '<option value="">Tümü</option>' +
+      TUM_MUSTERI.map(x => `<option value="${kacar(x)}">${kacar(x)}</option>`).join('');
+    document.getElementById('fCins').innerHTML = '<option value="">Tümü</option>' +
+      TUM_CINS.map(x => `<option value="${kacar(x)}">${kacar(x)}</option>`).join('');
+  }
+
+  kpiCiz();
+  ozetCiz();
+  satisCiz();
+}
+
+function kpiCiz() {
+  const ciro = SATISLAR.reduce((a, s) => a + tutarBul(s), 0);
+  const maliyet = SATISLAR.reduce((a, s) => a + (s.maliyet_usd || 0), 0);
+  const kar = SATISLAR.reduce((a, s) => a + (s.kar_usd || 0), 0);
+  const marj = ciro > 0 ? kar / ciro * 100 : 0;
+  const marjlar = SATISLAR.map(marjBul).filter(m => m > 0);
+  const enDusuk = marjlar.length ? Math.min(...marjlar) : 0;
+
+  document.getElementById('kCiro').innerHTML = para(ciro).replace(' $', '<small>$</small>');
+  document.getElementById('kCiroEk').textContent = SATISLAR.length + ' satış';
+  document.getElementById('kMaliyet').innerHTML = para(maliyet).replace(' $', '<small>$</small>');
+  document.getElementById('kKar').innerHTML = para(kar).replace(' $', '<small>$</small>');
+  const kEk = document.getElementById('kKarEk');
+  kEk.textContent = ciro > 0 ? 'ciro başına ' + para2(ciro > 0 ? kar / ciro : 0) : '—';
+  kEk.className = 'ek ' + (kar >= 0 ? 'iyi' : 'kotu');
+  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1);
+  document.getElementById('kMarjEk').textContent = marjlar.length
+    ? 'en düşük %' + enDusuk.toFixed(1) : '—';
+}
+
+function ozetListe(kok, satirlar, adAlan) {
+  const el = document.getElementById(kok);
+  if (!satirlar.length) { el.innerHTML = '<div class="bos" style="padding:14px">Kayıt yok.</div>'; return; }
+  const enB = Math.max(...satirlar.map(x => x.kar || 0), 1);
+  el.innerHTML = satirlar.slice(0, 10).map(x => {
+    const m = x.ciro > 0 ? x.kar / x.ciro * 100 : 0;
+    const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+    return `
+    <div class="ozet-satir">
+      <span class="ad">${kacar(x[adAlan] || '—')}</span>
+      <div class="bar"><i style="width:${(x.kar / enB * 100).toFixed(0)}%;background:var(${renk})"></i></div>
+      <div class="deg">
+        <div class="k">${para(x.kar)}</div>
+        <div class="m">%${m.toFixed(1)} · ${para(x.ciro)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function ozetCiz() {
+  // Filtrelenmiş veriden hesapla (endpoint'ler filtre almadığı için)
+  const grupla = (alan) => {
+    const g = {};
+    SATISLAR.forEach(s => {
+      const k = s[alan] || '—';
+      if (!g[k]) g[k] = { [alan]: k, ciro: 0, kar: 0, adet: 0 };
+      g[k].ciro += tutarBul(s);
+      g[k].kar += (s.kar_usd || 0);
+      g[k].adet++;
+    });
+    return Object.values(g).sort((a, b) => b.kar - a.kar);
+  };
+  ozetListe('musteriOzet', grupla('musteri'), 'musteri');
+  ozetListe('cinsOzet', grupla('cins'), 'cins');
+}
+
+function satisCiz() {
+  const sirali = [...SATISLAR].sort((a, b) => marjBul(a) - marjBul(b));   // düşük marj üstte
+  document.getElementById('satisAdet').textContent = '· ' + SATISLAR.length + ' kayıt (düşük marj üstte)';
+  document.getElementById('satisGovde').innerHTML = sirali.length ? sirali.slice(0, 60).map(s => {
+    const m = marjBul(s);
+    const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+    return `
+    <tr style="border-left-color:var(${renk})">
+      <td class="mono" style="font-size:.8rem">${kacar((s.satis_tarihi || '—').slice(0, 10))}
+        ${s.fatura_no ? '<div class="ikincil">' + kacar(s.fatura_no) + '</div>' : ''}</td>
+      <td>${kacar(s.musteri || '—')}</td>
+      <td>${kacar(s.cins || '—')}
+        <div class="ikincil">${(s.miktar || 0).toLocaleString('tr-TR')} ${kacar(s.birim || '')}</div></td>
+      <td class="sag mono" style="font-weight:600">${para(tutarBul(s))}</td>
+      <td class="sag mono" style="color:var(--soluk)">${para(s.maliyet_usd)}</td>
+      <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(s.kar_usd)}</td>
+      <td class="sag">
+        <div class="mono" style="font-weight:600">%${m.toFixed(1)}</div>
+        <div class="marj-cubuk"><i style="width:${Math.max(0, Math.min(100, m))}%;background:var(${renk})"></i></div>
+      </td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="bos">Bu filtrede satış yok.</td></tr>';
+}
+
+/* Hızlı dönem */
+document.querySelectorAll('#hizli button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#hizli button').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif');
+  const gun = parseInt(b.dataset.g);
+  if (!gun) {
+    document.getElementById('fBas').value = '';
+    document.getElementById('fSon').value = '';
+  } else {
+    const son = new Date();
+    const bas = new Date(Date.now() - gun * 86400000);
+    document.getElementById('fBas').value = bas.toISOString().slice(0, 10);
+    document.getElementById('fSon').value = son.toISOString().slice(0, 10);
+  }
+  yukle();
+});
+function elleTarih() {
+  document.querySelectorAll('#hizli button').forEach(x => x.classList.remove('aktif'));
+  yukle();
+}
+
+yukle();
+</script>
+{% endblock %}

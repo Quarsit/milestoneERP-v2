@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Rezervasyonlar{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'rezervasyon')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-rezervasyon">
+    <button onclick="disaAktar('rezervasyon','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('rezervasyon','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk)}
+  .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
+  .suz{margin-left:auto}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:220px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  tbody tr{cursor:pointer}
+  .grup{background:#FBFBF9;font-weight:600;font-size:.85rem}
+  .stok-satir{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
+  .stok-satir:last-child{border-bottom:0}
+  .stok-satir .m{margin-left:auto;font-family:var(--mono);font-size:.8rem;color:var(--soluk)}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Rezervasyonlar</h1>
+<p class="g-alt">Müşteri için ayrılmış stoklar. Satıra tıkla — hangi stoklar bağlı, siparişe dönüştü mü, iptal işlemleri sağ panelde.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler" style="grid-template-columns:repeat(3,1fr)">
+  <div class="kpi"><label>Aktif Rezervasyon</label><div class="deger" id="kAktif">—</div><div class="ek" id="kAktifEk">stok bekletiliyor</div></div>
+  <div class="kpi"><label>Siparişe Bağlı</label><div class="deger" id="kSiparis">—</div><div class="ek">sipariş oluşturulmuş</div></div>
+  <div class="kpi"><label>Bekleyen (siparişsiz)</label><div class="deger" id="kBekleyen">—</div><div class="ek" id="kBekleyenEk">karar bekliyor</div></div>
+</div>
+
+<div class="arac-cubugu">
+  <button class="cip aktif" data-d="">Tümü</button>
+  <button class="cip" data-d="aktif">Aktif</button>
+  <button class="cip" data-d="siparisli">Siparişli</button>
+  <button class="cip" data-d="siparissiz">Siparişsiz</button>
+  <button class="cip" data-d="iptal">İptal edilmiş</button>
+  <div class="suz"><input id="ara" placeholder="Müşteri, stok, cins ara…" autocomplete="off"></div>
+</div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead><tr><th>Rezervasyon</th><th>Müşteri</th><th>Stok</th><th>Sipariş</th><th class="sag">Tarih</th></tr></thead>
+    <tbody id="govde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ REZERVASYONLAR ═══
+   /api/rezervasyon            → liste (stok bazında satırlar)
+   DELETE /api/rezervasyon/<id> → iptal (stok "Serbest"e döner)
+   Rezervasyon = stoğun müşteri için ayrılması. Siparişe bağlıysa sipariş
+   üzerinden yönetilir; siparişsizse burada iptal edilebilir. */
+
+let TUM = [], DURUM = '', ARA = '';
+
+async function yukle() {
+  try {
+    const d = await api('/api/rezervasyon');
+    TUM = Array.isArray(d) ? d : (d.data || []);
+  } catch (e) {
+    document.getElementById('govde').innerHTML = '<tr><td colspan="5" class="bos">Rezervasyon verisi alınamadı.</td></tr>';
+    return;
+  }
+  kpiCiz(); ciz();
+}
+
+/* Backend soft-delete kullanır: iptal edilen rezervasyon listede kalır,
+   iptal_tarihi dolar. 'durum' alanı YOKTUR. */
+function aktifMi(r) { return !r.iptal_tarihi; }
+function rezTarih(r) { return (r.olusturma_tarihi || '').slice(0, 10); }
+
+function kpiCiz() {
+  const aktif = TUM.filter(aktifMi);
+  const sipli = aktif.filter(r => r.siparis_id);
+  const sipsiz = aktif.filter(r => !r.siparis_id);
+  document.getElementById('kAktif').textContent = aktif.length;
+  document.getElementById('kAktifEk').textContent =
+    [...new Set(aktif.map(r => r.musteri).filter(Boolean))].length + ' müşteri için';
+  document.getElementById('kSiparis').textContent = sipli.length;
+  document.getElementById('kBekleyen').textContent = sipsiz.length;
+  document.getElementById('kBekleyenEk').textContent = sipsiz.length ? 'siparişe dönmeyi bekliyor' : 'hepsi siparişli';
+}
+
+function ciz() {
+  const s = ARA.toLocaleLowerCase('tr');
+  let liste = TUM.filter(r => {
+    if (DURUM === 'aktif' && !aktifMi(r)) return false;
+    if (DURUM === 'iptal' && aktifMi(r)) return false;
+    if ((DURUM === 'siparisli' || DURUM === 'siparissiz') && !aktifMi(r)) return false;
+    if (DURUM === 'siparisli' && !r.siparis_id) return false;
+    if (DURUM === 'siparissiz' && r.siparis_id) return false;
+    if (s && ![r.musteri, r.stok_no, r.stok_id, r.cins, r.stok_tip].filter(Boolean)
+              .join(' ').toLocaleLowerCase('tr').includes(s)) return false;
+    return true;
+  });
+  liste.sort((a, b) => rezTarih(b).localeCompare(rezTarih(a)));
+
+  const g = document.getElementById('govde');
+  g.innerHTML = liste.length ? liste.map(r => {
+    const a = aktifMi(r);
+    const ray = !a ? '--cizgi-koyu' : (r.siparis_id ? '--verde' : '--kehribar');
+    return `
+    <tr style="border-left-color:var(${ray})" onclick="detayAc('${kacar(r.id)}')">
+      <td class="mono">${kacar(r.id)}</td>
+      <td><strong>${kacar(r.musteri || '—')}</strong></td>
+      <td>${kacar(r.cins || '—')}
+        <div class="ikincil">${kacar(r.stok_tip || '')} · ${kacar(r.stok_no || r.stok_id || '')}</div></td>
+      <td>${!a
+        ? '<span class="rozet rz-kirmizi">İptal edildi</span>'
+        : (r.siparis_id
+          ? `<span class="rozet rz-yesil">${kacar(r.siparis_id)}</span>`
+          : '<span class="rozet rz-kehribar">Siparişsiz</span>')}</td>
+      <td class="sag mono" style="color:var(--soluk);font-size:.82rem">${kacar(rezTarih(r) || '—')}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="bos">Rezervasyon yok.</td></tr>';
+}
+
+function detayAc(id) {
+  const r = TUM.find(x => x.id === id);
+  if (!r) return;
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+  const govde = `
+    <div class="alan-grid">
+      ${alan('Müşteri', kacar(r.musteri || '—'))}
+      ${alan('Tarih', kacar(rezTarih(r) || '—'), true)}
+      ${alan('Stok', kacar(r.stok_no || r.stok_id || '—'), true)}
+      ${alan('Tip', kacar(r.stok_tip || '—'))}
+      ${alan('Cins', kacar(r.cins || '—'))}
+      ${alan('Sipariş', r.siparis_id
+        ? `<span class="rozet rz-yesil">${kacar(r.siparis_id)}</span>`
+        : '<span class="rozet rz-kehribar">Siparişsiz</span>')}
+      ${r.iptal_tarihi ? alan('İptal', kacar((r.iptal_tarihi || '').slice(0, 10)) + (r.iptal_nedeni ? ' · ' + kacar(r.iptal_nedeni) : '')) : ''}
+      ${r.aciklama ? alan('Açıklama', kacar(r.aciklama)) : ''}
+    </div>
+    ${!r.siparis_id ? `
+      <div style="background:var(--kehribar-bg);color:var(--kehribar);border-radius:7px;padding:10px 12px;font-size:.82rem">
+        Bu stok müşteri için bekletiliyor ama henüz siparişe bağlanmadı. Sipariş oluşturulunca otomatik bağlanır.
+      </div>` : ''}`;
+
+  const eylem = [];
+  if (r.stok_id)
+    eylem.push(`<button class="blok-btn" onclick="location.href='/stok'">Stoğu aç</button>`);
+  if (r.siparis_id)
+    eylem.push(`<button class="blok-btn" onclick="location.href='/siparis'">Siparişi aç</button>`);
+  if (aktifMi(r) && !r.siparis_id && yazabilir('rezervasyon'))
+    eylem.push(`<button class="blok-btn birincil" style="background:var(--kirmizi);border-color:var(--kirmizi)" onclick="iptalEt('${kacar(id)}')">Rezervasyonu iptal et</button>`);
+  if (!eylem.length) eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+
+  cekmeceAc(kacar(r.musteri || id), `${kacar(r.stok_no || r.stok_id || '')}`, govde, eylem.join(''));
+}
+
+async function iptalEt(id) {
+  if (!confirm('Rezervasyon iptal edilsin mi? Bağlı stok "Serbest" durumuna döner.')) return;
+  try {
+    const d = await api(`/api/rezervasyon/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Rezervasyon iptal edildi');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* */ }
+}
+
+document.querySelectorAll('.cip').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.cip').forEach(x => x.classList.remove('aktif'));
+  b.classList.add('aktif'); DURUM = b.dataset.d; ciz();
+});
+let araZaman;
+document.getElementById('ara').addEventListener('input', e => {
+  clearTimeout(araZaman);
+  araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
+});
+
+yukle();
+</script>
+{% endblock %}

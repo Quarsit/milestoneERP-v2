@@ -1,0 +1,490 @@
+{% extends "base.html" %}
+{% block title %}KDV İade{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'kdviade')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-kdviade">
+    <button onclick="raporAc()"><span style="background:#3B6E8F">TBL</span> Dönem raporu</button>
+  </div>
+</div>
+{% if menu_admin or menu_yetki.get('fatura') == 'yazma' %}
+<button class="btn-yeni" onclick="yeniAc()">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+  Yeni Dosya
+</button>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk);cursor:pointer}
+  .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
+  .suz{margin-left:auto}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:210px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  tbody tr{cursor:pointer}
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:600px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-size:1.05rem;font-weight:700}
+  .modal-bas p{font-size:.8rem;color:var(--soluk);margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1}
+  .modal-alt{padding:14px 22px;border-top:1px solid var(--cizgi);display:flex;justify-content:flex-end;gap:9px}
+  .form-satir{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+  .form-satir.f3{grid-template-columns:1fr 1fr 1fr}
+  .form-alan label{display:block;font-size:.76rem;font-weight:600;color:var(--soluk);margin-bottom:4px}
+  .form-alan input,.form-alan select,.form-alan textarea{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:8px 10px;font-family:var(--govde);font-size:.88rem;background:var(--yuzey)}
+  .form-alan textarea{min-height:60px;resize:vertical}
+  .aday-satir{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--cizgi)}
+  .aday-satir:last-child{border-bottom:0}
+  .aday-satir .ana{font-weight:600;font-size:.86rem}
+  .aday-satir .alt{font-size:.75rem;color:var(--soluk);margin-top:2px}
+  .aday-bas{font-size:.78rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin:16px 0 4px}
+  .uyari{background:#FDF3E3;border:1px solid #E8C88A;color:#7A5A1E;border-radius:8px;padding:10px 12px;font-size:.79rem;line-height:1.45;margin-bottom:12px}
+  .ilerleme{height:5px;background:var(--notr-bg);border-radius:3px;overflow:hidden;margin-top:5px}
+  .ilerleme i{display:block;height:100%;background:var(--verde)}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="kpiler" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
+  <div class="kpi"><div class="g-baslik">Açık Dosya</div><div class="deger" id="kAcik">—</div><div class="g-alt" id="kAcikEk">—</div></div>
+  <div class="kpi"><div class="g-baslik">Talep Edilen</div><div class="deger" id="kTalep">—</div><div class="g-alt">toplam · TL</div></div>
+  <div class="kpi"><div class="g-baslik">Tahsil Edilen</div><div class="deger" id="kAlinan">—</div><div class="g-alt" id="kAlinanEk">—</div></div>
+  <div class="kpi"><div class="g-baslik">Devlette Bekleyen</div><div class="deger" id="kBekleyen">—</div><div class="g-alt">talep − tahsil</div></div>
+</div>
+
+<div class="arac-cubugu">
+  <button class="cip aktif" onclick="durumSec(this,'')">Tümü</button>
+  <button class="cip" onclick="durumSec(this,'Hazirlaniyor')">Hazırlanıyor</button>
+  <button class="cip" onclick="durumSec(this,'Beyan Edildi')">Beyan Edildi</button>
+  <button class="cip" onclick="durumSec(this,'Vergi Dairesinde')">Vergi Dairesinde</button>
+  <button class="cip" onclick="durumSec(this,'Alindi')">Alındı</button>
+  <div class="suz"><input id="ara" placeholder="Dönem, dosya no, vergi dairesi…" oninput="ARA=this.value;ciz()"></div>
+</div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead><tr>
+      <th>Dönem</th><th>Tür</th><th>Durum</th>
+      <th class="sag">Talep (TL)</th><th class="sag">Tahsil (TL)</th><th class="sag">Fatura</th>
+    </tr></thead>
+    <tbody id="govde"><tr><td colspan="6" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- ── YENİ DOSYA ── -->
+<div class="modal-ortu" id="yeniModal" onclick="if(event.target===this)yeniKapat()">
+  <div class="modal" role="dialog" aria-label="Yeni KDV iade dosyası">
+    <div class="modal-bas"><h3>Yeni KDV İade Dosyası</h3>
+      <p>Bir KDV beyan dönemi için iade takip dosyası açar.</p></div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Dönem (KDV beyan ayı)</label><input id="yDonem" type="month"></div>
+        <div class="form-alan"><label>İade Türü</label>
+          <select id="yTur">
+            <option value="ihracat">İhracat (tam istisna)</option>
+            <option value="ihrac_kayitli">İhraç kayıtlı teslim</option>
+          </select></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>İade Şekli</label>
+          <select id="ySekil"><option value="nakden">Nakden</option><option value="mahsuben">Mahsuben</option></select></div>
+        <div class="form-alan"><label>Vergi Dairesi</label><input id="yVd" placeholder="Denizli VD"></div>
+      </div>
+      <div class="form-alan"><label>Açıklama</label><input id="yAciklama" placeholder="opsiyonel"></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="yeniKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="yKaydet" onclick="yeniKaydet()">Dosyayı Aç</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DOSYA DÜZENLE ── -->
+<div class="modal-ortu" id="duzModal" onclick="if(event.target===this)duzKapat()">
+  <div class="modal" role="dialog" aria-label="Dosya bilgileri">
+    <div class="modal-bas"><h3>Dosya Bilgileri</h3><p id="duzAlt">—</p></div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Durum</label>
+          <select id="dDurum">
+            <option value="Hazirlaniyor">Hazırlanıyor</option>
+            <option value="Beyan Edildi">Beyan Edildi</option>
+            <option value="YMM Raporu">YMM Raporu Alındı</option>
+            <option value="Vergi Dairesinde">Vergi Dairesinde</option>
+            <option value="Kismi Alindi">Kısmi Alındı</option>
+            <option value="Alindi">Alındı</option>
+            <option value="Reddedildi">Reddedildi</option>
+          </select></div>
+        <div class="form-alan"><label>İade Şekli</label>
+          <select id="dSekil"><option value="nakden">Nakden</option><option value="mahsuben">Mahsuben</option></select></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Beyan Tarihi</label><input id="dBeyan" type="date"></div>
+        <div class="form-alan"><label>VD Başvuru</label><input id="dVdBasvuru" type="date"></div>
+        <div class="form-alan"><label>Vergi Dairesi</label><input id="dVd"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>YMM Rapor No</label><input id="dYmmNo" placeholder="opsiyonel"></div>
+        <div class="form-alan"><label>YMM Rapor Tarihi</label><input id="dYmmTarih" type="date"></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Talep (TL)</label><input id="dTalep" type="number" step="0.01"></div>
+        <div class="form-alan"><label>Onaylanan (TL)</label><input id="dOnaylanan" type="number" step="0.01"></div>
+        <div class="form-alan"><label>Tahsil Edilen (TL)</label><input id="dAlinan" type="number" step="0.01"></div>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px"><label>Tahsil Tarihi</label><input id="dAlinmaTarih" type="date"></div>
+      <div class="form-alan"><label>Açıklama</label><textarea id="dAciklama"></textarea></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="duzKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="dKaydet" onclick="duzKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── ADAY EKLE ── -->
+<div class="modal-ortu" id="adayModal" onclick="if(event.target===this)adayKapat()">
+  <div class="modal" style="width:760px" role="dialog" aria-label="Dosyaya kayıt ekle">
+    <div class="modal-bas"><h3>Dosyaya Kayıt Ekle</h3><p id="adayAlt">—</p></div>
+    <div class="modal-gov" id="adayGov"><div class="yukleniyor">Yükleniyor…</div></div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="adayKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="aKaydet" onclick="adayBagla()">Seçilenleri Bağla</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   KDV İADE TAKİBİ  ·  F7
+
+   Bu ekranın veri kaynağı ikiye ayrılır:
+     • SATIŞ tarafı — dosyaya bağlanan ihracat faturaları
+     • YÜKLENİLEN KDV — 'Iade KDV' maliyet kalemleri. Bunlar SIFIRDAN
+       hesaplanmaz; sipariş teslim edilirken 'Devreden KDV'den
+       dönüştürülüp zaten oluşuyorlar (flask_app.py, KDV İADE DÖNÜŞÜMÜ).
+       Bu modül onları bir DÖNEM DOSYASINA bağlar ve tahsilatı izler.
+   ═══════════════════════════════════════════════════════════════════ */
+let TUM = [], DURUM = '', ARA = '', SECILI = null, ADAYLAR = null;
+
+const AD = { 'Hazirlaniyor':'Hazırlanıyor', 'Beyan Edildi':'Beyan Edildi',
+             'YMM Raporu':'YMM Raporu', 'Vergi Dairesinde':'Vergi Dairesinde',
+             'Kismi Alindi':'Kısmi Alındı', 'Alindi':'Alındı', 'Reddedildi':'Reddedildi' };
+const RZ = { 'Hazirlaniyor':'rz-gri', 'Beyan Edildi':'rz-mavi', 'YMM Raporu':'rz-mavi',
+             'Vergi Dairesinde':'rz-sari', 'Kismi Alindi':'rz-sari',
+             'Alindi':'rz-yesil', 'Reddedildi':'rz-kirmizi' };
+const TUR_AD = { 'ihracat':'İhracat', 'ihrac_kayitli':'İhraç kayıtlı' };
+
+function tl(n) { return (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺'; }
+
+async function yukle() {
+  try {
+    const d = await api('/api/kdv-iade');
+    TUM = d.data || [];
+    ozet(); ciz();
+  } catch (e) { document.getElementById('govde').innerHTML = '<tr><td colspan="6" class="bos">Yüklenemedi</td></tr>'; }
+}
+
+function ozet() {
+  const acik = TUM.filter(x => !['Alindi', 'Reddedildi'].includes(x.durum));
+  const talep = TUM.reduce((t, x) => t + (x.talep_tutar || 0), 0);
+  const alinan = TUM.reduce((t, x) => t + (x.alinan_tutar || 0), 0);
+  document.getElementById('kAcik').textContent = acik.length;
+  document.getElementById('kAcikEk').textContent = TUM.length + ' dosyanın ' + acik.length + '\u2019i sürüyor';
+  document.getElementById('kTalep').textContent = tl(talep);
+  document.getElementById('kAlinan').textContent = tl(alinan);
+  document.getElementById('kAlinanEk').textContent = talep > 0 ? '%' + (alinan / talep * 100).toFixed(1) : '—';
+  document.getElementById('kBekleyen').textContent = tl(Math.max(0, talep - alinan));
+}
+
+function durumSec(btn, d) {
+  DURUM = d;
+  document.querySelectorAll('.cip').forEach(b => b.classList.remove('aktif'));
+  btn.classList.add('aktif');
+  ciz();
+}
+
+function ciz() {
+  const s = ARA.toLocaleLowerCase('tr');
+  const liste = TUM.filter(x =>
+    (!DURUM || x.durum === DURUM) &&
+    (!s || [x.id, x.donem, x.vergi_dairesi, x.ymm_rapor_no].filter(Boolean)
+      .join(' ').toLocaleLowerCase('tr').includes(s)));
+  liste.sort((a, b) => (b.donem || '').localeCompare(a.donem || ''));
+
+  const g = document.getElementById('govde');
+  g.innerHTML = liste.length ? liste.map(x => {
+    const oran = (x.talep_tutar || 0) > 0 ? Math.min(100, (x.alinan_tutar || 0) / x.talep_tutar * 100) : 0;
+    return `
+    <tr onclick="detayAc('${kacar(x.id)}')">
+      <td class="mono"><strong>${kacar(x.donem || '—')}</strong><div class="ikincil">${kacar(x.id)}</div></td>
+      <td>${kacar(TUR_AD[x.iade_tur] || x.iade_tur || '—')}<div class="ikincil">${x.iade_sekli === 'mahsuben' ? 'Mahsuben' : 'Nakden'}</div></td>
+      <td><span class="rozet ${RZ[x.durum] || 'rz-gri'}">${kacar(AD[x.durum] || x.durum)}</span></td>
+      <td class="sag mono">${tl(x.talep_tutar)}</td>
+      <td class="sag mono">${tl(x.alinan_tutar)}<div class="ilerleme"><i style="width:${oran}%"></i></div></td>
+      <td class="sag mono">${x.fatura_adet || 0}<div class="ikincil">${x.kalem_adet || 0} KDV kalemi</div></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="bos">Dosya yok</td></tr>';
+}
+
+/* ── Çekmece / detay ── */
+async function detayAc(id) {
+  cekmeceAc(id, 'Yükleniyor…', '<div class="yukleniyor">Yükleniyor…</div>', '');
+  let d;
+  try { d = await api(`/api/kdv-iade/${encodeURIComponent(id)}`); } catch (e) { return; }
+  SECILI = d.dosya;
+  const f = d.dosya, t = d.toplamlar || {};
+
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+
+  let uyari = '';
+  if ((t.pasif || 0) > 0) uyari += `
+    <div class="uyari"><strong>${t.pasif} KDV kalemi artık PASİF.</strong>
+    Bu kalemlerin siparişi teslim durumundan geri alınmış; iade hakkı düşmüştür.
+    Toplama dahil EDİLMEDİLER. Dosya beyan edildiyse düzeltme beyannamesi gerekebilir —
+    mali müşavirinize danışın.</div>`;
+  if ((t.cevrilemeyen || 0) > 0) uyari += `
+    <div class="uyari"><strong>${t.cevrilemeyen} KDV kaleminin TL karşılığı hesaplanamadı.</strong>
+    Bu kalemler döviz cinsinden girilmiş ve maliyet tarihinde kur kaydı yok.
+    Aşağıdaki "Yüklenilen KDV" toplamı bu kalemleri İÇERMİYOR — beyan öncesi elle kontrol edin.</div>`;
+
+  const govde = `
+    ${uyari}
+    <div class="alan-grid">
+      ${alan('Dönem', kacar(f.donem), true)}
+      ${alan('Tür', kacar(TUR_AD[f.iade_tur] || f.iade_tur))}
+      ${alan('İade Şekli', f.iade_sekli === 'mahsuben' ? 'Mahsuben' : 'Nakden')}
+      ${alan('Vergi Dairesi', kacar(f.vergi_dairesi || '—'))}
+      ${alan('Beyan Tarihi', kacar(f.beyan_tarihi || '—'), true)}
+      ${alan('VD Başvuru', kacar(f.vd_basvuru_tarihi || '—'), true)}
+      ${alan('YMM Raporu', f.ymm_rapor_no ? kacar(f.ymm_rapor_no) + (f.ymm_rapor_tarihi ? ' · ' + kacar(f.ymm_rapor_tarihi) : '') : '—', true)}
+      ${alan('Tahsil Tarihi', kacar(f.alinma_tarihi || '—'), true)}
+    </div>
+
+    <div class="alan-grid" style="margin-bottom:16px">
+      ${alan('İhracat Bedeli', kacar(t.fatura_toplam_tl != null ? tl(t.fatura_toplam_tl) : '—'), true)}
+      ${alan('Yüklenilen KDV', kacar(tl(t.yuklenilen_kdv_tl)), true)}
+      ${alan('Talep Edilen', kacar(tl(f.talep_tutar)), true)}
+      ${alan('Tahsil Edilen', `<span style="color:var(--verde);font-weight:700">${tl(f.alinan_tutar)}</span>`, true)}
+    </div>
+
+    <div class="aday-bas">Bağlı Faturalar · ${(d.faturalar || []).length}</div>
+    ${(d.faturalar || []).length ? (d.faturalar).map(x => `
+      <div class="aday-satir">
+        <div></div>
+        <div><div class="ana">${kacar(x.fatura_no || x.id)}</div>
+          <div class="alt">${kacar(x.musteri || '')} · ${kacar(x.fatura_tarihi || '')}${x.ettn ? ' · ETTN ✓' : ' · <span style="color:var(--kirmizi)">ETTN yok</span>'}</div></div>
+        <div class="mono" style="text-align:right">${para(x.toplam, x.doviz)}</div>
+      </div>`).join('') : '<div class="bos" style="padding:10px 0;font-size:.82rem">Henüz fatura bağlanmadı</div>'}
+
+    <div class="aday-bas">Yüklenilen KDV Kalemleri · ${(d.kalemler || []).length}</div>
+    ${(d.kalemler || []).length ? (d.kalemler).map(x => `
+      <div class="aday-satir">
+        <div></div>
+        <div><div class="ana">${kacar(x.aciklama || x.id)}</div>
+          <div class="alt">${kacar(x.fatura_no || 'fatura no yok')} · ${kacar(x.maliyet_tarihi || '')}</div></div>
+        <div class="mono" style="text-align:right">${x.aktif === false
+          ? '<span style="color:var(--kirmizi)">PASİF</span>'
+          : (x.try_tutar != null ? tl(x.try_tutar) : '<span style="color:var(--kirmizi)">TL ?</span>')}</div>
+      </div>`).join('') : '<div class="bos" style="padding:10px 0;font-size:.82rem">Henüz KDV kalemi bağlanmadı</div>'}
+  `;
+
+  const kilitli = ['Alindi', 'Reddedildi'].includes(f.durum);
+  const eylem = [];
+  if (yazabilir('fatura') && !kilitli)
+    eylem.push(`<button class="blok-btn birincil" onclick="adayAc('${kacar(f.id)}')">Fatura / KDV ekle</button>`);
+  if (yazabilir('fatura'))
+    eylem.push(`<button class="blok-btn" onclick="duzAc('${kacar(f.id)}')">Dosyayı düzenle</button>`);
+  if (yazabilir('fatura') && f.durum === 'Hazirlaniyor')
+    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="dosyaSil('${kacar(f.id)}')">Sil</button>`);
+  eylem.push('<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>');
+
+  cekmeceAc(`${f.donem} · ${TUR_AD[f.iade_tur] || f.iade_tur}`,
+    `${AD[f.durum] || f.durum} · ${tl(f.talep_tutar)} talep`, govde, eylem.join(''));
+}
+
+/* ── Yeni dosya ── */
+function yeniAc() {
+  const b = new Date();
+  b.setMonth(b.getMonth() - 1);           // varsayılan: geçen ay
+  document.getElementById('yDonem').value = b.toISOString().slice(0, 7);
+  document.getElementById('yVd').value = '';
+  document.getElementById('yAciklama').value = '';
+  document.getElementById('yeniModal').classList.add('acik');
+}
+function yeniKapat() { document.getElementById('yeniModal').classList.remove('acik'); }
+
+async function yeniKaydet() {
+  const btn = document.getElementById('yKaydet');
+  btn.disabled = true; btn.textContent = 'Açılıyor…';
+  try {
+    const d = await api('/api/kdv-iade', { method: 'POST', body: JSON.stringify({
+      donem: document.getElementById('yDonem').value,
+      iade_tur: document.getElementById('yTur').value,
+      iade_sekli: document.getElementById('ySekil').value,
+      vergi_dairesi: document.getElementById('yVd').value.trim(),
+      aciklama: document.getElementById('yAciklama').value.trim()
+    })});
+    bildir(d.mesaj || 'Dosya açıldı');
+    yeniKapat(); await yukle();
+    if (d.id) detayAc(d.id);
+  } catch (e) { /* api() bildiriyor */ }
+  finally { btn.disabled = false; btn.textContent = 'Dosyayı Aç'; }
+}
+
+/* ── Düzenle ── */
+function duzAc(id) {
+  const f = TUM.find(x => x.id === id) || SECILI;
+  if (!f) return;
+  SECILI = f;
+  document.getElementById('duzAlt').textContent = `${f.donem} · ${f.id}`;
+  document.getElementById('dDurum').value = f.durum || 'Hazirlaniyor';
+  document.getElementById('dSekil').value = f.iade_sekli || 'nakden';
+  document.getElementById('dBeyan').value = f.beyan_tarihi || '';
+  document.getElementById('dVdBasvuru').value = f.vd_basvuru_tarihi || '';
+  document.getElementById('dVd').value = f.vergi_dairesi || '';
+  document.getElementById('dYmmNo').value = f.ymm_rapor_no || '';
+  document.getElementById('dYmmTarih').value = f.ymm_rapor_tarihi || '';
+  document.getElementById('dTalep').value = f.talep_tutar || '';
+  document.getElementById('dOnaylanan').value = f.onaylanan_tutar || '';
+  document.getElementById('dAlinan').value = f.alinan_tutar || '';
+  document.getElementById('dAlinmaTarih').value = f.alinma_tarihi || '';
+  document.getElementById('dAciklama').value = f.aciklama || '';
+  document.getElementById('duzModal').classList.add('acik');
+}
+function duzKapat() { document.getElementById('duzModal').classList.remove('acik'); }
+
+async function duzKaydet() {
+  const btn = document.getElementById('dKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api(`/api/kdv-iade/${encodeURIComponent(SECILI.id)}`, {
+      method: 'PUT', body: JSON.stringify({
+        durum: document.getElementById('dDurum').value,
+        iade_sekli: document.getElementById('dSekil').value,
+        beyan_tarihi: document.getElementById('dBeyan').value || null,
+        vd_basvuru_tarihi: document.getElementById('dVdBasvuru').value || null,
+        vergi_dairesi: document.getElementById('dVd').value.trim(),
+        ymm_rapor_no: document.getElementById('dYmmNo').value.trim(),
+        ymm_rapor_tarihi: document.getElementById('dYmmTarih').value || null,
+        talep_tutar: document.getElementById('dTalep').value || 0,
+        onaylanan_tutar: document.getElementById('dOnaylanan').value || 0,
+        alinan_tutar: document.getElementById('dAlinan').value || 0,
+        alinma_tarihi: document.getElementById('dAlinmaTarih').value || null,
+        aciklama: document.getElementById('dAciklama').value
+      })
+    });
+    bildir(d.mesaj || 'Kaydedildi');
+    duzKapat(); await yukle(); detayAc(SECILI.id);
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+async function dosyaSil(id) {
+  if (!confirm('Dosya silinsin mi? Bağlı fatura ve KDV kalemlerinin bağı çözülür, kayıtlar silinmez.')) return;
+  try {
+    const d = await api(`/api/kdv-iade/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Dosya silindi');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* */ }
+}
+
+/* ── Aday ekleme ──────────────────────────────────────────────────
+   Adaylar dosyanın DÖNEMİNE göre önerilir: o ay kesilmiş, henüz
+   hiçbir dosyaya bağlanmamış ihracat faturaları ve aynı dönemdeki
+   serbest 'Iade KDV' kalemleri. Fatura satırında, o faturanın
+   siparişinden İZLENEN KDV kalemleri de gösterilir. */
+async function adayAc(id) {
+  SECILI = TUM.find(x => x.id === id) || SECILI;
+  document.getElementById('adayAlt').textContent = `${SECILI.donem} · ${SECILI.id}`;
+  document.getElementById('adayGov').innerHTML = '<div class="yukleniyor">Yükleniyor…</div>';
+  document.getElementById('adayModal').classList.add('acik');
+  try { ADAYLAR = await api(`/api/kdv-iade/${encodeURIComponent(id)}/adaylar`); }
+  catch (e) { adayKapat(); return; }
+
+  const f = ADAYLAR.faturalar || [], k = ADAYLAR.kalemler || [];
+  document.getElementById('adayGov').innerHTML = `
+    ${(!f.length && !k.length) ? `<div class="bos" style="padding:20px 0">
+      ${kacar(SECILI.donem)} döneminde bağlanmamış kayıt bulunamadı.
+      <div style="font-size:.78rem;color:var(--soluk);margin-top:6px">
+      Fatura kesilmiş (Taslak değil) ve satış tipi iade kapsamında olmalı.</div></div>` : ''}
+    ${f.length ? `<div class="aday-bas">İhracat Faturaları · ${f.length}</div>
+      ${f.map(x => `
+        <div class="aday-satir">
+          <input type="checkbox" class="af" value="${kacar(x.id)}" checked>
+          <div><div class="ana">${kacar(x.fatura_no || x.id)}</div>
+            <div class="alt">${kacar(x.musteri || '')} · ${kacar(x.fatura_tarihi || '')}
+              ${x.izli_kdv_adet ? ` · <strong>${x.izli_kdv_adet} izli KDV kalemi (${tl(x.izli_kdv_tl)})</strong>` : ' · izli KDV kalemi yok'}</div></div>
+          <div class="mono" style="text-align:right">${para(x.toplam, x.doviz)}</div>
+        </div>`).join('')}` : ''}
+    ${k.length ? `<div class="aday-bas">Serbest Yüklenilen KDV Kalemleri · ${k.length}</div>
+      ${k.map(x => `
+        <div class="aday-satir">
+          <input type="checkbox" class="ak" value="${kacar(x.id)}">
+          <div><div class="ana">${kacar(x.aciklama || x.id)}</div>
+            <div class="alt">${kacar(x.fatura_no || 'fatura no yok')} · ${kacar(x.maliyet_tarihi || '')}</div></div>
+          <div class="mono" style="text-align:right">${x.try_tutar != null ? tl(x.try_tutar) : '<span style="color:var(--kirmizi)">TL ?</span>'}</div>
+        </div>`).join('')}` : ''}
+    ${f.length ? `<div style="margin-top:14px;font-size:.78rem;color:var(--soluk);display:flex;align-items:center;gap:7px">
+      <input type="checkbox" id="izliDahil" checked>
+      <label for="izliDahil">Seçili faturaların izlenen KDV kalemlerini de bağla</label></div>` : ''}`;
+}
+function adayKapat() { document.getElementById('adayModal').classList.remove('acik'); }
+
+async function adayBagla() {
+  const fid = [...document.querySelectorAll('.af:checked')].map(x => x.value);
+  const kid = [...document.querySelectorAll('.ak:checked')].map(x => x.value);
+  const izli = document.getElementById('izliDahil');
+  if (!fid.length && !kid.length) { bildir('Hiçbir kayıt seçilmedi', true); return; }
+  const btn = document.getElementById('aKaydet');
+  btn.disabled = true; btn.textContent = 'Bağlanıyor…';
+  try {
+    const d = await api(`/api/kdv-iade/${encodeURIComponent(SECILI.id)}/bagla`, {
+      method: 'POST', body: JSON.stringify({
+        fatura_idler: fid, maliyet_idler: kid,
+        izli_kdv: !!(izli && izli.checked)
+      })
+    });
+    bildir(d.mesaj || 'Bağlandı');
+    adayKapat(); await yukle(); detayAc(SECILI.id);
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Seçilenleri Bağla'; }
+}
+
+/* ── Dönem raporu ── */
+async function raporAc() {
+  document.querySelectorAll('.disa-menu').forEach(m => m.classList.remove('acik'));
+  let d;
+  try { d = await api('/api/kdv-iade/rapor'); } catch (e) { return; }
+  const s = d.donemler || [];
+  cekmeceAc('KDV İade — Dönem Raporu', `${s.length} dönem · toplam ${tl(d.genel_talep)} talep`, `
+    <div class="alan-grid" style="margin-bottom:16px">
+      <div class="alan"><label>Toplam Talep</label><div class="mono">${tl(d.genel_talep)}</div></div>
+      <div class="alan"><label>Tahsil Edilen</label><div class="mono">${tl(d.genel_alinan)}</div></div>
+      <div class="alan"><label>Bekleyen</label><div class="mono">${tl(d.genel_bekleyen)}</div></div>
+      <div class="alan"><label>Ort. Tahsil Süresi</label><div class="mono">${d.ortalama_gun != null ? d.ortalama_gun + ' gün' : '—'}</div></div>
+    </div>
+    ${s.map(x => `
+      <div class="aday-satir">
+        <div></div>
+        <div><div class="ana">${kacar(x.donem)} · ${kacar(TUR_AD[x.iade_tur] || x.iade_tur)}</div>
+          <div class="alt">${kacar(AD[x.durum] || x.durum)} · ${x.fatura_adet} fatura${x.gun != null ? ' · ' + x.gun + ' günde tahsil' : ''}</div></div>
+        <div class="mono" style="text-align:right">${tl(x.alinan_tutar)}<div class="alt">/ ${tl(x.talep_tutar)}</div></div>
+      </div>`).join('') || '<div class="bos">Dosya yok</div>'}
+  `, '<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>');
+}
+
+yukle();
+</script>
+{% endblock %}

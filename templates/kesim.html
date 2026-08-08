@@ -1,0 +1,529 @@
+{% extends "base.html" %}
+{% block title %}Kesim{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'kesim')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-kesim">
+    <button onclick="disaAktar('kesim','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('kesim','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% if menu_admin or menu_yetki.get('kesim') == 'yazma' %}
+<button class="btn-yeni" onclick="yeniAc()">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+  Yeni Kesim
+</button>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+  .suz{margin-bottom:14px;display:flex}
+  .suz input{margin-left:auto;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:220px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  tbody tr{cursor:pointer}
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:860px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto}
+  .form-satir{display:grid;gap:12px;margin-bottom:12px}
+  .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr} .f4{grid-template-columns:1fr 1fr 1fr 1fr}
+  .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .kutu{border:1px dashed var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:14px;margin-bottom:14px}
+  .kutu h5{font-size:.75rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px}
+  .kaynak-liste{max-height:150px;overflow-y:auto;border:1px solid var(--cizgi);border-radius:var(--r-kucuk);padding:6px}
+  .kaynak-satir{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:6px;font-size:.85rem;cursor:pointer}
+  .kaynak-satir:hover{background:var(--notr-bg)}
+  .kaynak-satir.secili{background:var(--verde-acik)}
+  .kaynak-satir input{width:auto;margin:0}
+  .kaynak-satir .m{margin-left:auto;font-family:var(--mono);font-size:.78rem;color:var(--soluk)}
+  .hedef-satir{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
+  .hedef-satir:last-child{border-bottom:0}
+  .hedef-satir .m{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
+  .sil-btn{border:0;background:transparent;color:var(--kirmizi);font-size:1rem;cursor:pointer;padding:0 4px}
+  .ekle-btn{border:1px solid var(--verde);background:var(--verde-acik);color:var(--verde);border-radius:var(--r-kucuk);padding:9px 14px;font-weight:600;font-size:.85rem}
+  .ozet-kutu{background:var(--notr-bg);border-radius:var(--r-kucuk);padding:12px 14px;display:flex;gap:22px;flex-wrap:wrap;font-size:.85rem}
+  .ozet-kutu b{font-family:var(--mono)}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
+  .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--verde-acik);color:var(--verde)}
+  @media (max-width:820px){ .f3,.f4{grid-template-columns:1fr 1fr} }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Kesim</h1>
+<p class="g-alt">Blok → plaka, plaka → ebatlı. Kaynağın maliyeti üretilen ürünlere otomatik devredilir.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="suz"><input id="ara" placeholder="Kesim no, cins, blok ara…" autocomplete="off"></div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead><tr><th>Kesim</th><th>Yön</th><th>Kaynak</th><th>Üretilen</th><th class="sag">Fire</th><th class="sag">Tarih</th></tr></thead>
+    <tbody id="govde"><tr><td colspan="6" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- Yeni kesim modalı -->
+<div class="modal-ortu" id="modal" onclick="if(event.target===this)modalKapat()">
+  <div class="modal" role="dialog" aria-label="Yeni kesim">
+    <div class="modal-bas">
+      <h3>Yeni Kesim</h3>
+      <p>Kaynağı seç, üretilecek ürünleri gir. Maliyet m² başına otomatik dağıtılır.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Kesim Yönü</label>
+          <select id="fYon" onchange="yonDegisti()">
+            <option value="BLOK_PLAKA">Blok → Plaka</option>
+            <option value="BLOK_EBATLI">Blok → Ebatlı</option>
+            <option value="PLAKA_EBATLI">Plaka → Ebatlı</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Kesim Tarihi</label><input id="fTarih" type="date"></div>
+      </div>
+
+      <div class="kutu">
+        <h5 id="kaynakBaslik">Kaynak seç</h5>
+        <div class="kaynak-liste" id="kaynakListe"><div class="yukleniyor" style="padding:10px">Yükleniyor…</div></div>
+        <div style="margin-top:8px;font-size:.8rem;color:var(--soluk)" id="kaynakOzet">Kaynak seçilmedi</div>
+      </div>
+
+      <div class="kutu" id="uretimNoKutu">
+        <h5>Üretim Blok No</h5>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="fUretimNo" placeholder="Boş bırakılırsa otomatik üretilir — örn. A-2026-001-U1"
+                 style="flex:1;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--mono);font-size:.85rem;font-weight:600">
+          <button type="button" class="ekle-btn" style="margin:0;white-space:nowrap" onclick="uretimNoOner()">Otomatik öner</button>
+        </div>
+        <div style="margin-top:6px;font-size:.75rem;color:var(--soluk)">Üretilen ürünler stoğa bu blok numarası ile girer. <span id="uretimNoOrijinal"></span></div>
+      </div>
+
+      <div class="kutu" id="slabKutu">
+        <h5>Plaka Numaralandırma</h5>
+        <div class="form-satir f2">
+          <div class="form-alan"><label>Başlangıç No</label><input id="fSlabBas" type="number" min="1" value="1"></div>
+          <div class="form-alan"><label>Atlanacak No (kırılan)</label><input id="fAtlanan" placeholder="örn. 3, 61"></div>
+        </div>
+        <div style="font-size:.75rem;color:var(--soluk)">Plakalar başlangıçtan itibaren kesintisiz numaralanır; atlanan numaralar es geçilir.</div>
+      </div>
+
+      <div class="kutu">
+        <h5>Üretilecek ürün ekle</h5>
+        <div class="form-satir f4">
+          <div class="form-alan"><label>Cins</label><input id="hCins" placeholder="Emperador Dark"></div>
+          <div class="form-alan"><label>Yüzey</label><input id="hOzellik" placeholder="Cilalı"></div>
+          <div class="form-alan"><label>Boy (cm)</label><input id="hBoy" type="number" oninput="hedefHesapla()"></div>
+          <div class="form-alan"><label>Yükseklik (cm)</label><input id="hYuk" type="number" oninput="hedefHesapla()"></div>
+        </div>
+        <div class="form-satir f4">
+          <div class="form-alan"><label>Kalınlık (cm)</label><input id="hKal" type="number" step="0.1" value="2"></div>
+          <div class="form-alan"><label>Adet</label><input id="hAdet" type="number" value="1" oninput="hedefHesapla()"></div>
+          <div class="form-alan" id="kasaAlan" style="display:none"><label>Kasa İçi Adet</label><input id="hKasaAdet" type="number" value="1"></div>
+          <div class="form-alan"><label>Toplam m²</label><input id="hM2" readonly style="font-family:var(--mono);font-weight:600;background:var(--notr-bg)"></div>
+        </div>
+        <button class="ekle-btn" onclick="hedefEkle()">+ Ürünü listeye ekle</button>
+      </div>
+
+      <div id="hedefListe" style="margin-bottom:14px"></div>
+      <div class="ozet-kutu">
+        <span>Giren: <b id="ozGiren">0 m²</b></span>
+        <span>Çıkan: <b id="ozCikan">0 m²</b></span>
+        <span>Fire: <b id="ozFire">—</b></span>
+        <span style="margin-left:auto">Devredilecek maliyet: <b id="ozMaliyet">—</b></span>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="modalKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="fKaydet" onclick="kesimKaydet()">Kesimi Kaydet</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ KESİM ═══
+   /api/kesim                       → liste
+   /api/kesim/kaynak_listesi?tip=   → kesilebilir BLOK / PLAKA stokları
+   POST /api/kesim {kesim_yon: BLOK_PLAKA|BLOK_EBATLI|PLAKA_EBATLI,
+                    kaynak_ids[], hedefler[{hedef_tip, cins, ozellik, boy, yukseklik,
+                    kalinlik, adet, kasa_ici_adet?}], kesim_tarihi, aciklama}
+   Maliyet: kaynak toplam maliyeti / hedef toplam m² → birim maliyet (backend hesaplar).
+   BLOK kaynakta tek blok seçilebilir; PLAKA kaynakta çoklu seçim serbest. */
+
+let TUM = [], ARA = '', KAYNAKLAR = [], SECILI_KAYNAK = [], HEDEFLER = [];
+
+/* Depo'dan "Kesime gönder" ile gelindiyse: ?kaynak=<stok_id>&yon=BLOK_PLAKA|BLOK_EBATLI|PLAKA_EBATLI
+   → modal açılır, yön ve kaynak seçilir, cins/yüzey kaynaktan doldurulur. */
+async function urlIleAc() {
+  const p = new URLSearchParams(location.search);
+  const kaynakId = p.get('kaynak');
+  const yon = p.get('yon');
+  if (!kaynakId || !yon) return;
+  await yeniAc();
+  document.getElementById('fYon').value = yon;
+  await yonDegisti();                       // kaynak listesini o yöne göre yükler
+  // Kaynağı işaretle
+  const kutu = document.querySelector(`.kaynak-satir[data-id="${CSS.escape(kaynakId)}"] input`);
+  if (kutu) {
+    kutu.checked = true;
+    kaynakSecildi(kutu, yon.startsWith('BLOK') ? 'BLOK' : 'PLAKA');
+    kutu.closest('.kaynak-satir').scrollIntoView({ block: 'nearest' });
+  }
+  // Cins / yüzey bilgilerini kaynaktan doldur
+  const kaynak = KAYNAKLAR.find(x => x.id === kaynakId);
+  if (kaynak) {
+    document.getElementById('hCins').value = (kaynak.cins || '').toUpperCase();
+    document.getElementById('hOzellik').value = (kaynak.ozellik || '').toUpperCase();
+    // Plaka → ebatlı kesiminde kalınlık kaynaktan gelir
+    if (yon === 'PLAKA_EBATLI' && kaynak.kalinlik) {
+      document.getElementById('hKal').value = kaynak.kalinlik;
+    }
+    bildir(`${kacar(kaynak.cins || kaynakId)} kesime hazır — üretilecek ürünü gir`);
+  }
+  // URL'i temizle (yenilemede tekrar açılmasın)
+  history.replaceState({}, '', '/kesim');
+}
+
+async function yukle() {
+  try {
+    const d = await api('/api/kesim');
+    TUM = d.kesimler || d.data || (Array.isArray(d) ? d : []);
+  } catch (e) {
+    document.getElementById('govde').innerHTML = '<tr><td colspan="6" class="bos">Kesim verisi alınamadı.</td></tr>';
+    return;
+  }
+  ciz();
+}
+
+const YON_AD = { 'BLOK_PLAKA':'Blok → Plaka', 'BLOK_EBATLI':'Blok → Ebatlı', 'PLAKA_EBATLI':'Plaka → Ebatlı' };
+/* Backend kesim_yon döndürmez; kaynak_tip + ilk hedefin tipinden türetilir. */
+function yonBul(k) {
+  const kt = (k.kaynak_tip || 'BLOK').toUpperCase();
+  const ht = ((k.detaylar || [])[0] || {}).hedef_tip || 'PLAKA';
+  return `${kt}_${ht}`;
+}
+function kesimM2(k) { return (k.detaylar || []).reduce((a, d) => a + (d.miktar_m2 || 0), 0); }
+
+function ciz() {
+  const s = ARA.toLocaleLowerCase('tr');
+  let liste = TUM.filter(k => !s ||
+    [k.id, k.kaynak_cins, k.kaynak_no, k.uretim_blok_no, k.aciklama].filter(Boolean)
+      .join(' ').toLocaleLowerCase('tr').includes(s));
+  liste.sort((a, b) => (b.kesim_tarihi || '').localeCompare(a.kesim_tarihi || ''));
+
+  const g = document.getElementById('govde');
+  g.innerHTML = liste.length ? liste.map(k => {
+    const fire = k.fire_miktar || 0;
+    const fireY = k.fire_orani || 0;
+    const cikan = kesimM2(k);
+    return `
+    <tr style="border-left-color:var(--mavi)" onclick="detayAc('${kacar(k.id)}')">
+      <td class="mono">${kacar(k.uretim_blok_no || k.kaynak_no || k.id)}</td>
+      <td><span class="rozet rz-mavi">${kacar(YON_AD[yonBul(k)] || '—')}</span></td>
+      <td>${kacar(k.kaynak_cins || '—')}
+        <div class="ikincil mono">${kacar(k.kaynak_no || k.kaynak_id || '')}</div></td>
+      <td class="mono" style="font-size:.8rem">${k.detay_sayisi || 0} adet
+        <div class="ikincil">${cikan.toLocaleString('tr-TR')} m²</div></td>
+      <td class="sag mono" style="${fireY > 15 ? 'color:var(--kehribar);font-weight:600' : 'color:var(--soluk)'}">
+        ${fire ? fire.toLocaleString('tr-TR') : '—'}
+        ${fireY ? '<div style="font-size:.72rem">%' + fireY.toFixed(1) + '</div>' : ''}</td>
+      <td class="sag mono" style="color:var(--soluk);font-size:.82rem">${kacar((k.kesim_tarihi || '—').slice(0, 10))}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="bos">Kesim kaydı yok.</td></tr>';
+}
+
+function detayAc(id) {
+  const k = TUM.find(x => x.id === id);
+  if (!k) return;
+  const detaylar = k.detaylar || [];
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+  const fire = k.fire_miktar || 0, fireY = k.fire_orani || 0;
+  const cikan = kesimM2(k);
+  // Aynı ürün satırlarını grupla (30 plaka tek tek listelenmesin)
+  const gruplar = {};
+  detaylar.forEach(d => {
+    const anahtar = `${d.hedef_tip}|${d.cins}|${d.ozellik || ''}|${d.boy}|${d.yukseklik}|${d.kalinlik}`;
+    if (!gruplar[anahtar]) gruplar[anahtar] = { ...d, adet: 0, m2: 0 };
+    gruplar[anahtar].adet += (d.adet || 1);
+    gruplar[anahtar].m2 += (d.miktar_m2 || 0);
+  });
+  const govde = `
+    <div class="alan-grid">
+      ${alan('Yön', kacar(YON_AD[yonBul(k)] || '—'))}
+      ${alan('Tarih', kacar((k.kesim_tarihi || '—').slice(0, 10)), true)}
+      ${alan('Kaynak', kacar(k.kaynak_cins || '—') + (k.kaynak_no ? ' · ' + kacar(k.kaynak_no) : ''))}
+      ${alan('Kaynak Maliyeti', k.kaynak_toplam_maliyet ? para(k.kaynak_toplam_maliyet, k.kaynak_doviz) : '—', true)}
+      ${alan('Üretilen', (k.detay_sayisi || 0) + ' adet · ' + cikan.toLocaleString('tr-TR') + ' m²', true)}
+      ${alan('Devredilen Maliyet', (detaylar[0] || {}).birim_maliyet ? para2(detaylar[0].birim_maliyet) + ' /m²' : '—', true)}
+      ${alan('Fire', fire ? `<span style="${fireY > 15 ? 'color:var(--kehribar)' : ''}">${fire.toLocaleString('tr-TR')} (%${fireY.toFixed(1)})</span>` : '—')}
+      ${k.uretim_blok_no ? alan('Üretim Blok No', kacar(k.uretim_blok_no)) : ''}
+      ${k.aciklama ? alan('Açıklama', kacar(k.aciklama)) : ''}
+    </div>
+    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">
+      Üretilen ürünler</h4>
+    <div>
+      ${Object.values(gruplar).map(x => `
+        <div class="hedef-satir">
+          <span class="rozet rz-gri">${kacar(x.hedef_tip || '?')}</span>
+          <div>
+            <div>${kacar(x.cins || '—')}${x.ozellik ? ' · ' + kacar(x.ozellik) : ''}</div>
+            <div style="color:var(--soluk);font-size:.76rem">${x.adet} adet · ${x.boy || '?'}×${x.yukseklik || '?'}×${x.kalinlik || '?'} cm</div>
+          </div>
+          <span class="m">${x.m2.toLocaleString('tr-TR')} m²</span>
+        </div>`).join('') || '<div class="bos" style="padding:12px">Detay yok.</div>'}
+    </div>`;
+  const eylem = [`<button class="blok-btn" onclick="location.href='/stok'">Depoyu aç</button>`];
+  if (yazabilir('kesim'))
+    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="kesimSil('${kacar(k.id)}')">Kesimi geri al</button>`);
+  eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+  cekmeceAc(kacar(YON_AD[yonBul(k)] || id), `${k.id} · ${(k.kesim_tarihi || '').slice(0, 10)}`, govde, eylem.join(''));
+}
+
+/* ── Yeni kesim ── */
+async function yeniAc() {
+  // Cins/yüzey alanları Ayarlar > Listeler'den beslenir, girilen değer BÜYÜK HARF olur
+  listeyeBagla('hCins', 'cins');
+  listeyeBagla('hOzellik', 'ozellik');
+  document.getElementById('modal').classList.add('acik');
+  SECILI_KAYNAK = []; HEDEFLER = [];
+  document.getElementById('fTarih').valueAsDate = new Date();
+  ['hCins','hOzellik','hBoy','hYuk','hM2'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('hAdet').value = 1;
+  document.getElementById('hKal').value = 2;
+  hedefListeCiz();
+  await yonDegisti();
+}
+function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
+
+async function yonDegisti() {
+  const yon = document.getElementById('fYon').value;
+  const kaynakTip = yon.startsWith('BLOK') ? 'BLOK' : 'PLAKA';
+  const hedefEbatli = yon.endsWith('EBATLI');
+  document.getElementById('kaynakBaslik').textContent =
+    kaynakTip === 'BLOK' ? 'Kaynak blok seç (tek blok)' : 'Kaynak plakaları seç (çoklu)';
+  document.getElementById('kasaAlan').style.display = hedefEbatli ? '' : 'none';
+  document.getElementById('slabKutu').style.display = hedefEbatli ? 'none' : '';
+  document.getElementById('fUretimNo').value = '';
+  document.getElementById('uretimNoOrijinal').textContent = '';
+  SECILI_KAYNAK = []; kaynakOzetCiz();
+
+  const kok = document.getElementById('kaynakListe');
+  kok.innerHTML = '<div class="yukleniyor" style="padding:10px">Yükleniyor…</div>';
+  try {
+    const d = await api(`/api/kesim/kaynak_listesi?tip=${kaynakTip}`);
+    KAYNAKLAR = d.kaynaklar || [];
+  } catch (e) { KAYNAKLAR = []; }
+
+  kok.innerHTML = KAYNAKLAR.length ? KAYNAKLAR.map(k => `
+    <label class="kaynak-satir" data-id="${kacar(k.id)}">
+      <input type="${kaynakTip === 'BLOK' ? 'radio' : 'checkbox'}" name="kaynak" value="${kacar(k.id)}"
+             onchange="kaynakSecildi(this, '${kaynakTip}')">
+      <div>
+        <div>${kacar(k.cins || '—')}${k.no ? ' · ' + kacar(k.no) : ''}</div>
+        <div style="color:var(--soluk);font-size:.75rem">${kacar(k.id)}${k.uretici ? ' · ' + kacar(k.uretici) : ''}</div>
+      </div>
+      <span class="m">${kaynakMiktar(k)}${kaynakMaliyet(k) ? ' · ' + para(kaynakMaliyet(k)) : ''}</span>
+    </label>`).join('')
+    : '<div class="bos" style="padding:14px">Kesilebilir ' + (kaynakTip === 'BLOK' ? 'blok' : 'plaka') + ' yok (Serbest durumda olmalı).</div>';
+  ozetHesapla();
+}
+
+/* Kaynak listesi alanları: mevcut (m²), tonaj (blok), birim, birim_maliyet */
+function kaynakM2(k) { return k.mevcut || 0; }              // BLOK'ta 0 gelir
+function kaynakMaliyet(k) {
+  const bm = k.birim_maliyet || 0;
+  if (!bm) return 0;
+  // BLOK: birim maliyet × tonaj · PLAKA/EBATLI: birim maliyet × m²
+  const carpan = (k.tonaj || 0) > 0 ? k.tonaj : (k.mevcut || 0);
+  return bm * carpan;
+}
+function kaynakMiktar(k) {
+  if ((k.tonaj || 0) > 0) return k.tonaj.toLocaleString('tr-TR') + ' ton';
+  if ((k.mevcut || 0) > 0) return k.mevcut.toLocaleString('tr-TR') + ' m²';
+  return '';
+}
+
+function kaynakSecildi(el, tip) {
+  if (tip === 'BLOK') {
+    SECILI_KAYNAK = [el.value];
+    document.querySelectorAll('.kaynak-satir').forEach(s => s.classList.remove('secili'));
+    el.closest('.kaynak-satir').classList.add('secili');
+  } else {
+    if (el.checked) SECILI_KAYNAK.push(el.value);
+    else SECILI_KAYNAK = SECILI_KAYNAK.filter(x => x !== el.value);
+    el.closest('.kaynak-satir').classList.toggle('secili', el.checked);
+  }
+  kaynakOzetCiz(); ozetHesapla();
+}
+
+function kaynakOzetCiz() {
+  const secilenler = KAYNAKLAR.filter(k => SECILI_KAYNAK.includes(k.id));
+  const m2 = secilenler.reduce((a, k) => a + kaynakM2(k), 0);
+  const mal = secilenler.reduce((a, k) => a + kaynakMaliyet(k), 0);
+  document.getElementById('kaynakOzet').textContent = secilenler.length
+    ? `${secilenler.length} kaynak seçildi · ${m2 ? m2.toLocaleString('tr-TR') + ' m² · ' : ''}maliyet ${para(mal)}`
+    : 'Kaynak seçilmedi';
+  document.getElementById('uretimNoOrijinal').textContent =
+    secilenler.length && (secilenler[0].no || '') ? `Orijinal: ${secilenler[0].no}` : '';
+}
+
+function hedefHesapla() {
+  const boy = parseFloat(document.getElementById('hBoy').value) || 0;
+  const yuk = parseFloat(document.getElementById('hYuk').value) || 0;
+  const adet = parseFloat(document.getElementById('hAdet').value) || 0;
+  document.getElementById('hM2').value = (boy > 0 && yuk > 0 && adet > 0)
+    ? ((boy * yuk * adet) / 10000).toFixed(2) : '';
+}
+
+function hedefEkle() {
+  const yon = document.getElementById('fYon').value;
+  const hedefTip = yon.endsWith('EBATLI') ? 'EBATLI' : 'PLAKA';
+  const cins = document.getElementById('hCins').value.trim();
+  const boy = parseFloat(document.getElementById('hBoy').value) || 0;
+  const yuk = parseFloat(document.getElementById('hYuk').value) || 0;
+  const adet = parseFloat(document.getElementById('hAdet').value) || 0;
+  if (!cins) { bildir('Cins zorunlu.', true); return; }
+  if (boy <= 0 || yuk <= 0 || adet <= 0) { bildir('Boy, yükseklik ve adet girilmeli.', true); return; }
+  HEDEFLER.push({
+    hedef_tip: hedefTip, cins,
+    ozellik: document.getElementById('hOzellik').value.trim(),
+    boy, yukseklik: yuk,
+    kalinlik: parseFloat(document.getElementById('hKal').value) || 2,
+    adet,
+    kasa_ici_adet: hedefTip === 'EBATLI' ? (parseInt(document.getElementById('hKasaAdet').value) || 1) : undefined,
+    _m2: (boy * yuk * adet) / 10000
+  });
+  hedefListeCiz(); ozetHesapla();
+  ['hCins','hOzellik','hBoy','hYuk','hM2'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('hAdet').value = 1;
+  bildir('Ürün eklendi');
+}
+function hedefSil(i) { HEDEFLER.splice(i, 1); hedefListeCiz(); ozetHesapla(); }
+
+function hedefListeCiz() {
+  const kok = document.getElementById('hedefListe');
+  kok.innerHTML = HEDEFLER.length ? HEDEFLER.map((h, i) => `
+    <div class="hedef-satir">
+      <span class="rozet rz-gri">${kacar(h.hedef_tip)}</span>
+      <div>
+        <div>${kacar(h.cins)}${h.ozellik ? ' · ' + kacar(h.ozellik) : ''}</div>
+        <div style="color:var(--soluk);font-size:.76rem">
+          ${h.adet} adet · ${h.boy}×${h.yukseklik}×${h.kalinlik} cm${h.kasa_ici_adet ? ' · kasada ' + h.kasa_ici_adet : ''}
+        </div>
+      </div>
+      <span class="m">${h._m2.toLocaleString('tr-TR')} m²</span>
+      <button class="sil-btn" onclick="hedefSil(${i})" title="Sil">✕</button>
+    </div>`).join('') : '<div class="bos" style="padding:14px">Henüz ürün eklenmedi.</div>';
+}
+
+function ozetHesapla() {
+  const secilenler = KAYNAKLAR.filter(k => SECILI_KAYNAK.includes(k.id));
+  const girenM2 = secilenler.reduce((a, k) => a + kaynakM2(k), 0);
+  const maliyet = secilenler.reduce((a, k) => a + kaynakMaliyet(k), 0);
+  const cikanM2 = HEDEFLER.reduce((a, h) => a + h._m2, 0);
+  const yon = document.getElementById('fYon').value;
+
+  document.getElementById('ozGiren').textContent = girenM2 ? girenM2.toLocaleString('tr-TR') + ' m²' : (yon.startsWith('BLOK') ? 'blok (ton)' : '0 m²');
+  document.getElementById('ozCikan').textContent = cikanM2.toLocaleString('tr-TR') + ' m²';
+  // Fire yalnızca PLAKA→EBATLI'da anlamlı (blokta m² girişi yok)
+  if (yon === 'PLAKA_EBATLI' && girenM2 > 0 && cikanM2 > 0) {
+    const fire = girenM2 - cikanM2;
+    const y = fire / girenM2 * 100;
+    const el = document.getElementById('ozFire');
+    el.textContent = fire.toLocaleString('tr-TR') + ' m² (%' + y.toFixed(1) + ')';
+    el.style.color = fire < 0 ? 'var(--kirmizi)' : (y > 15 ? 'var(--kehribar)' : 'var(--verde)');
+  } else {
+    const el = document.getElementById('ozFire');
+    el.textContent = '—'; el.style.color = '';
+  }
+  document.getElementById('ozMaliyet').textContent =
+    (maliyet > 0 && cikanM2 > 0) ? para2(maliyet / cikanM2) + ' /m²' : '—';
+}
+
+/* Üretim blok no önerisi: orijinal no + -U + yıl kısaltması + sıra */
+function uretimNoOner() {
+  const k = KAYNAKLAR.find(x => x.id === SECILI_KAYNAK[0]);
+  if (!k) { bildir('Önce kaynak seç.', true); return; }
+  const orijinal = k.no || k.id;
+  const yy = String(new Date().getFullYear()).slice(-2);
+  document.getElementById('fUretimNo').value = `${orijinal}-U${yy}1`;
+}
+
+async function kesimKaydet(rezerveOnay, uretilenRez) {
+  if (!SECILI_KAYNAK.length) { bildir('Kaynak seç.', true); return; }
+  if (!HEDEFLER.length) { bildir('En az bir üretilecek ürün ekle.', true); return; }
+  const btn = document.getElementById('fKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const govde = {
+      kesim_yon: document.getElementById('fYon').value,
+      kaynak_ids: SECILI_KAYNAK,
+      uretim_blok_no: document.getElementById('fUretimNo').value.trim(),
+      baslangic_slab: parseInt(document.getElementById('fSlabBas').value) || 1,
+      atlanan_slablar: document.getElementById('fAtlanan').value.trim(),
+      hedefler: HEDEFLER.map(h => ({
+        hedef_tip: h.hedef_tip, cins: h.cins, ozellik: h.ozellik,
+        boy: h.boy, yukseklik: h.yukseklik, kalinlik: h.kalinlik,
+        adet: h.adet, kasa_ici_adet: h.kasa_ici_adet
+      })),
+      kesim_tarihi: document.getElementById('fTarih').value || null
+    };
+    if (rezerveOnay) govde.rezerve_kesim_onay = true;
+    if (uretilenRez) govde.uretilen_rezerve = true;
+    const d = await api('/api/kesim', { method: 'POST', body: JSON.stringify(govde) });
+    bildir(d.mesaj || ('Kesim kaydedildi · ' + (govde.uretim_blok_no || '')));
+    modalKapat(); await yukle();
+  } catch (e) {
+    // 409: kaynak bir müşteriye rezerve/satılmış — açık onay iste
+    const yanit = e && e.yanit;
+    if (yanit && yanit.error === 'rezerve_onay_gerekli') {
+      btn.disabled = false; btn.textContent = 'Kesimi Kaydet';
+      // İki aşamalı sor: (1) müşteri için kesim onayı (2) üretilenler rezerve mi?
+      const onay = confirm(`${yanit.mesaj}\n\nBu stok bir müşteriye ayrılmış (${yanit.stok_durum}). Müşteri için kesim yapıyorsanız "Tamam"a basın.`);
+      if (!onay) return;
+      const uretilenRez = confirm(
+        `Üretilen plaka/ebatlı ürünler de bu müşteriye REZERVE edilsin mi?\n\n` +
+        `• "Tamam" → üretilen ürünler müşteriye rezerve olur (sipariş/rezervasyon iptalinde otomatik serbest döner).\n` +
+        `• "İptal" → üretilen ürünler SERBEST stoğa girer.`);
+      return kesimKaydet(true, uretilenRez);
+    }
+    /* diğer hatalar api() içinde gösterilir */
+  }
+  finally { btn.disabled = false; btn.textContent = 'Kesimi Kaydet'; }
+}
+
+/* DELETE /api/kesim/<id> — üretilen stoklar silinir, kaynak geri döner */
+async function kesimSil(id) {
+  if (!confirm('Kesim geri alınsın mı?\n\nÜretilen stoklar SİLİNİR, kaynak blok/plaka eski durumuna döner.')) return;
+  try {
+    const d = await api(`/api/kesim/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Kesim geri alındı');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* */ }
+}
+
+let araZaman;
+document.getElementById('ara').addEventListener('input', e => {
+  clearTimeout(araZaman);
+  araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
+});
+
+yukle().then(urlIleAc);
+</script>
+{% endblock %}

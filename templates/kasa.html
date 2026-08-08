@@ -1,0 +1,695 @@
+{% extends "base.html" %}
+{% block title %}Kasa &amp; Cari{% endblock %}
+
+{% block header_right %}
+{% if menu_admin or menu_yetki.get('kasa') == 'yazma' %}
+<button class="disa-btn" onclick="yeniKasaAc()" title="Yeni kasa / banka hesabı tanımla">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+  Yeni Kasa
+</button>
+<button class="disa-btn" onclick="virmanAc()" title="Kasadan bankaya / bankadan kasaya transfer">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M7 10h10M7 10l3-3M7 10l3 3M17 14H7M17 14l-3-3M17 14l-3 3"/></svg>
+  Virman
+</button>
+<button class="btn-yeni" onclick="kasaHareketAc()">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+  Kasa Hareketi
+</button>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .parcali{display:flex;background:var(--notr-bg);border-radius:var(--r-kucuk);padding:3px}
+  .parcali button{border:0;background:transparent;padding:7px 15px;border-radius:6px;font-weight:600;font-size:.84rem;color:var(--soluk)}
+  .parcali button.aktif{background:var(--yuzey);color:var(--murekkep);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .suz{margin-left:auto}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:220px}
+  .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  tbody tr{cursor:pointer}
+  .konsolide{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:22px}
+  .kons-kart{background:var(--murekkep);color:#fff;border-radius:var(--r);padding:15px 18px;position:relative}
+  .kons-kart label{font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA39F}
+  .kons-kart .deger{font-family:var(--baslik);font-weight:800;font-size:1.6rem;letter-spacing:-.02em;margin-top:5px}
+  .kons-kart .ek{font-size:.75rem;color:#9BA39F;margin-top:3px;font-family:var(--mono)}
+  .kons-ekstre{position:absolute;top:12px;right:14px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#D8DDD9;border-radius:999px;padding:4px 12px;font-family:var(--govde);font-size:.72rem;font-weight:700;cursor:pointer;transition:all .12s}
+  .kons-ekstre:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.5);color:#fff}
+  .kasa-kart.ana{border-left-color:var(--kehribar);background:#FDFCF8}
+  .hareket-satir{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
+  .hareket-satir:last-child{border-bottom:0}
+  .hareket-satir .t{font-family:var(--mono);font-size:.75rem;color:var(--soluk);width:80px;flex:none}
+  .hareket-satir .tut{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
+  .hareket-satir .tut.giris{color:var(--verde)}
+  .hareket-satir .tut.cikis{color:var(--kirmizi)}
+  .hsil{border:0;background:transparent;color:var(--cizgi-koyu);font-size:.85rem;cursor:pointer;padding:0 2px}
+  .hsil:hover{color:var(--kirmizi)}
+  .kasa-izgara{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:22px}
+  .kasa-kart{background:var(--yuzey);border:1px solid var(--cizgi);border-left:3px solid var(--verde);border-radius:var(--r);padding:14px 16px;cursor:pointer;transition:box-shadow .15s}
+  .kasa-kart:hover{box-shadow:var(--golge)}
+  .kasa-kart .ad{font-weight:600;font-size:.92rem;display:flex;align-items:center;gap:7px}
+  .kasa-kart .bak{font-family:var(--baslik);font-weight:800;font-size:1.35rem;margin-top:6px;letter-spacing:-.02em}
+  .kasa-kart .ek{font-size:.76rem;color:var(--soluk);margin-top:3px;font-family:var(--mono)}
+  .ekstre-satir{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--cizgi);font-size:.84rem}
+  .ekstre-satir:last-child{border-bottom:0}
+  .ekstre-satir .t{font-family:var(--mono);font-size:.74rem;color:var(--soluk);width:74px;flex:none}
+  .ekstre-satir .tut{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
+  .ekstre-satir .tut.borc{color:var(--kirmizi)}
+  .ekstre-satir .tut.alacak{color:var(--verde)}
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:520px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px}
+  .form-satir{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+  .form-alan label{display:block;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+
+  /* ── Virman modalı ── */
+  .modal-ortu2{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:46;place-items:center;padding:20px}
+  .modal-ortu2.acik{display:grid}
+  .m2{width:640px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden}
+  .vir-bas{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:20px 24px 14px}
+  .vir-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.2rem}
+  .vir-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .vir-damar{width:110px;flex:none;margin-top:8px}
+  .vir-damar path{fill:none;stroke:var(--verde);stroke-width:1.6;opacity:.5}
+  .vir-damar path.d2{stroke:var(--kehribar);opacity:.35}
+  .vir-gov{padding:6px 24px 20px}
+  .akis{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:stretch;margin-bottom:16px}
+  .akis-kart{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:12px 14px;background:var(--notr-bg);transition:border-color .15s}
+  .akis-kart:focus-within{border-color:var(--verde);background:var(--yuzey)}
+  .akis-kart label{display:block;font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px}
+  .akis-kart select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:7px;padding:8px 9px;font-family:var(--govde);font-size:.85rem;background:var(--yuzey)}
+  .akis-kart select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .bak-satir{display:flex;align-items:center;gap:6px;margin-top:9px;font-family:var(--mono);font-size:.76rem}
+  .bak-satir .onceki{color:var(--soluk)}
+  .bak-satir .ok{color:var(--soluk);opacity:.6}
+  .bak-satir .sonraki{font-weight:700}
+  .bak-satir .sonraki.eksi{color:var(--kirmizi)}
+  .bak-satir .sonraki.arti{color:var(--verde)}
+  .akis-ok{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:0 2px}
+  .ok-daire{width:42px;height:42px;border-radius:50%;background:var(--verde);color:#fff;display:grid;place-items:center;box-shadow:0 6px 16px rgba(12,79,56,.35)}
+  .ok-daire svg{width:20px;height:20px}
+  .ok-tutar{font-family:var(--mono);font-size:.74rem;font-weight:700;color:var(--verde);white-space:nowrap}
+  .tutar-kutu{margin-bottom:14px}
+  .tutar-kutu>label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px}
+  .tutar-giris{position:relative}
+  .tutar-giris input{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:12px 64px 12px 14px;font-family:var(--mono);font-size:1.25rem;font-weight:700;background:var(--yuzey)}
+  .tutar-giris input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .tutar-doviz{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:.82rem;font-weight:700;color:var(--soluk)}
+  .hizli-tutar{display:flex;gap:8px;margin-top:9px}
+  .hizli-tutar button{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:999px;padding:5px 13px;font-family:var(--govde);font-size:.78rem;font-weight:600;color:var(--murekkep);cursor:pointer;transition:all .12s}
+  .hizli-tutar button:hover{border-color:var(--verde);color:var(--verde);background:var(--verde-acik)}
+  .vir-uyari{background:#FBEAE8;border:1px solid #E8C4BE;color:var(--kirmizi);border-radius:var(--r-kucuk);padding:10px 13px;font-size:.82rem;font-weight:600;margin-bottom:12px}
+  .vir-detay{border:1px solid var(--cizgi);border-radius:var(--r-kucuk);padding:10px 14px;margin-bottom:4px}
+  .vir-detay summary{cursor:pointer;font-size:.82rem;font-weight:600;color:var(--soluk);user-select:none;list-style:none;display:flex;align-items:center;gap:7px}
+  .vir-detay summary::before{content:'▸';font-size:.7rem;transition:transform .15s}
+  .vir-detay[open] summary::before{transform:rotate(90deg)}
+  .vir-detay summary::-webkit-details-marker{display:none}
+  .fs{display:grid;gap:12px;margin-bottom:12px}
+  .fs3{grid-template-columns:1fr 1fr 1fr}
+  .fa label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .fa input{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.88rem;background:var(--yuzey)}
+  .fa input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .m2-alt{padding:14px 24px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  .iptal-btn2{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:9px 16px;font-family:var(--govde);font-size:.88rem;font-weight:600;color:var(--murekkep);cursor:pointer}
+  .iptal-btn2:hover{background:var(--notr-bg)}
+  @media (max-width:640px){
+    .akis{grid-template-columns:1fr}
+    .akis-ok{flex-direction:row;padding:2px 0}
+    .fs3{grid-template-columns:1fr}
+  }
+  .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
+  .not{background:var(--verde-acik);color:var(--verde);border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Kasalar</h1>
+<p class="g-alt">Nakit ve banka kasaları, döviz bazlı konsolide toplam. Cari bakiyeler için <a href="/cari" style="color:var(--verde);font-weight:600">Cari Hesaplar</a> sekmesine geç.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px">
+  Konsolide — döviz bazlı toplam</h4>
+<div class="konsolide" id="konsolide">
+  <div class="kons-kart"><label>Yükleniyor…</label></div>
+</div>
+
+<h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px">
+  Kasalar <span id="kasaAdet" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h4>
+<div class="kasa-izgara" id="kasalar">
+  <div class="kasa-kart"><div class="ad">Yükleniyor…</div></div>
+</div>
+
+<div class="panel">
+  <h4>Son hareketler <span id="hareketOzet" style="color:var(--soluk);font-weight:400;font-size:.83rem"></span></h4>
+  <div id="sonHareketler"><div class="yukleniyor">Yükleniyor…</div></div>
+</div>
+
+<!-- Kasa hareketi modalı -->
+<div class="modal-ortu" id="hareketModal" onclick="if(event.target===this)hareketKapat()">
+  <div class="modal" style="width:500px" role="dialog" aria-label="Kasa hareketi">
+    <div class="modal-bas">
+      <h3>Kasa Hareketi</h3>
+      <p>Nakit giriş veya çıkış. Cari seçmezsen sadece kasa etkilenir.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Kasa</label><select id="hKasa"></select></div>
+        <div class="form-alan"><label>Tip</label>
+          <select id="hTip"><option value="giris">Giriş (+)</option><option value="cikis">Çıkış (−)</option></select>
+        </div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Tutar</label><input id="hTutar" type="number" step="0.01"></div>
+        <div class="form-alan"><label>Tarih</label><input id="hTarih" type="date"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Cari (opsiyonel)</label><select id="hCari" onchange="hCariSiparisYukle()"><option value="">— yok —</option></select></div>
+        <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px"><label>Sipariş (opsiyonel)</label>
+        <select id="hSiparis" disabled><option value="">— önce cari seç —</option></select>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px"><label>Açıklama</label><input id="hAciklama" placeholder="Kira, yakıt, personel…"></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="hareketKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="hKaydet" onclick="hareketKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Virman -->
+<div class="modal-ortu2" id="virmanModal" onclick="if(event.target===this)virmanKapat()">
+  <div class="m2 vir" role="dialog" aria-label="Virman">
+    <div class="vir-bas">
+      <div>
+        <h3>Virman</h3>
+        <p>Kasadan bankaya yatır, bankadan çek, kasalar arası aktar.</p>
+      </div>
+      <svg class="vir-damar" viewBox="0 0 120 8" aria-hidden="true">
+        <path d="M0 5 C 18 2, 32 7, 48 4 S 84 1, 105 5 S 116 6, 120 3"/>
+        <path class="d2" d="M0 6 C 22 4, 44 8, 66 5 S 106 2, 120 6"/>
+      </svg>
+    </div>
+
+    <div class="vir-gov">
+      <div class="akis">
+        <div class="akis-kart" id="akisKaynak">
+          <label>Çıkış</label>
+          <select id="vKaynak" onchange="virmanOnizle()"></select>
+          <div class="bak-satir">
+            <span class="onceki" id="kaynakOnce">—</span>
+            <span class="ok">→</span>
+            <span class="sonraki eksi" id="kaynakSonra">—</span>
+          </div>
+        </div>
+
+        <div class="akis-ok" id="akisOk">
+          <div class="ok-daire">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </div>
+          <div class="ok-tutar" id="okTutar">—</div>
+        </div>
+
+        <div class="akis-kart" id="akisHedef">
+          <label>Giriş</label>
+          <select id="vHedef" onchange="virmanOnizle()"></select>
+          <div class="bak-satir">
+            <span class="onceki" id="hedefOnce">—</span>
+            <span class="ok">→</span>
+            <span class="sonraki arti" id="hedefSonra">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="tutar-kutu">
+        <label>Transfer Tutarı</label>
+        <div class="tutar-giris">
+          <input id="vTutar" type="number" step="0.01" placeholder="0,00" oninput="virmanOnizle()" autocomplete="off">
+          <span class="tutar-doviz" id="vDoviz">USD</span>
+        </div>
+        <div class="hizli-tutar" id="hizliTutar"></div>
+      </div>
+
+      <div id="vUyari" class="vir-uyari" style="display:none"></div>
+
+      <details class="vir-detay">
+        <summary>Tarih, evrak, açıklama</summary>
+        <div class="fs fs3" style="margin-top:12px;margin-bottom:0">
+          <div class="fa"><label>Tarih</label><input id="vTarih" type="date"></div>
+          <div class="fa"><label>Evrak No</label><input id="vEvrak" placeholder="dekont no"></div>
+          <div class="fa"><label>Açıklama</label><input id="vAciklama" placeholder="Bankaya yatırma"></div>
+        </div>
+      </details>
+    </div>
+
+    <div class="m2-alt">
+      <button class="iptal-btn2" onclick="virmanKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="vKaydet" onclick="virmanKaydet()" disabled>Transferi Yap</button>
+    </div>
+  </div>
+</div>
+
+<!-- Yeni kasa modalı -->
+<div class="modal-ortu" id="kasaModal" onclick="if(event.target===this)yeniKasaKapat()">
+  <div class="modal" style="width:460px" role="dialog" aria-label="Yeni kasa">
+    <div class="modal-bas">
+      <h3>Yeni Kasa</h3>
+      <p>Ana kasa, aynı dövizdeki alt kasaların toplamını gösterir.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Kasa Adı</label><input id="nAd" placeholder="Ofis Kasası"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="nDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Başlangıç Bakiyesi</label><input id="nBakiye" type="number" step="0.01" value="0"></div>
+        <div class="form-alan"><label>Bağlı Banka Hesabı</label>
+          <select id="nBanka"><option value="">— Nakit kasa (banka yok) —</option></select>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:8px">
+        <input type="checkbox" id="nAna" style="width:auto" onchange="anaKasaDegisti()">
+        <label for="nAna" style="margin:0;text-transform:none;letter-spacing:0;font-weight:600;color:var(--kehribar)">Ana kasa (döviz bazlı konsolide özet)</label>
+      </div>
+      <div id="anaNot" style="display:none;background:var(--kehribar-bg);color:var(--kehribar);border-radius:7px;padding:9px 12px;font-size:.79rem;margin-bottom:10px">
+        Ana kasa, aynı dövizdeki tüm alt kasaların bakiyesini otomatik toplar.
+        Kendisine doğrudan hareket girilemez. Her döviz için bir ana kasa yeterlidir.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="yeniKasaKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="nKaydet" onclick="kasaKaydet()">Oluştur</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══ KASALAR ═══
+   /api/kasa                     → liste (ana kasa = alt kasaların canlı toplamı)
+   POST   /api/kasa              → {ad, doviz, baslangic_bakiye, ana_kasa, aciklama}
+   DELETE /api/kasa/<id>
+   /api/kasa/<id>/hareket        → hareket listesi
+   POST   /api/kasa/hareket      → {kasa_id, tip, tutar, tarih, cari_id, evrak_no, aciklama}
+   DELETE /api/kasa/hareket/<id>
+   NOT: kasa hareketi CARİ defterine yazmaz — ayrı defterler.
+        Cariyi de etkileyen tahsilat: Cari Hesaplar ekranı. */
+
+let KASALAR = [], CARILER = [], BANKALAR = [];
+
+async function kasalariYukle() {
+  try {
+    KASALAR = await api('/api/kasa');
+  } catch (e) {
+    document.getElementById('kasalar').innerHTML =
+      '<div class="kasa-kart"><div class="ad">Kasa görüntüleme yetkin yok</div></div>';
+    document.getElementById('konsolide').innerHTML = '';
+    return;
+  }
+  konsolideCiz();
+  kasaKartlariCiz();
+  await sonHareketleriYukle();
+}
+
+/* Döviz bazlı konsolide — alt kasaların toplamı */
+function konsolideCiz() {
+  const alt = KASALAR.filter(k => !k.ana_kasa);
+  const dv = {};
+  alt.forEach(k => {
+    if (!dv[k.doviz]) dv[k.doviz] = { bakiye: 0, adet: 0, giris: 0, cikis: 0 };
+    dv[k.doviz].bakiye += (k.bakiye || 0);
+    dv[k.doviz].adet++;
+    dv[k.doviz].giris += (k.giris_toplam || 0);
+    dv[k.doviz].cikis += (k.cikis_toplam || 0);
+  });
+  const kok = document.getElementById('konsolide');
+  const ks = Object.keys(dv).sort();
+  kok.innerHTML = ks.length ? ks.map(d => `
+    <div class="kons-kart">
+      <button class="kons-ekstre" onclick="window.open('/api/kasa/konsolide/${kacar(d)}/excel','_blank')"
+              title="${kacar(d)} kasalarının birleşik hareket dökümü (Excel)">Ekstre ↓</button>
+      <label>${kacar(d)} Toplam</label>
+      <div class="deger">${para(dv[d].bakiye, d)}</div>
+      <div class="ek">${dv[d].adet} kasa · ↑ ${para(dv[d].giris, d)} · ↓ ${para(dv[d].cikis, d)}</div>
+    </div>`).join('')
+    : '<div class="kons-kart"><label>Kasa yok</label><div class="deger">—</div><div class="ek">"Yeni Kasa" ile başla</div></div>';
+}
+
+function kasaKartlariCiz() {
+  const kok = document.getElementById('kasalar');
+  document.getElementById('kasaAdet').textContent = KASALAR.length ? '· ' + KASALAR.length : '';
+  kok.innerHTML = KASALAR.length ? KASALAR.map(k => `
+    <div class="kasa-kart ${k.ana_kasa ? 'ana' : ''}" onclick="kasaAc(${k.id})">
+      <div class="ad">${kacar(k.ad)}
+        ${k.ana_kasa ? '<span class="rozet rz-kehribar">Ana</span>' : ''}
+        ${k.banka_adi ? '<span class="rozet rz-mavi">Banka</span>' : ''}</div>
+      <div class="bak">${para(k.bakiye, k.doviz)}</div>
+      <div class="ek">${k.ana_kasa ? 'alt kasaların toplamı'
+        : (k.banka_adi ? kacar(k.banka_adi) : '↑ ' + para(k.giris_toplam, k.doviz) + ' · ↓ ' + para(k.cikis_toplam, k.doviz))}</div>
+    </div>`).join('')
+    : '<div class="kasa-kart"><div class="ad">Kasa tanımlı değil</div><div class="ek">"Yeni Kasa" ile başla</div></div>';
+}
+
+/* Son hareketler — tüm alt kasalar (veya tek kasa) */
+async function sonHareketleriYukle(kasaId) {
+  const kok = document.getElementById('sonHareketler');
+  const ozet = document.getElementById('hareketOzet');
+  kok.innerHTML = '<div class="yukleniyor">Yükleniyor…</div>';
+  const hedefler = kasaId ? KASALAR.filter(k => k.id === kasaId) : KASALAR.filter(k => !k.ana_kasa);
+  const hepsi = [];
+  await Promise.all(hedefler.map(async k => {
+    try {
+      const h = await api(`/api/kasa/${k.id}/hareket`);
+      (h || []).forEach(x => hepsi.push({ ...x, _kasa: k.ad, _doviz: k.doviz }));
+    } catch (e) { /* */ }
+  }));
+  hepsi.sort((a, b) => String(b.tarih || '').localeCompare(String(a.tarih || '')));
+  ozet.textContent = kasaId
+    ? '· ' + (hedefler[0] ? hedefler[0].ad : '')
+    : (hepsi.length ? '· tüm kasalar' : '');
+  kok.innerHTML = hepsi.length ? hepsi.slice(0, 25).map(h => `
+    <div class="hareket-satir">
+      <span class="t">${kacar(String(h.tarih || '').slice(0, 10))}</span>
+      <div>
+        <div>${h.tip === 'giris' ? 'Giriş' : 'Çıkış'} · <span style="color:var(--soluk)">${kacar(h._kasa)}</span></div>
+        ${h.aciklama ? '<div style="color:var(--soluk);font-size:.76rem">' + kacar(String(h.aciklama).slice(0, 50)) + '</div>' : ''}
+        ${h.siparis_id ? '<div style="font-family:var(--mono);font-size:.68rem;color:var(--verde);font-weight:700">' + kacar(h.siparis_id) + '</div>' : ''}
+      </div>
+      <span class="tut ${h.tip === 'giris' ? 'giris' : 'cikis'}">
+        ${h.tip === 'giris' ? '+' : '−'}${para(h.tutar, h._doviz)}</span>
+      ${yazabilir('kasa') ? `<button class="hsil" onclick="hareketSil(${h.id})" title="Hareketi sil">✕</button>` : ''}
+    </div>`).join('') : '<div class="bos" style="padding:16px">Hareket yok.</div>';
+}
+
+/* ── Kasa çekmecesi ── */
+async function kasaAc(id) {
+  const k = KASALAR.find(x => x.id === id);
+  if (!k) return;
+  cekmeceAc(k.ad, `${k.doviz}${k.ana_kasa ? ' · ana kasa' : ''}`, '<div class="yukleniyor">Yükleniyor…</div>', '');
+  let hareketler = [];
+  if (!k.ana_kasa) {
+    try { hareketler = (await api(`/api/kasa/${id}/hareket`) || []).slice(0, 20); } catch (e) { /* */ }
+  }
+  const alt = KASALAR.filter(x => !x.ana_kasa && x.doviz === k.doviz);
+  const govde = `
+    <div class="alan-grid">
+      <div class="alan"><label>Bakiye</label><div class="mono" style="font-weight:700;font-size:1.05rem">${para(k.bakiye, k.doviz)}</div></div>
+      <div class="alan"><label>Döviz</label><div>${kacar(k.doviz)}</div></div>
+      ${k.banka_adi ? `<div class="alan" style="grid-column:1/-1"><label>Bağlı Banka</label>
+        <div>${kacar(k.banka_adi)}${k.banka_iban ? '<div class="mono" style="font-size:.78rem;color:var(--soluk);margin-top:2px">' + kacar(k.banka_iban) + '</div>' : ''}</div></div>` : ''}
+      ${k.ana_kasa ? `
+        <div class="alan" style="grid-column:1/-1"><label>Kapsadığı kasalar</label>
+          <div style="font-size:.85rem;line-height:1.7">${alt.length
+            ? alt.map(x => kacar(x.ad) + ' — <span class="mono">' + para(x.bakiye, x.doviz) + '</span>').join('<br>')
+            : 'Bu dövizde alt kasa yok'}</div></div>`
+      : `
+        <div class="alan"><label>Toplam Giriş</label><div class="mono" style="color:var(--verde)">${para(k.giris_toplam, k.doviz)}</div></div>
+        <div class="alan"><label>Toplam Çıkış</label><div class="mono" style="color:var(--kirmizi)">${para(k.cikis_toplam, k.doviz)}</div></div>`}
+    </div>
+    ${k.ana_kasa
+      ? '<div style="background:var(--kehribar-bg);color:var(--kehribar);border-radius:7px;padding:10px 12px;font-size:.8rem">Ana kasa: bakiyesi aynı dövizdeki alt kasaların canlı toplamıdır, doğrudan hareket girilmez.</div>'
+      : `<h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">Son hareketler</h4>
+      <div>${hareketler.length ? hareketler.map(h => `
+          <div class="hareket-satir">
+            <span class="t">${kacar(String(h.tarih || '').slice(5, 10))}</span>
+            <div><div>${h.tip === 'giris' ? 'Giriş' : 'Çıkış'}</div>
+              ${h.aciklama ? '<div style="color:var(--soluk);font-size:.75rem">' + kacar(String(h.aciklama).slice(0, 40)) + '</div>' : ''}
+              ${h.siparis_id ? '<div style="font-family:var(--mono);font-size:.68rem;color:var(--verde);font-weight:700">' + kacar(h.siparis_id) + '</div>' : ''}</div>
+            <span class="tut ${h.tip === 'giris' ? 'giris' : 'cikis'}">
+              ${h.tip === 'giris' ? '+' : '−'}${para(h.tutar, k.doviz)}</span>
+          </div>`).join('') : '<div class="bos" style="padding:12px">Hareket yok.</div>'}</div>`}`;
+
+  const eylem = [];
+  if (!k.ana_kasa) {
+    eylem.push(`<button class="blok-btn birincil" onclick="cekmeceKapat();sonHareketleriYukle(${id})">Hareketlerini göster</button>`);
+    eylem.push(`<button class="blok-btn" onclick="window.open('/api/kasa/${id}/hareket/excel','_blank')">Excel indir</button>`);
+  }
+  if (yazabilir('kasa'))
+    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="kasaSil(${id}, '${kacar(k.ad)}')">Kasayı sil</button>`);
+  eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+  cekmeceAc(k.ad, `${k.doviz}${k.ana_kasa ? ' · ana kasa' : ''}`, govde, eylem.join(''));
+}
+
+/* ── Kasa hareketi ── */
+async function kasaHareketAc() {
+  document.getElementById('hareketModal').classList.add('acik');
+  ['hTutar','hEvrak','hAciklama'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('hTarih').valueAsDate = new Date();
+  const alt = KASALAR.filter(k => !k.ana_kasa);
+  document.getElementById('hKasa').innerHTML = alt.length
+    ? alt.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz}) · ${para(k.bakiye, k.doviz)}</option>`).join('')
+    : '<option value="">— alt kasa yok, önce tanımla —</option>';
+  if (!CARILER.length) {
+    try { CARILER = ((await api('/api/cari?per_page=300')).data || []); } catch (e) { CARILER = []; }
+  }
+  document.getElementById('hCari').innerHTML = '<option value="">— yok —</option>' +
+    CARILER.map(c => `<option value="${kacar(c.id)}">${kacar(c.unvan)}</option>`).join('');
+  hCariSiparisYukle();
+}
+function hareketKapat() { document.getElementById('hareketModal').classList.remove('acik'); }
+
+/* Cari seçilince o carinin siparişlerini yükle — sipariş bazlı takip/ekstre için */
+async function hCariSiparisYukle() {
+  const sel = document.getElementById('hSiparis');
+  const cariId = document.getElementById('hCari').value;
+  const cari = CARILER.find(c => c.id === cariId);
+  if (!cari) {
+    sel.innerHTML = '<option value="">— önce cari seç —</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = '<option value="">Yükleniyor…</option>';
+  try {
+    const d = await api(`/api/siparis?musteri=${encodeURIComponent(cari.unvan)}&per_page=100`);
+    const sips = d.data || [];
+    sel.innerHTML = '<option value="">— sipariş bağlama —</option>' +
+      sips.map(s => `<option value="${kacar(s.id)}">${kacar(s.id)} · ${kacar(s.durum || '')}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">— sipariş yok —</option>';
+  }
+}
+
+async function hareketKaydet() {
+  const kasaId = document.getElementById('hKasa').value;
+  const tutar = parseFloat(document.getElementById('hTutar').value);
+  if (!kasaId) { bildir('Kasa seç.', true); return; }
+  if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar gir.', true); return; }
+  const btn = document.getElementById('hKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api('/api/kasa/hareket', {
+      method: 'POST',
+      body: JSON.stringify({
+        kasa_id: parseInt(kasaId),
+        tip: document.getElementById('hTip').value,
+        tutar,
+        tarih: document.getElementById('hTarih').value || null,
+        cari_id: document.getElementById('hCari').value || null,
+        siparis_id: document.getElementById('hSiparis').value || null,
+        evrak_no: document.getElementById('hEvrak').value,
+        aciklama: document.getElementById('hAciklama').value
+      })
+    });
+    bildir(d.mesaj || 'Kasa hareketi kaydedildi');
+    hareketKapat();
+    await kasalariYukle();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+async function hareketSil(id) {
+  if (!confirm('Kasa hareketi silinsin mi? Bakiye geri düzeltilir.')) return;
+  try {
+    const d = await api(`/api/kasa/hareket/${id}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Hareket silindi');
+    await kasalariYukle();
+  } catch (e) { /* */ }
+}
+
+/* ── Yeni kasa ── */
+async function yeniKasaAc() {
+  // Banka hesapları (Ayarlar > Bankalar)
+  if (!BANKALAR.length) {
+    try {
+      const bl = await api('/api/banka');
+      BANKALAR = Array.isArray(bl) ? bl : (bl.data || bl.bankalar || []);
+    } catch (e) { BANKALAR = []; }
+  }
+  document.getElementById('nBanka').innerHTML = '<option value="">— Nakit kasa (banka yok) —</option>' +
+    BANKALAR.map(b => `<option value="${b.id}" data-doviz="${kacar(b.doviz || '')}">${kacar(b.banka_adi)}${b.sube ? ' · ' + kacar(b.sube) : ''} (${kacar(b.doviz || '')})</option>`).join('');
+  document.getElementById('nAd').value = '';
+  document.getElementById('nBakiye').value = 0;
+  document.getElementById('nAna').checked = false;
+  anaKasaDegisti();
+  document.getElementById('kasaModal').classList.add('acik');
+}
+function yeniKasaKapat() { document.getElementById('kasaModal').classList.remove('acik'); }
+function anaKasaDegisti() {
+  const el = document.getElementById('anaNot');
+  if (el) el.style.display = document.getElementById('nAna').checked ? '' : 'none';
+}
+
+async function kasaKaydet() {
+  const ad = document.getElementById('nAd').value.trim();
+  if (!ad) { bildir('Kasa adı zorunlu.', true); return; }
+  const btn = document.getElementById('nKaydet');
+  btn.disabled = true; btn.textContent = 'Oluşturuluyor…';
+  try {
+    await api('/api/kasa', {
+      method: 'POST',
+      body: JSON.stringify({
+        ad,
+        doviz: document.getElementById('nDoviz').value,
+        baslangic_bakiye: parseFloat(document.getElementById('nBakiye').value) || 0,
+        ana_kasa: document.getElementById('nAna').checked,
+        banka_id: document.getElementById('nBanka').value || null
+      })
+    });
+    bildir('Kasa oluşturuldu · ' + ad);
+    yeniKasaKapat();
+    await kasalariYukle();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Oluştur'; }
+}
+
+async function kasaSil(id, ad) {
+  if (!confirm(`"${ad}" kasası silinsin mi? Hareketleri olan kasa silinemez.`)) return;
+  try {
+    const d = await api(`/api/kasa/${id}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Kasa silindi');
+    cekmeceKapat();
+    await kasalariYukle();
+  } catch (e) { /* */ }
+}
+
+/* ═══ VİRMAN — kasa ↔ banka çift taraflı transfer ═══
+   POST /api/kasa/virman {kaynak_kasa_id, hedef_kasa_id, tutar, tarih, evrak_no, aciklama}
+   Backend atomik: kaynaktan ÇIKIŞ + hedefe GİRİŞ. Döviz eşleşmeli, bakiye yeterli olmalı. */
+
+async function virmanAc() {
+  document.getElementById('virmanModal').classList.add('acik');
+  ['vTutar','vEvrak','vAciklama'].forEach(i => document.getElementById(i).value = '');
+  document.getElementById('vTarih').valueAsDate = new Date();
+
+  const alt = KASALAR.filter(k => !k.ana_kasa);
+  const sec = k => `<option value="${k.id}">${kacar(k.ad)}${k.banka_adi ? ' · ' + kacar(k.banka_adi) : ''}</option>`;
+  document.getElementById('vKaynak').innerHTML = alt.length ? alt.map(sec).join('') : '<option value="">— kasa yok —</option>';
+  document.getElementById('vHedef').innerHTML = alt.length ? alt.map(sec).join('') : '<option value="">— kasa yok —</option>';
+  if (alt.length > 1) document.getElementById('vHedef').selectedIndex = 1;
+  virmanOnizle();
+  setTimeout(() => document.getElementById('vTutar').focus(), 120);
+}
+function virmanKapat() { document.getElementById('virmanModal').classList.remove('acik'); }
+
+function virmanKasalar() {
+  return {
+    kaynak: KASALAR.find(x => x.id === parseInt(document.getElementById('vKaynak').value)),
+    hedef:  KASALAR.find(x => x.id === parseInt(document.getElementById('vHedef').value)),
+    tutar:  parseFloat(document.getElementById('vTutar').value) || 0
+  };
+}
+
+function virmanOnizle() {
+  const { kaynak, hedef, tutar } = virmanKasalar();
+  const uyari = document.getElementById('vUyari');
+  const btn = document.getElementById('vKaydet');
+  const ok = document.getElementById('akisOk');
+  const kK = document.getElementById('akisKaynak');
+  const hK = document.getElementById('akisHedef');
+
+  const bosalt = () => {
+    ['kaynakOnce','kaynakSonra','hedefOnce','hedefSonra'].forEach(i => document.getElementById(i).textContent = '—');
+    document.getElementById('okTutar').textContent = '—';
+    ok.classList.remove('aktif'); kK.classList.remove('canli'); hK.classList.remove('canli');
+  };
+
+  if (!kaynak || !hedef) { bosalt(); uyari.style.display = 'none'; btn.disabled = true; return; }
+
+  document.getElementById('vDoviz').textContent = kaynak.doviz;
+  document.getElementById('kaynakOnce').textContent = para(kaynak.bakiye, kaynak.doviz);
+  document.getElementById('hedefOnce').textContent = para(hedef.bakiye, hedef.doviz);
+
+  // Hızlı tutar butonları (kaynağın bakiyesine göre)
+  const hz = document.getElementById('hizliTutar');
+  const b = kaynak.bakiye || 0;
+  hz.innerHTML = b > 0
+    ? [['%25', b * 0.25], ['%50', b * 0.5], ['Tümü', b]]
+        .map(([ad, v]) => `<button onclick="document.getElementById('vTutar').value=${v.toFixed(2)};virmanOnizle()">${ad}</button>`).join('')
+    : '';
+
+  // Hata durumları
+  let hata = null;
+  if (kaynak.id === hedef.id) hata = 'Kaynak ve hedef kasa aynı olamaz.';
+  else if (kaynak.doviz !== hedef.doviz)
+    hata = `Döviz uyuşmuyor (${kaynak.doviz} → ${hedef.doviz}). Aynı dövizdeki kasalar arasında transfer yapılabilir.`;
+  else if (tutar > 0 && tutar > b)
+    hata = `Yetersiz bakiye. ${kaynak.ad}: ${para(b, kaynak.doviz)}`;
+
+  if (hata) {
+    uyari.style.display = ''; uyari.textContent = hata;
+    bosalt();
+    document.getElementById('kaynakOnce').textContent = para(kaynak.bakiye, kaynak.doviz);
+    document.getElementById('hedefOnce').textContent = para(hedef.bakiye, hedef.doviz);
+    btn.disabled = true;
+    return;
+  }
+  uyari.style.display = 'none';
+
+  if (tutar > 0) {
+    document.getElementById('kaynakSonra').textContent = para(b - tutar, kaynak.doviz);
+    document.getElementById('hedefSonra').textContent = para((hedef.bakiye || 0) + tutar, hedef.doviz);
+    document.getElementById('okTutar').textContent = para(tutar, kaynak.doviz);
+    ok.classList.add('aktif'); kK.classList.add('canli'); hK.classList.add('canli');
+    btn.disabled = false;
+  } else {
+    document.getElementById('kaynakSonra').textContent = '—';
+    document.getElementById('hedefSonra').textContent = '—';
+    document.getElementById('okTutar').textContent = '—';
+    ok.classList.remove('aktif'); kK.classList.remove('canli'); hK.classList.remove('canli');
+    btn.disabled = true;
+  }
+}
+
+async function virmanKaydet() {
+  const { kaynak, hedef, tutar } = virmanKasalar();
+  if (!kaynak || !hedef || tutar <= 0) { bildir('Kaynak, hedef ve tutar gerekli.', true); return; }
+  const btn = document.getElementById('vKaydet');
+  btn.disabled = true; btn.textContent = 'Aktarılıyor…';
+  try {
+    const d = await api('/api/kasa/virman', {
+      method: 'POST',
+      body: JSON.stringify({
+        kaynak_kasa_id: kaynak.id, hedef_kasa_id: hedef.id, tutar,
+        tarih: document.getElementById('vTarih').value || null,
+        evrak_no: document.getElementById('vEvrak').value,
+        aciklama: document.getElementById('vAciklama').value
+      })
+    });
+    bildir(d.mesaj || 'Transfer tamam');
+    virmanKapat();
+    await kasalariYukle();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Transferi Yap'; }
+}
+
+kasalariYukle();
+</script>
+{% endblock %}
