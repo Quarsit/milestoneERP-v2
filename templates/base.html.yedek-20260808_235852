@@ -1312,21 +1312,8 @@ async function kurSorgula() {
       api(`/api/doviz_kur?doviz=USD&tarih=${encodeURIComponent(tarih)}`),
       api(`/api/doviz_kur?doviz=EUR&tarih=${encodeURIComponent(tarih)}`)
     ]);
-    const bicim = v => Number(v).toLocaleString('tr-TR', {minimumFractionDigits: 4});
     const satir = (ad, d) => {
-      /* K11 — BÜYÜK PUNTO = HESAPLARDA KULLANILAN KUR.
-         Eskiden `efektif` (BanknoteSelling) gösteriliyordu ama
-         _kur_getir() `alis`i kullanıyor:
-             val = k.alis or k.efektif or k.satis
-         Ekrandaki sayı, faturanın TL karşılığını belirleyen sayı
-         değildi. 100.000 $'da 15.700 TL fark eden bir yanılgı.
-
-         Döviz alış esas alınması MEVZUAT GEREĞİ: sözleşmede özel
-         kur yoksa VUK/GİB uygulamasında TCMB döviz alış kuru
-         kullanılır (KDV K. m.26 — vergiyi doğuran olay anındaki
-         cari kur). Yani hesap doğruydu, ekran yanlıştı. */
-      const hesapKuru = d ? (d.alis || d.efektif || d.satis) : null;
-      const yok = !hesapKuru;
+      const yok = !d || !d.efektif;
       /* Sorulan tarih ile dönen tarih farklıysa SÖYLE: hafta sonu ya
          da resmî tatil sorulmuş, kur bir önceki iş gününden geliyor.
          Sessizce farklı bir günün kurunu göstermek yanıltıcı olur. */
@@ -1334,29 +1321,20 @@ async function kurSorgula() {
       return `<div class="kalem-satir">
         <span class="rozet ${yok ? 'rz-gri' : 'rz-yesil'}">${ad}</span>
         <div>
-          <div><strong style="font-size:1.15rem">${yok ? '—' : bicim(hesapKuru)}</strong>
-            <span style="color:var(--soluk)"> ₺</span>
-            ${yok ? '' : `<span style="color:var(--verde);font-size:.72rem;
-              font-weight:600;margin-left:6px">DÖVİZ ALIŞ</span>`}</div>
-          ${yok ? '' : `<div style="color:var(--soluk);font-size:.73rem;margin-top:1px">
-            hesaplarda kullanılan kur</div>`}
-          ${!yok && (d.satis || d.efektif) ? `<div style="color:var(--soluk);
-            font-size:.75rem;margin-top:4px;padding-top:4px;border-top:1px solid var(--cizgi)">
-            ${d.satis ? 'Döviz satış ' + bicim(d.satis) : ''}${d.satis && d.efektif ? ' · ' : ''}${
-              d.efektif && d.efektif !== d.satis ? 'Efektif satış ' + bicim(d.efektif) : ''}</div>` : ''}
-          ${farkli ? `<div style="color:var(--kehribar);font-size:.76rem;margin-top:3px">
+          <div><strong style="font-size:1.05rem">${yok ? '—' :
+            Number(d.efektif).toLocaleString('tr-TR', {minimumFractionDigits: 4})}</strong>
+            <span style="color:var(--soluk)"> ₺</span></div>
+          ${!yok && d.alis && d.satis ? `<div style="color:var(--soluk);font-size:.76rem">
+            Alış ${Number(d.alis).toLocaleString('tr-TR', {minimumFractionDigits: 4})} ·
+            Satış ${Number(d.satis).toLocaleString('tr-TR', {minimumFractionDigits: 4})}</div>` : ''}
+          ${farkli ? `<div style="color:var(--kehribar);font-size:.76rem">
             ⚠ ${tarih} için kur yok (hafta sonu / tatil) — ${d.tarih} kuru gösteriliyor</div>` : ''}
           ${yok ? `<div style="color:var(--kirmizi);font-size:.76rem">
             Bu tarih için arşivde kayıt yok</div>` : ''}
         </div>
       </div>`;
     };
-    kutu.innerHTML = satir('USD', usd) + satir('EUR', eur) +
-      `<div style="margin-top:8px;font-size:.72rem;color:var(--soluk);line-height:1.5">
-         Dövizli işlemlerin TL karşılığı <strong>TCMB döviz alış kuru</strong> ile
-         hesaplanır. Sözleşmede özel bir kur belirlenmişse fatura üzerinde
-         ayrıca belirtilmelidir.
-       </div>`;
+    kutu.innerHTML = satir('USD', usd) + satir('EUR', eur);
   } catch (e) {
     kutu.innerHTML = '<div class="bos" style="padding:12px">Sorgulanamadı</div>';
   }

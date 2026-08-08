@@ -450,7 +450,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <kbd>Ctrl K</kbd>
       </button>
       <div class="ust-sag">
-        <span class="kur-cip" id="ustKur" onclick="kurSorguAc()" title="Kur sorgula — geçmiş tarihler dahil"></span>
+        <span class="kur-cip" id="ustKur" onclick="kurGuncelle()" title="TCMB güncel kurları — tıkla, yenile"></span>
         <span class="tarih-cip" id="ustTarih"></span>
         {% set satis_sayfasi = yol.startswith('/siparis') or yol.startswith('/proforma')
               or yol.startswith('/fatura') or yol.startswith('/satislar')
@@ -525,36 +525,6 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
     <input id="paletGiris" placeholder="Blok no, kasa no, müşteri, fatura no… (sonuçlar tüm modüllerden gelir)" autocomplete="off">
     <div class="palet-liste" id="paletListe"></div>
     <div class="palet-ipucu"><span><kbd>↑↓</kbd> gezin</span><span><kbd>Enter</kbd> aç</span><span><kbd>Esc</kbd> kapat</span></div>
-  </div>
-</div>
-
-<!-- U1b — KUR SORGU MODALI
-     Kullanıcı geçmiş bir tarihin kurunu görmek için sistemden çıkıp
-     TCMB sitesine bakmak zorundaydı. Veri zaten elimizde: 2019'a
-     kadar dolu arşiv. -->
-<div class="modal-ortu" id="kurModal" onclick="if(event.target===this)kurSorguKapat()">
-  <div class="modal" style="width:460px" role="dialog" aria-label="Kur sorgulama">
-    <div class="modal-bas">
-      <h3>Döviz Kuru</h3>
-      <p>TCMB kurları · geçmiş tarihler dahil</p>
-    </div>
-    <div class="modal-gov">
-      <div class="form-satir">
-        <div class="form-alan">
-          <label>Tarih</label>
-          <input type="date" id="kurTarih" onchange="kurSorgula()">
-        </div>
-        <div class="form-alan" style="display:flex;align-items:flex-end;gap:6px">
-          <button type="button" class="blok-btn" onclick="kurBugun()">Bugün</button>
-          <button type="button" class="blok-btn" onclick="kurGuncelle()"
-                  title="TCMB'den güncel kuru yeniden çek">Yenile</button>
-        </div>
-      </div>
-      <div id="kurSonuc" style="margin-top:6px"></div>
-    </div>
-    <div class="modal-alt">
-      <button class="iptal-btn" onclick="kurSorguKapat()">Kapat</button>
-    </div>
   </div>
 </div>
 
@@ -1275,92 +1245,6 @@ document.addEventListener('click', () => {
 /* ═══ ÜST ŞERİT: tarih + güncel kur ═══ */
 document.getElementById('ustTarih').textContent =
   new Date().toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' });
-
-/* ═══ KUR SORGULAMA (U1b) ═══
-   /api/doviz_kur zaten `tarih` parametresini destekliyor ve
-   "o tarih veya ÖNCESİ en yakın kur" mantığını uyguluyor —
-   hafta sonu/tatil sorulduğunda bir önceki iş gününü döndürür.
-   Yeni uç nokta yazılmadı; eksik olan yalnızca arayüzdü. */
-function kurSorguAc() {
-  const m = document.getElementById('kurModal');
-  if (!m) return;
-  m.classList.add('acik');
-  kurBugun();
-}
-
-function kurSorguKapat() {
-  const m = document.getElementById('kurModal');
-  if (m) m.classList.remove('acik');
-}
-
-function kurBugun() {
-  const g = new Date();
-  const s = g.getFullYear() + '-' + String(g.getMonth() + 1).padStart(2, '0')
-          + '-' + String(g.getDate()).padStart(2, '0');
-  const alan = document.getElementById('kurTarih');
-  if (alan) alan.value = s;
-  kurSorgula();
-}
-
-async function kurSorgula() {
-  const tarih = (document.getElementById('kurTarih') || {}).value;
-  const kutu = document.getElementById('kurSonuc');
-  if (!tarih || !kutu) return;
-  kutu.innerHTML = '<div class="bos" style="padding:12px">Sorgulanıyor…</div>';
-  try {
-    const [usd, eur] = await Promise.all([
-      api(`/api/doviz_kur?doviz=USD&tarih=${encodeURIComponent(tarih)}`),
-      api(`/api/doviz_kur?doviz=EUR&tarih=${encodeURIComponent(tarih)}`)
-    ]);
-    const bicim = v => Number(v).toLocaleString('tr-TR', {minimumFractionDigits: 4});
-    const satir = (ad, d) => {
-      /* K11 — BÜYÜK PUNTO = HESAPLARDA KULLANILAN KUR.
-         Eskiden `efektif` (BanknoteSelling) gösteriliyordu ama
-         _kur_getir() `alis`i kullanıyor:
-             val = k.alis or k.efektif or k.satis
-         Ekrandaki sayı, faturanın TL karşılığını belirleyen sayı
-         değildi. 100.000 $'da 15.700 TL fark eden bir yanılgı.
-
-         Döviz alış esas alınması MEVZUAT GEREĞİ: sözleşmede özel
-         kur yoksa VUK/GİB uygulamasında TCMB döviz alış kuru
-         kullanılır (KDV K. m.26 — vergiyi doğuran olay anındaki
-         cari kur). Yani hesap doğruydu, ekran yanlıştı. */
-      const hesapKuru = d ? (d.alis || d.efektif || d.satis) : null;
-      const yok = !hesapKuru;
-      /* Sorulan tarih ile dönen tarih farklıysa SÖYLE: hafta sonu ya
-         da resmî tatil sorulmuş, kur bir önceki iş gününden geliyor.
-         Sessizce farklı bir günün kurunu göstermek yanıltıcı olur. */
-      const farkli = d && d.tarih && d.tarih !== tarih;
-      return `<div class="kalem-satir">
-        <span class="rozet ${yok ? 'rz-gri' : 'rz-yesil'}">${ad}</span>
-        <div>
-          <div><strong style="font-size:1.15rem">${yok ? '—' : bicim(hesapKuru)}</strong>
-            <span style="color:var(--soluk)"> ₺</span>
-            ${yok ? '' : `<span style="color:var(--verde);font-size:.72rem;
-              font-weight:600;margin-left:6px">DÖVİZ ALIŞ</span>`}</div>
-          ${yok ? '' : `<div style="color:var(--soluk);font-size:.73rem;margin-top:1px">
-            hesaplarda kullanılan kur</div>`}
-          ${!yok && (d.satis || d.efektif) ? `<div style="color:var(--soluk);
-            font-size:.75rem;margin-top:4px;padding-top:4px;border-top:1px solid var(--cizgi)">
-            ${d.satis ? 'Döviz satış ' + bicim(d.satis) : ''}${d.satis && d.efektif ? ' · ' : ''}${
-              d.efektif && d.efektif !== d.satis ? 'Efektif satış ' + bicim(d.efektif) : ''}</div>` : ''}
-          ${farkli ? `<div style="color:var(--kehribar);font-size:.76rem;margin-top:3px">
-            ⚠ ${tarih} için kur yok (hafta sonu / tatil) — ${d.tarih} kuru gösteriliyor</div>` : ''}
-          ${yok ? `<div style="color:var(--kirmizi);font-size:.76rem">
-            Bu tarih için arşivde kayıt yok</div>` : ''}
-        </div>
-      </div>`;
-    };
-    kutu.innerHTML = satir('USD', usd) + satir('EUR', eur) +
-      `<div style="margin-top:8px;font-size:.72rem;color:var(--soluk);line-height:1.5">
-         Dövizli işlemlerin TL karşılığı <strong>TCMB döviz alış kuru</strong> ile
-         hesaplanır. Sözleşmede özel bir kur belirlenmişse fatura üzerinde
-         ayrıca belirtilmelidir.
-       </div>`;
-  } catch (e) {
-    kutu.innerHTML = '<div class="bos" style="padding:12px">Sorgulanamadı</div>';
-  }
-}
 
 async function kurGuncelle() {
   const el = document.getElementById('ustKur');

@@ -7332,39 +7332,12 @@ def create_app():
         # ÇOK DÖVİZLİ MUHASEBE: kur ve TRY karşılığı
         manuel_kur = data.get('kur_uygulanan')
         kur_kaynak = 'MANUEL' if manuel_kur and float(manuel_kur) > 0 else 'TCMB'
-        # YAMA KF1: hareket tarihi ISTEMCIDEN alinir.
-        # Eskiden okunmuyordu; her hareket bugune yaziliyordu ve
-        # gecmis tarihli fatura girmek mumkun degildi.
-        _h_tarihi = date.today()
-        _ht = (data.get('hareket_tarihi') or '').strip()
-        if _ht:
-            try:
-                _h_tarihi = datetime.strptime(_ht, '%Y-%m-%d').date()
-            except ValueError:
-                return jsonify({'ok': False,
-                                'mesaj': 'Hareket tarihi GG.AA.YYYY degil, '
-                                         'YYYY-AA-GG biciminde olmali'}), 400
-
         if doviz == 'TRY':
             kullanilan_kur = 1.0
         elif manuel_kur and float(manuel_kur) > 0:
             kullanilan_kur = float(manuel_kur)
         else:
-            # YAMA KF1: HAREKET TARIHINDEKI kur kullanilir.
-            #
-            # Eskiden `_kur_getir(doviz)` tarihsiz cagriliyordu ve
-            # arsivdeki EN SON kur geliyordu. Yani 08.08 tarihli bir
-            # faturaya 07.09 kuru uygulaniyordu.
-            #
-            # VUK/GIB uygulamasinda dovizli islemin TL karsiligi ISLEM
-            # TARIHINDEKI TCMB doviz alis kuru ile hesaplanir. Bugunun
-            # kuruyla hesaplamak beyani yanlis yapar; 10.000 EUR'luk
-            # bir faturada 1,50 TL sapma = 15.000 TL.
-            #
-            # AYRICA: fatura ve tahsilat ayni kuru aldigi icin aralarinda
-            # fark cikmiyordu ve KUR FARKI HIC OLUSMUYORDU. Altyapi
-            # calismiyor degildi — beslenmiyordu.
-            kullanilan_kur = _kur_getir(doviz, _h_tarihi)
+            kullanilan_kur = _kur_getir(doviz)
             # TCMB kuru bulunamadıysa hata - kullanıcı manuel girmeli ya da Doviz Kur'a kayıt eklemeli
             if not kullanilan_kur or kullanilan_kur <= 0:
                 return jsonify({'ok': False,
@@ -7395,7 +7368,7 @@ def create_app():
 
         # CariHareket kaydi olustur
         hareket = CariHareket(
-            id=_yeni_id('HR'), hareket_tarihi=_h_tarihi,
+            id=_yeni_id('HR'), hareket_tarihi=date.today(),
             cari_id=data['cari_id'], islem_tip=islem_tip,
             evrak_no=evrak_no, aciklama=aciklama,
             borc=borc, alacak=alacak, doviz=doviz,
