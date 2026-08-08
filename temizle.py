@@ -5,13 +5,19 @@
 #  Dosya listesi tek tek incelenerek hazırlandı. Silinecek her grubun
 #  gerekçesi aşağıda yazılı; kalacaklar da açıkça listeli.
 #
-#  ⚠ ÖNCE YEDEK ALIN — bu betik yedekleri de siliyor:
-#      sudo /usr/local/bin/milestone-yedek.sh
-#    (siz elle alacağınızı söylediniz; betik ayrıca hatırlatır)
+#  ── YEDEKLER VARSAYILAN OLARAK KORUNUR ──
+#    Betik yedeklere DOKUNMAZ. Silmek icin acikca istemek gerekir:
+#        --yedekleri-sil
+#
+#    Neden: gercek veriye gecildikten sonra bu betigi yanlislikla
+#    calistirmak pahali olur. Kod artiklarini temizlemek rutin bir
+#    istir; yedek silmek degil. Ikisini ayni komuta baglamak, rutin
+#    bir islemi tehlikeli hale getirir.
 #
 #  KULLANIM (proje klasöründe):
-#      venv/bin/python temizle.py            # RAPOR — ne silinecek
-#      venv/bin/python temizle.py --uygula   # sil
+#      venv/bin/python temizle.py                  # RAPOR
+#      venv/bin/python temizle.py --uygula         # sil (yedekler KALIR)
+#      venv/bin/python temizle.py --uygula --yedekleri-sil
 # ══════════════════════════════════════════════════════════════════════
 import os
 import shutil
@@ -19,6 +25,8 @@ import sys
 from pathlib import Path
 
 UYGULA = '--uygula' in sys.argv
+# Yedekler VARSAYILAN OLARAK korunur — silmek icin acik istek gerekir.
+YEDEKLERI_SIL = '--yedekleri-sil' in sys.argv
 KOK = Path('.').resolve()
 
 if not (KOK / 'flask_app.py').exists():
@@ -73,19 +81,20 @@ GRUPLAR.append((
 ))
 
 # 4) Uygulama yedekleri
-GRUPLAR.append((
-    'Uygulama yedekleri (backups/*.dump)',
-    sorted((KOK / 'backups').glob('*.dump')),
-    'TEST verilerinin yedekleri. Gerçek veriye geçilecek;\n'
-    '     bunlarla geri dönmek istenmiyor (karışıklık riski).',
-))
+if YEDEKLERI_SIL:
+    GRUPLAR.append((
+        'Uygulama yedekleri (backups/*.dump)  ⚠',
+        sorted((KOK / 'backups').glob('*.dump')),
+        'AÇIKCA istendi (--yedekleri-sil). Geri dönüşü yok.',
+    ))
 
 # 5) Zamanlanmış sistem yedekleri
-GRUPLAR.append((
-    'Sistem yedekleri (~/yedekler/*.dump)',
-    sorted((EV / 'yedekler').glob('*.dump')),
-    'Aynı gerekçe — test verisi. Klasör KALIR (timer oraya yazıyor).',
-))
+if YEDEKLERI_SIL:
+    GRUPLAR.append((
+        'Sistem yedekleri (~/yedekler/*.dump)  ⚠',
+        sorted((EV / 'yedekler').glob('*.dump')),
+        'AÇIKCA istendi. Klasör KALIR (timer oraya yazıyor).',
+    ))
 
 # 6) Günlük dosyası
 _log = [p for p in [KOK / 'erp.log'] if p.exists()]
@@ -131,8 +140,11 @@ KORUNAN = [
     ('listeler_excel.py · envanter_kdv.py', 'veri aktarma'),
     ('tani_izli_kdv.py · tani_fatura_kilit.py', 'tanı araçları'),
     ('kur_arsivi_doldur.py · kur_guncelle.py', 'kur yönetimi'),
-    ('backups/ · ~/yedekler/ klasörleri', 'KLASÖRLER kalır, içleri boşalır'),
+    ('backups/ · ~/yedekler/ klasörleri', 'klasörler her durumda kalır'),
 ]
+if not YEDEKLERI_SIL:
+    KORUNAN.append(('backups/*.dump · ~/yedekler/*.dump',
+                    'YEDEKLER KORUNDU — silmek için --yedekleri-sil'))
 
 print("═" * 74)
 print(" MILESTONE ERP — PROJE DİZİNİ TEMİZLİĞİ")
@@ -180,26 +192,33 @@ if not UYGULA:
     print("═" * 74)
     print(" RAPOR MODU — HİÇBİR ŞEY SİLİNMEDİ")
     print()
-    print(" ⚠ ÖNCE YEDEK:  sudo /usr/local/bin/milestone-yedek.sh")
+    if YEDEKLERI_SIL:
+        print(" ⚠ --yedekleri-sil VERİLDİ: yedekler de silinecek.")
+        print("    Önce yedek alın: sudo /usr/local/bin/milestone-yedek.sh")
+    else:
+        print(" ✓ Yedekler KORUNACAK (silmek için --yedekleri-sil)")
     print()
     print(" Silmek için:")
-    print("   venv/bin/python temizle.py --uygula")
+    print("   venv/bin/python temizle.py --uygula"
+          + (" --yedekleri-sil" if YEDEKLERI_SIL else ""))
     print("═" * 74)
     sys.exit(0)
 
-# ── Yedek uyarısı ──────────────────────────────────────────────────
-print("═" * 74)
-print(" ⚠ BU BETİK TÜM YEDEKLERİ SİLECEK")
-print("═" * 74)
-print()
-print(" Silme sonrası ELİNİZDE YEDEK KALMAYACAK. Devam etmeden önce")
-print(" güncel bir yedek aldığınızdan emin olun:")
-print("   sudo /usr/local/bin/milestone-yedek.sh")
-print()
-onay = input(" Yedek aldınız mı ve silmek istiyor musunuz? (evet/hayir): ")
-if onay.strip().lower() not in ('evet', 'e'):
-    print(" İptal edildi — hiçbir şey silinmedi.")
-    sys.exit(0)
+# ── Yedek silinecekse ONAY İSTE ────────────────────────────────────
+if YEDEKLERI_SIL:
+    print("═" * 74)
+    print(" ⚠ TÜM VERİTABANI YEDEKLERİ SİLİNECEK")
+    print("═" * 74)
+    print()
+    print(" Silme sonrası ELİNİZDE YEDEK KALMAYACAK. Geri dönüşü yoktur.")
+    print(" Devam etmeden önce güncel bir yedek aldığınızdan emin olun:")
+    print("   sudo /usr/local/bin/milestone-yedek.sh")
+    print()
+    onay = input(" Yedekleri silmek istediğinizden EMİN misiniz? (evet/hayir): ")
+    if onay.strip().lower() not in ('evet', 'e'):
+        print(" İptal edildi — hiçbir şey silinmedi.")
+        sys.exit(0)
+    print()
 
 print()
 silinen = hata = 0
@@ -219,10 +238,11 @@ print("═" * 74)
 print(f" ✓ {silinen} öge silindi" + (f" · {hata} hata" if hata else ""))
 print("═" * 74)
 print()
-print(" ŞİMDİ YENİ TABAN YEDEĞİ ALIN:")
-print("   sudo /usr/local/bin/milestone-yedek.sh")
-print("   ls -la ~/yedekler/")
-print()
+if YEDEKLERI_SIL:
+    print(" ŞİMDİ YENİ TABAN YEDEĞİ ALIN — elinizde yedek yok:")
+    print("   sudo /usr/local/bin/milestone-yedek.sh")
+    print("   ls -la ~/yedekler/")
+    print()
 print(" Ardından doğrulama:")
 print("   git status --short          # beklenmedik silme var mı")
 print("   venv/bin/python goc.py durum")
