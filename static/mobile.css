@@ -1,0 +1,148 @@
+/* ════════════════════════════════════════════════════════════════════
+   Milestone ERP — Mobil uyumluluk katmanı  (v2)
+   SADECE 760px ve altında devreye girer. Masaüstü hiç etkilenmez.
+
+   base.html'de </style> satırının altına şu satır eklenmiş olmalı:
+   <link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}">
+   ════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 760px) {
+
+/* ─────────────────────────────────────────────────────────────
+   1) ÜST ÇUBUK — yatay taşmanın asıl kaynağı
+   .ust'te flex-wrap yoktu; arama + kur + butonlar sığmayınca
+   belgeyi ekrandan geniş yapıp TÜM sayfayı sağdan kestiriyordu.
+   ───────────────────────────────────────────────────────────── */
+.ust {
+  flex-wrap: wrap;          /* sığmayan alt satıra insin */
+  gap: 8px;
+  padding: 10px 14px;
+  position: static;         /* sabit değil — telefonda dikey alan kazanılır */
+}
+.arama {
+  flex: 1 1 100%;           /* arama tek başına ilk satır */
+  max-width: none;
+  white-space: nowrap;      /* 5 satıra bölünmesin */
+  overflow: hidden;
+  font-size: .86rem;
+  padding: 9px 12px;
+}
+.arama svg { flex: none }
+.ust-sag {
+  margin-left: 0;
+  flex-wrap: wrap;          /* butonlar da sarabilsin */
+  gap: 8px;
+}
+.tarih-cip { display: none }
+
+/* Alt sekmeler artık üstte sabitlenir (.ust static olduğu için top:0) */
+.alt-sekmeler {
+  top: 0;
+  padding: 0 14px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   2) ALT NAVİGASYON — ekranın yarısını kaplama sorunu
+   .ray yatay oluyordu ama içindeki .ray-grup column kalıyordu.
+   ───────────────────────────────────────────────────────────── */
+.ray {
+  flex-direction: row;
+  height: auto;
+  padding: 4px 2px 6px;
+  gap: 0;
+  justify-content: space-between;
+  border-top: 1px solid rgba(255,255,255,.12);
+}
+.ray-grup {
+  flex-direction: row;      /* ← asıl düzeltme */
+  width: auto;
+  flex: 1;
+  gap: 0;
+  justify-content: space-around;
+}
+.ray-oge {
+  width: auto;
+  flex: 1;
+}
+.ray-btn {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 2px 4px;
+  gap: 2px;
+}
+.ray-btn svg { width: 20px; height: 20px }
+.ray-btn span { font-size: .6rem; line-height: 1.15; letter-spacing: -.01em }
+.ray-islem { flex: 1 }
+
+/* Uçan alt menüler telefonda gizli kalır — o görevi sayfa içindeki
+   "Satış Hattı / Proforma / Faturalar…" alt sekmeleri görüyor. */
+.ray-ucan { display: none !important }
+
+/* ─────────────────────────────────────────────────────────────
+   3) İÇERİK — alt çubuğun altında kalmasın
+   ───────────────────────────────────────────────────────────── */
+.icerik {
+  padding: 16px 14px 78px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   4) TABLOLAR — kırpma yerine parmakla yatay kaydırma
+   ───────────────────────────────────────────────────────────── */
+.tablo-kutu {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+.tablo-kutu table {
+  width: max-content;
+  min-width: 100%;
+}
+.tablo-kutu th,
+.tablo-kutu td { white-space: nowrap }
+
+/* ─────────────────────────────────────────────────────────────
+   5) ÇOK KOLONLU GRID'LER — 2 kolona insin
+   Sadece 3+ kolonlu tanımlar hedeflenir; tek kolonluya dokunulmaz.
+   ───────────────────────────────────────────────────────────── */
+[style*="repeat(3"],
+[style*="repeat(4"],
+[style*="repeat(5"],
+[style*="repeat(6"],
+[style*="1fr 1fr 1fr"] {
+  grid-template-columns: 1fr 1fr !important;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   6) MODALLAR — alttan açılan sayfa hissi, tek elle erişim
+   ───────────────────────────────────────────────────────────── */
+.modal-ortu {
+  padding: 0;
+  align-items: flex-end;
+}
+.modal {
+  width: 100% !important;
+  max-width: 100% !important;
+  max-height: 92vh;
+  border-radius: 14px 14px 0 0;
+}
+.modal-gov { padding: 16px 14px }
+.modal-bas, .modal-alt { padding: 14px }
+.modal-alt { flex-wrap: wrap; gap: 8px }
+
+/* ─────────────────────────────────────────────────────────────
+   7) DOKUNMA ERGONOMİSİ
+   ───────────────────────────────────────────────────────────── */
+button, .btn, .alt-sekme { min-height: 40px }
+input, select, textarea {
+  font-size: 16px;          /* iOS'un otomatik yakınlaştırmasını engeller */
+}
+
+/* Görseller ekranı zorlamasın */
+img, canvas { max-width: 100% }
+
+}
+
+/* Çok dar ekranlar (küçük telefonlar) */
+@media (max-width: 400px) {
+  .kpiler { grid-template-columns: 1fr !important }
+  .ray-btn span { font-size: .55rem }
+}
