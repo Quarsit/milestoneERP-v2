@@ -131,30 +131,10 @@
   <button class="blok-btn" id="secSilBtn" onclick="secilenleriSil()"
           style="color:var(--kirmizi)">Seçilenleri Sil</button>
 </div>
-<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+<div style="margin-bottom:8px">
   <button class="disa-btn" id="secKipBtn" onclick="secKipiDegistir()"
           title="Toplu işlem için satır seçimini aç">Seç</button>
-  <!-- F1: Seçenekler SABİT DEĞİL — o anda listelenen stoklardan
-       üretilir. Ayarlar'da 19 cins olsa da depoda 3 varsa yalnızca
-       o 3'ü gösterir; olmayan seçenek boş sonuç üretmez. -->
-  <select id="fUretici" onchange="suzgecDegisti()" class="suzgec-sec"
-          title="Üretici / tedarikçiye göre süz"></select>
-  <select id="fCins" onchange="suzgecDegisti()" class="suzgec-sec"
-          title="Cinse göre süz"></select>
-  <select id="fOzellik" onchange="suzgecDegisti()" class="suzgec-sec"
-          title="Yüzey işlemine göre süz"></select>
-  <button class="blok-btn" id="suzgecSifirla" onclick="suzgecleriSifirla()"
-          style="display:none;padding:4px 10px;font-size:.78rem">Süzgeçleri temizle</button>
-  <span id="suzgecBilgi" style="font-size:.78rem;color:var(--soluk)"></span>
 </div>
-<style>
-/* F1 — süzgeç açılır kutuları */
-.suzgec-sec{border:1px solid var(--cizgi-koyu);border-radius:7px;padding:5px 9px;
-  font-size:.82rem;background:var(--kagit);color:var(--murekkep);cursor:pointer;
-  max-width:190px}
-.suzgec-sec:focus{outline:2px solid var(--verde);outline-offset:1px}
-.suzgec-sec.dolu{border-color:var(--verde);background:var(--verde-acik);font-weight:600}
-</style>
 <div class="tablo-kutu">
   <table>
     <thead>
@@ -597,9 +577,6 @@ function nakliyeNotu() {
    Sunucuda serbest-metin araması yok; sayfadaki kayıtlar üzerinde anlık süzülür. */
 
 let TIP = 'BLOK', DURUM = '', FATURA_DURUM = '', SAYFA = 1, ARA = '';
-/* F1 — açılır süzgeçler. Metin aramasıyla AYNI katmanda (istemci)
-   çalışırlar; ikisi birlikte uygulanır. */
-let F_URETICI = '', F_CINS = '', F_OZELLIK = '';
 let SON = { data: [], meta: {} };
 
 /** Saf ALIM/ÜRETİM birim maliyeti (USD, ek maliyetler HARİÇ).
@@ -656,68 +633,6 @@ function olcu(s) {
   return [ol, kl, m2].filter(Boolean).join(' · ');
 }
 
-/* ═══ AÇILIR SÜZGEÇLER (F1) ═══
-   Seçenekler o anda listelenen stoklardan üretilir; sabit liste
-   kullanılmaz. Ayarlar'da 19 cins olsa da depoda 3 varsa yalnızca
-   o 3'ü gösterir — olmayan seçenek boş sonuç üretmez. */
-function suzgecSecenekleriDoldur(kayitlar) {
-  const kur = (alan, id, etiket, secili) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    /* Değer → kaç stok. Kullanıcı tıklamadan önce ne bulacağını görsün. */
-    const sayac = {};
-    kayitlar.forEach(x => {
-      const v = (x[alan] || '').trim();
-      if (v) sayac[v] = (sayac[v] || 0) + 1;
-    });
-    const degerler = Object.keys(sayac).sort((a, b) => a.localeCompare(b, 'tr'));
-    /* Seçili değer artık listede yoksa (tip değişti vb.) yine de
-       seçenek olarak kalsın — aksi halde süzgeç sessizce sıfırlanır
-       ve kullanıcı neden hepsini gördüğünü anlamaz. */
-    if (secili && !degerler.includes(secili)) degerler.unshift(secili);
-    el.innerHTML = `<option value="">${etiket} (tümü)</option>` +
-      degerler.map(v => `<option value="${kacar(v)}"${v === secili ? ' selected' : ''}>` +
-        `${kacar(v)}${sayac[v] ? ' (' + sayac[v] + ')' : ''}</option>`).join('');
-    el.value = secili || '';
-    el.classList.toggle('dolu', !!secili);
-  };
-  kur('uretici', 'fUretici', 'Üretici', F_URETICI);
-  kur('cins',    'fCins',    'Cins',    F_CINS);
-  kur('ozellik', 'fOzellik', 'Özellik', F_OZELLIK);
-}
-
-function suzgecDegisti() {
-  F_URETICI = (document.getElementById('fUretici') || {}).value || '';
-  F_CINS    = (document.getElementById('fCins')    || {}).value || '';
-  F_OZELLIK = (document.getElementById('fOzellik') || {}).value || '';
-  ciz();
-}
-
-function suzgecleriSifirla() {
-  F_URETICI = F_CINS = F_OZELLIK = '';
-  ciz();
-}
-
-function suzgecBilgiGuncelle(toplam, gosterilen) {
-  const btn = document.getElementById('suzgecSifirla');
-  const bilgi = document.getElementById('suzgecBilgi');
-  const suzgecVar = !!(F_URETICI || F_CINS || F_OZELLIK);
-  if (btn) btn.style.display = suzgecVar ? '' : 'none';
-  if (!bilgi) return;
-  if (suzgecVar) {
-    bilgi.textContent = `${gosterilen} / ${toplam} kayıt`;
-    bilgi.style.color = 'var(--verde)';
-  } else if ((SON.meta || {}).toplam && SON.meta.toplam > toplam) {
-    /* Sayfalama sınırı: süzgeçler yalnızca GÖRÜNTÜLENEN sayfayı
-       süzer (metin araması da öyle). Kullanıcı bunu bilmeli. */
-    bilgi.textContent = `süzgeçler bu sayfadaki ${toplam} kaydı kapsar ` +
-      `(toplam ${SON.meta.toplam})`;
-    bilgi.style.color = 'var(--soluk)';
-  } else {
-    bilgi.textContent = '';
-  }
-}
-
 async function listeyiCiz() {
   const govde = document.getElementById('govde');
   govde.innerHTML = '<tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr>';
@@ -732,28 +647,12 @@ async function listeyiCiz() {
     return;
   }
   const s = ARA.toLocaleLowerCase('tr');
-  /* F1: önce açılır süzgeçler, sonra metin araması. Sıra önemli
-     değil (ikisi de AND ile birleşiyor) ama süzgeç seçenekleri
-     ARAMADAN ÖNCEKİ kümeden üretiliyor — arama yazarken seçenekler
-     kaybolmasın diye. */
-  const tumu = SON.data || [];
-  suzgecSecenekleriDoldur(tumu);
-  const suzulmus = tumu.filter(x =>
-    (!F_URETICI || (x.uretici || '') === F_URETICI) &&
-    (!F_CINS    || (x.cins    || '') === F_CINS) &&
-    (!F_OZELLIK || (x.ozellik || '') === F_OZELLIK));
-  const satirlar = suzulmus.filter(x => !s ||
+  const satirlar = (SON.data || []).filter(x => !s ||
     [x.cins, x.blok_no, x.uretici, x.id, x.ozellik, x.konum]
       .filter(Boolean).join(' ').toLocaleLowerCase('tr').includes(s));
-  suzgecBilgiGuncelle(tumu.length, satirlar.length);
 
   if (!satirlar.length) {
-    /* F1: kullanıcı hangi süzgeç yüzünden boş kaldığını bilmeli */
-    const suzgecVar = F_URETICI || F_CINS || F_OZELLIK;
-    govde.innerHTML = `<tr><td colspan="7" class="bos">${
-      ARA ? 'Aramaya uyan kayıt yok.'
-      : suzgecVar ? 'Seçilen süzgeçlere uyan kayıt yok.'
-      : 'Bu filtrede stok yok.'}</td></tr>`;
+    govde.innerHTML = `<tr><td colspan="7" class="bos">${ARA ? 'Aramaya uyan kayıt yok.' : 'Bu filtrede stok yok.'}</td></tr>`;
   } else {
     govde.innerHTML = satirlar.map(x => {
       const r = RAY[x.durum] || 'ray-gri';

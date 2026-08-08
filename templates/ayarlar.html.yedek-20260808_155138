@@ -544,16 +544,13 @@ const MODULLER = [
    "Bankalar" sekmesinden yönetilir. */
 const LOOKUPLAR = [
   ['cins', 'Mermer Cinsleri'], ['ozellik', 'Yüzey İşlemleri'],
-  /* U1a: GTİP ile Ülkeler yer değiştirdi. Ülkeler 193 kayıtlık uzun
-     bir liste; belge alanlarını besleyen kısa listelerin arasında
-     durunca ekranı bölüyordu. Artık en sonda. */
-  ['gtip', 'GTİP / HS Kodları'],
+  ['ulke', 'Ülkeler'],
   /* Proforma ve belge alanlarını besleyen listeler. Buraya eklenen
      değerler proforma formunda öneri olarak çıkar; kullanıcı listede
      olmayan bir değeri elle de yazabilir (datalist davranışı). */
   ['liman', 'Limanlar'],
   ['konteyner', 'Konteyner Tipleri'],
-  ['ulke', 'Ülkeler'],
+  ['gtip', 'GTİP / HS Kodları'],
 ];
 
 /* Konteyner tipleri ve mermer GTİP kodları evrenseldir; boş listeye
