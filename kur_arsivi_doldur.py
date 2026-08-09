@@ -57,7 +57,8 @@ for i, a in enumerate(sys.argv[1:]):
 
 import xml.etree.ElementTree as ET  # noqa: E402
 
-import requests  # noqa: E402
+import requests
+import tcmb_kur   # TK1  # noqa: E402
 
 import flask_app  # noqa: E402
 from models import db, DovizKur  # noqa: E402
@@ -80,31 +81,9 @@ def tcmb_gun_kuru_cek(gun):
         if r.status_code != 200:
             return None, None
         root = ET.fromstring(r.content)
-        usd = eur = None
-        for c in root.findall('Currency'):
-            kod = c.get('CurrencyCode')
-            if kod not in ('USD', 'EUR'):
-                continue
-            # K9: TCMB alis ve satis kurunu AYRI verir. Eskiden yalnizca
-            # ForexSelling okunup UCUNE birden yaziliyordu; alis/satis
-            # farki (spread) kayboluyordu.
-            def _oku(etiket):
-                el = c.find(etiket)
-                try:
-                    return float(el.text) if (el is not None and el.text) else None
-                except (TypeError, ValueError):
-                    return None
-            _alis = _oku('ForexBuying')
-            _satis = _oku('ForexSelling')
-            _efektif = _oku('BanknoteSelling') or _satis or _alis
-            if not (_alis or _satis or _efektif):
-                continue
-            _deger = (_alis or _satis, _satis or _alis, _efektif)
-            if kod == 'USD':
-                usd = _deger
-            else:
-                eur = _deger
-        return usd, eur
+        # YAMA TK1: ayristirma tcmb_kur.py'de. Ayni mantigin dort
+        # kopyasi vardi; K9'da ucu duzeltilip biri kacirilmisti.
+        return tcmb_kur._xml_ayristir(r.content)
     except Exception:
         return None, None
 
@@ -161,16 +140,18 @@ with app.app_context():
                     print(f"   ! {g}: {str(e)[:60]}")
 
             if usd:
-                _a, _s, _e = usd   # K9: uclu
+                _a, _s, _e, _ea = usd   # EA1: dortlu
                 db.session.add(DovizKur(doviz='USD', alis=_a, satis=_s,
-                                        efektif=_e, tarih=g, kaynak='TCMB'))
+                                        efektif=_e, efektif_alis=_ea,
+                                        tarih=g, kaynak='TCMB'))
                 eklenen += 1
             else:
                 tatil += 1
             if eur:
-                _a, _s, _e = eur   # K9: uclu
+                _a, _s, _e, _ea = eur   # EA1
                 db.session.add(DovizKur(doviz='EUR', alis=_a, satis=_s,
-                                        efektif=_e, tarih=g, kaynak='TCMB'))
+                                        efektif=_e, efektif_alis=_ea,
+                                        tarih=g, kaynak='TCMB'))
 
             if sira % 20 == 0:
                 db.session.commit()

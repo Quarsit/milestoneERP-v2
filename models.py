@@ -533,7 +533,14 @@ class DovizKur(db.Model):
     doviz       = db.Column(db.String(5))
     alis        = db.Column(Kur)
     satis       = db.Column(Kur)
+    # DIKKAT: `efektif` alani aslinda EFEKTIF SATIS'i tutuyor
+    # (BanknoteSelling). Adi yaniltici ama 32 yerde kullanildigi ve
+    # yeniden adlandirma gocu veri kaybi riski tasidigi icin
+    # degistirilmiyor.
     efektif     = db.Column(Kur)
+    # EA1: efektif ALIS (BanknoteBuying) — TCMB veriyordu ama
+    # saklanmiyordu. Nakit doviz bozdurma kuru.
+    efektif_alis = db.Column(Kur)
     kaynak      = db.Column(db.String(20), default='TCMB')
 
 # ── VERILER (lookup) ───────────────────────────────────────────────────

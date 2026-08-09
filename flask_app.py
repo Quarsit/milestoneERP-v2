@@ -13,6 +13,7 @@ from models import Siparis, SiparisKalem, Rezervasyon, Cari, CariHareket, Maliye
 from models import Cek, CekHareket
 from models import KdvIadeDosya
 from models import Konteyner
+import tcmb_kur   # TK1: ortak TCMB kur cekici
 import yedek as yedek_modul
 import threading
 
@@ -2701,42 +2702,23 @@ def create_app():
         eur_kur = None
         
         try:
-            url = "https://www.tcmb.gov.tr/kurlar/today.xml"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                root = ET.fromstring(response.content)
-                
-                for currency in root.findall('Currency'):
-                    kod = currency.get('CurrencyCode')
-                    if kod == 'USD':
-                        # K10: alis VE satis AYRI tutulur.
-                        # Eskiden ikisi de okunuyor ama tek degiskende
-                        # eziliyordu; spread kayboluyordu.
-                        alis = currency.find('ForexBuying').text
-                        satis = currency.find('ForexSelling').text
-                        _bn = currency.find('BanknoteSelling')
-                        _bns = _bn.text if _bn is not None else None
-                        usd_alis = float(alis) if alis else None
-                        usd_satis = float(satis) if satis else None
-                        usd_efektif = (float(_bns) if _bns
-                                       else (usd_satis or usd_alis))
-                        # usd_kur: geriye uyumluluk — asagidaki kod ve
-                        # varsayilan/yedek dallar bunu kullaniyor.
-                        usd_kur = usd_efektif
-                    elif kod == 'EUR':
-                        # K10: alis VE satis AYRI tutulur (bkz. USD)
-                        alis = currency.find('ForexBuying').text
-                        satis = currency.find('ForexSelling').text
-                        _bn = currency.find('BanknoteSelling')
-                        _bns = _bn.text if _bn is not None else None
-                        eur_alis = float(alis) if alis else None
-                        eur_satis = float(satis) if satis else None
-                        eur_efektif = (float(_bns) if _bns
-                                       else (eur_satis or eur_alis))
-                        eur_kur = eur_efektif
-                
-                print(f"TCMB'den kur çekildi - USD: {usd_kur}, EUR: {eur_kur}")
+            # YAMA TK1: ayristirma tcmb_kur.py'de — DORT kopya tek yerde.
+            #
+            # Bu, dorduncu kopyaydi. K9'da ucunu duzeltip bunu
+            # kacirdigim icin hata ancak K10 ile kapanmisti:
+            #   03.07 arsiv  → alis 46,6337 · satis 46,7178  ✓
+            #   08.08 bugun  → alis 47,6085 · satis 47,6085  ✗
+            # Ucunu birlestirip bunu birakmak ayni tuzagi acik
+            # tutmak olurdu.
+            _u, _e = tcmb_kur.bugun_kuru_cek()
+            usd_alis, usd_satis, usd_efektif, usd_ef_alis = _u if _u else (None,) * 4
+            eur_alis, eur_satis, eur_efektif, eur_ef_alis = _e if _e else (None,) * 4
+            # usd_kur/eur_kur: asagidaki varsayilan/yedek dallar bunlari
+            # kullaniyor — geriye uyumluluk icin korunuyor.
+            usd_kur = usd_efektif
+            eur_kur = eur_efektif
+            if usd_kur or eur_kur:
+                print(f"TCMB'den kur cekildi - USD: {usd_kur}, EUR: {eur_kur}")
         except Exception as e:
             print(f"TCMB'den kur çekilemedi: {e}")
         
@@ -2747,7 +2729,9 @@ def create_app():
             yeni_usd = DovizKur(doviz='USD',
                                 alis=locals().get('usd_alis') or usd_kur,
                                 satis=locals().get('usd_satis') or usd_kur,
-                                efektif=usd_kur, tarih=date.today())
+                                efektif=usd_kur,
+                                efektif_alis=locals().get('usd_ef_alis'),   # EA1
+                                tarih=date.today())
             db.session.add(yeni_usd)
         else:
             son_usd = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
@@ -2762,7 +2746,9 @@ def create_app():
             yeni_eur = DovizKur(doviz='EUR',
                                 alis=locals().get('eur_alis') or eur_kur,
                                 satis=locals().get('eur_satis') or eur_kur,
-                                efektif=eur_kur, tarih=date.today())   # K10
+                                efektif=eur_kur,
+                                efektif_alis=locals().get('eur_ef_alis'),   # EA1
+                                tarih=date.today())
             db.session.add(yeni_eur)
         else:
             son_eur = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
@@ -2778,39 +2764,13 @@ def create_app():
 
     def _tcmb_gun_kuru_cek(gun):
         """Belirli bir günün TCMB kurunu çeker. Döner: (usd, eur) veya (None, None).
-        Hafta sonu/tatil günleri TCMB kur yayınlamaz → 404 → (None, None)."""
-        try:
-            url = f"https://www.tcmb.gov.tr/kurlar/{gun.strftime('%Y%m')}/{gun.strftime('%d%m%Y')}.xml"
-            r = requests.get(url, timeout=10)
-            if r.status_code != 200:
-                return None, None
-            root = ET.fromstring(r.content)
-            usd = eur = None
-            for c in root.findall('Currency'):
-                kod = c.get('CurrencyCode')
-                if kod in ('USD', 'EUR'):
-                    # K9: TCMB alis ve satis kurunu AYRI verir. Eskiden
-                    # yalnizca ForexSelling okunup UCUNE birden
-                    # yaziliyordu; alis/satis farki (spread) kayboluyordu.
-                    def _oku(etiket):
-                        el = c.find(etiket)
-                        try:
-                            return float(el.text) if (el is not None and el.text) else None
-                        except (TypeError, ValueError):
-                            return None
-                    _alis = _oku('ForexBuying')
-                    _satis = _oku('ForexSelling')
-                    _efektif = _oku('BanknoteSelling') or _satis or _alis
-                    if not (_alis or _satis or _efektif):
-                        continue
-                    _deger = (_alis or _satis, _satis or _alis, _efektif)
-                    if kod == 'USD':
-                        usd = _deger
-                    else:
-                        eur = _deger
-            return usd, eur
-        except Exception:
-            return None, None
+        Hafta sonu/tatil günleri TCMB kur yayınlamaz → 404 → (None, None).
+
+        YAMA TK1: govde tcmb_kur.py'ye tasindi. Ayni mantik DORT yerde
+        kopyalanmisti; K9'da uc kopyayi duzeltip dordunculuyu kacirdim
+        ve hata ancak K10 ile kapandi. Artik TEK dogruluk kaynagi var.
+        """
+        return tcmb_kur.gun_kuru_cek(gun)
 
     # ══════════════════════════════════════════════════════════
     #  KURSUZ GÜN İŞARETLERİ  (YAMA K2)
@@ -2884,15 +2844,17 @@ def create_app():
             usd, eur = _tcmb_gun_kuru_cek(g)
             if usd:
                 # K9: usd artik (alis, satis, efektif) uclusu
-                _a, _s, _e = usd
-                db.session.add(DovizKur(doviz='USD', alis=_a, satis=_s, efektif=_e, tarih=g, kaynak='TCMB'))
+                _a, _s, _e, _ea = usd   # EA1: dortlu
+                db.session.add(DovizKur(doviz='USD', alis=_a, satis=_s, efektif=_e,
+                                        efektif_alis=_ea, tarih=g, kaynak='TCMB'))
                 eklenen += 1
             elif g < _isaret_siniri:
                 if _kursuz_isaretle(g):
                     isaretlenen += 1
             if eur:
-                _a, _s, _e = eur
-                db.session.add(DovizKur(doviz='EUR', alis=_a, satis=_s, efektif=_e, tarih=g, kaynak='TCMB'))
+                _a, _s, _e, _ea = eur   # EA1
+                db.session.add(DovizKur(doviz='EUR', alis=_a, satis=_s, efektif=_e,
+                                        efektif_alis=_ea, tarih=g, kaynak='TCMB'))
             if (eklenen + isaretlenen) % 20 == 0 and (eklenen + isaretlenen) > 0:
                 db.session.commit()  # ara ara kaydet (uzun liste için)
         db.session.commit()
@@ -3393,6 +3355,8 @@ def create_app():
                 return jsonify({'doviz': single, 'alis': 0, 'satis': 0, 'efektif': 0, 'mesaj': 'Kur bulunamadi'})
             return jsonify({'doviz': single, 'alis': q_kur(k.alis or 0),
                             'satis': q_kur(k.satis or 0), 'efektif': q_kur(k.efektif or 0),
+                            # EA1: efektif alis — bos olabilir (eski arsiv kayitlari)
+                            'efektif_alis': q_kur(k.efektif_alis) if k.efektif_alis else None,
                             'tarih': k.tarih.isoformat() if k.tarih else None})
 
         # Tum dovizler (geri uyumluluk)

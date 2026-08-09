@@ -1340,10 +1340,11 @@ async function kurSorgula() {
               font-weight:600;margin-left:6px">DÖVİZ ALIŞ</span>`}</div>
           ${yok ? '' : `<div style="color:var(--soluk);font-size:.73rem;margin-top:1px">
             hesaplarda kullanılan kur</div>`}
-          ${!yok && (d.satis || d.efektif) ? `<div style="color:var(--soluk);
-            font-size:.75rem;margin-top:4px;padding-top:4px;border-top:1px solid var(--cizgi)">
-            ${d.satis ? 'Döviz satış ' + bicim(d.satis) : ''}${d.satis && d.efektif ? ' · ' : ''}${
-              d.efektif && d.efektif !== d.satis ? 'Efektif satış ' + bicim(d.efektif) : ''}</div>` : ''}
+          ${!yok && (d.satis || d.efektif || d.efektif_alis) ? `<div style="color:var(--soluk);
+            font-size:.75rem;margin-top:4px;padding-top:4px;border-top:1px solid var(--cizgi);line-height:1.6">
+            ${d.satis ? 'Döviz satış ' + bicim(d.satis) : ''}
+            ${d.efektif_alis && d.efektif_alis !== d.alis ? '<br>Efektif alış ' + bicim(d.efektif_alis) : ''}
+            ${d.efektif && d.efektif !== d.satis ? '<br>Efektif satış ' + bicim(d.efektif) : ''}</div>` : ''}
           ${farkli ? `<div style="color:var(--kehribar);font-size:.76rem;margin-top:3px">
             ⚠ ${tarih} için kur yok (hafta sonu / tatil) — ${d.tarih} kuru gösteriliyor</div>` : ''}
           ${yok ? `<div style="color:var(--kirmizi);font-size:.76rem">
