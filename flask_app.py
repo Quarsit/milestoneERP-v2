@@ -6791,6 +6791,7 @@ def create_app():
                 'doviz': h.doviz,
                 'kur_uygulanan': h.kur_uygulanan,
                 'kur_kaynak': h.kur_kaynak,
+                'kur_gerekce': h.kur_gerekce,   # SK1
                 'borc_try': h.borc_try,
                 'alacak_try': h.alacak_try,
                 'kapatildi': h.kapatildi,
@@ -7332,6 +7333,14 @@ def create_app():
         # ÇOK DÖVİZLİ MUHASEBE: kur ve TRY karşılığı
         manuel_kur = data.get('kur_uygulanan')
         kur_kaynak = 'MANUEL' if manuel_kur and float(manuel_kur) > 0 else 'TCMB'
+        # SK1: elle kur girildiyse GEREKCE ZORUNLU.
+        # Sozlesme kuru kullanmak mesru ama izi birakilmali; aksi
+        # halde denetimde "neden TCMB disi kur?" sorusu cevapsiz kalir.
+        kur_gerekce = (data.get('kur_gerekce') or '').strip()
+        if kur_kaynak == 'MANUEL' and len(kur_gerekce) < 3:
+            return jsonify({'ok': False, 'error': 'kur_gerekce_zorunlu',
+                            'mesaj': 'TCMB disi kur girdiniz. Gerekcesini yazin '
+                                     '(orn. "Sozlesme madde 4 - sabit kur 52,00").'}), 400
         # YAMA KF1: hareket tarihi ISTEMCIDEN alinir.
         # Eskiden okunmuyordu; her hareket bugune yaziliyordu ve
         # gecmis tarihli fatura girmek mumkun degildi.
@@ -7401,6 +7410,7 @@ def create_app():
             borc=borc, alacak=alacak, doviz=doviz,
             kur_uygulanan=q_kur(kullanilan_kur),
             kur_kaynak=kur_kaynak,
+            kur_gerekce=(kur_gerekce or None),   # SK1
             borc_try=q3(borc_try), alacak_try=q3(alacak_try),
             vade_tarihi=vade, siparis_id=siparis_id,
             kdv_dahil_mi=kdv_dahil_mi, kdv_oran=kdv_oran,
@@ -12679,6 +12689,37 @@ def create_app():
             ProformaKalem.sira, ProformaKalem.id).all()
         return p, kalemler, None
 
+    def _sozlesme_kuru_bul(proforma):
+        """Proformaya bagli faturada SOZLESME KURU kullanildi mi?
+
+        Doner: {'kur': 52.0, 'gerekce': '...'} ya da None.
+
+        ZINCIR: proforma → Fatura.proforma_id → o faturaya bagli cari
+        hareket → kur_uygulanan + kur_gerekce
+
+        Sozlesme kuru CARI HAREKETTE saklaniyor (kur_kaynak='MANUEL').
+        Ticari fatura ise PROFORMADAN basiliyor; aradaki bagi kurmak
+        icin fatura uzerinden gidiyoruz.
+
+        DIKKAT: hareketin KENDI kur_uygulanan degeri okunur, guncel
+        TCMB kuru DEGIL. Aksi halde fatura, cari ekstresiyle celisirdi
+        (bkz. E2 — ayni belgede iki farkli kur).
+        """
+        try:
+            fatura = Fatura.query.filter_by(proforma_id=proforma.id).first()
+            if not fatura:
+                return None
+            h = CariHareket.query.filter_by(
+                baglanti_tip='fatura', baglanti_id=fatura.id,
+                kur_kaynak='MANUEL').first()
+            if not h or not h.kur_uygulanan:
+                return None
+            return {'kur': float(h.kur_uygulanan),
+                    'gerekce': h.kur_gerekce or ''}
+        except Exception as exc:
+            app.logger.warning(f'_sozlesme_kuru_bul: {exc}')
+            return None
+
     def _konteyner_gruplari(proforma, kalemler):
         """Kalemleri KONTEYNER bazinda gruplar.
 
@@ -12770,6 +12811,7 @@ def create_app():
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
+                               sozlesme_kuru=_sozlesme_kuru_bul(p),   # SK3
                                toplam_yazili=toplam_yazili)
 
     def _html_to_pdf(html_str):
@@ -13073,6 +13115,7 @@ def create_app():
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
+                               sozlesme_kuru=_sozlesme_kuru_bul(p),   # SK3
                                toplam_yazili=toplam_yazili)
 
 

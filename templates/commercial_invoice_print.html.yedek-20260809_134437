@@ -215,14 +215,6 @@ tbody td.c{text-align:center}
   <div class="bottom-grid">
     <div>
       <div class="section-title">{{ _ceviri('belge.bank_details', dil) }}</div>
-      {# SK2: Sözleşme kuru faturada BELİRTİLMELİ (GİB özelgesi).
-         `sozlesme_kuru` sunucudan gelir; yoksa satır hiç basılmaz. #}
-      {% if sozlesme_kuru %}
-      <div class="info-row"><span class="info-label">{{ 'Kur' if dil == 'TR' else 'Rate' }}:</span><span class="info-val">
-        1 {{ p.doviz }} = {{ '%.4f'|format(sozlesme_kuru.kur) }} TL
-        ({{ 'sözleşme kuru' if dil == 'TR' else 'contractual rate' }}){% if sozlesme_kuru.gerekce %}<br>{{ sozlesme_kuru.gerekce }}{% endif %}
-      </span></div>
-      {% endif %}
       {% if p.banka_adi %}<div class="info-row"><span class="info-label">{{ _ceviri('belge.bank', dil) }}:</span><span class="info-val">{{ p.banka_adi }}</span></div>{% endif %}
       {% if p.iban %}<div class="info-row"><span class="info-label">IBAN:</span><span class="info-val">{{ p.iban }}</span></div>{% endif %}
       {% if p.swift %}<div class="info-row"><span class="info-label">SWIFT:</span><span class="info-val">{{ p.swift }}</span></div>{% endif %}

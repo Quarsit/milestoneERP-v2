@@ -220,36 +220,6 @@
         <div class="form-alan"><label>Tutar <span style="color:var(--kirmizi)">*</span></label><input id="hTutar" type="number" step="0.01" oninput="kdvOnizle()"></div>
       </div>
 
-      <!-- SK1 — SÖZLEŞME KURU
-           Sunucu elle kuru zaten kabul ediyordu ama formda giriş yolu
-           yoktu; özellik erişilemez durumdaydı. GİB özelgesi: sözleşmede
-           taraflarca belirlenen kur varsa O geçerli, yoksa fatura
-           tarihindeki TCMB döviz alış kuru. -->
-      <div id="hKurAlan" style="display:none">
-        <div style="padding:8px 10px;background:var(--notr-bg);border-radius:8px;margin-bottom:10px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.83rem">
-            <input type="checkbox" id="hSozlesmeKur" onchange="sozlesmeKurDegisti()"
-                   style="width:15px;height:15px;cursor:pointer">
-            <strong>Sözleşme kuru kullan</strong>
-            <span style="color:var(--soluk);font-weight:400">(TCMB dışı)</span>
-          </label>
-          <div id="hKurDetay" style="display:none;margin-top:8px">
-            <div class="form-satir f2">
-              <div class="form-alan"><label>Kur <span style="color:var(--kirmizi)">*</span></label>
-                <input id="hKur" type="number" step="0.0001" placeholder="52,0000"></div>
-              <div class="form-alan"><label>Gerekçe <span style="color:var(--kirmizi)">*</span></label>
-                <input id="hKurGerekce" maxlength="200"
-                       placeholder="Sözleşme madde 4 — sabit kur"></div>
-            </div>
-            <div style="font-size:.75rem;color:var(--soluk);line-height:1.5">
-              Gerekçe <strong>zorunludur</strong> ve belgede görünür. Sözleşme kuru
-              kullanıldığında fatura üzerinde belirtilmelidir.
-            </div>
-          </div>
-          <div id="hTcmbNot" style="font-size:.75rem;color:var(--soluk);margin-top:4px"></div>
-        </div>
-      </div>
-
       <!-- KDV — yalnızca fatura nitelikli işlemlerde görünür -->
       <div id="hKdvAlan" style="display:none">
         <div class="form-satir f2">
@@ -311,7 +281,7 @@
 
       <div class="form-satir f3">
         <div class="form-alan"><label>Döviz</label>
-          <select id="hDoviz" onchange="kurAlaniGoster()"><option>USD</option><option>EUR</option><option>TRY</option></select>
+          <select id="hDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
         </div>
         <div class="form-alan"><label>Vade Tarihi</label><input id="hVade" type="date"></div>
         <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
@@ -629,48 +599,6 @@ function ekstreSecenek(id) {
 
 function ekstreKapat() {
   document.getElementById('ekstreModal').classList.remove('acik');
-}
-
-/* ═══ SÖZLEŞME KURU (SK1) ═══
-   TRY işlemlerde anlamsız olduğu için gizlenir. */
-function kurAlaniGoster() {
-  const dov = (document.getElementById('hDoviz') || {}).value;
-  const alan = document.getElementById('hKurAlan');
-  if (!alan) return;
-  alan.style.display = (dov && dov !== 'TRY') ? '' : 'none';
-  if (dov === 'TRY') {
-    const k = document.getElementById('hSozlesmeKur');
-    if (k) { k.checked = false; sozlesmeKurDegisti(); }
-  } else {
-    tcmbNotGoster(dov);
-  }
-}
-
-/* Kullanıcı hangi kurun kullanılacağını ÖNCEDEN görsün. */
-async function tcmbNotGoster(doviz) {
-  const not = document.getElementById('hTcmbNot');
-  if (!not) return;
-  const soz = document.getElementById('hSozlesmeKur');
-  if (soz && soz.checked) { not.textContent = ''; return; }
-  try {
-    const d = await api(`/api/doviz_kur?doviz=${encodeURIComponent(doviz)}`);
-    const k = d && (d.alis || d.efektif || d.satis);
-    not.textContent = k
-      ? `İşaretlemezseniz TCMB döviz alış kuru kullanılır: ${Number(k).toLocaleString('tr-TR',{minimumFractionDigits:4})}`
-      : '';
-  } catch (e) { not.textContent = ''; }
-}
-
-function sozlesmeKurDegisti() {
-  const acik = document.getElementById('hSozlesmeKur').checked;
-  document.getElementById('hKurDetay').style.display = acik ? '' : 'none';
-  const not = document.getElementById('hTcmbNot');
-  if (acik) { if (not) not.textContent = ''; }
-  else {
-    document.getElementById('hKur').value = '';
-    document.getElementById('hKurGerekce').value = '';
-    tcmbNotGoster((document.getElementById('hDoviz') || {}).value);
-  }
 }
 
 /* Kur esası yalnızca dövizli ekstrede anlamlı — TRY'de gizlenir. */
@@ -1209,22 +1137,6 @@ async function hareketKaydet() {
 
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';
 
-  /* SK1: sözleşme kuru işaretliyse kur ve gerekçe ZORUNLU */
-  const _sozKur = document.getElementById('hSozlesmeKur');
-  let _kurDeger = null, _kurGerekce = '';
-  if (_sozKur && _sozKur.checked) {
-    _kurDeger = parseFloat(document.getElementById('hKur').value);
-    _kurGerekce = (document.getElementById('hKurGerekce').value || '').trim();
-    if (!_kurDeger || _kurDeger <= 0) {
-      bildir('Sözleşme kuru işaretli — kur değerini girin', true);
-      btn.disabled = false; btn.textContent = 'Kaydet'; return;
-    }
-    if (_kurGerekce.length < 3) {
-      bildir('Sözleşme kuru için GEREKÇE zorunlu (örn. "Sözleşme madde 4")', true);
-      btn.disabled = false; btn.textContent = 'Kaydet'; return;
-    }
-  }
-
   const govde = {
     cari_id: HAR_CARI,
     islem_tip: tip,
@@ -1233,10 +1145,6 @@ async function hareketKaydet() {
     evrak_no: document.getElementById('hEvrak').value,
     aciklama: document.getElementById('hAciklama').value
   };
-  if (_kurDeger) {              // SK1
-    govde.kur_uygulanan = _kurDeger;
-    govde.kur_gerekce = _kurGerekce;
-  }
   if (document.getElementById('hSiparisSec').value &&
       (tip !== 'Bakiye Transfer' || document.getElementById('hTransferYon').value === 'cari'))
     govde.siparis_id = document.getElementById('hSiparisSec').value;

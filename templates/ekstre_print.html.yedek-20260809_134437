@@ -164,21 +164,7 @@
       <td>{{ h.hareket_tarihi.strftime('%d.%m.%Y') if h.hareket_tarihi else '—' }}</td>
       <td style="font-weight:600;">{{ _deger_cevir('islem', h.islem_tip, dil) }}</td>
       <td>{{ h.evrak_no or '-' }}</td>
-      <td>{{ _aciklama_cevir(h.aciklama, dil) or '-' }} {% if h.siparis_id %}<br><span style="font-size:10px; color:#555;">({{ 'Sip' if dil=='TR' else 'Order' }}: {{ h.siparis_id }})</span>{% endif %}
-      {# SK2 — SÖZLEŞME KURU NOTU
-         GİB özelgesi: sözleşmede belirlenen kur kullanıldıysa belgede
-         belirtilmeli. Mutabakatta karşı taraf, TCMB dışı bir kurun
-         neden kullanıldığını görebilmeli.
-
-         DİKKAT: hareketin KENDİ kur_uygulanan değeri okunur, güncel
-         TCMB kuru DEĞİL. Aksi halde belge kendi içinde çelişirdi
-         (bkz. E2 — bakiye sütunu ile toplam farklı kur kullanıyordu). #}
-      {% if h.kur_kaynak == 'MANUEL' and h.kur_uygulanan %}
-      <br><span style="font-size:9px;color:#8a6d1f;">
-        ⚑ 1 {{ h.doviz }} = {{ '%.4f'|format(h.kur_uygulanan) }} TL
-        ({{ 'sözleşme kuru' if dil == 'TR' else 'contractual rate' }}{% if h.kur_gerekce %} — {{ h.kur_gerekce }}{% endif %})
-      </span>
-      {% endif %}</td>
+      <td>{{ _aciklama_cevir(h.aciklama, dil) or '-' }} {% if h.siparis_id %}<br><span style="font-size:10px; color:#555;">({{ 'Sip' if dil=='TR' else 'Order' }}: {{ h.siparis_id }})</span>{% endif %}</td>
       <td class="num text-danger">{{ "%.2f"|format(h.borc) if h.borc else '-' }}</td>
       <td class="num text-success">{{ "%.2f"|format(h.alacak) if h.alacak else '-' }}</td>
       <td style="text-align:center; font-weight:600;">{{ h.doviz }}</td>

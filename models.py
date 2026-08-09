@@ -369,6 +369,11 @@ class CariHareket(db.Model):
     vade_tarihi     = db.Column(db.Date)
     kur_uygulanan   = db.Column(Kur, default=0)
     kur_kaynak      = db.Column(db.String(10), default='TCMB')
+    # SK1: kur ELLE girildiyse NEDEN girildigi. GIB ozelgesi sozlesme
+    # kurunun belgede belirtilmesini istiyor; ayrica alti ay sonra
+    # "bu fatura neden 52,00'den hesaplanmis?" sorusunun cevabi olmali.
+    # kur_kaynak='MANUEL' ise ZORUNLU (sunucuda dogrulanir).
+    kur_gerekce     = db.Column(db.String(200))
     borc_try        = db.Column(Para, default=0)
     alacak_try      = db.Column(Para, default=0)
     kapatildi       = db.Column(db.Boolean, default=False)
