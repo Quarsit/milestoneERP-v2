@@ -879,7 +879,9 @@ async function secilenleriSil() {
         .map(x => `• ${x.stok_id}: ${x.sebep}`).join('\n'));
     }
     SECILENLER.clear();
-    await yukle();
+    // H5: `yukle` TANIMSIZDI — silme oluyordu ama ekran
+    // yenilenmiyordu. Doğru çağrı listeyiCiz + kpiYukle.
+    await Promise.all([listeyiCiz(), kpiYukle()]);
     secDurumGuncelle();
   } catch (e) { /* api() zaten bildiriyor */ }
   finally { if (btn) { btn.disabled = false; btn.textContent = 'Seçilenleri Sil'; } }

@@ -234,6 +234,51 @@ else:
     print("   ✓ temiz — her olay işleyicisi tanımlı bir fonksiyon çağırıyor")
 
 print()
+
+
+# ══════════════════════════════════════════════════════════════════
+#  J3 · AWAIT İLE ÇAĞRILAN TANIMSIZ FONKSİYON   [SESSİZ YARIM İŞ]
+# ══════════════════════════════════════════════════════════════════
+# J2 yalnizca onclick ozniteliklerine bakiyor. Ama hata JS GOVDESINDE
+# de olabilir:
+#     await yukle();      ← tanimsiz
+# Istek gitmis, kayit silinmis; ama ekran yenilenmedigi icin islem
+# YARIM GORUNUR. Kullanici ne oldugunu anlamaz (H5).
+#
+# `await` secildi cunku KESIN bir fonksiyon cagrisidir — yorum, dize
+# ya da degisken adi olma ihtimali yok. Yanlis alarm uretmez.
+print()
+print("─" * 70)
+print(" J3 · AWAIT İLE ÇAĞRILAN TANIMSIZ FONKSİYON   [SESSİZ YARIM İŞ]")
+print("─" * 70)
+_j3 = 0
+_ATLA3 = {'api', 'fetch', 'Promise', 'JSON', 'navigator', 'caches', 'import'}
+for p3 in sorted(SABLON.glob('*.html')):
+    ham3 = p3.read_text(encoding='utf-8', errors='replace')
+    js3 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham3, re.S))
+    if not js3.strip():
+        continue
+    js3 = jinja_temizle(js3)
+    js3 = re.sub(r'/\*.*?\*/', ' ', js3, flags=re.S)
+    js3 = re.sub(r'(?m)//.*$', ' ', js3)
+    tan3 = set(re.findall(r'(?:async\s+)?function\s+([\w$]+)', js3))
+    tan3 |= set(re.findall(r'(?:const|let|var)\s+([\w$]+)\s*=', js3))
+    tan3 |= set(re.findall(r'window\.([\w$]+)\s*=', js3))
+    tan3 |= BASE_TANIMLI
+    eksik3 = sorted({a for a in re.findall(r'await\s+([\w$]+)\s*\(', js3)
+                     if a not in tan3 and a not in _ATLA3})
+    if eksik3:
+        _j3 += len(eksik3)
+        print(f"   ✗ {p3.name}: {', '.join(eksik3)}")
+if _j3:
+    print()
+    print(f"   → {_j3} çağrı TANIMSIZ fonksiyona gidiyor.")
+    print("   İstek gider, iş yapılır — ama ekran güncellenmez.")
+    bulgu += _j3
+else:
+    print("   ✓ temiz — await edilen her fonksiyon tanımlı")
+
+print()
 print("═" * 70)
 if bulgu:
     print(f" ✗ {bulgu} şablonda JavaScript hatası ({betikli} şablon tarandı)")
