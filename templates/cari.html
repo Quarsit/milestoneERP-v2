@@ -313,7 +313,16 @@
         <div class="form-alan"><label>Döviz</label>
           <select id="hDoviz" onchange="kurAlaniGoster()"><option>USD</option><option>EUR</option><option>TRY</option></select>
         </div>
-        <div class="form-alan"><label>Vade Tarihi</label><input id="hVade" type="date"></div>
+        <!-- BT1 — BELGE TARİHİ
+             Faturanın KESİLDİĞİ gün. Kur bu tarihten alınır (VUK/GİB:
+             dövizli işlemin TL karşılığı fatura tarihindeki TCMB döviz
+             alış kuru ile hesaplanır). Boş bırakılırsa bugün. -->
+        <div class="form-alan"><label>Belge Tarihi
+          <span style="font-weight:400;color:var(--soluk)">· kur bu tarihten</span></label>
+          <input id="hBelgeTarihi" type="date" onchange="belgeTarihiDegisti()"></div>
+        <div class="form-alan"><label>Vade Tarihi
+          <span style="font-weight:400;color:var(--soluk)">· ödeme/tahsilat</span></label>
+          <input id="hVade" type="date"></div>
         <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
       </div>
       <div class="form-alan" id="hKasaAlan" style="margin-bottom:12px"><label>Kasa / Banka Hesabı</label>
@@ -631,6 +640,23 @@ function ekstreKapat() {
   document.getElementById('ekstreModal').classList.remove('acik');
 }
 
+/* BT1 — Belge tarihi değişince o günün kurunu göster.
+   Kullanıcı hangi kurun uygulanacağını KAYDETMEDEN ÖNCE görsün. */
+function belgeTarihiDegisti() {
+  const dov = (document.getElementById('hDoviz') || {}).value;
+  if (dov && dov !== 'TRY') tcmbNotGoster(dov);
+}
+
+/* Form açılırken belge tarihi BUGÜN olarak gelir. Geçmiş tarihli
+   belge girenler değiştirir; günlük işlemde ek yük olmaz. */
+function belgeTarihiVarsayilan() {
+  const el = document.getElementById('hBelgeTarihi');
+  if (!el) return;
+  const g = new Date();
+  el.value = g.getFullYear() + '-' + String(g.getMonth() + 1).padStart(2, '0')
+           + '-' + String(g.getDate()).padStart(2, '0');
+}
+
 /* ═══ SÖZLEŞME KURU (SK1) ═══
    TRY işlemlerde anlamsız olduğu için gizlenir. */
 function kurAlaniGoster() {
@@ -653,11 +679,18 @@ async function tcmbNotGoster(doviz) {
   const soz = document.getElementById('hSozlesmeKur');
   if (soz && soz.checked) { not.textContent = ''; return; }
   try {
-    const d = await api(`/api/doviz_kur?doviz=${encodeURIComponent(doviz)}`);
+    /* BT1: BELGE TARİHİNİN kuru sorulur, bugünün değil.
+       Geçmiş tarihli fatura girildiğinde kullanıcı o günün kurunu
+       görmeli — kaydedildikten sonra sürpriz olmasın. */
+    const _bt = (document.getElementById('hBelgeTarihi') || {}).value;
+    const d = await api(`/api/doviz_kur?doviz=${encodeURIComponent(doviz)}`
+                        + (_bt ? `&tarih=${encodeURIComponent(_bt)}` : ''));
     const k = d && (d.alis || d.efektif || d.satis);
+    const _gun = (d && d.tarih && _bt && d.tarih !== _bt)
+      ? ` (${_bt} için kur yok — ${d.tarih} kuru)` : '';
     not.textContent = k
-      ? `İşaretlemezseniz TCMB döviz alış kuru kullanılır: ${Number(k).toLocaleString('tr-TR',{minimumFractionDigits:4})}`
-      : '';
+      ? `İşaretlemezseniz TCMB döviz alış kuru kullanılır: ${Number(k).toLocaleString('tr-TR',{minimumFractionDigits:4})}${_gun}`
+      : (_bt ? `${_bt} için arşivde kur yok` : '');
   } catch (e) { not.textContent = ''; }
 }
 
@@ -1027,6 +1060,7 @@ async function hareketAc(cariId, unvan) {
   document.getElementById('hEvrak').value = '';
   document.getElementById('hAciklama').value = '';
   document.getElementById('hVade').valueAsDate = new Date();
+  belgeTarihiVarsayilan();   // BT1
   // KDV kontrolünü varsayılana döndür (önceki faturanın oranı taşınmasın)
   document.getElementById('hKdvOranSec').value = '20';
   document.getElementById('hKdvOran').value = '20';
@@ -1229,6 +1263,8 @@ async function hareketKaydet() {
     cari_id: HAR_CARI,
     islem_tip: tip,
     doviz: document.getElementById('hDoviz').value,
+    // BT1: belge tarihi — sunucu bu tarihin kurunu kullanır
+    hareket_tarihi: document.getElementById('hBelgeTarihi').value || null,
     vade_tarihi: document.getElementById('hVade').value || null,
     evrak_no: document.getElementById('hEvrak').value,
     aciklama: document.getElementById('hAciklama').value

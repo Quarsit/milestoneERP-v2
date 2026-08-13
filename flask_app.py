@@ -10147,15 +10147,25 @@ def create_app():
             try:
                 cdoviz = cek.doviz or 'TRY'
                 # TRY karşılığı
+                # YAMA CK1: kur KESIDE TARIHINDEN alinir, bugunden degil.
+                # Dovizli islemin TL karsiligi BELGE TARIHINDEKI TCMB doviz
+                # alis kuru ile bulunur (VUK/GIB). 01.08 keside tarihli bir
+                # cek 07.08'de girilirse 01.08 kuru gecerli.
+                # Vade tarihi KULLANILMAZ — ileri tarihli cekte henuz
+                # olusmamis bir kur istemek olurdu.
+                #
+                # try'dan ONCE tanimlanir: except'e dusuldugunde de
+                # asagidaki CariHareket() cagrilari bu degiskeni kullaniyor.
+                _cek_tarihi = cek.keside_tarihi or date.today()
                 try:
-                    kur = _kur_getir(cdoviz, date.today()) if cdoviz != 'TRY' else 1.0
+                    kur = _kur_getir(cdoviz, _cek_tarihi) if cdoviz != 'TRY' else 1.0
                 except Exception:
                     kur = 1.0
                 try_karsilik = q3(tutar * (kur or 1.0))
                 if yon == 'alinan':
                     # Müşteriden çek aldık → müşterinin borcu düşer → ALACAK (bizim defterimizde)
                     ch = CariHareket(
-                        id=_yeni_id('HR'), hareket_tarihi=date.today(),
+                        id=_yeni_id('HR'), hareket_tarihi=_cek_tarihi,   # CK1
                         cari_id=cari_id, cari_unvan=cari_unvan,
                         islem_tip='Çek Tahsilatı',
                         evrak_no=cek.cek_no or cek.id,
@@ -10171,7 +10181,7 @@ def create_app():
                 else:
                     # Tedarikçiye çek verdik → borcumuz düşer → BORC (bizim defterimizde)
                     ch = CariHareket(
-                        id=_yeni_id('HR'), hareket_tarihi=date.today(),
+                        id=_yeni_id('HR'), hareket_tarihi=_cek_tarihi,   # CK1
                         cari_id=cari_id, cari_unvan=cari_unvan,
                         islem_tip='Çek Ödemesi',
                         evrak_no=cek.cek_no or cek.id,

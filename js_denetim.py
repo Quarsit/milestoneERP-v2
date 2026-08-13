@@ -163,6 +163,77 @@ for p in dosyalar:
             bulgu += 1
             print(f" ✗ {p.name}: {', '.join(hatalar)}")
 
+
+
+# ══════════════════════════════════════════════════════════════════
+#  J2 · ONCLICK'TE TANIMSIZ FONKSİYON   [SESSİZ ÖLÜ DÜĞME]
+# ══════════════════════════════════════════════════════════════════
+# node --check yalnızca SÖZDİZİMİ denetler. `ciz()` diye olmayan bir
+# fonksiyonu çağırmak SÖZDİZİMSEL OLARAK GEÇERLİDİR — denetim temiz
+# der, ama tarayıcıda "ciz is not defined" ile çöker ve o işleyicinin
+# GERİ KALANI hiç çalışmaz.
+#
+# H4'te tam bu yaşandı: stok süzgeçleri, seçim kutuları ve "Seçimi
+# Bırak" üçü birden sessizce bozuldu; dört denetim de temiz geçmişti.
+#
+# Bu kontrol DAR tutuluyor: yalnızca onclick/onchange/oninput
+# özniteliklerindeki doğrudan çağrılara bakar. Serbest JS gövdesini
+# taramak yorum ve dize gürültüsü yüzünden yanlış alarm üretiyor.
+ONCLICK_DESEN = re.compile(
+    r'on(?:click|change|input|submit)\s*=\s*"([a-zA-Z_$][\w$]*)\s*\(')
+
+def olay_isleyici_kontrol(ham_html, js):
+    """onclick="fn(...)" içindeki fn tanımlı mı?"""
+    tanimli = set(re.findall(r'(?:async\s+)?function\s+([\w$]+)', js))
+    tanimli |= set(re.findall(r'(?:const|let|var)\s+([\w$]+)\s*=', js))
+    tanimli |= set(re.findall(r'window\.([\w$]+)\s*=', js))
+    # JS anahtar kelimeleri ve tarayici genelleri fonksiyon degildir
+    ATLA = {'if', 'for', 'while', 'switch', 'return', 'typeof', 'new',
+            'await', 'else', 'do', 'try', 'catch', 'delete', 'void',
+            'alert', 'confirm', 'prompt', 'parseInt', 'parseFloat',
+            'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
+            'setTimeout', 'clearTimeout', 'fetch', 'event'}
+    eksik = []
+    for ad in sorted(set(ONCLICK_DESEN.findall(ham_html))):
+        if ad in ATLA or ad in tanimli or ad in BASE_TANIMLI:
+            continue
+        eksik.append(ad)
+    return eksik
+
+
+# base.html tüm sayfalarda yüklendiği için oradaki tanımlar geçerli
+try:
+    _b = (SABLON / 'base.html').read_text(encoding='utf-8', errors='replace')
+    _bjs = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', _b, re.S))
+    BASE_TANIMLI = set(re.findall(r'(?:async\s+)?function\s+([\w$]+)', _bjs))
+    BASE_TANIMLI |= set(re.findall(r'(?:const|let|var)\s+([\w$]+)\s*=', _bjs))
+    BASE_TANIMLI |= set(re.findall(r'window\.([\w$]+)\s*=', _bjs))
+except Exception:
+    BASE_TANIMLI = set()
+
+print()
+print("─" * 70)
+print(" J2 · ONCLICK'TE TANIMSIZ FONKSİYON   [SESSİZ ÖLÜ DÜĞME]")
+print("─" * 70)
+_j2 = 0
+for p2 in sorted(SABLON.glob('*.html')):
+    ham2 = p2.read_text(encoding='utf-8', errors='replace')
+    js2 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham2, re.S))
+    if not js2.strip():
+        continue
+    eksik2 = olay_isleyici_kontrol(ham2, jinja_temizle(js2))
+    if eksik2:
+        _j2 += len(eksik2)
+        print(f"   ✗ {p2.name}: {', '.join(eksik2)}")
+if _j2:
+    print()
+    print(f"   → {_j2} düğme TANIMSIZ fonksiyon çağırıyor.")
+    print("   Tıklandığında sessizce hiçbir şey olmaz.")
+    bulgu += _j2
+else:
+    print("   ✓ temiz — her olay işleyicisi tanımlı bir fonksiyon çağırıyor")
+
+print()
 print("═" * 70)
 if bulgu:
     print(f" ✗ {bulgu} şablonda JavaScript hatası ({betikli} şablon tarandı)")

@@ -365,6 +365,14 @@
               <option>USD</option><option>EUR</option><option>TRY</option>
             </select>
           </div>
+          <!-- X2 — ORTAK ALIŞ FİYATI
+               Çeki listelerinde fiyat genelde olmaz; ayrı sözleşmeden
+               gelir. Excel'de fiyat sütunu yoksa ürünler SIFIR fiyatla
+               giriyordu ve stok değeri 0 çıkıyordu. -->
+          <div class="form-alan"><label>Alış Fiyatı (ortak)
+            <span style="font-weight:400;color:var(--soluk)">· Excel'de yoksa</span></label>
+            <input id="tFiyat" type="number" step="0.0001" placeholder="örn. 47,50"
+                   oninput="topluOnizle()"></div>
           <div class="form-alan"><label>Fiyat Birimi</label>
             <select id="tFiyatBirim" onchange="topluOnizle()">
               <option value="m2">m²</option>
@@ -690,12 +698,12 @@ function suzgecDegisti() {
   F_URETICI = (document.getElementById('fUretici') || {}).value || '';
   F_CINS    = (document.getElementById('fCins')    || {}).value || '';
   F_OZELLIK = (document.getElementById('fOzellik') || {}).value || '';
-  ciz();
+  listeyiCiz();
 }
 
 function suzgecleriSifirla() {
   F_URETICI = F_CINS = F_OZELLIK = '';
-  ciz();
+  listeyiCiz();
 }
 
 function suzgecBilgiGuncelle(toplam, gosterilen) {
@@ -822,7 +830,7 @@ function secKipiDegistir() {
   if (bas) bas.style.display = SECIM_KIPI ? '' : 'none';
   const btn = document.getElementById('secKipBtn');
   if (btn) btn.textContent = SECIM_KIPI ? 'Seçimi Bırak' : 'Seç';
-  ciz();
+  listeyiCiz();
   secDurumGuncelle();
 }
 
@@ -1400,6 +1408,13 @@ function topluEslestirmeCiz() {
 }
 
 /* Eşleştirmeyi uygula → TP_SATIRLAR üret, önizleme çiz */
+/* X2 — Ortak alış fiyatı. Excel'de o satırın fiyatı yoksa kullanılır. */
+function _ortakFiyat() {
+  const el = document.getElementById('tFiyat');
+  const v = el ? parseFloat(el.value) : 0;
+  return (v > 0) ? v : 0;
+}
+
 function topluOnizle() {
   if (!TP_AKTIF) return;
   const tip = document.getElementById('tTip').value;
@@ -1421,6 +1436,19 @@ function topluOnizle() {
 
   TP_SATIRLAR = [];
   const hatalar = [];
+  /* X1 — BİRLEŞTİRİLMİŞ HÜCRE (aşağı doğru doldurma)
+     Çeki listelerinde blok no ve malzeme adı birleştirilmiş hücrede
+     yazılır: tek blok, birçok satır. Excel bu değeri YALNIZCA ilk
+     satıra koyar, kalanlar boş gelir ve "cins boş" diye atlanırdı.
+     6 satırlık listeden 1 kayıt çıkıyordu.
+
+     Yalnızca birleştirilmiş hücrede kullanılan alanlar doldurulur.
+     ÖLÇÜ ve ADET doldurulmaz — onlar her satırda farklıdır, boş
+     olmaları gerçek bir hatadır. */
+  const DOLDURULACAK = ['cins', 'blok_no', 'ozellik', 'kalinlik', 'kasa_no'];
+  const oncekiDeger = {};
+  let dolduruldu = 0;
+
   (TP_AKTIF.satirlar || []).forEach((satir, idx) => {
     const al = kod => (kod in harita) ? satir[harita[kod]] : '';
     const kayit = { _satir: idx + 2 };   // +2: başlık satırı + 1 tabanlı
@@ -1429,6 +1457,19 @@ function topluOnizle() {
            'kasa_adedi', 'kasa_ici_adet'].includes(kod)) kayit[kod] = sayi(al(kod));
       else kayit[kod] = String(al(kod) ?? '').trim();
     });
+
+    /* Boşsa üstteki satırın değerini al; doluysa hatırla. */
+    let buSatirDolduruldu = false;
+    DOLDURULACAK.forEach(kod => {
+      const bos = (kod === 'kalinlik') ? !(kayit[kod] > 0) : !kayit[kod];
+      if (bos && oncekiDeger[kod] !== undefined && oncekiDeger[kod] !== '') {
+        kayit[kod] = oncekiDeger[kod];
+        buSatirDolduruldu = true;
+      } else if (!bos) {
+        oncekiDeger[kod] = kayit[kod];
+      }
+    });
+    if (buSatirDolduruldu) dolduruldu++;
 
     if (!kayit.cins) { hatalar.push(`Satır ${kayit._satir}: cins boş`); return; }
     if (!(kayit.boy > 0) || !(kayit.yukseklik > 0)) {
@@ -1482,6 +1523,19 @@ function topluOnizle() {
       <div><b>${toplamMatrah.toLocaleString('tr-TR', {maximumFractionDigits: 2})} ${dov}</b><small>matrah (KDV hariç)</small></div>
       <div><b>${kdvTutar.toLocaleString('tr-TR', {maximumFractionDigits: 2})} ${dov}</b><small>KDV %${oran}</small></div>
     </div>
+    ${(() => {
+      /* X2: kaç satır FİYATSIZ kalacak? Eskiden sessizce 0 giriyordu;
+         kullanıcı stok listesine bakana kadar fark etmiyordu. */
+      const ort = _ortakFiyat();
+      const fiyatsiz = TP_SATIRLAR.filter(k => !(k.fiyat > 0) && !ort).length;
+      return fiyatsiz ? `<div class="tp-not tp-uyari">
+        ⚠ ${fiyatsiz} satır FİYATSIZ girecek (stok değeri 0 görünür).<br>
+        Excel'de fiyat sütunu yoksa yukarıdaki <strong>Alış Fiyatı (ortak)</strong>
+        alanına birim fiyatı yazın.</div>` : '';
+    })()}
+    ${dolduruldu ? `<div class="tp-not" style="background:var(--notr-bg);color:var(--soluk)">
+      ${dolduruldu} satırda birleştirilmiş hücre tamamlandı
+      <span style="font-size:.9em">(blok no / cins / özellik üstteki satırdan alındı)</span></div>` : ''}
     ${hatalar.length ? `<div class="tp-not tp-uyari">${hatalar.length} satır atlanacak:<br>${
       kacar(hatalar.slice(0, 6).join(' · '))}${hatalar.length > 6 ? ' …' : ''}</div>` : ''}
     ${TP_SATIRLAR.length ? `<div class="tablo-kutu" style="margin-top:10px">
@@ -1589,7 +1643,9 @@ async function topluKaydet() {
       kalinlik: k.kalinlik || 0,
       ozellik: k.ozellik || '',
       tonaj: k.tonaj || 0,
-      fiyat: k.fiyat || 0,
+      /* X2: satır fiyatı ÖNCELİKLİ. Karma listelerde bazı satırların
+         kendi fiyatı olabilir; ortak değer onları EZMEMELİ. */
+      fiyat: k.fiyat || _ortakFiyat() || 0,
       adet: adet,
       baslangic_no: basNo,
       kasa_adedi: k.kasa_adedi || 1,
