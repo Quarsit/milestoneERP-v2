@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from models import db, Kullanici, BlokStok, PlakaStok, EbatliStok, StokCikis, Proforma, ProformaKalem, AuditLog
 from models import Siparis, SiparisKalem, Rezervasyon, Cari, CariHareket, Maliyet, Sevkiyat, DovizKur, Veriler, SatisKaydi, Fatura, Banka, Kasa, KasaHareket, Kesim, KesimDetay
 from models import Cek, CekHareket
+from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
 from models import Konteyner
 import tcmb_kur   # TK1: ortak TCMB kur cekici
@@ -8850,6 +8851,164 @@ def create_app():
 
         return jsonify(gruplar)
 
+    # ══════════════════════════════════════════════════════════
+    #  NAKİT AKIŞI — SABİT GİDERLER  (NA1)
+    # ══════════════════════════════════════════════════════════
+    GIDER_KATEGORI = ('Personel', 'Kira', 'Enerji', 'Vergi/SGK',
+                      'Nakliye', 'Finansman', 'Diğer')
+    GIDER_PERIYOT = ('aylik', 'haftalik', 'yillik')
+
+    def _sabit_gider_dict(g):
+        return {
+            'id': g.id, 'ad': g.ad, 'kategori': g.kategori,
+            'tutar': g.tutar, 'doviz': g.doviz,
+            'periyot': g.periyot, 'ayin_gunu': g.ayin_gunu,
+            'haftanin_gunu': g.haftanin_gunu, 'ay': g.ay,
+            'baslangic': g.baslangic.isoformat() if g.baslangic else None,
+            'bitis': g.bitis.isoformat() if g.bitis else None,
+            'aktif': g.aktif, 'aciklama': g.aciklama,
+        }
+
+    @app.route('/api/sabit_gider', methods=['GET'])
+    def api_sabit_gider_liste():
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        q = SabitGider.query
+        if request.args.get('aktif') == '1':
+            q = q.filter_by(aktif=True)
+        gl = q.order_by(SabitGider.kategori, SabitGider.ad).all()
+        return jsonify({'ok': True, 'data': [_sabit_gider_dict(g) for g in gl],
+                        'kategoriler': list(GIDER_KATEGORI)})
+
+    @app.route('/api/sabit_gider', methods=['POST'])
+    def api_sabit_gider_ekle():
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        d = request.json or {}
+        ad = (d.get('ad') or '').strip()
+        if not ad:
+            return jsonify({'ok': False, 'mesaj': 'Gider adi zorunlu'}), 400
+        try:
+            tutar = float(d.get('tutar') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Tutar sayisal olmali'}), 400
+        if tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Tutar sifirdan buyuk olmali'}), 400
+
+        periyot = (d.get('periyot') or 'aylik').lower()
+        if periyot not in GIDER_PERIYOT:
+            return jsonify({'ok': False, 'mesaj':
+                            f'Periyot: {", ".join(GIDER_PERIYOT)}'}), 400
+
+        # Gun dogrulama — periyoda gore FARKLI alan zorunlu
+        _gun = d.get('ayin_gunu')
+        _hg = d.get('haftanin_gunu')
+        if periyot in ('aylik', 'yillik'):
+            try:
+                _gun = int(_gun or 1)
+            except (TypeError, ValueError):
+                return jsonify({'ok': False, 'mesaj': 'Ayin gunu sayisal olmali'}), 400
+            if not (1 <= _gun <= 31):
+                return jsonify({'ok': False, 'mesaj': 'Ayin gunu 1-31 arasinda olmali'}), 400
+        elif periyot == 'haftalik':
+            try:
+                _hg = int(_hg if _hg is not None else 0)
+            except (TypeError, ValueError):
+                return jsonify({'ok': False, 'mesaj': 'Haftanin gunu sayisal olmali'}), 400
+            if not (0 <= _hg <= 6):
+                return jsonify({'ok': False, 'mesaj':
+                                'Haftanin gunu 0-6 arasinda olmali (0=Pazartesi)'}), 400
+
+        g = SabitGider(
+            id=_yeni_id('SG'), ad=ad,
+            kategori=(d.get('kategori') or 'Diğer').strip(),
+            tutar=q3(tutar), doviz=(d.get('doviz') or 'TRY').upper(),
+            periyot=periyot,
+            ayin_gunu=_gun if periyot in ('aylik', 'yillik') else None,
+            haftanin_gunu=_hg if periyot == 'haftalik' else None,
+            ay=int(d['ay']) if (periyot == 'yillik' and d.get('ay')) else None,
+            baslangic=_parse_date(d.get('baslangic')) or date.today(),
+            bitis=_parse_date(d.get('bitis')),
+            aciklama=(d.get('aciklama') or '').strip() or None,
+            aktif=bool(d.get('aktif', True)))
+        db.session.add(g)
+        _log_audit('EKLE', 'sabit_gider', g.id, yeni={'ad': ad, 'tutar': tutar})
+        ok, hata = _safe_commit(f'Sabit gider: {ad}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'id': g.id, 'gider': _sabit_gider_dict(g),
+                        'mesaj': f'{ad} eklendi'})
+
+    @app.route('/api/sabit_gider/<gider_id>', methods=['PUT'])
+    def api_sabit_gider_guncelle(gider_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        g = SabitGider.query.get(gider_id)
+        if not g:
+            return jsonify({'ok': False, 'mesaj': 'Gider bulunamadi'}), 404
+        d = request.json or {}
+        for alan in ('ad', 'kategori', 'aciklama'):
+            if alan in d:
+                setattr(g, alan, (d.get(alan) or '').strip() or None)
+        if 'tutar' in d:
+            try:
+                _t = float(d['tutar'])
+            except (TypeError, ValueError):
+                return jsonify({'ok': False, 'mesaj': 'Tutar sayisal olmali'}), 400
+            if _t <= 0:
+                return jsonify({'ok': False, 'mesaj': 'Tutar sifirdan buyuk olmali'}), 400
+            g.tutar = q3(_t)
+        if 'doviz' in d:
+            g.doviz = (d['doviz'] or 'TRY').upper()
+        if 'periyot' in d and d['periyot'] in GIDER_PERIYOT:
+            g.periyot = d['periyot']
+        for alan in ('ayin_gunu', 'haftanin_gunu', 'ay'):
+            if alan in d:
+                setattr(g, alan, int(d[alan]) if d[alan] not in (None, '') else None)
+        for alan in ('baslangic', 'bitis'):
+            if alan in d:
+                setattr(g, alan, _parse_date(d[alan]))
+        if 'aktif' in d:
+            g.aktif = bool(d['aktif'])
+        _log_audit('GUNCELLE', 'sabit_gider', g.id, yeni={'ad': g.ad, 'tutar': g.tutar})
+        ok, hata = _safe_commit(f'Sabit gider guncelleme: {gider_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'gider': _sabit_gider_dict(g),
+                        'mesaj': 'Guncellendi'})
+
+    @app.route('/api/sabit_gider/<gider_id>', methods=['DELETE'])
+    def api_sabit_gider_sil(gider_id):
+        """Sablonu siler. Uretilmis NakitPlan kalemleri KALIR.
+
+        Gecmis aylarin projeksiyonu bozulmasin diye: gider artik
+        yok ama gecen ay odendiyse o kayit durmali.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        g = SabitGider.query.get(gider_id)
+        if not g:
+            return jsonify({'ok': False, 'mesaj': 'Gider bulunamadi'}), 404
+        # Gerceklesmemis plan kalemleri temizlenir; gerceklesenler KALIR
+        silinen = NakitPlan.query.filter_by(
+            kaynak='sabit', kaynak_id=gider_id, gerceklesti=False).delete()
+        _ad = g.ad
+        db.session.delete(g)
+        _log_audit('SIL', 'sabit_gider', gider_id, eski={'ad': _ad})
+        ok, hata = _safe_commit(f'Sabit gider silme: {gider_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'silinen_plan': silinen,
+                        'mesaj': f'{_ad} silindi'
+                                 + (f' · {silinen} planlanan kalem kaldirildi'
+                                    if silinen else '')})
+
     @app.route('/api/maliyet', methods=['GET'])
     def api_maliyet_liste():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -8900,6 +9059,58 @@ def create_app():
                     'fatura_no': s.fatura_no,
                     'tarih': (s.alis_tarihi or s.giris_tarihi)}
 
+        def _maliyet_stok_tip(m):
+            """Maliyetin bagli oldugu stogun GERCEK tipi: BLOK/PLAKA/EBATLI.
+
+            `baglanti_tip` yeterli degil: sanal kayitlarda sabit 'stok'
+            yaziliyor, gerceklerde ise 'blok'/'plaka' gibi kucuk harf ya da
+            'sevkiyat'/'siparis' gibi stok disi degerler olabiliyor.
+            """
+            bt = (getattr(m, 'baglanti_tip', '') or '').lower()
+            if bt in ('blok', 'plaka', 'ebatli'):
+                return bt.upper()
+            if bt not in ('stok', ''):
+                return ''          # sevkiyat / siparis — stok tipi yok
+            # 'stok' ya da bos: kaydin kendisinden bul
+            for _M, _ad in ((BlokStok, 'BLOK'), (PlakaStok, 'PLAKA'),
+                            (EbatliStok, 'EBATLI')):
+                try:
+                    if db.session.get(_M, m.baglanti_id) is not None:
+                        return _ad
+                except Exception:
+                    continue
+            return ''
+
+        def _maliyet_cins(m):
+            """Bagli stogun cinsi. Stok disi baglantilarda bos."""
+            for _M in (BlokStok, PlakaStok, EbatliStok):
+                try:
+                    s = db.session.get(_M, m.baglanti_id)
+                    if s is not None:
+                        return (getattr(s, 'cins', '') or '').strip()
+                except Exception:
+                    continue
+            return ''
+
+        def _maliyet_cari(m):
+            """Maliyeti kesen cari. Once maliyetin kendi cari_id'si,
+            yoksa bagli stogun ureticisi."""
+            try:
+                if getattr(m, 'cari_id', None):
+                    c = db.session.get(Cari, m.cari_id)
+                    if c:
+                        return c.unvan or ''
+            except Exception:
+                pass
+            for _M in (BlokStok, PlakaStok, EbatliStok):
+                try:
+                    s = db.session.get(_M, m.baglanti_id)
+                    if s is not None:
+                        return (getattr(s, 'uretici', '') or '').strip()
+                except Exception:
+                    continue
+            return ''
+
         # Stok dışı bağlantılar için okunabilir no (sipariş/fatura zaten anlamlı ID taşır)
         def _okunabilir_no(m):
             if m.baglanti_tip and m.baglanti_tip.lower() == 'stok':
@@ -8921,6 +9132,13 @@ def create_app():
                 'maliyet_tip': m.maliyet_tip, 'baglanti_tip': m.baglanti_tip,
                 'baglanti_id': m.baglanti_id,
                 'baglanti_no': _okunabilir_no(m),
+                # YAMA M2 — SUZGEC VERISI
+                # Maliyet sayfasindaki Stok Tipi / Cins / Cari suzgecleri
+                # bu alanlardan besleniyor. Eskiden HIC DONMUYORLARDI;
+                # cins ve cari suzgecleri bos, stok tipi tek secenekliydi.
+                'stok_tip': _maliyet_stok_tip(m),
+                'cins': _maliyet_cins(m),
+                'cari_unvan': _maliyet_cari(m),
                 'tutar': m.tutar, 'doviz': m.doviz,
                 'usd_karsilik': m.usd_karsilik,
                 'fatura_no': m.fatura_no,
@@ -8950,6 +9168,10 @@ def create_app():
                     'maliyet_tarihi': (bilgi['tarih'] or date.today()).isoformat(),
                     'maliyet_tip': 'Alış Bedeli',
                     'baglanti_tip': 'stok', 'baglanti_id': stok_id,
+                    # M2: sanal kayitta GERCEK tip zaten bilgi sozlugunde
+                    'stok_tip': (bilgi.get('tip') or '').upper(),
+                    'cins': bilgi.get('cins') or '',
+                    'cari_unvan': bilgi.get('uretici') or '',
                     'baglanti_no': bilgi['no'],
                     'tutar': q3(bilgi['matrah']), 'doviz': bilgi['doviz'],
                     'usd_karsilik': q3(bilgi['matrah']) if bilgi['doviz'] == 'USD' else None,

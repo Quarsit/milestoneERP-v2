@@ -89,9 +89,38 @@
   <button class="cip" data-t="Gümrük">Gümrük</button>
   <button class="cip" data-t="Kesim">Kesim/Fason</button>
   <button class="cip" data-t="Komisyon">Komisyon</button>
+  <!-- M1: sistemde 'Devreden KDV' ve 'Iade KDV' kayitlari uretiliyor
+       (flask_app.py) ama sekmesi yoktu — yalnizca "Tumu"nde
+       gorunuyorlardi. KDV izleme yaparken tam bu kayitlara bakiliyor. -->
+  <button class="cip" data-t="KDV">KDV</button>
+  <button class="cip" data-t="Diğer">Diğer</button>
   <div class="suz"><input id="ara" placeholder="Fatura no, açıklama ara…" autocomplete="off"></div>
 </div>
 
+<!-- M1 — AÇILIR SÜZGEÇLER
+     Seçenekler SABİT DEĞİL: o anda listelenen kayıtlardan üretilir
+     ve yanlarında kaç kayıt olduğu yazar (stok sayfasındaki F1 ile
+     aynı yaklaşım). Olmayan seçeneği tıklayıp boş sonuç almazsınız. -->
+<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+  <select id="mStokTip" onchange="mSuzgecDegisti()" class="msuz"
+          title="Stok tipine göre süz"></select>
+  <select id="mCins" onchange="mSuzgecDegisti()" class="msuz"
+          title="Cinse göre süz"></select>
+  <select id="mCari" onchange="mSuzgecDegisti()" class="msuz"
+          title="Tedarikçiye göre süz"></select>
+  <button class="blok-btn" id="mSuzSifirla" onclick="mSuzgecleriSifirla()"
+          style="display:none;padding:4px 10px;font-size:.78rem">Süzgeçleri temizle</button>
+  <span id="mSuzBilgi" style="font-size:.78rem;color:var(--soluk)"></span>
+</div>
+
+<style>
+/* M1 — süzgeç açılır kutuları */
+.msuz{border:1px solid var(--cizgi-koyu);border-radius:7px;padding:5px 9px;
+  font-size:.82rem;background:var(--kagit);color:var(--murekkep);cursor:pointer;
+  max-width:200px}
+.msuz:focus{outline:2px solid var(--verde);outline-offset:1px}
+.msuz.dolu{border-color:var(--verde);background:var(--verde-acik);font-weight:600}
+</style>
 <div class="tablo-kutu">
   <table>
     <thead><tr><th>Tip</th><th>Bağlantı</th><th>Fatura No</th><th class="sag">Tutar</th><th class="sag">Tarih</th></tr></thead>
@@ -232,6 +261,9 @@
    Bağlanan kaydın birim maliyeti backend'de yeniden hesaplanır. */
 
 let TUM = [], TIP = '', ARA = '', HEDEFLER = [], SECILI_HEDEF = null, CARILER = [];
+/* M1 — açılır süzgeçler. Tür sekmesi ve metin aramasıyla AYNI
+   katmanda (istemci) çalışır; üçü birlikte uygulanır. */
+let M_STOKTIP = '', M_CINS = '', M_CARI = '';
 
 async function yukle() {
   try {
@@ -280,10 +312,87 @@ async function faturasizSay() {
   }
 }
 
+/* ═══ MALİYET SÜZGEÇLERİ (M1) ═══
+   Seçenekler o anda listelenen kayıtlardan üretilir; sabit liste
+   kullanılmaz. Yanlarında kaç kayıt olduğu yazar. */
+function mSecenekleriDoldur(kayitlar) {
+  const kur = (cikar, id, etiket, secili) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const sayac = {};
+    kayitlar.forEach(m => {
+      const v = cikar(m);
+      if (v) sayac[v] = (sayac[v] || 0) + 1;
+    });
+    const degerler = Object.keys(sayac).sort((a, b) => a.localeCompare(b, 'tr'));
+    /* Seçili değer artık listede yoksa yine de seçenek olarak kalsın —
+       aksi halde süzgeç sessizce sıfırlanır ve kullanıcı neden hepsini
+       gördüğünü anlamaz. */
+    if (secili && !degerler.includes(secili)) degerler.unshift(secili);
+    /* Kutu HER ZAMAN görünür. Ilk surumde "secenek yoksa gizle"
+       yapmistim; bos liste kafa karistirir diye dusunmustum ama
+       KAYBOLAN KUTU daha kotu: kullanici ozelligin var oldugunu bile
+       bilmiyor. Stok bosken hicbir suzgec gorunmuyordu, urun
+       eklenince yalnizca "Stok tipi" beliriyordu.
+       Seçenek yoksa kutu pasif görünür ve nedenini yazar. */
+    el.disabled = !degerler.length;
+    el.style.opacity = degerler.length ? '' : '.55';
+    el.innerHTML = (degerler.length
+        ? `<option value="">${etiket} (tümü)</option>`
+        : `<option value="">${etiket} — kayıt yok</option>`) +
+      degerler.map(v => `<option value="${kacar(v)}"${v === secili ? ' selected' : ''}>` +
+        `${kacar(v)}${sayac[v] ? ' (' + sayac[v] + ')' : ''}</option>`).join('');
+    el.value = secili || '';
+    el.classList.toggle('dolu', !!secili);
+  };
+  /* M2: `baglanti_tip` DEGIL `stok_tip`. Ilki sanal kayitlarda sabit
+     'stok' yaziyordu ve tek secenek "Stok (60)" cikiyordu. */
+  kur(m => m.stok_tip || '', 'mStokTip', 'Stok tipi', M_STOKTIP);
+  /* Cins doğrudan maliyet tablosunda YOK; bağlantı adından okunur.
+     "CEPPO K-77 #12" gibi bir metnin İLK kelimesi cinstir.
+
+     YALNIZCA STOK bağlantılarında anlamlı: sevkiyat/sipariş
+     kayıtlarının cinsi yoktur, onlarda bağlantı adı "SEVK-1" gibi
+     bir numaradır ve cins listesinde görünmemeli. */
+  /* M2: cins artik SUNUCUDAN geliyor — bağlantı adından tahmin
+     etmeye gerek yok. */
+  kur(m => m.cins || '', 'mCins', 'Cins', M_CINS);
+  kur(m => m.cari_unvan || m.cari_id || '', 'mCari', 'Cari', M_CARI);
+}
+
+function mSuzgecDegisti() {
+  M_STOKTIP = (document.getElementById('mStokTip') || {}).value || '';
+  M_CINS    = (document.getElementById('mCins')    || {}).value || '';
+  M_CARI    = (document.getElementById('mCari')    || {}).value || '';
+  ciz();
+}
+
+function mSuzgecleriSifirla() {
+  M_STOKTIP = M_CINS = M_CARI = '';
+  ciz();
+}
+
+function mSuzBilgiGuncelle(toplam, gosterilen) {
+  const btn = document.getElementById('mSuzSifirla');
+  const bilgi = document.getElementById('mSuzBilgi');
+  const varMi = !!(M_STOKTIP || M_CINS || M_CARI);
+  if (btn) btn.style.display = varMi ? '' : 'none';
+  if (bilgi) {
+    bilgi.textContent = varMi ? `${gosterilen} / ${toplam} kayıt` : '';
+    bilgi.style.color = 'var(--verde)';
+  }
+}
+
 function ciz() {
+  mSecenekleriDoldur(TUM);   // M1: seçenekleri tazele
   const s = ARA.toLocaleLowerCase('tr');
   let liste = TUM.filter(m =>
+    /* M1: KDV sekmesi 'Devreden KDV' ve 'Iade KDV' kayitlarinin
+       IKISINI de kapsar — ikisi de 'KDV' iceriyor. */
     (!TIP || (m.maliyet_tip || '').includes(TIP)) &&
+    (!M_STOKTIP || (m.stok_tip || '') === M_STOKTIP) &&
+    (!M_CINS    || (m.cins || '') === M_CINS) &&
+    (!M_CARI    || (m.cari_unvan || m.cari_id || '') === M_CARI) &&
     (!s || [m.fatura_no, m.aciklama, m.baglanti_no, m.baglanti_id, m.maliyet_tip].filter(Boolean)
             .join(' ').toLocaleLowerCase('tr').includes(s)));
   liste.sort((a, b) => (b.maliyet_tarihi || '').localeCompare(a.maliyet_tarihi || ''));
@@ -294,6 +403,7 @@ function ciz() {
     return '--cizgi-koyu';
   };
 
+  mSuzBilgiGuncelle(TUM.length, liste.length);   // M1
   const g = document.getElementById('govde');
   g.innerHTML = liste.length ? liste.map(m => `
     <tr style="border-left-color:var(${renkBul(m.maliyet_tip)})" onclick="detayAc('${kacar(m.id)}')">

@@ -945,6 +945,64 @@ class Konteyner(db.Model):
     olusturma     = db.Column(db.DateTime, default=datetime.now)
 
 
+# ── NAKİT AKIŞI (NA1) ─────────────────────────────────────────────────
+class SabitGider(db.Model):
+    """Tekrarlayan gider SABLONU — kira, maas, elektrik…
+
+    Projeksiyona otomatik yayilir. `tutar` TAHMINIDIR: elektrik her ay
+    degisir, kira yilda bir artar. Gerceklesince NakitPlan uzerinden
+    guncellenir, sablon oldugu gibi kalir.
+    """
+    __tablename__ = 'sabit_gider'
+    id          = db.Column(db.String(20), primary_key=True)
+    ad          = db.Column(db.String(100), nullable=False)
+    kategori    = db.Column(db.String(50))      # Personel/Kira/Enerji/Vergi/Diger
+    tutar       = db.Column(Para, nullable=False)
+    doviz       = db.Column(db.String(5), default='TRY')
+    # Periyot: aylik | haftalik | yillik
+    periyot     = db.Column(db.String(10), default='aylik')
+    ayin_gunu   = db.Column(db.Integer, default=1)    # aylik/yillik icin (1-31)
+    haftanin_gunu = db.Column(db.Integer)             # haftalik icin (0=Pzt)
+    ay          = db.Column(db.Integer)               # yillik icin (1-12)
+    baslangic   = db.Column(db.Date, default=date.today)
+    bitis       = db.Column(db.Date, nullable=True)   # bos = suresiz
+    aktif       = db.Column(db.Boolean, default=True)
+    aciklama    = db.Column(db.Text)
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+
+class NakitPlan(db.Model):
+    """Projeksiyondaki TEKIL kalem.
+
+    Uc kaynaktan dogar:
+      'sabit'  — SabitGider sablonundan uretilen
+      'elle'   — kullanicinin ekledigi (vadesiz harekete vade atama)
+      'cari'/'cek'/'fatura' — mevcut kayitlardan turetilen
+
+    ONEMLI: cari/cek/fatura kalemleri icin BU TABLOYA KAYIT ACILMAZ;
+    projeksiyon onlari anlik okur. Tablo yalnizca 'sabit' ve 'elle'
+    kalemleri tutar. Aksi halde ayni borc iki kez sayilirdi.
+
+    `gerceklesti` ELLE isaretlenir. Kasa hareketiyle otomatik
+    eslestirme denenmedi: yanlis eslestirme, olmayan bir tahsilati
+    "olmus" gostermekten daha kotu sonuc verir.
+    """
+    __tablename__ = 'nakit_plan'
+    id          = db.Column(db.String(20), primary_key=True)
+    tarih       = db.Column(db.Date, nullable=False, index=True)
+    yon         = db.Column(db.String(6), nullable=False)   # giris | cikis
+    tutar       = db.Column(Para, nullable=False)
+    doviz       = db.Column(db.String(5), default='TRY')
+    aciklama    = db.Column(db.String(200))
+    kaynak      = db.Column(db.String(20), default='elle')  # sabit | elle
+    kaynak_id   = db.Column(db.String(20))    # SabitGider.id ya da CariHareket.id
+    cari_id     = db.Column(db.String(20))
+    gerceklesti = db.Column(db.Boolean, default=False)
+    gerceklesme_tarihi = db.Column(db.Date)
+    kullanici   = db.Column(db.String(50))
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+
 class AuditLog(db.Model):
     __tablename__ = 'audit_log'
     id              = db.Column(db.Integer, primary_key=True)
