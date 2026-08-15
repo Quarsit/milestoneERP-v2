@@ -8878,7 +8878,33 @@ def create_app():
                       'Nakliye', 'Finansman', 'Diğer')
     GIDER_PERIYOT = ('aylik', 'haftalik', 'yillik')
 
+    def _sabit_gider_grup(g):
+        """Giderin ait oldugu surum zincirinin kimligi.
+
+        Eski kayitlarda grup_id bos olabilir; o durumda kayit kendi
+        zincirinin koku sayilir.
+        """
+        return g.grup_id or g.id
+
+    def _sg_tarih(d):
+        """Kullaniciya gosterilecek tarih. (api_export icindeki
+        _tarih yereldir, burada kullanilamaz.)"""
+        try:
+            return d.strftime('%d.%m.%Y')
+        except Exception:
+            return str(d) if d else ''
+
+    def _sg_para(v, doviz='TRY'):
+        try:
+            return f"{float(v or 0):,.2f} {doviz}"
+        except Exception:
+            return f"{v} {doviz}"
+
     def _sabit_gider_dict(g):
+        _bugun = date.today()
+        # Sonlanmis mi: bitis gecmiste kaldiysa bu surum artik
+        # projeksiyona girmiyor demektir.
+        _sonlandi = bool(g.bitis and g.bitis < _bugun)
         return {
             'id': g.id, 'ad': g.ad, 'kategori': g.kategori,
             'tutar': g.tutar, 'doviz': g.doviz,
@@ -8887,6 +8913,9 @@ def create_app():
             'baslangic': g.baslangic.isoformat() if g.baslangic else None,
             'bitis': g.bitis.isoformat() if g.bitis else None,
             'aktif': g.aktif, 'aciklama': g.aciklama,
+            'grup_id': _sabit_gider_grup(g),
+            'sonlandi': _sonlandi,
+            'yururlukte': bool(g.aktif and not _sonlandi),
         }
 
     # ══════════════════════════════════════════════════════════
@@ -9005,9 +9034,23 @@ def create_app():
             _dv = (h.doviz or 'TRY').upper()
 
             if _k in NAKIT_YUKUMLULUK:
-                if h.kapatildi:
-                    # Alan sistemde kullanilmiyor ama isaretlenmisse saygi duy.
-                    continue
+                # DIKKAT: burada `kapatildi` bayragina BAKILMAZ.
+                #
+                # Bakilsaydi hareket yukumluluk listesinden cikardi ama
+                # karsiligindaki tahsilat kapatma havuzunda KALIRDI —
+                # ayni odeme iki kez kapatma yapar, BASKA bir faturayi
+                # yanlislikla silerdi. Olculdu: 100.000 tahsil edilince
+                # tahsil EDILMEMIS 70.000'lik fatura da ekrandan
+                # kayboluyordu.
+                #
+                # FIFO kapatmayi zaten kendisi hesapliyor: kapatan her
+                # hareket NAKIT_KAPATMA listesinde ve havuza giriyor,
+                # yani kapanmis fatura kendiliginden dusuyor. Bayraga
+                # ayrica bakmak gereksiz ve zararli.
+                #
+                # (`kapatildi` alani baska yerlerde kullaniliyor —
+                #  stok silme korumasi, ekran gosterimi — bu yuzden
+                #  alanin kendisine dokunulmadi.)
                 # borc   = musteri bize borclu       → GIRIS
                 # alacak = biz tedarikciye borcluyuz → CIKIS
                 _yon = 'giris' if _borc > 0 else 'cikis'
@@ -9168,17 +9211,39 @@ def create_app():
         # KRITIK SUTUN: hangi donemde para BITIYOR onu gosterir.
         # Vadesi gecmis kalemler acilisa DAHIL EDILMEZ — henuz tahsil
         # edilmemisler; ayri grupta uyari olarak gosterilir.
+        def _donem_bitisi(anahtar):
+            """Donemin SON gunu — gecmis mi diye bakmak icin."""
+            import calendar as _cal
+            if kirilim == 'ay':
+                _y, _a = (int(x) for x in anahtar.split('-'))
+                return date(_y, _a, _cal.monthrange(_y, _a)[1])
+            _t = date.fromisoformat(anahtar)
+            return _t + timedelta(days=6) if kirilim == 'hafta' else _t
+
+        _bugun = date.today()
         yurur = dict(acilis)
         sirali = []
         for a in sorted(donemler.keys()):
-            satir = {'donem': a, 'dovizler': {}}
+            # GECMIS DONEM: bugunden once bitmis.
+            # Gosterilir ama kumulatife KATILMAZ — o donemdeki para
+            # hareketleri zaten gerceklesti ve bugunku kasa
+            # bakiyesine (acilis) yansidi. Kumulatiften bir daha
+            # dusmek geçmisi IKI KEZ saymak olurdu.
+            # DIKKAT: `gecmis` adi disaridaki "vadesi gecmis kalemler"
+            # listesine ait. Ayni adi kullanmak onu ezerdi.
+            _gd = _donem_bitisi(a) < _bugun
+            satir = {'donem': a, 'gecmis': _gd, 'dovizler': {}}
             for d in sorted(set(list(donemler[a].keys()) + list(yurur.keys()))):
                 s = donemler[a].get(d, {'giris': 0.0, 'cikis': 0.0, 'kalemler': []})
                 net = q3(s['giris'] - s['cikis'])
-                yurur[d] = q3(float(yurur.get(d, 0)) + float(net))
+                if _gd:
+                    kum = None            # ekranda "—"
+                else:
+                    yurur[d] = q3(float(yurur.get(d, 0)) + float(net))
+                    kum = yurur[d]
                 satir['dovizler'][d] = {
                     'giris': q3(s['giris']), 'cikis': q3(s['cikis']),
-                    'net': net, 'kumulatif': yurur[d],
+                    'net': net, 'kumulatif': kum, 'gecmis': _gd,
                     'kalem_sayisi': len(s['kalemler']),
                     'kalemler': sorted(s['kalemler'], key=lambda x: x['tarih'])[:40],
                 }
@@ -9431,6 +9496,9 @@ def create_app():
             bitis=_parse_date(d.get('bitis')),
             aciklama=(d.get('aciklama') or '').strip() or None,
             aktif=bool(d.get('aktif', True)))
+        # Ilk kayit kendi surum zincirinin kokudur. Sonraki surumler
+        # (tutar_guncelle) bu degeri devralir.
+        g.grup_id = g.id
         db.session.add(g)
         _log_audit('EKLE', 'sabit_gider', g.id, yeni={'ad': ad, 'tutar': tutar})
         ok, hata = _safe_commit(f'Sabit gider: {ad}')
@@ -9479,12 +9547,133 @@ def create_app():
         return jsonify({'ok': True, 'gider': _sabit_gider_dict(g),
                         'mesaj': 'Guncellendi'})
 
+    @app.route('/api/sabit_gider/<gider_id>/tutar_guncelle', methods=['POST'])
+    def api_sabit_gider_tutar_guncelle(gider_id):
+        """Tutari YENI SURUM acarak gunceller — gecmisi bozmadan.
+
+        Kaydi duzenlemek gecmisi de degistirirdi (sablon her istekte
+        yeniden yayiliyor). Bunun yerine:
+            eski kayit → bitis = gecerlilik - 1 gun
+            yeni kayit → baslangic = gecerlilik, yeni tutar
+
+        Sinir hesabini SISTEM yapar. Elle yapilirsa bir gun kayarsa o
+        ay ya hic gorunmez ya iki kez sayilir.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+
+        g = db.session.get(SabitGider, gider_id)
+        if not g:
+            return jsonify({'ok': False, 'mesaj': 'Gider bulunamadı'}), 404
+
+        d = request.json or {}
+        try:
+            yeni_tutar = float(d.get('tutar'))
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Tutar sayısal olmalı'}), 400
+        if yeni_tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Tutar sıfırdan büyük olmalı'}), 400
+
+        gecerlilik = _parse_date(d.get('gecerlilik'))
+        if not gecerlilik:
+            return jsonify({'ok': False,
+                            'mesaj': 'Geçerlilik tarihi zorunlu (YYYY-AA-GG)'}), 400
+        if g.baslangic and gecerlilik <= g.baslangic:
+            return jsonify({'ok': False,
+                            'mesaj': 'Geçerlilik tarihi, giderin başlangıcından '
+                                     'sonra olmalı'}), 400
+        if g.bitis and gecerlilik > g.bitis:
+            return jsonify({'ok': False,
+                            'mesaj': 'Bu gider zaten '
+                                     f'{_sg_tarih(g.bitis)} tarihinde sonlanmış'}), 400
+
+        eski_tutar = float(g.tutar or 0)
+        grup = _sabit_gider_grup(g)
+
+        # Eski surumu bir gun oncesinde kapat — bosluk da bindirme de olmaz.
+        g.grup_id = grup
+        g.bitis = gecerlilik - timedelta(days=1)
+
+        yeni = SabitGider(
+            id=_yeni_id('SG'), ad=g.ad, kategori=g.kategori,
+            tutar=q3(yeni_tutar), doviz=g.doviz, periyot=g.periyot,
+            ayin_gunu=g.ayin_gunu, haftanin_gunu=g.haftanin_gunu, ay=g.ay,
+            baslangic=gecerlilik, bitis=None, aktif=True,
+            aciklama=(d.get('aciklama') or g.aciklama), grup_id=grup)
+        db.session.add(yeni)
+        _log_audit('GUNCELLE', 'sabit_gider', gider_id,
+                   eski={'tutar': eski_tutar},
+                   yeni={'tutar': yeni_tutar, 'gecerlilik': gecerlilik.isoformat(),
+                         'yeni_id': yeni.id})
+        ok, hata = _safe_commit(f'Sabit gider tutar guncelleme: {gider_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({
+            'ok': True, 'yeni_id': yeni.id, 'grup_id': grup,
+            'mesaj': f'{g.ad}: {_sg_para(eski_tutar, g.doviz)} → '
+                     f'{_sg_para(yeni_tutar, g.doviz)} '
+                     f'({_sg_tarih(gecerlilik)} itibarıyla). Önceki tutar '
+                     f'{_sg_tarih(g.bitis)} tarihine kadar korundu.'})
+
+    @app.route('/api/sabit_gider/<gider_id>/sonlandir', methods=['POST'])
+    def api_sabit_gider_sonlandir(gider_id):
+        """Gideri bir tarihte SONLANDIRIR — silmez, pasiflestirmez.
+
+        Personel ayrildi, sozlesme bitti gibi durumlar icin. Gecmis
+        aylar oldugu gibi kalir; yalnizca o tarihten sonrasi
+        projeksiyona girmez.
+
+        aktif=False YAPILMAZ: projeksiyon pasif kaydi hic okumuyor,
+        o yuzden pasiflestirmek gecmisi de silerdi.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+
+        g = db.session.get(SabitGider, gider_id)
+        if not g:
+            return jsonify({'ok': False, 'mesaj': 'Gider bulunamadı'}), 404
+
+        d = request.json or {}
+        bitis = _parse_date(d.get('tarih'))
+        if not bitis:
+            return jsonify({'ok': False,
+                            'mesaj': 'Bitiş tarihi zorunlu (YYYY-AA-GG)'}), 400
+        if g.baslangic and bitis < g.baslangic:
+            return jsonify({'ok': False,
+                            'mesaj': 'Bitiş tarihi, başlangıçtan önce olamaz'}), 400
+
+        g.bitis = bitis
+        g.grup_id = _sabit_gider_grup(g)
+        _log_audit('GUNCELLE', 'sabit_gider', gider_id,
+                   yeni={'bitis': bitis.isoformat()})
+        ok, hata = _safe_commit(f'Sabit gider sonlandirma: {gider_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True,
+                        'mesaj': f'{g.ad} {_sg_tarih(bitis)} tarihinde sonlandırıldı. '
+                                 f'Geçmiş dönemler korundu.'})
+
     @app.route('/api/sabit_gider/<gider_id>', methods=['DELETE'])
     def api_sabit_gider_sil(gider_id):
-        """Sablonu siler. Uretilmis NakitPlan kalemleri KALIR.
+        """Sablonu TAMAMEN siler — gecmisi de dahil.
 
-        Gecmis aylarin projeksiyonu bozulmasin diye: gider artik
-        yok ama gecen ay odendiyse o kayit durmali.
+        DIKKAT: SabitGider bir SABLON'dur; donem kaydi saklanmaz,
+        projeksiyon her istekte sablondan yayilir. Silinince gecmis
+        aylar da projeksiyondan kaybolur.
+
+        Bu yuzden "artik bu gideri odemiyorum" durumunda SILME
+        kullanilmamali — /sonlandir kullanilmali (bitis tarihi
+        koyar, gecmisi korur). Silme yalnizca "bu kaydi yanlislikla
+        girdim" icindir.
+
+        (Onceki surumde bu docstring "uretilmis NakitPlan kalemleri
+        KALIR" diyordu; oyle kalemler HIC uretilmiyor — tek
+        NakitPlan olusturma noktasi kaynak='elle'. Asagidaki filtre
+        her zaman 0 kayit siler, geriye donuk uyumluluk icin durdu.)
         """
         if _auth_required():
             return jsonify({'error': 'Unauthorized'}), 401
@@ -16953,9 +17142,51 @@ def create_app():
     #  JENERİK DIŞA AKTARMA (xlsx + pdf) — tüm liste modülleri
     #  /api/export/<modul>?format=xlsx|pdf
     # ═══════════════════════════════════════════════════════════
+    # Disa aktarma modulu → yetki modulu.
+    #
+    # Her satir, o modulun KENDI SAYFA ROTASINDAKI kontrolden
+    # okundu; tahmin edilmedi. Ozellikle 'cek' → 'kasa': tahmin
+    # edilseydi 'cek' yazilirdi, oyle bir yetki modulu yok ve
+    # kontrol sessizce yanlis calisirdi.
+    EXPORT_YETKI = {
+        'siparis': 'siparis',
+        'fatura': 'fatura',
+        'cek': 'kasa',
+        'cari': 'cari',
+        'cari_hareket': 'cari',
+        'stok': 'stok',
+        'proforma': 'proforma',
+        'sevkiyat': 'sevkiyat',
+        'satislar': 'satislar',
+        'karlilik': 'karlilik',
+        'maliyet': 'maliyet',
+        'kesim': 'kesim',
+        'rezervasyon': 'rezervasyon',
+        'denetim': 'denetim',
+        'nakit': 'kasa',
+        'nakit_detay': 'kasa',
+        'sabit_gider': 'kasa',
+    }
+
     @app.route('/api/export/<modul>', methods=['GET'])
     def api_export(modul):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+
+        # YETKI: ekranda gizlenen veri dosya olarak disari cikmasin.
+        # Onceden burada YALNIZCA oturum kontrolu vardi; fatura
+        # yetkisi kapali bir kullanici fatura listesini indirebiliyordu.
+        #
+        # FAIL-CLOSED: tabloda olmayan modul icin varsayilan yetki
+        # YOK. Ileride yeni bir export modulu eklenip tabloya
+        # yazilmazsa acikta kalmaz — kapali kalir ve hemen fark
+        # edilir.
+        _yetki = EXPORT_YETKI.get(modul)
+        if not _yetki:
+            return jsonify({'ok': False,
+                            'mesaj': f'Bilinmeyen modül: {modul}'}), 400
+        if not _yetki_var_mi(_yetki, 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+
         try:
             from export_utils import liste_xlsx, liste_pdf
         except ImportError as e:
@@ -17206,8 +17437,14 @@ def create_app():
                                    f" – {_tarih(date.fromisoformat(p['bitis']))}"))
             # Kumulatif negatife dusen ilk donem: raporun asil uyarisi
             for dv in sorted(p['acilis']):
-                kritik = next((s for s in p['donemler']
-                               if (s['dovizler'].get(dv) or {}).get('kumulatif', 0) < 0), None)
+                # Gecmis donemlerin kumulatifi None — kiyaslamadan ONCE
+                # elenmeli, yoksa TypeError ile tum cikti 500 verir.
+                def _kritik_mi(s):
+                    v = s['dovizler'].get(dv) or {}
+                    k = v.get('kumulatif')
+                    return (not v.get('gecmis')) and k is not None and k < 0
+
+                kritik = next((s for s in p['donemler'] if _kritik_mi(s)), None)
                 if kritik:
                     ozet_satirlari.append((
                         f'⚠ {dv} bakiyesi eksiye düşüyor',
@@ -17238,7 +17475,8 @@ def create_app():
                         v = s['dovizler'].get(dv)
                         if not v or (not v['giris'] and not v['cikis']):
                             continue
-                        rows.append([dv, _nakit_donem_adi(s['donem'], kirilim),
+                        _et = ' (geçmiş)' if s.get('gecmis') else ''
+                        rows.append([dv, _nakit_donem_adi(s['donem'], kirilim) + _et,
                                      _f(v['giris'], True), _f(v['cikis'], True),
                                      _f(v['net'], True), _f(v['kumulatif'], True)])
                         _yazildi = True

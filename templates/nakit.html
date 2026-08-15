@@ -49,6 +49,10 @@
     letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)}
   .na-satir{cursor:pointer}
   .na-satir:hover{background:var(--notr-bg)}
+  .na-gecmis td{opacity:.62;font-style:italic}
+  .na-gecmis .rozet{display:inline-block;font-size:.62rem;font-weight:700;
+    letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:20px;
+    background:var(--notr-bg);color:var(--soluk);margin-left:8px;font-style:normal}
   .na-eksi{color:var(--kirmizi);font-weight:600}
   .na-arti{color:var(--verde-koyu)}
   /* Kümülatif negatife düşen dönem — nakit sıkışıklığı */
@@ -67,6 +71,25 @@
     font-size:.86rem;line-height:1.6}
   .na-bos{padding:34px;text-align:center;color:var(--soluk);font-size:.9rem}
 
+  .na-plan{margin-top:18px}
+  .na-plan-bas{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .na-plan-bas h2{font-family:var(--baslik);font-size:1rem;font-weight:700}
+  .na-plan-bas .say{font-size:.78rem;color:var(--soluk)}
+  .na-plan table{width:100%;border-collapse:collapse;font-size:.86rem}
+  .na-plan th{text-align:left;padding:8px 12px;font-size:.7rem;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);
+    border-bottom:1px solid var(--cizgi);white-space:nowrap}
+  .na-plan th.sag,.na-plan td.sag{text-align:right}
+  .na-plan td{padding:9px 12px;border-bottom:1px solid var(--cizgi);vertical-align:middle}
+  .na-plan .oldu{opacity:.55}
+  .na-plan .oldu .ac{text-decoration:line-through}
+  .na-islem{display:flex;gap:6px;justify-content:flex-end}
+  .na-islem button{background:none;border:1px solid var(--cizgi-koyu);
+    border-radius:var(--r-kucuk);padding:5px 10px;font-family:var(--govde);
+    font-size:.76rem;cursor:pointer;color:var(--murekkep);white-space:nowrap}
+  .na-islem button:hover{border-color:var(--verde);color:var(--verde-koyu)}
+  .na-islem button.sil:hover{border-color:var(--kirmizi);color:var(--kirmizi);
+    background:var(--kirmizi-bg)}
   .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;
     z-index:45;place-items:center;padding:20px}
   .modal-ortu.acik{display:grid}
@@ -107,6 +130,12 @@
     <option value="6" selected>6 ay</option>
     <option value="12">12 ay</option>
   </select>
+  <select id="naGecmis" class="na-sec" onchange="naYukle()" aria-label="Geçmiş">
+    <option value="0" selected>Bugünden</option>
+    <option value="3">3 ay geriden</option>
+    <option value="6">6 ay geriden</option>
+    <option value="12">12 ay geriden</option>
+  </select>
   <select id="naKirilim" class="na-sec" onchange="naYukle()" aria-label="Kırılım">
     <option value="ay" selected>Aylık</option>
     <option value="hafta">Haftalık</option>
@@ -122,6 +151,22 @@
 
 <div class="tablo-kutu">
   <div id="naTablo"><div class="na-bos">Yükleniyor…</div></div>
+</div>
+
+<!-- Elle eklenen kalemler: gorulebilir ve GERI ALINABILIR olmali.
+     Onceden yalnizca ekleme vardi; kullanici ekledigi kalemi ne
+     goruyor ne silebiliyordu. -->
+<div class="na-plan" id="naPlanBolum" style="display:none">
+  <div class="na-plan-bas">
+    <h2>Elle Eklenen Kalemler</h2>
+    <span class="say" id="naPlanSay"></span>
+    <label style="margin-left:auto;font-size:.8rem;color:var(--soluk);cursor:pointer">
+      <input type="checkbox" id="naPlanTum" onchange="naPlanCiz()"> gerçekleşenleri de göster
+    </label>
+  </div>
+  <div class="tablo-kutu">
+    <div id="naPlanTablo"></div>
+  </div>
 </div>
 
 <!-- Elle nakit kalemi -->
@@ -186,14 +231,30 @@ function naDonemAd(a, kirilim) {
   return t.getDate() + ' ' + NA_AYLAR[t.getMonth()];
 }
 
-async function naYukle() {
-  const ay = document.getElementById('naAy').value;
+/* Geçmiş aylar istendiğinde pencereyi GERİYE uzatırız; ileri ufuk
+   aynı kalsın diye ay sayısı da o kadar artırılır. */
+function naSorgu() {
+  const ileri = parseInt(document.getElementById('naAy').value, 10);
+  const geri = parseInt(document.getElementById('naGecmis').value, 10) || 0;
   const kirilim = document.getElementById('naKirilim').value;
+  let q = 'ay=' + (ileri + geri) + '&kirilim=' + kirilim;
+  if (geri > 0) {
+    const t = new Date();
+    t.setDate(1);
+    t.setMonth(t.getMonth() - geri);
+    q += '&baslangic=' + t.getFullYear() + '-'
+       + String(t.getMonth() + 1).padStart(2, '0') + '-01';
+  }
+  return q;
+}
+
+async function naYukle() {
   const durum = document.getElementById('naDurum');
   durum.textContent = 'yükleniyor…';
   try {
-    NA_VERI = await api('/api/nakit_akis?ay=' + ay + '&kirilim=' + kirilim);
+    NA_VERI = await api('/api/nakit_akis?' + naSorgu());
     naCiz();
+    await naPlanYukle();
   } catch (e) {
     document.getElementById('naTablo').innerHTML =
       '<div class="na-bos">Veri alınamadı</div>';
@@ -215,13 +276,17 @@ function naCiz() {
     let son = acilis;
     for (let i = d.donemler.length - 1; i >= 0; i--) {
       const v = d.donemler[i].dovizler[dv];
-      if (v) { son = v.kumulatif; break; }
+      // Geçmiş dönemlerin kümülatifi yok (null) — atla.
+      if (v && v.kumulatif !== null && v.kumulatif !== undefined) {
+        son = v.kumulatif; break;
+      }
     }
     const fark = son - acilis;
     return '<div class="na-kart">'
       + '<label>' + dv + ' — bugünkü kasa</label>'
       + '<div class="deger">' + naPara(acilis, dv) + '</div>'
-      + '<div class="ek">' + d.ay + ' ay sonra: <strong class="' + (son < 0 ? 'na-eksi' : '') + '">'
+      + '<div class="ek">' + document.getElementById('naAy').value
+      + ' ay sonra: <strong class="' + (son < 0 ? 'na-eksi' : '') + '">'
       + naPara(son, dv) + '</strong> <span class="' + (fark < 0 ? 'na-eksi' : 'na-arti') + '">('
       + (fark >= 0 ? '+' : '') + naPara(fark, dv) + ')</span></div></div>';
   }).join('') || '<div class="na-bos">Tanımlı kasa yok</div>';
@@ -229,7 +294,10 @@ function naCiz() {
   /* ── Uyarılar ── */
   const uy = [];
   for (const dv of dovizler) {
-    const kritik = (d.donemler || []).find(s => (s.dovizler[dv] || {}).kumulatif < 0);
+    const kritik = (d.donemler || []).find(s => {
+      const v = s.dovizler[dv] || {};
+      return !v.gecmis && v.kumulatif !== null && v.kumulatif < 0;
+    });
     if (kritik) uy.push('<strong>' + dv + '</strong> bakiyesi <strong>'
       + naDonemAd(kritik.donem, d.kirilim) + '</strong> döneminde eksiye düşüyor ('
       + naPara(kritik.dovizler[dv].kumulatif, dv) + ').');
@@ -266,14 +334,18 @@ function naCiz() {
     for (const s of satirlar) {
       const v = s.dovizler[dv];
       const id = 'nad' + (sayac++);
-      h += '<tr class="na-satir' + (v.kumulatif < 0 ? ' na-tehlike' : '') + '"'
+      const gec = !!v.gecmis;
+      h += '<tr class="na-satir' + (gec ? ' na-gecmis' : '')
+         + ((!gec && v.kumulatif < 0) ? ' na-tehlike' : '') + '"'
          + ' onclick="naDetayAc(\'' + id + '\')">'
-         + '<td>' + naDonemAd(s.donem, d.kirilim) + '</td>'
+         + '<td>' + naDonemAd(s.donem, d.kirilim)
+         + (gec ? '<span class="rozet">geçmiş</span>' : '') + '</td>'
          + '<td class="' + (v.giris ? 'na-arti' : '') + '">' + (v.giris ? naPara(v.giris, dv) : '—') + '</td>'
          + '<td class="' + (v.cikis ? 'na-eksi' : '') + '">' + (v.cikis ? naPara(v.cikis, dv) : '—') + '</td>'
          + '<td class="' + (v.net < 0 ? 'na-eksi' : 'na-arti') + '">'
          + (v.net >= 0 ? '+' : '') + naPara(v.net, dv) + '</td>'
-         + '<td><strong>' + naPara(v.kumulatif, dv) + '</strong></td></tr>';
+         + '<td>' + (gec ? '<span style="color:var(--soluk)">—</span>'
+             : '<strong>' + naPara(v.kumulatif, dv) + '</strong>') + '</td></tr>';
       h += '<tr class="na-detay" id="' + id + '" style="display:none"><td colspan="5">'
          + '<div class="na-detay-ic">'
          + (v.kalemler || []).map(k => '<div><span>' + naKacinc(k.aciklama) + '</span>'
@@ -331,12 +403,87 @@ async function naPlanKaydet() {
   } catch (e) { /* api() zaten bildiriyor */ }
 }
 
+/* ── Elle eklenen kalemler ───────────────────────────────────────
+   Ekleyebilip silememek tek yönlü kapı olurdu: yanlışlıkla girilen
+   bir kalem projeksiyonu kalıcı olarak bozardı. */
+let NA_PLAN = [];
+
+async function naPlanYukle() {
+  try {
+    const d = await api('/api/nakit_plan');
+    NA_PLAN = d.data || [];
+  } catch (e) {
+    NA_PLAN = [];
+  }
+  naPlanCiz();
+}
+
+function naPlanCiz() {
+  const tumu = document.getElementById('naPlanTum').checked;
+  const liste = NA_PLAN.filter(p => tumu || !p.gerceklesti);
+  const bekleyen = NA_PLAN.filter(p => !p.gerceklesti).length;
+
+  document.getElementById('naPlanBolum').style.display = NA_PLAN.length ? '' : 'none';
+  if (!NA_PLAN.length) return;
+
+  document.getElementById('naPlanSay').textContent =
+    bekleyen + ' bekleyen' + (NA_PLAN.length > bekleyen
+      ? ' · ' + (NA_PLAN.length - bekleyen) + ' gerçekleşti' : '');
+
+  if (!liste.length) {
+    document.getElementById('naPlanTablo').innerHTML =
+      '<div class="na-bos">Bekleyen kalem yok</div>';
+    return;
+  }
+
+  let h = '<table><thead><tr><th>Tarih</th><th>Yön</th><th class="sag">Tutar</th>'
+        + '<th>Açıklama</th><th class="sag">İşlem</th></tr></thead><tbody>';
+  for (const p of liste) {
+    const t = p.tarih ? p.tarih.split('-').reverse().join('.') : '—';
+    h += '<tr class="' + (p.gerceklesti ? 'oldu' : '') + '">'
+       + '<td>' + t + '</td>'
+       + '<td class="' + (p.yon === 'giris' ? 'na-arti' : 'na-eksi') + '">'
+       + (p.yon === 'giris' ? 'Giriş' : 'Çıkış') + '</td>'
+       + '<td class="sag" style="font-variant-numeric:tabular-nums;font-weight:600">'
+       + naPara(p.tutar, p.doviz) + '</td>'
+       + '<td class="ac">' + naKacinc(p.aciklama || '—') + '</td>'
+       + '<td><div class="na-islem">'
+       + '<button onclick="naPlanOldu(\'' + p.id + '\',' + (p.gerceklesti ? 'false' : 'true') + ')">'
+       + (p.gerceklesti ? 'Geri al' : 'Gerçekleşti') + '</button>'
+       + '<button class="sil" onclick="naPlanSil(\'' + p.id + '\')">Sil</button>'
+       + '</div></td></tr>';
+  }
+  h += '</tbody></table>';
+  document.getElementById('naPlanTablo').innerHTML = h;
+}
+
+/* Gerçekleşti işaretlenen kalem projeksiyondan düşer — para artık
+   kasa bakiyesinde sayılıyor, ayrıca beklemek çift sayım olurdu. */
+async function naPlanOldu(id, deger) {
+  try {
+    const d = await api('/api/nakit_plan/' + id + '/gerceklesti',
+      { method: 'POST', body: JSON.stringify({ gerceklesti: deger }) });
+    bildir(d.mesaj || 'İşaretlendi');
+    naYukle();
+  } catch (e) { /* api() zaten bildiriyor */ }
+}
+
+async function naPlanSil(id) {
+  const p = NA_PLAN.find(x => x.id === id);
+  const ad = p ? (p.aciklama || naPara(p.tutar, p.doviz)) : 'Kalem';
+  if (!confirm(ad + '\n\nBu kalem silinecek. Yalnızca nakit tahminini '
+      + 'etkiler; cari hesap veya kasa kaydına dokunmaz.\n\nDevam edilsin mi?')) return;
+  try {
+    const d = await api('/api/nakit_plan/' + id, { method: 'DELETE' });
+    bildir(d.mesaj || 'Silindi');
+    naYukle();
+  } catch (e) { /* api() zaten bildiriyor */ }
+}
+
 /* Dışa aktarma EKRANDAKİ seçimi izler — kullanıcı 12 aya geçtiyse
    Excel'de de 12 ay olmalı, yoksa neden 6 ay indiğini anlamaz. */
 function naDisa(modul, fmt) {
-  const ay = document.getElementById('naAy').value;
-  const kirilim = document.getElementById('naKirilim').value;
-  disaAktar(modul, fmt, 'ay=' + ay + '&kirilim=' + kirilim);
+  disaAktar(modul, fmt, naSorgu());
 }
 
 naYukle();

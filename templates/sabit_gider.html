@@ -80,6 +80,18 @@
     color:var(--kirmizi);border-radius:var(--r-kucuk);padding:9px 15px;
     font-family:var(--govde);font-size:.86rem;cursor:pointer}
   .modal-alt .sil-btn:hover{background:var(--kirmizi-bg)}
+  .sg-surum td{background:var(--notr-bg);font-size:.83rem;color:var(--soluk)}
+  .sg-surum td:first-child{padding-left:30px}
+  .sg-rozet{display:inline-block;font-size:.65rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;padding:2px 7px;border-radius:20px;margin-left:7px;
+    background:var(--notr-bg);color:var(--soluk)}
+  .sg-rozet.yur{background:var(--verde-acik);color:var(--verde-koyu)}
+  .sg-ac{cursor:pointer;font-size:.72rem;color:var(--verde-koyu);
+    background:none;border:none;font-family:var(--govde);padding:0 0 0 6px}
+  .modal-alt .ara-btn{background:var(--yuzey);border:1px solid var(--cizgi-koyu);
+    color:var(--murekkep);border-radius:var(--r-kucuk);padding:9px 15px;
+    font-family:var(--govde);font-size:.86rem;cursor:pointer}
+  .modal-alt .ara-btn:hover{border-color:var(--verde)}
   .sg-not{font-size:.78rem;color:var(--soluk);line-height:1.55;margin-top:10px;
     padding-top:10px;border-top:1px solid var(--cizgi)}
 </style>
@@ -163,8 +175,63 @@
     </div>
     <div class="modal-alt">
       <button class="sil-btn" id="sgSilBtn" onclick="sgSil()" style="display:none">Sil</button>
+      <button class="ara-btn" id="sgZamBtn" onclick="sgZamAc()" style="display:none">Tutarı güncelle</button>
+      <button class="ara-btn" id="sgSonBtn" onclick="sgSonAc()" style="display:none">Sonlandır</button>
       <button class="iptal-btn" onclick="sgKapat()">Vazgeç</button>
       <button class="btn-yeni" onclick="sgKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tutar guncelleme: yeni surum acar, gecmisi bozmaz -->
+<div class="modal-ortu" id="sgZamModal" onclick="if(event.target===this)sgZamKapat()">
+  <div class="modal" style="width:470px" role="dialog" aria-label="Tutarı güncelle">
+    <div class="modal-bas">
+      <h3>Tutarı Güncelle</h3>
+      <p id="sgZamAlt">Yeni tutar hangi tarihten itibaren geçerli?</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Yeni tutar <span style="color:var(--kirmizi)">*</span></label>
+          <input id="szTutar" type="number" step="0.01" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>Geçerlilik <span style="color:var(--kirmizi)">*</span></label>
+          <input id="szTarih" type="date" data-buyuk-harf="hayir"></div>
+      </div>
+      <div class="sg-not">
+        Kayıt <strong>düzenlenmez</strong>. Eski tutar bir gün öncesinde
+        sonlandırılır, yeni tutarla yeni bir sürüm açılır. Böylece geçmiş
+        dönemler eski tutarla kalır — 7 ay 10.000 ödediyseniz o aylar
+        10.000 görünmeye devam eder.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="sgZamKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="sgZamKaydet()">Güncelle</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sonlandirma: bitis tarihi koyar, silmez -->
+<div class="modal-ortu" id="sgSonModal" onclick="if(event.target===this)sgSonKapat()">
+  <div class="modal" style="width:470px" role="dialog" aria-label="Sonlandır">
+    <div class="modal-bas">
+      <h3>Gideri Sonlandır</h3>
+      <p id="sgSonAlt">Bu gider hangi tarihten sonra ödenmeyecek?</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Son ödeme tarihi <span style="color:var(--kirmizi)">*</span></label>
+          <input id="ssTarih" type="date" data-buyuk-harf="hayir"></div>
+      </div>
+      <div class="sg-not">
+        Kayıt <strong>silinmez, pasife de alınmaz</strong> — yalnızca bitiş
+        tarihi konur. Geçmiş dönemler projeksiyonda durmaya devam eder.
+        Personel ayrıldıysa son çalışma gününü girin.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="sgSonKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="sgSonKaydet()">Sonlandır</button>
     </div>
   </div>
 </div>
@@ -238,13 +305,35 @@ function sgKategoriDoldur(k) {
 
 function sgCiz() {
   const suzgec = document.getElementById('sgSuzgec').value;
-  const liste = SG_LISTE.filter(g => suzgec === 'tum' || g.aktif);
 
-  /* Kartlar: döviz bazında aylık yük */
+  /* Sürümleri zincire göre grupla. Aynı giderin 10.000'lik eski ve
+     14.000'lik yeni sürümü tek satırda görünür; eskiler açılır. */
+  const gruplar = new Map();
+  for (const g of SG_LISTE) {
+    const k = g.grup_id || g.id;
+    if (!gruplar.has(k)) gruplar.set(k, []);
+    gruplar.get(k).push(g);
+  }
+  for (const [, v] of gruplar) {
+    v.sort((a, b) => String(a.baslangic || '').localeCompare(String(b.baslangic || '')));
+  }
+
+  /* Bir zincirin "şu anki hali": yürürlükteki sürüm, yoksa en sonuncusu. */
+  const satirlar = [];
+  for (const [k, v] of gruplar) {
+    const yur = v.filter(x => x.yururlukte);
+    const bas = yur.length ? yur[yur.length - 1] : v[v.length - 1];
+    if (suzgec !== 'tum' && !bas.yururlukte) continue;
+    satirlar.push({ anahtar: k, bas: bas, eskiler: v.filter(x => x.id !== bas.id) });
+  }
+
+  /* Kartlar: yalnızca YÜRÜRLÜKTEKİ sürümler sayılır. Eski sürümleri
+     de toplasaydık aylık yük iki katı çıkardı. */
   const toplam = {};
-  liste.filter(g => g.aktif).forEach(g => {
-    toplam[g.doviz] = (toplam[g.doviz] || 0) + sgAylikKarsilik(g);
-  });
+  for (const s of satirlar) {
+    if (!s.bas.yururlukte) continue;
+    toplam[s.bas.doviz] = (toplam[s.bas.doviz] || 0) + sgAylikKarsilik(s.bas);
+  }
   const dv = Object.keys(toplam).sort();
   document.getElementById('sgKartlar').innerHTML = dv.length
     ? dv.map(d => '<div class="sg-kart"><label>' + d + ' — aylık yük</label>'
@@ -252,7 +341,7 @@ function sgCiz() {
         + '<div class="ek">yıllık ' + sgPara(toplam[d] * 12, d) + '</div></div>').join('')
     : '';
 
-  if (!liste.length) {
+  if (!satirlar.length) {
     document.getElementById('sgTablo').innerHTML =
       '<div class="sg-bos">Tanımlı sabit gider yok. Kira ve maaşı girerseniz '
       + 'nakit akışı projeksiyonu gerçekçi olur.</div>';
@@ -262,19 +351,39 @@ function sgCiz() {
   let h = '<table class="sg-tablo"><thead><tr><th>Gider</th><th>Kategori</th>'
         + '<th>Periyot</th><th class="sag">Tutar</th><th>Başlangıç</th>'
         + '<th>Bitiş</th><th>Durum</th></tr></thead><tbody>';
-  for (const g of liste) {
-    h += '<tr class="' + (g.aktif ? '' : 'sg-pasif') + '" onclick="sgAc(\'' + g.id + '\')">'
-       + '<td class="sg-ad">' + sgKacinc(g.ad) + '</td>'
+  for (const s of satirlar) {
+    const g = s.bas;
+    const kac = s.eskiler.length;
+    h += '<tr class="' + (g.yururlukte ? '' : 'sg-pasif') + '" onclick="sgAc(\'' + g.id + '\')">'
+       + '<td class="sg-ad">' + sgKacinc(g.ad)
+       + (kac ? '<button class="sg-ac" onclick="event.stopPropagation();sgSurumAc(\''
+                + s.anahtar + '\')">' + kac + ' önceki sürüm ▾</button>' : '')
+       + '</td>'
        + '<td>' + sgKacinc(g.kategori || '—') + '</td>'
        + '<td>' + sgPeriyotYazi(g) + '</td>'
        + '<td class="sag sg-tutar">' + sgPara(g.tutar, g.doviz) + '</td>'
        + '<td>' + (g.baslangic || '—') + '</td>'
        + '<td>' + (g.bitis || 'süresiz') + '</td>'
-       + '<td><span class="sg-etiket' + (g.aktif ? ' acik' : '') + '">'
-       + (g.aktif ? 'Aktif' : 'Pasif') + '</span></td></tr>';
+       + '<td><span class="sg-etiket' + (g.yururlukte ? ' acik' : '') + '">'
+       + (g.yururlukte ? 'Yürürlükte' : (g.sonlandi ? 'Sonlandı' : 'Pasif')) + '</span></td></tr>';
+    for (const e of s.eskiler) {
+      h += '<tr class="sg-surum" id="sgs-' + s.anahtar + '" style="display:none"'
+         + ' onclick="sgAc(\'' + e.id + '\')">'
+         + '<td>↳ önceki sürüm</td><td></td><td></td>'
+         + '<td class="sag sg-tutar">' + sgPara(e.tutar, e.doviz) + '</td>'
+         + '<td>' + (e.baslangic || '—') + '</td>'
+         + '<td>' + (e.bitis || 'süresiz') + '</td>'
+         + '<td><span class="sg-rozet">geçmiş</span></td></tr>';
+    }
   }
   h += '</tbody></table>';
   document.getElementById('sgTablo').innerHTML = h;
+}
+
+function sgSurumAc(anahtar) {
+  document.querySelectorAll('#sgs-' + CSS.escape(anahtar)).forEach(e => {
+    e.style.display = (e.style.display === 'none') ? '' : 'none';
+  });
 }
 
 function sgPeriyotDegisti() {
@@ -297,6 +406,11 @@ function sgAc(id) {
   const g = SG_DUZEN;
   document.getElementById('sgBaslik').textContent = g ? 'Sabit Gideri Düzenle' : 'Yeni Sabit Gider';
   document.getElementById('sgSilBtn').style.display = g ? '' : 'none';
+  // Tutar guncelleme ve sonlandirma yalnizca YURURLUKTEKI surum icin
+  // anlamli. Gecmis bir surumu zamlamak zinciri bozardi.
+  const _y = !!(g && g.yururlukte);
+  document.getElementById('sgZamBtn').style.display = _y ? '' : 'none';
+  document.getElementById('sgSonBtn').style.display = _y ? '' : 'none';
   document.getElementById('sgAd').value = g ? (g.ad || '') : '';
   document.getElementById('sgKategori').value = g ? (g.kategori || 'Diğer') : 'Diğer';
   document.getElementById('sgTutar').value = g ? (g.tutar || '') : '';
@@ -365,13 +479,67 @@ async function sgKaydet() {
 
 async function sgSil() {
   if (!SG_DUZEN) return;
-  if (!confirm(SG_DUZEN.ad + ' silinecek.\n\nGerçekleşmemiş planlanan kalemler '
-      + 'kaldırılır; geçmişte gerçekleşenler kalır.\n\nDevam edilsin mi?')) return;
+  if (!confirm(SG_DUZEN.ad + ' TAMAMEN silinecek.\n\n'
+      + 'Bu gider geçmiş aylardan da kaybolur — sabit gider bir şablondur, '
+      + 'dönem kaydı saklanmaz.\n\n'
+      + 'Artık ödemiyorsanız SİLMEYİN, "Sonlandır" kullanın: geçmiş korunur.\n\n'
+      + 'Yine de silinsin mi?')) return;
   try {
     const d = await api('/api/sabit_gider/' + SG_DUZEN.id, { method: 'DELETE' });
     bildir(d.mesaj || 'Silindi');
     sgKapat();
     sgYukle();
+  } catch (e) { /* api() zaten bildiriyor */ }
+}
+
+/* ── Tutar güncelleme: yeni sürüm açar ───────────────────────── */
+function sgZamAc() {
+  if (!SG_DUZEN) return;
+  document.getElementById('sgZamAlt').textContent =
+    SG_DUZEN.ad + ' — şu an ' + sgPara(SG_DUZEN.tutar, SG_DUZEN.doviz);
+  document.getElementById('szTutar').value = '';
+  document.getElementById('szTarih').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('sgZamModal').classList.add('acik');
+}
+
+function sgZamKapat() {
+  document.getElementById('sgZamModal').classList.remove('acik');
+}
+
+async function sgZamKaydet() {
+  const tutar = parseFloat(document.getElementById('szTutar').value);
+  const tarih = document.getElementById('szTarih').value;
+  if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar girin', true); return; }
+  if (!tarih) { bildir('Geçerlilik tarihi zorunlu', true); return; }
+  try {
+    const d = await api('/api/sabit_gider/' + SG_DUZEN.id + '/tutar_guncelle',
+      { method: 'POST', body: JSON.stringify({ tutar: tutar, gecerlilik: tarih }) });
+    bildir(d.mesaj || 'Güncellendi');
+    sgZamKapat(); sgKapat(); sgYukle();
+  } catch (e) { /* api() zaten bildiriyor */ }
+}
+
+/* ── Sonlandırma: bitiş tarihi koyar ─────────────────────────── */
+function sgSonAc() {
+  if (!SG_DUZEN) return;
+  document.getElementById('sgSonAlt').textContent =
+    SG_DUZEN.ad + ' — hangi tarihten sonra ödenmeyecek?';
+  document.getElementById('ssTarih').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('sgSonModal').classList.add('acik');
+}
+
+function sgSonKapat() {
+  document.getElementById('sgSonModal').classList.remove('acik');
+}
+
+async function sgSonKaydet() {
+  const tarih = document.getElementById('ssTarih').value;
+  if (!tarih) { bildir('Tarih zorunlu', true); return; }
+  try {
+    const d = await api('/api/sabit_gider/' + SG_DUZEN.id + '/sonlandir',
+      { method: 'POST', body: JSON.stringify({ tarih: tarih }) });
+    bildir(d.mesaj || 'Sonlandırıldı');
+    sgSonKapat(); sgKapat(); sgYukle();
   } catch (e) { /* api() zaten bildiriyor */ }
 }
 

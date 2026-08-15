@@ -968,6 +968,12 @@ class SabitGider(db.Model):
     bitis       = db.Column(db.Date, nullable=True)   # bos = suresiz
     aktif       = db.Column(db.Boolean, default=True)
     aciklama    = db.Column(db.Text)
+    # Surum zinciri: tutar degisince kayit DUZENLENMEZ, eskisine bitis
+    # konup yeni tutarla yeni kayit acilir. Ayni giderin tum surumleri
+    # bu alani paylasir. Ilk kayitta kendi id'sine esitlenir.
+    # Ada gore gruplamak kirilgan olurdu: bir surumun adi duzeltilince
+    # zincir kopardi.
+    grup_id     = db.Column(db.String(20), index=True)
     olusturma   = db.Column(db.DateTime, default=datetime.now)
 
 
