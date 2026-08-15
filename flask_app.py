@@ -8894,9 +8894,22 @@ def create_app():
     # ══════════════════════════════════════════════════════════
 
     # Cari hareketin nakit projeksiyonuna GIRMEYECEGI kaynaklar.
-    # Gerekce icin dosya basindaki acikliamaya bakin — ozetle: ya
-    # parasi zaten kasaya girmis, ya baska bir tablodan sayiliyor,
-    # ya da hic nakit hareketi yok.
+    # Her biri AYRI sebeple disarida:
+    #
+    #   'cek'          Cek kendi tablosundan sayiliyor (asagida,
+    #                  Cek.query dongusu).
+    #   'tahsilat'     Bu hareket CEK ALINIRKEN aciliyor — bkz.
+    #                  api_cek_ekle(). Yani cekin ta kendisi.
+    #                  Sayilsaydi ayni tahsilat hem Cek hem
+    #                  CariHareket uzerinden IKI KEZ gorunurdu.
+    #   'virman'       Parayi zaten kasaya tasimis; tutar kasa.bakiye
+    #                  icinde, yani acilis bakiyesine dahil.
+    #   'mahsup'       Hesap denklestirme — nakit hareketi yok.
+    #   'avans_devir'  Hesaplar arasi avans aktarimi — nakit hareketi
+    #                  yok.
+    #
+    # Fatura tablosu HIC okunmuyor: fatura kesilince cari hareket
+    # zaten aciliyor. Ikisini de okumak her borcu iki kez sayardi.
     NAKIT_HARIC_KAYNAK = ('cek', 'tahsilat', 'virman', 'mahsup', 'avans_devir')
 
     # Cek durumlari — /api/cek/ozet ile AYNI liste olmali.
