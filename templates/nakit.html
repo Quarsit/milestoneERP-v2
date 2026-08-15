@@ -1,0 +1,344 @@
+{% extends "base.html" %}
+{% block title %}Nakit Akışı{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'nakit')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-nakit">
+    <button onclick="naDisa('nakit','xlsx')"><span style="background:#1D6F42">XLS</span> Projeksiyon — Excel</button>
+    <button onclick="naDisa('nakit','pdf')"><span style="background:#B23A2E">PDF</span> Projeksiyon — PDF</button>
+    <button onclick="naDisa('nakit_detay','xlsx')"><span style="background:#1D6F42">XLS</span> Kalem listesi — Excel</button>
+    <button onclick="naDisa('nakit_detay','pdf')"><span style="background:#B23A2E">PDF</span> Kalem listesi — PDF</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+/* ── NAKİT AKIŞI (NA3) ─────────────────────────────────────────────
+   Üç döviz AYRI gösterilir; toplanmaz. İhracatçıda döviz girişi ve TL
+   gideri aynı anda olur — toplamak kur riskini gizler. */
+  .na-ust{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 14px}
+  .na-sec{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:8px 11px;font-family:var(--govde);font-size:.86rem;
+    background:var(--yuzey);color:var(--murekkep);cursor:pointer}
+  .na-sec:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+
+  .na-kartlar{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+    gap:12px;margin-bottom:16px}
+  .na-kart{background:var(--yuzey);border:1px solid var(--cizgi);
+    border-radius:var(--r);padding:15px 17px}
+  .na-kart label{display:block;font-size:.7rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .na-kart .deger{font-family:var(--baslik);font-size:1.4rem;font-weight:700;
+    letter-spacing:-.02em}
+  .na-kart .ek{font-size:.78rem;color:var(--soluk);margin-top:4px;line-height:1.45}
+
+  .na-tablo{width:100%;border-collapse:collapse;font-size:.88rem}
+  .na-tablo th{text-align:right;padding:9px 12px;font-size:.7rem;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);
+    border-bottom:1px solid var(--cizgi);white-space:nowrap}
+  .na-tablo th:first-child{text-align:left}
+  .na-tablo td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--cizgi)}
+  .na-tablo td:first-child{text-align:left;font-weight:600}
+  .na-doviz-bas td{background:var(--notr-bg);font-weight:700;font-size:.76rem;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)}
+  .na-satir{cursor:pointer}
+  .na-satir:hover{background:var(--notr-bg)}
+  .na-eksi{color:var(--kirmizi);font-weight:600}
+  .na-arti{color:var(--verde-koyu)}
+  /* Kümülatif negatife düşen dönem — nakit sıkışıklığı */
+  .na-tehlike td{background:var(--kirmizi-bg)}
+  .na-tehlike td:last-child{color:var(--kirmizi);font-weight:700}
+
+  .na-detay td{padding:0;border-bottom:1px solid var(--cizgi)}
+  .na-detay-ic{padding:10px 14px 12px 26px;background:var(--notr-bg);
+    font-size:.82rem;color:var(--soluk)}
+  .na-detay-ic div{display:flex;justify-content:space-between;gap:14px;padding:3px 0}
+  .na-detay-ic .t{color:var(--murekkep);font-weight:600;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .na-uyari{background:var(--kehribar-bg);border:1px solid var(--kehribar);
+    border-radius:var(--r-kucuk);padding:11px 15px;margin-bottom:14px;
+    font-size:.86rem;line-height:1.6}
+  .na-bos{padding:34px;text-align:center;color:var(--soluk);font-size:.9rem}
+
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;
+    z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:520px;max-width:100%;background:var(--yuzey);border-radius:14px;
+    box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;
+    display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto}
+  .form-satir{display:grid;gap:12px;margin-bottom:12px}
+  .f2{grid-template-columns:1fr 1fr}
+  .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);
+    border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);
+    font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);
+    box-shadow:0 0 0 3px var(--verde-acik)}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;
+    border-top:1px solid var(--cizgi)}
+  .na-not{font-size:.78rem;color:var(--soluk);line-height:1.55;margin-top:10px;
+    padding-top:10px;border-top:1px solid var(--cizgi)}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Nakit Akışı</h1>
+<p class="g-alt">Kasa bakiyeleri, cari vadeleri, çekler ve sabit giderler tek zaman ekseninde. Üç döviz ayrı izlenir — toplanmaz, çünkü toplamak kur riskini gizler.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="na-ust">
+  <select id="naAy" class="na-sec" onchange="naYukle()" aria-label="Süre">
+    <option value="3">3 ay</option>
+    <option value="6" selected>6 ay</option>
+    <option value="12">12 ay</option>
+  </select>
+  <select id="naKirilim" class="na-sec" onchange="naYukle()" aria-label="Kırılım">
+    <option value="ay" selected>Aylık</option>
+    <option value="hafta">Haftalık</option>
+    <option value="gun">Günlük</option>
+  </select>
+  <button class="blok-btn" onclick="naPlanAc()">+ Nakit kalemi ekle</button>
+  <button class="blok-btn" onclick="location.href='/sabit-gider'">Sabit giderler</button>
+  <span id="naDurum" style="font-size:.8rem;color:var(--soluk)"></span>
+</div>
+
+<div id="naUyarilar"></div>
+<div class="na-kartlar" id="naKartlar"></div>
+
+<div class="tablo-kutu">
+  <div id="naTablo"><div class="na-bos">Yükleniyor…</div></div>
+</div>
+
+<!-- Elle nakit kalemi -->
+<div class="modal-ortu" id="naPlanModal" onclick="if(event.target===this)naPlanKapat()">
+  <div class="modal" role="dialog" aria-label="Nakit kalemi ekle">
+    <div class="modal-bas">
+      <h3>Nakit Kalemi Ekle</h3>
+      <p>Vadesi belirsiz bir hareket için tahmini tarih girin</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Tarih <span style="color:var(--kirmizi)">*</span></label>
+          <input id="npTarih" type="date" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>Yön <span style="color:var(--kirmizi)">*</span></label>
+          <select id="npYon">
+            <option value="giris">Giriş (tahsilat)</option>
+            <option value="cikis">Çıkış (ödeme)</option>
+          </select></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Tutar <span style="color:var(--kirmizi)">*</span></label>
+          <input id="npTutar" type="number" step="0.01" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="npDoviz"><option>TRY</option><option>USD</option><option>EUR</option></select></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Açıklama</label>
+          <input id="npAciklama" maxlength="200" placeholder="ÖRN. ACME — TAHMİNİ TAHSİLAT"></div>
+      </div>
+      <div class="na-not">
+        Bu kayıt yalnızca <strong>nakit tahminini</strong> etkiler; cari hesap
+        hareketine dokunmaz. Muhasebe kaydı gerçek, nakit planı öngörüdür —
+        ikisi birbirine karışmamalı.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="naPlanKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="naPlanKaydet()">Ekle</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let NA_VERI = null;
+const NA_AYLAR = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
+
+function naPara(v, d) {
+  const n = Number(v || 0);
+  const s = n.toLocaleString('tr-TR', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+  return s + ' ' + (d === 'TRY' ? '₺' : d === 'USD' ? '$' : d === 'EUR' ? '€' : d);
+}
+
+function naDonemAd(a, kirilim) {
+  if (kirilim === 'ay') {
+    const p = a.split('-');
+    return NA_AYLAR[parseInt(p[1], 10) - 1] + ' ' + p[0];
+  }
+  const t = new Date(a + 'T00:00:00');
+  if (kirilim === 'hafta') return t.getDate() + ' ' + NA_AYLAR[t.getMonth()] + ' haftası';
+  return t.getDate() + ' ' + NA_AYLAR[t.getMonth()];
+}
+
+async function naYukle() {
+  const ay = document.getElementById('naAy').value;
+  const kirilim = document.getElementById('naKirilim').value;
+  const durum = document.getElementById('naDurum');
+  durum.textContent = 'yükleniyor…';
+  try {
+    NA_VERI = await api('/api/nakit_akis?ay=' + ay + '&kirilim=' + kirilim);
+    naCiz();
+  } catch (e) {
+    document.getElementById('naTablo').innerHTML =
+      '<div class="na-bos">Veri alınamadı</div>';
+  }
+  durum.textContent = '';
+}
+
+function naCiz() {
+  if (!NA_VERI) return;
+  const d = NA_VERI;
+  const dovizler = [...new Set([
+    ...Object.keys(d.acilis || {}),
+    ...(d.donemler || []).flatMap(s => Object.keys(s.dovizler || {}))
+  ])].sort();
+
+  /* ── Açılış kartları: bugün → dönem sonu ── */
+  document.getElementById('naKartlar').innerHTML = dovizler.map(dv => {
+    const acilis = (d.acilis || {})[dv] || 0;
+    let son = acilis;
+    for (let i = d.donemler.length - 1; i >= 0; i--) {
+      const v = d.donemler[i].dovizler[dv];
+      if (v) { son = v.kumulatif; break; }
+    }
+    const fark = son - acilis;
+    return '<div class="na-kart">'
+      + '<label>' + dv + ' — bugünkü kasa</label>'
+      + '<div class="deger">' + naPara(acilis, dv) + '</div>'
+      + '<div class="ek">' + d.ay + ' ay sonra: <strong class="' + (son < 0 ? 'na-eksi' : '') + '">'
+      + naPara(son, dv) + '</strong> <span class="' + (fark < 0 ? 'na-eksi' : 'na-arti') + '">('
+      + (fark >= 0 ? '+' : '') + naPara(fark, dv) + ')</span></div></div>';
+  }).join('') || '<div class="na-bos">Tanımlı kasa yok</div>';
+
+  /* ── Uyarılar ── */
+  const uy = [];
+  for (const dv of dovizler) {
+    const kritik = (d.donemler || []).find(s => (s.dovizler[dv] || {}).kumulatif < 0);
+    if (kritik) uy.push('<strong>' + dv + '</strong> bakiyesi <strong>'
+      + naDonemAd(kritik.donem, d.kirilim) + '</strong> döneminde eksiye düşüyor ('
+      + naPara(kritik.dovizler[dv].kumulatif, dv) + ').');
+  }
+  for (const [dv, o] of Object.entries((d.vadesi_gecmis || {}).ozet || {})) {
+    if (o.giris) uy.push('<strong>' + naPara(o.giris, dv) + '</strong> vadesi geçmiş alacak ('
+      + o.adet + ' kayıt) — henüz tahsil edilmedi, projeksiyona dahil değil.');
+    if (o.cikis) uy.push('<strong>' + naPara(o.cikis, dv) + '</strong> vadesi geçmiş borç ('
+      + o.adet + ' kayıt).');
+  }
+  const vszAdet = Object.values((d.vadesiz || {}).ozet || {}).reduce((t, o) => t + o.adet, 0);
+  if (vszAdet) uy.push('<strong>' + vszAdet + ' hareketin vadesi belirsiz</strong> — '
+    + 'projeksiyona dahil DEĞİL. "Nakit kalemi ekle" ile tahmini tarih verebilirsiniz.');
+  document.getElementById('naUyarilar').innerHTML = uy.length
+    ? '<div class="na-uyari">' + uy.join('<br>') + '</div>' : '';
+
+  /* ── Tablo: her döviz kendi bloğunda ── */
+  if (!(d.donemler || []).length) {
+    document.getElementById('naTablo').innerHTML =
+      '<div class="na-bos">Bu aralıkta beklenen hareket yok</div>';
+    return;
+  }
+  let h = '<table class="na-tablo"><thead><tr><th>Dönem</th><th>Giriş</th>'
+        + '<th>Çıkış</th><th>Net</th><th>Kümülatif</th></tr></thead><tbody>';
+  let sayac = 0;
+  for (const dv of dovizler) {
+    const satirlar = (d.donemler || []).filter(s => {
+      const v = s.dovizler[dv];
+      return v && (v.giris || v.cikis);
+    });
+    if (!satirlar.length) continue;
+    h += '<tr class="na-doviz-bas"><td colspan="5">' + dv + ' — açılış '
+       + naPara((d.acilis || {})[dv] || 0, dv) + '</td></tr>';
+    for (const s of satirlar) {
+      const v = s.dovizler[dv];
+      const id = 'nad' + (sayac++);
+      h += '<tr class="na-satir' + (v.kumulatif < 0 ? ' na-tehlike' : '') + '"'
+         + ' onclick="naDetayAc(\'' + id + '\')">'
+         + '<td>' + naDonemAd(s.donem, d.kirilim) + '</td>'
+         + '<td class="' + (v.giris ? 'na-arti' : '') + '">' + (v.giris ? naPara(v.giris, dv) : '—') + '</td>'
+         + '<td class="' + (v.cikis ? 'na-eksi' : '') + '">' + (v.cikis ? naPara(v.cikis, dv) : '—') + '</td>'
+         + '<td class="' + (v.net < 0 ? 'na-eksi' : 'na-arti') + '">'
+         + (v.net >= 0 ? '+' : '') + naPara(v.net, dv) + '</td>'
+         + '<td><strong>' + naPara(v.kumulatif, dv) + '</strong></td></tr>';
+      h += '<tr class="na-detay" id="' + id + '" style="display:none"><td colspan="5">'
+         + '<div class="na-detay-ic">'
+         + (v.kalemler || []).map(k => '<div><span>' + naKacinc(k.aciklama) + '</span>'
+             + '<span class="t">' + (k.yon === 'giris' ? '+' : '−')
+             + naPara(k.tutar, k.doviz) + '</span></div>').join('')
+         + '</div></td></tr>';
+    }
+  }
+  h += '</tbody></table>';
+  document.getElementById('naTablo').innerHTML = h;
+}
+
+/* Açıklamada HTML olabilir — kaçır. */
+function naKacinc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function naDetayAc(id) {
+  const e = document.getElementById(id);
+  if (e) e.style.display = (e.style.display === 'none') ? '' : 'none';
+}
+
+/* ── Elle nakit kalemi ── */
+function naPlanAc() {
+  const g = new Date();
+  document.getElementById('npTarih').value = g.getFullYear() + '-'
+    + String(g.getMonth() + 1).padStart(2, '0') + '-'
+    + String(g.getDate()).padStart(2, '0');
+  document.getElementById('npTutar').value = '';
+  document.getElementById('npAciklama').value = '';
+  document.getElementById('naPlanModal').classList.add('acik');
+}
+
+function naPlanKapat() {
+  document.getElementById('naPlanModal').classList.remove('acik');
+}
+
+async function naPlanKaydet() {
+  const tarih = document.getElementById('npTarih').value;
+  const tutar = parseFloat(document.getElementById('npTutar').value);
+  if (!tarih) { bildir('Tarih zorunlu', true); return; }
+  if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar girin', true); return; }
+  try {
+    await api('/api/nakit_plan', { method: 'POST', body: JSON.stringify({
+      tarih: tarih,
+      yon: document.getElementById('npYon').value,
+      tutar: tutar,
+      doviz: document.getElementById('npDoviz').value,
+      aciklama: document.getElementById('npAciklama').value })});
+    bildir('Nakit kalemi eklendi');
+    naPlanKapat();
+    naYukle();
+  } catch (e) { /* api() zaten bildiriyor */ }
+}
+
+/* Dışa aktarma EKRANDAKİ seçimi izler — kullanıcı 12 aya geçtiyse
+   Excel'de de 12 ay olmalı, yoksa neden 6 ay indiğini anlamaz. */
+function naDisa(modul, fmt) {
+  const ay = document.getElementById('naAy').value;
+  const kirilim = document.getElementById('naKirilim').value;
+  disaAktar(modul, fmt, 'ay=' + ay + '&kirilim=' + kirilim);
+}
+
+naYukle();
+</script>
+{% endblock %}

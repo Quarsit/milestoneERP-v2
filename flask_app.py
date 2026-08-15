@@ -3239,6 +3239,26 @@ def create_app():
             return redirect(url_for('dashboard'))
         return render_template('cari.html')
 
+    @app.route('/nakit')
+    def nakit_sayfa():
+        """Nakit akisi projeksiyonu.
+
+        YETKI: 'kasa' moduluna bagli — bu ekran kasa bakiyelerini ve
+        tum borc/alacaklari gosterir, finans yetkisi olmayan gormemeli.
+        """
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('kasa', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('nakit.html')
+
+    @app.route('/sabit-gider')
+    def sabit_gider_sayfa():
+        """Tekrarlayan gider sablonlari — projeksiyonun tek eksik girdisi."""
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('kasa', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('sabit_gider.html')
+
     @app.route('/maliyet')
     def maliyet_sayfa():
         if _auth_required(): return _auth_required()
@@ -8868,6 +8888,413 @@ def create_app():
             'bitis': g.bitis.isoformat() if g.bitis else None,
             'aktif': g.aktif, 'aciklama': g.aciklama,
         }
+
+    # ══════════════════════════════════════════════════════════
+    #  NAKİT AKIŞI — PROJEKSİYON  (NA2)
+    # ══════════════════════════════════════════════════════════
+
+    # Cari hareketin nakit projeksiyonuna GIRMEYECEGI kaynaklar.
+    # Gerekce icin dosya basindaki acikliamaya bakin — ozetle: ya
+    # parasi zaten kasaya girmis, ya baska bir tablodan sayiliyor,
+    # ya da hic nakit hareketi yok.
+    NAKIT_HARIC_KAYNAK = ('cek', 'tahsilat', 'virman', 'mahsup', 'avans_devir')
+
+    # Cek durumlari — /api/cek/ozet ile AYNI liste olmali.
+    NAKIT_ACIK_CEK_ALINAN = ('Portfoyde', 'TahsildeBanka', 'Teminatta')
+    NAKIT_ACIK_CEK_VERILEN = ('Verildi',)
+
+    def _gider_tarihleri(g, bas, son):
+        """Sabit gider sablonunu tarih listesine yayar.
+
+        Ayin 31'i secilmis ama ay 30 cekiyorsa AYIN SON GUNU kullanilir
+        — 31 Subat diye bir gun yok, gider kaybolmamali.
+        """
+        import calendar
+        sonuc = []
+        if not g.aktif:
+            return sonuc
+        _bas = max(bas, g.baslangic or bas)
+        _son = min(son, g.bitis) if g.bitis else son
+        if _bas > _son:
+            return sonuc
+
+        if g.periyot == 'haftalik':
+            hg = g.haftanin_gunu if g.haftanin_gunu is not None else 0
+            t = _bas
+            while t.weekday() != hg:
+                t += timedelta(days=1)
+                if t > _son:
+                    return sonuc
+            while t <= _son:
+                sonuc.append(t)
+                t += timedelta(days=7)
+            return sonuc
+
+        # aylik / yillik
+        gun = g.ayin_gunu or 1
+        y, a = _bas.year, _bas.month
+        # Guvenlik siniri: 24 ay * 12 = kacak dongu olmaz
+        for _ in range(400):
+            if date(y, a, 1) > _son:
+                break
+            atla = (g.periyot == 'yillik' and g.ay and a != g.ay)
+            if not atla:
+                son_gun = calendar.monthrange(y, a)[1]
+                t = date(y, a, min(gun, son_gun))
+                if _bas <= t <= _son:
+                    sonuc.append(t)
+            a += 1
+            if a > 12:
+                a = 1
+                y += 1
+        return sonuc
+
+    def _nakit_kalemleri(bas, son):
+        """Tarih araligindaki TUM beklenen nakit hareketlerini toplar.
+
+        Doner: [{'tarih','yon','tutar','doviz','kaynak','aciklama',
+                 'kayit_id','vadesiz'}]
+        """
+        kalemler = []
+
+        # ── 1) CARİ HAREKETLER ────────────────────────────────
+        for h in CariHareket.query.filter(
+                CariHareket.kapatildi.isnot(True)).all():
+            if (h.kaynak or '') in NAKIT_HARIC_KAYNAK:
+                continue
+            borc = float(h.borc or 0)
+            alacak = float(h.alacak or 0)
+            if borc <= 0 and alacak <= 0:
+                continue
+            # borc   = musteri bize borclu       → GIRIS
+            # alacak = biz tedarikciye borcluyuz → CIKIS
+            yon = 'giris' if borc > 0 else 'cikis'
+            tutar = borc if borc > 0 else alacak
+            vade = h.vade_tarihi
+            _ad = (h.cari_unvan or h.cari_id or '').strip()
+            _tip = (h.islem_tip or '').strip()
+            kalemler.append({
+                'tarih': vade.isoformat() if vade else None,
+                'yon': yon, 'tutar': q3(tutar),
+                'doviz': (h.doviz or 'TRY').upper(),
+                'kaynak': 'cari', 'kayit_id': h.id,
+                'aciklama': f"{_ad} — {_tip}".strip(' —') or 'Cari hareket',
+                'vadesiz': vade is None,
+            })
+
+        # ── 2) ÇEKLER ─────────────────────────────────────────
+        for ck in Cek.query.filter(Cek.aktif.isnot(False)).all():
+            if ck.yon == 'alinan':
+                acik = ck.durum in NAKIT_ACIK_CEK_ALINAN
+            else:
+                acik = ck.durum in NAKIT_ACIK_CEK_VERILEN
+            if not acik:
+                continue
+            _no = ck.cek_no or ck.id
+            _ad = (ck.cari_unvan or '').strip()
+            kalemler.append({
+                'tarih': ck.vade_tarihi.isoformat() if ck.vade_tarihi else None,
+                'yon': 'giris' if ck.yon == 'alinan' else 'cikis',
+                'tutar': q3(float(ck.tutar or 0)),
+                'doviz': (ck.doviz or 'TRY').upper(),
+                'kaynak': 'cek', 'kayit_id': ck.id,
+                'aciklama': f"Çek {_no} — {_ad}".strip(' —'),
+                'vadesiz': ck.vade_tarihi is None,
+            })
+
+        # ── 3) SABİT GİDERLER (sablondan yayilir) ─────────────
+        for g in SabitGider.query.filter_by(aktif=True).all():
+            for t in _gider_tarihleri(g, bas, son):
+                kalemler.append({
+                    'tarih': t.isoformat(), 'yon': 'cikis',
+                    'tutar': q3(float(g.tutar or 0)),
+                    'doviz': (g.doviz or 'TRY').upper(),
+                    'kaynak': 'sabit', 'kayit_id': g.id,
+                    'aciklama': f"{g.ad} ({g.kategori or 'Diğer'})",
+                    'vadesiz': False,
+                })
+
+        # ── 4) ELLE EKLENEN PLAN KALEMLERİ ────────────────────
+        for p in NakitPlan.query.filter(
+                NakitPlan.gerceklesti.isnot(True),
+                NakitPlan.kaynak == 'elle').all():
+            kalemler.append({
+                'tarih': p.tarih.isoformat() if p.tarih else None,
+                'yon': p.yon, 'tutar': q3(float(p.tutar or 0)),
+                'doviz': (p.doviz or 'TRY').upper(),
+                'kaynak': 'elle', 'kayit_id': p.id,
+                'aciklama': p.aciklama or 'Elle eklenen',
+                'vadesiz': p.tarih is None,
+            })
+
+        return kalemler
+
+    def _nakit_projeksiyon(tam=False):
+        """Nakit akisi projeksiyonunu HESAPLAR — dict doner.
+
+        YETKI KONTROLU YOK: cagiran taraf kendisi denetler. Bu
+        fonksiyonu hem /api/nakit_akis hem /api/export/nakit
+        kullaniyor; ikisi de kendi yetkisini basta kontrol ediyor.
+
+        Hesabin TEK KOPYA olmasi sart. Iki kopya olsaydi biri
+        duzeltilip oteki unutuldugunda ekrandaki rakamla Excel'e
+        inen rakam sessizce ayrisirdi.
+
+        tam=True ise `tum_kalemler` de doner (kalem kalem disa
+        aktarma icin, donem ozetindeki 40'lik kirpma olmadan).
+
+        Parametreler request.args'tan okunur:
+            ay=6                kac ay ileriye (1-24, varsayilan 6)
+            kirilim=ay|hafta|gun
+            baslangic=YYYY-MM-DD
+
+        UC DOVIZ AYRI doner — toplanmaz.
+        """
+        try:
+            ay_sayisi = max(1, min(24, int(request.args.get('ay', 6))))
+        except (TypeError, ValueError):
+            ay_sayisi = 6
+        kirilim = (request.args.get('kirilim') or 'ay').lower()
+        if kirilim not in ('ay', 'hafta', 'gun'):
+            kirilim = 'ay'
+        bas = _parse_date(request.args.get('baslangic')) or date.today()
+        son = bas + timedelta(days=ay_sayisi * 31)
+
+        # ── Acilis kasa bakiyeleri (doviz bazinda) ──
+        acilis = {}
+        for k in Kasa.query.filter(Kasa.aktif.isnot(False)).all():
+            d = (k.doviz or 'TRY').upper()
+            acilis[d] = q3(float(acilis.get(d, 0)) + float(k.bakiye or 0))
+
+        kalemler = _nakit_kalemleri(bas, son)
+
+        # ── Vadesiz olanlari AYIR ──
+        # Gizlemek projeksiyonu iyimser yapar; ayri gostermek dogru.
+        vadesiz = [x for x in kalemler if x['vadesiz']]
+        vadeli = [x for x in kalemler if not x['vadesiz']]
+
+        gecmis = [x for x in vadeli if x['tarih'] < bas.isoformat()]
+        gelecek = [x for x in vadeli
+                   if bas.isoformat() <= x['tarih'] <= son.isoformat()]
+
+        def donem_anahtari(tarih_str):
+            t = date.fromisoformat(tarih_str)
+            if kirilim == 'gun':
+                return t.isoformat()
+            if kirilim == 'hafta':
+                return (t - timedelta(days=t.weekday())).isoformat()
+            return f'{t.year}-{t.month:02d}'
+
+        donemler = {}
+        for x in gelecek:
+            a = donem_anahtari(x['tarih'])
+            g = donemler.setdefault(a, {})
+            s = g.setdefault(x['doviz'], {'giris': 0.0, 'cikis': 0.0, 'kalemler': []})
+            s['giris' if x['yon'] == 'giris' else 'cikis'] += float(x['tutar'])
+            s['kalemler'].append(x)
+
+        # ── Kumulatif bakiye (doviz bazinda) ──
+        # KRITIK SUTUN: hangi donemde para BITIYOR onu gosterir.
+        # Vadesi gecmis kalemler acilisa DAHIL EDILMEZ — henuz tahsil
+        # edilmemisler; ayri grupta uyari olarak gosterilir.
+        yurur = dict(acilis)
+        sirali = []
+        for a in sorted(donemler.keys()):
+            satir = {'donem': a, 'dovizler': {}}
+            for d in sorted(set(list(donemler[a].keys()) + list(yurur.keys()))):
+                s = donemler[a].get(d, {'giris': 0.0, 'cikis': 0.0, 'kalemler': []})
+                net = q3(s['giris'] - s['cikis'])
+                yurur[d] = q3(float(yurur.get(d, 0)) + float(net))
+                satir['dovizler'][d] = {
+                    'giris': q3(s['giris']), 'cikis': q3(s['cikis']),
+                    'net': net, 'kumulatif': yurur[d],
+                    'kalem_sayisi': len(s['kalemler']),
+                    'kalemler': sorted(s['kalemler'], key=lambda x: x['tarih'])[:40],
+                }
+            sirali.append(satir)
+
+        def ozet(liste):
+            o = {}
+            for x in liste:
+                d = o.setdefault(x['doviz'], {'giris': 0.0, 'cikis': 0.0, 'adet': 0})
+                d['giris' if x['yon'] == 'giris' else 'cikis'] += float(x['tutar'])
+                d['adet'] += 1
+            return {k: {'giris': q3(v['giris']), 'cikis': q3(v['cikis']),
+                        'adet': v['adet']} for k, v in o.items()}
+
+        sonuc = {
+            'ok': True,
+            'baslangic': bas.isoformat(), 'bitis': son.isoformat(),
+            'kirilim': kirilim, 'ay': ay_sayisi,
+            'acilis': acilis,
+            'donemler': sirali,
+            'vadesi_gecmis': {'ozet': ozet(gecmis),
+                              'kalemler': sorted(gecmis, key=lambda x: x['tarih'])[:100]},
+            'vadesiz': {'ozet': ozet(vadesiz), 'kalemler': vadesiz[:100]},
+        }
+        if tam:
+            # Kirpilmamis tam liste — yalnizca disa aktarma icin.
+            # API yanitina konmuyor: ekran zaten donem ozetini
+            # gosteriyor, bosuna yuk olurdu.
+            sonuc['tum_kalemler'] = (
+                sorted(gecmis + gelecek, key=lambda x: x['tarih']) + vadesiz)
+        return sonuc
+
+    @app.route('/api/nakit_akis', methods=['GET'])
+    def api_nakit_akis():
+        """Nakit akisi projeksiyonu (ekran icin)."""
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        return jsonify(_nakit_projeksiyon())
+
+    # ── Disa aktarma yardimcilari (NA4) ───────────────────────
+    NAKIT_KAYNAK_ETIKET = {
+        'cari': 'Cari hesap', 'cek': 'Çek / Senet',
+        'sabit': 'Sabit gider', 'elle': 'Elle eklenen',
+    }
+
+    def _nakit_gun_adi(i):
+        return ('Pazartesi', 'Salı', 'Çarşamba', 'Perşembe',
+                'Cuma', 'Cumartesi', 'Pazar')[i % 7]
+
+    def _nakit_ay_adi(i):
+        return ('Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+                'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım',
+                'Aralık')[(i - 1) % 12]
+
+    def _nakit_donem_adi(anahtar, kirilim):
+        """'2026-08' → 'Ağustos 2026' gibi okunur bicime cevirir."""
+        try:
+            if kirilim == 'ay':
+                y, a = anahtar.split('-')
+                return f'{_nakit_ay_adi(int(a))} {y}'
+            t = date.fromisoformat(anahtar)
+            if kirilim == 'hafta':
+                return f'{t.strftime("%d.%m.%Y")} haftası'
+            return t.strftime('%d.%m.%Y')
+        except Exception:
+            return anahtar
+
+    def _sabit_gider_periyot_yazi(g):
+        if g.periyot == 'haftalik':
+            return f'Her {_nakit_gun_adi(g.haftanin_gunu or 0)}'
+        if g.periyot == 'yillik':
+            return f'Her yıl {_nakit_ay_adi(g.ay or 1)} {g.ayin_gunu or 1}'
+        return f"Her ayın {g.ayin_gunu or 1}'i"
+
+    def _sabit_gider_aylik(g):
+        """Periyodu aylik olcege getirir. Doviz cevrimi YAPILMAZ."""
+        t = float(g.tutar or 0)
+        if g.periyot == 'haftalik':
+            return t * 52 / 12
+        if g.periyot == 'yillik':
+            return t / 12
+        return t
+
+    @app.route('/api/nakit_plan', methods=['GET'])
+    def api_nakit_plan_liste():
+        """Elle eklenmis plan kalemleri."""
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        q = NakitPlan.query.filter_by(kaynak='elle')
+        if request.args.get('bekleyen') == '1':
+            q = q.filter(NakitPlan.gerceklesti.isnot(True))
+        pl = q.order_by(NakitPlan.tarih).all()
+        return jsonify({'ok': True, 'data': [{
+            'id': p.id,
+            'tarih': p.tarih.isoformat() if p.tarih else None,
+            'yon': p.yon, 'tutar': p.tutar, 'doviz': p.doviz,
+            'aciklama': p.aciklama, 'cari_id': p.cari_id,
+            'gerceklesti': bool(p.gerceklesti),
+            'gerceklesme_tarihi': (p.gerceklesme_tarihi.isoformat()
+                                   if p.gerceklesme_tarihi else None),
+        } for p in pl]})
+
+    @app.route('/api/nakit_plan', methods=['POST'])
+    def api_nakit_plan_ekle():
+        """Elle nakit kalemi ekler.
+
+        Asil kullanim: VADESIZ bir cari hareketine tahmini vade atamak.
+        Asil kayda DOKUNULMAZ — muhasebe kaydi gercek, nakit tahmini
+        ongorudur; ikisi karismamali.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        d = request.json or {}
+        t = _parse_date(d.get('tarih'))
+        if not t:
+            return jsonify({'ok': False, 'mesaj': 'Tarih zorunlu (YYYY-AA-GG)'}), 400
+        yon = (d.get('yon') or '').lower()
+        if yon not in ('giris', 'cikis'):
+            return jsonify({'ok': False,
+                            'mesaj': "Yon 'giris' ya da 'cikis' olmali"}), 400
+        try:
+            tutar = float(d.get('tutar') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Tutar sayisal olmali'}), 400
+        if tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Tutar sifirdan buyuk olmali'}), 400
+
+        p = NakitPlan(
+            id=_yeni_id('NP'), tarih=t, yon=yon, tutar=q3(tutar),
+            doviz=(d.get('doviz') or 'TRY').upper(),
+            aciklama=(d.get('aciklama') or '').strip() or None,
+            kaynak='elle', kaynak_id=(d.get('kaynak_id') or '').strip() or None,
+            cari_id=(d.get('cari_id') or '').strip() or None,
+            kullanici=session.get('kullanici'))
+        db.session.add(p)
+        ok, hata = _safe_commit('Nakit plan ekleme')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'id': p.id, 'mesaj': 'Nakit kalemi eklendi'})
+
+    @app.route('/api/nakit_plan/<plan_id>/gerceklesti', methods=['POST'])
+    def api_nakit_plan_gerceklesti(plan_id):
+        """Plan kalemini GERCEKLESTI olarak isaretler.
+
+        ELLE isaretleme — kasa hareketiyle otomatik eslestirme
+        denenmedi: yanlis eslestirme, olmayan bir tahsilati "olmus"
+        gostermekten daha kotu sonuc verir.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        p = NakitPlan.query.get(plan_id)
+        if not p:
+            return jsonify({'ok': False, 'mesaj': 'Kalem bulunamadi'}), 404
+        d = request.json or {}
+        p.gerceklesti = bool(d.get('gerceklesti', True))
+        if p.gerceklesti:
+            p.gerceklesme_tarihi = _parse_date(d.get('tarih')) or date.today()
+        else:
+            p.gerceklesme_tarihi = None
+        ok, hata = _safe_commit(f'Nakit plan gerceklesme: {plan_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'gerceklesti': p.gerceklesti,
+                        'mesaj': 'İşaretlendi' if p.gerceklesti else 'Geri alındı'})
+
+    @app.route('/api/nakit_plan/<plan_id>', methods=['DELETE'])
+    def api_nakit_plan_sil(plan_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        p = NakitPlan.query.get(plan_id)
+        if not p:
+            return jsonify({'ok': False, 'mesaj': 'Kalem bulunamadi'}), 404
+        db.session.delete(p)
+        ok, hata = _safe_commit(f'Nakit plan silme: {plan_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': 'Silindi'})
 
     @app.route('/api/sabit_gider', methods=['GET'])
     def api_sabit_gider_liste():
@@ -16391,6 +16818,10 @@ def create_app():
         rows = []
         sayisal = []
         dosya = modul
+        # PDF ciktisinin basindaki ozet bloğu — [(etiket, deger), ...].
+        # liste_pdf bunu zaten destekliyordu ama dagitici hic
+        # doldurmuyordu. Bos birakilirsa davranis eskisi gibi.
+        ozet_satirlari = []
 
         if modul == 'siparis':
             baslik = 'Sipariş Listesi'
@@ -16577,12 +17008,111 @@ def create_app():
                              str(a.kayit_id or ''), a.ip_adresi or ''])
             dosya = 'denetim_kaydi'
 
+        elif modul in ('nakit', 'nakit_detay'):
+            # YETKI: genel dagitici modul yetkisine bakmiyor; nakit
+            # ciktilari kasa bakiyelerini ve tum borc/alacaklari
+            # icerdigi icin burada ACIKCA denetleniyor.
+            if not _yetki_var_mi('kasa', 'okuma'):
+                return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+
+            p = _nakit_projeksiyon(tam=(modul == 'nakit_detay'))
+            kirilim = p['kirilim']
+
+            # Ozet blogu — her iki cikti icin ayni
+            for dv in sorted(p['acilis']):
+                ozet_satirlari.append((f'{dv} açılış bakiyesi',
+                                       _f(p['acilis'][dv], True)))
+            ozet_satirlari.append(('Tarih aralığı',
+                                   f"{_tarih(date.fromisoformat(p['baslangic']))}"
+                                   f" – {_tarih(date.fromisoformat(p['bitis']))}"))
+            # Kumulatif negatife dusen ilk donem: raporun asil uyarisi
+            for dv in sorted(p['acilis']):
+                kritik = next((s for s in p['donemler']
+                               if (s['dovizler'].get(dv) or {}).get('kumulatif', 0) < 0), None)
+                if kritik:
+                    ozet_satirlari.append((
+                        f'⚠ {dv} bakiyesi eksiye düşüyor',
+                        f"{_nakit_donem_adi(kritik['donem'], kirilim)}"
+                        f" ({_f(kritik['dovizler'][dv]['kumulatif'], True)})"))
+            for dv, o in sorted((p['vadesi_gecmis']['ozet'] or {}).items()):
+                if o.get('giris'):
+                    ozet_satirlari.append((f'Vadesi geçmiş {dv} alacak',
+                                           f"{_f(o['giris'], True)} ({o['adet']} kayıt)"))
+                if o.get('cikis'):
+                    ozet_satirlari.append((f'Vadesi geçmiş {dv} borç',
+                                           f"{_f(o['cikis'], True)} ({o['adet']} kayıt)"))
+            _vsz = sum(o['adet'] for o in (p['vadesiz']['ozet'] or {}).values())
+            if _vsz:
+                ozet_satirlari.append(('Vadesi belirsiz hareket',
+                                       f'{_vsz} adet — projeksiyona dahil değil'))
+
+            if modul == 'nakit':
+                baslik = 'Nakit Akışı Projeksiyonu'
+                headers = ['Döviz', 'Dönem', 'Giriş', 'Çıkış', 'Net', 'Kümülatif']
+                sayisal = [2, 3, 4, 5]
+                # Doviz doviz gruplanir — tek cizgide toplanmaz.
+                dovizler = sorted(set(list(p['acilis'].keys())
+                                      + [d for s in p['donemler'] for d in s['dovizler']]))
+                for dv in dovizler:
+                    _yazildi = False
+                    for s in p['donemler']:
+                        v = s['dovizler'].get(dv)
+                        if not v or (not v['giris'] and not v['cikis']):
+                            continue
+                        rows.append([dv, _nakit_donem_adi(s['donem'], kirilim),
+                                     _f(v['giris'], True), _f(v['cikis'], True),
+                                     _f(v['net'], True), _f(v['kumulatif'], True)])
+                        _yazildi = True
+                    if not _yazildi and p['acilis'].get(dv):
+                        rows.append([dv, 'hareket yok', '', '', '',
+                                     _f(p['acilis'][dv], True)])
+                dosya = f"nakit_akisi_{p['ay']}ay"
+
+            else:
+                baslik = 'Nakit Akışı — Kalem Listesi'
+                headers = ['Vade', 'Döviz', 'Yön', 'Tutar', 'Kaynak', 'Açıklama']
+                sayisal = [3]
+                for k in p.get('tum_kalemler', []):
+                    rows.append([
+                        _tarih(date.fromisoformat(k['tarih'])) if k['tarih'] else 'VADESİZ',
+                        k['doviz'],
+                        'Giriş' if k['yon'] == 'giris' else 'Çıkış',
+                        _f(k['tutar'], True),
+                        NAKIT_KAYNAK_ETIKET.get(k['kaynak'], k['kaynak']),
+                        k['aciklama'] or ''])
+                dosya = f"nakit_kalemleri_{p['ay']}ay"
+
+        elif modul == 'sabit_gider':
+            if not _yetki_var_mi('kasa', 'okuma'):
+                return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+            baslik = 'Sabit Giderler'
+            headers = ['Gider', 'Kategori', 'Periyot', 'Tutar', 'Döviz',
+                       'Aylık karşılık', 'Başlangıç', 'Bitiş', 'Durum']
+            sayisal = [3, 5]
+            gl = SabitGider.query.order_by(SabitGider.kategori, SabitGider.ad).all()
+            aylik = {}
+            for g in gl:
+                if g.aktif:
+                    _d = (g.doviz or 'TRY').upper()
+                    aylik[_d] = aylik.get(_d, 0) + _sabit_gider_aylik(g)
+                rows.append([g.ad, g.kategori or '', _sabit_gider_periyot_yazi(g),
+                             _f(g.tutar, True), g.doviz or 'TRY',
+                             _f(_sabit_gider_aylik(g), True),
+                             _tarih(g.baslangic), _tarih(g.bitis) or 'süresiz',
+                             'Aktif' if g.aktif else 'Pasif'])
+            for dv in sorted(aylik):
+                ozet_satirlari.append((f'{dv} aylık yük', _f(aylik[dv], True)))
+                ozet_satirlari.append((f'{dv} yıllık yük', _f(aylik[dv] * 12, True)))
+            dosya = 'sabit_giderler'
+
         else:
             return jsonify({'ok': False, 'mesaj': f'Bilinmeyen modül: {modul}'}), 400
 
         dosya = f'{dosya}_{date.today().isoformat()}'
         if fmt == 'pdf':
-            return liste_pdf(baslik, headers, rows, dosya_adi=dosya, sayisal_sutunlar=sayisal)
+            return liste_pdf(baslik, headers, rows, dosya_adi=dosya,
+                             sayisal_sutunlar=sayisal,
+                             ozet=ozet_satirlari or None)
         return liste_xlsx(baslik, headers, rows, dosya_adi=dosya, sayisal_sutunlar=sayisal)
 
     return app

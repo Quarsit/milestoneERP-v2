@@ -13,13 +13,39 @@ import io
 from datetime import date
 
 
+# Icerik tipi → dosya uzantisi. Uzanti burada, TEK YERDE ekleniyor.
+# Onceden her cagiran kendisi eklemek zorundaydi; liste_pdf'in
+# WeasyPrint yolu bunu unutmustu ve PDF'ler uzantisiz iniyordu.
+# Windows dosyayi taniyamayip Word'e veriyor, icerik gecerli PDF
+# oldugu halde "bozuk" gorunuyordu.
+_UZANTILAR = {
+    'application/pdf': '.pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'text/csv': '.csv',
+}
+
+
 def _make_response(data_bytes, dosya_adi, content_type, inline=False):
     from flask import make_response
     resp = make_response(data_bytes)
     resp.headers['Content-Type'] = content_type
+
+    dosya_adi = (dosya_adi or 'dosya').strip() or 'dosya'
+    uzanti = _UZANTILAR.get((content_type or '').split(';')[0].strip().lower())
+    if uzanti and not dosya_adi.lower().endswith(uzanti):
+        dosya_adi += uzanti
+
     # inline=True → tarayıcıda aç (PDF için); inline=False → indir (Excel için)
     yerlesim = 'inline' if inline else 'attachment'
-    resp.headers['Content-Disposition'] = f'{yerlesim}; filename="{dosya_adi}"'
+
+    # Dosya adinda ASCII disi karakter varsa (Turkce ad, firma unvani)
+    # duz filename= basligi bazi tarayicilarda bozulur. RFC 6266/5987
+    # geregi ASCII yedek + filename* birlikte veriliyor.
+    ascii_ad = dosya_adi.encode('ascii', 'replace').decode('ascii').replace('?', '_')
+    from urllib.parse import quote
+    resp.headers['Content-Disposition'] = (
+        f'{yerlesim}; filename="{ascii_ad}"; '
+        f"filename*=UTF-8''{quote(dosya_adi)}")
     return resp
 
 
@@ -227,7 +253,10 @@ def liste_pdf(baslik, headers, rows, dosya_adi='liste', sayisal_sutunlar=None,
             bugun=_date.today().strftime('%d.%m.%Y'),
         )
         pdf = HTML(string=html, base_url='.').write_pdf()
-        return _make_response(pdf, dosya_adi, 'application/pdf')
+        # inline=True: reportlab yedegiyle AYNI davranis. Onceden
+        # birincil yol dosya olarak indiriyor, yedek yol tarayicida
+        # aciyordu — ayni istek, iki farkli sonuc.
+        return _make_response(pdf, dosya_adi, 'application/pdf', inline=True)
 
     except Exception as hata:                                    # noqa: BLE001
         # Şablon yoksa, weasyprint kurulu değilse veya render hata verirse:
@@ -238,10 +267,12 @@ def liste_pdf(baslik, headers, rows, dosya_adi='liste', sayisal_sutunlar=None,
                 'liste_pdf: HTML yolu basarisiz (%s) — reportlab yedegine dusuldu', hata)
         except Exception:
             pass
-        return _liste_pdf_reportlab(baslik, headers, rows, dosya_adi, sayisal_sutunlar)
+        return _liste_pdf_reportlab(baslik, headers, rows, dosya_adi, sayisal_sutunlar,
+                                    ozet=ozet)
 
 
-def _liste_pdf_reportlab(baslik, headers, rows, dosya_adi='liste', sayisal_sutunlar=None):
+def _liste_pdf_reportlab(baslik, headers, rows, dosya_adi='liste', sayisal_sutunlar=None,
+                         ozet=None):
     """Yedek PDF üretici (eski reportlab yolu). Yalnızca HTML yolu
     çalışmadığında kullanılır."""
     """PDF tablo üretir (reportlab). Türkçe karakter destekli."""
@@ -276,6 +307,16 @@ def _liste_pdf_reportlab(baslik, headers, rows, dosya_adi='liste', sayisal_sutun
         Paragraph(f'Oluşturma: {date.today().strftime("%d.%m.%Y")}', tarih_stil),
         Spacer(1, 4),
     ]
+
+    # ÖZET — HTML yolundaki blokla ayni bilgi. Yedege dusuldugunde
+    # ozetin sessizce kaybolmamasi icin burada da basiliyor.
+    if ozet:
+        ozet_stil = ParagraphStyle('Ozet', parent=styles['Normal'], fontSize=8.5,
+                                   leading=12, fontName=font_normal,
+                                   textColor=colors.HexColor('#333333'))
+        for _etiket, _deger in ozet:
+            elemanlar.append(Paragraph(f'<b>{_etiket}:</b> {_deger}', ozet_stil))
+        elemanlar.append(Spacer(1, 8))
 
     # Hücre içeriklerini Paragraph yap (uzun metin kayması için)
     hucre_stil = ParagraphStyle('Hucre', parent=styles['Normal'], fontSize=8, leading=10, fontName=font_normal)
