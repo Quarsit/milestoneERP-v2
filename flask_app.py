@@ -8893,24 +8893,34 @@ def create_app():
     #  NAKİT AKIŞI — PROJEKSİYON  (NA2)
     # ══════════════════════════════════════════════════════════
 
-    # Cari hareketin nakit projeksiyonuna GIRMEYECEGI kaynaklar.
-    # Her biri AYRI sebeple disarida:
+    # Cari hareketlerin nakit projeksiyonundaki ROLU.
     #
-    #   'cek'          Cek kendi tablosundan sayiliyor (asagida,
-    #                  Cek.query dongusu).
-    #   'tahsilat'     Bu hareket CEK ALINIRKEN aciliyor — bkz.
-    #                  api_cek_ekle(). Yani cekin ta kendisi.
-    #                  Sayilsaydi ayni tahsilat hem Cek hem
-    #                  CariHareket uzerinden IKI KEZ gorunurdu.
-    #   'virman'       Parayi zaten kasaya tasimis; tutar kasa.bakiye
-    #                  icinde, yani acilis bakiyesine dahil.
-    #   'mahsup'       Hesap denklestirme — nakit hareketi yok.
-    #   'avans_devir'  Hesaplar arasi avans aktarimi — nakit hareketi
-    #                  yok.
-    #
+    # BORC/ALACAK sutunu tek basina YETMEZ: bir 'alacak' satiri hem
+    # alis faturasi (odenecek borc) hem de tahsilat (alinan para)
+    # olabilir. Ikisi zit yonde nakit demek. Ayrimi kaynak yapar.
+
+    # YUKUMLULUK: gelecekte nakit hareketi DOGURAN kayitlar.
+    NAKIT_YUKUMLULUK = ('fatura', 'maliyet', 'stok', 'siparis_teslim',
+                        'sicak_satis', 'rezervasyon', 'sabit',
+                        'elle', 'manuel')
+
+    # KAPATMA: yukumlulugu azaltan kayitlar. Ya para zaten hareket
+    # etti (tahsilat, odeme, virman), ya baska bir enstrumana devredildi
+    # (cek — Cek tablosundan ayrica sayiliyor), ya da hesaplar arasi
+    # denklestirme yapildi (mahsup, avans_devir).
+    NAKIT_KAPATMA = ('tahsilat', 'odeme', 'cek', 'virman',
+                     'mahsup', 'avans_devir')
+
+    # Ikisi de degil — yalnizca muhasebe kaydi, nakit tarafinda isi yok:
+    #   'cek_olu'            CK2'nin olen cek icin actigi ters kayit.
+    #                        Cari bakiyeyi duzeltmek icin var. Olu cekin
+    #                        kapatma satiri zaten sayilmadigindan asil
+    #                        fatura kendiliginden geri donuyor; ikisini
+    #                        birden saymak cift kayit olurdu.
+    #   'otomatik_kur_farki' Kur degerlemesi — nakit hareketi yok.
+
     # Fatura tablosu HIC okunmuyor: fatura kesilince cari hareket
     # zaten aciliyor. Ikisini de okumak her borcu iki kez sayardi.
-    NAKIT_HARIC_KAYNAK = ('cek', 'tahsilat', 'virman', 'mahsup', 'avans_devir')
 
     # Cek durumlari — /api/cek/ozet ile AYNI liste olmali.
     NAKIT_ACIK_CEK_ALINAN = ('Portfoyde', 'TahsildeBanka', 'Teminatta')
@@ -8970,30 +8980,78 @@ def create_app():
         """
         kalemler = []
 
-        # ── 1) CARİ HAREKETLER ────────────────────────────────
-        for h in CariHareket.query.filter(
-                CariHareket.kapatildi.isnot(True)).all():
-            if (h.kaynak or '') in NAKIT_HARIC_KAYNAK:
+        # ── 1) CARİ HAREKETLER — FIFO KAPATMA ─────────────────
+        # Sistem tahsilati, asil faturanin borc'unu AZALTMIYOR; ayri
+        # bir kapatma satiri aciyor. Ham borc'u okumak, tahsil edilmis
+        # faturayi da "bekleyen" gostermek demek.
+        #
+        # Bu yuzden her cari + doviz + yon grubunda kapatmalar
+        # yukumluluklere VADE SIRASIYLA uygulanir; artan kisim
+        # projeksiyona girer.
+
+        # Olu cekler (karsiliksiz / iade) kapatma SAYILMAZ — para hic
+        # gelmedi. Boylece asil fatura kendi vadesiyle geri doner.
+        _olu_cek = {c.id for c in Cek.query.filter(
+            Cek.durum.in_(CEK_OLU_DURUMLAR)).all()}
+
+        _yuk, _kap = {}, {}
+        for h in CariHareket.query.all():
+            _k = (h.kaynak or '')
+            _borc = float(h.borc or 0)
+            _alacak = float(h.alacak or 0)
+            if _borc <= 0 and _alacak <= 0:
                 continue
-            borc = float(h.borc or 0)
-            alacak = float(h.alacak or 0)
-            if borc <= 0 and alacak <= 0:
-                continue
-            # borc   = musteri bize borclu       → GIRIS
-            # alacak = biz tedarikciye borcluyuz → CIKIS
-            yon = 'giris' if borc > 0 else 'cikis'
-            tutar = borc if borc > 0 else alacak
-            vade = h.vade_tarihi
-            _ad = (h.cari_unvan or h.cari_id or '').strip()
-            _tip = (h.islem_tip or '').strip()
-            kalemler.append({
-                'tarih': vade.isoformat() if vade else None,
-                'yon': yon, 'tutar': q3(tutar),
-                'doviz': (h.doviz or 'TRY').upper(),
-                'kaynak': 'cari', 'kayit_id': h.id,
-                'aciklama': f"{_ad} — {_tip}".strip(' —') or 'Cari hareket',
-                'vadesiz': vade is None,
-            })
+            _grup = h.cari_id or h.cari_unvan or '?'
+            _dv = (h.doviz or 'TRY').upper()
+
+            if _k in NAKIT_YUKUMLULUK:
+                if h.kapatildi:
+                    # Alan sistemde kullanilmiyor ama isaretlenmisse saygi duy.
+                    continue
+                # borc   = musteri bize borclu       → GIRIS
+                # alacak = biz tedarikciye borcluyuz → CIKIS
+                _yon = 'giris' if _borc > 0 else 'cikis'
+                _yuk.setdefault((_grup, _dv, _yon), []).append(h)
+
+            elif _k in NAKIT_KAPATMA:
+                if (_k == 'cek' and h.baglanti_tip == 'cek'
+                        and h.baglanti_id in _olu_cek):
+                    continue
+                # Alacak sutunu BORC yukumlulugunu kapatir, ve tersi.
+                _yon = 'giris' if _alacak > 0 else 'cikis'
+                _kap[(_grup, _dv, _yon)] = (
+                    _kap.get((_grup, _dv, _yon), 0.0)
+                    + (_alacak if _alacak > 0 else _borc))
+
+        for _anahtar, _hs in _yuk.items():
+            _grup, _dv, _yon = _anahtar
+            _kalan_kapatma = _kap.get(_anahtar, 0.0)
+            # En eski vade once kapanir. Vadesizler en sona — vadesi
+            # belli olan bir borc, belirsiz olandan once odenir.
+            _hs.sort(key=lambda x: (x.vade_tarihi is None,
+                                    x.vade_tarihi or date.max))
+            for h in _hs:
+                _tutar = float(h.borc or 0) if _yon == 'giris' else float(h.alacak or 0)
+                if _kalan_kapatma > 0:
+                    _dus = min(_tutar, _kalan_kapatma)
+                    _tutar -= _dus
+                    _kalan_kapatma -= _dus
+                if _tutar <= 0.005:   # kurus artigi — kapanmis say
+                    continue
+                _vade = h.vade_tarihi
+                _ad = (h.cari_unvan or h.cari_id or '').strip()
+                _tip = (h.islem_tip or '').strip()
+                _tam = float(h.borc or 0) if _yon == 'giris' else float(h.alacak or 0)
+                _not = '' if abs(_tutar - _tam) < 0.005 else ' (kısmi)'
+                kalemler.append({
+                    'tarih': _vade.isoformat() if _vade else None,
+                    'yon': _yon, 'tutar': q3(_tutar),
+                    'doviz': _dv,
+                    'kaynak': 'cari', 'kayit_id': h.id,
+                    'aciklama': (f"{_ad} — {_tip}{_not}".strip(' —')
+                                 or 'Cari hareket'),
+                    'vadesiz': _vade is None,
+                })
 
         # ── 2) ÇEKLER ─────────────────────────────────────────
         for ck in Cek.query.filter(Cek.aktif.isnot(False)).all():
@@ -11014,17 +11072,34 @@ def create_app():
         elif islem == 'karsiliksiz':
             c.durum = 'Karsiliksiz'
             _cek_hareket_ekle(c, 'Karşılıksız', onceki, c.durum, d.get('aciklama', ''))
+            # Cek olduyse kapanma da bozulur: alacagi geri getir.
+            _ters = _cek_olu_hareket_ve_fatura(c, 'karşılıksız')
             mesaj = 'Çek karşılıksız olarak işaretlendi'
+            if _ters:
+                mesaj += ' — cari hesaba borç yeniden yansıtıldı'
 
         elif islem == 'iade':
             # Çeki iade et (müşteriye geri ver / tedarikçiden geri al)
             c.durum = 'Iade Edildi' if c.yon == 'alinan' else 'Iade Alindi'
             _cek_hareket_ekle(c, 'İade', onceki, c.durum, d.get('aciklama', ''))
+            # Iade edilen cek de odeme saglamaz — alacak geri doner.
+            _ters = _cek_olu_hareket_ve_fatura(c, 'iade edildi')
             mesaj = 'Çek iade edildi'
+            if _ters:
+                mesaj += ' — cari hesaba borç yeniden yansıtıldı'
 
         elif islem == 'geri_al':
             # Önceki duruma döndür (portföye geri al) + yan etkileri geri al
             geri_mesaj = ''
+            # 0) Olu cek ters hareketini SIL. Yoksa portfoye geri
+            #    alinan cek cari hesapta kalici borc birakirdi.
+            _tx = db.session.get(CariHareket, _cek_ters_hareket_id(c))
+            if _tx:
+                db.session.delete(_tx)
+                geri_mesaj += ' Alacak iadesi kaydı kaldırıldı.'
+            # Fatura durumu BURADA tazelenmez: cekin durumu henuz
+            # 'Karsiliksiz'. Once portfoye donmesi, sonra tazelenmesi
+            # gerekiyor — bkz. asagidaki blok.
             # 1) Tahsil/ödeme sırasında oluşan KASA hareketini geri al (bakiye düzelt)
             if c.kasa_hareket_id:
                 kh = db.session.get(KasaHareket, c.kasa_hareket_id)
@@ -11052,6 +11127,14 @@ def create_app():
                 c.ciro_cari_unvan = None
             c.durum = 'Portfoyde' if c.yon == 'alinan' else 'Verildi'
             c.tahsil_banka_id = None
+            # Cek yeniden GECERLI: fatura durumunu simdi tazele.
+            # Sira onemli — bu satirlar durum sifirlandiktan sonra.
+            try:
+                if getattr(c, 'fatura_id', None):
+                    db.session.flush()
+                    _fatura_tahsilat_durumu(c.fatura_id)
+            except Exception:
+                pass
             _cek_hareket_ekle(c, 'Geri Alındı', onceki, c.durum, 'Portföye geri alındı')
             mesaj = 'Çek portföye geri alındı.' + geri_mesaj
         else:
@@ -15812,6 +15895,83 @@ def create_app():
             tutar_try = tutar * float(h.kur_uygulanan or _kur_getir(h.doviz, h.hareket_tarihi) or 0)
         return tutar_try / float(k)
 
+    # Cekin OLDUGU durumlar: para hic gelmedi ya da geri gitti.
+    # Nakit akisi ve fatura kapanis mantigi AYNI listeyi kullanmali,
+    # yoksa iki farkli gercek ortaya cikar.
+    CEK_OLU_DURUMLAR = ('Karsiliksiz', 'Iade Edildi', 'Iade Alindi')
+
+    def _cek_ters_hareket_id(cek):
+        """Bu cek icin acilmis ters hareketin kimligi (deterministik).
+
+        Sabit kalip: ayni cek icin iki kez ters hareket acilmasini
+        engeller ve 'geri_al' dalinda kaydi bulup silmeyi saglar.
+        """
+        return f'HX-{cek.id}'
+
+    def _cek_olu_ters_hareket(cek, sebep):
+        """Olen cek icin TERS cari hareket acar — alacagi geri getirir.
+
+        Cek bir odeme VAADIDIR. Vaat bozulunca kapanma da bozulur:
+        alinan cekte musteri yine borclu (borc), verilen cekte biz
+        yine borcluyuz (alacak).
+
+        Idempotent: ayni cek icin ikinci kez cagrilirsa yeni kayit
+        acmaz.
+        """
+        if not cek.cari_id:
+            # Cariye bagli olmayan cek — ters hareket acacak hesap yok.
+            return None
+        hid = _cek_ters_hareket_id(cek)
+        if db.session.get(CariHareket, hid):
+            return None
+
+        tutar = q3(float(cek.tutar or 0))
+        if tutar <= 0:
+            return None
+        doviz = (cek.doviz or 'TRY').upper()
+        kur = _kur_getir(doviz) or 1.0
+        try_karsilik = q3(tutar * kur) if doviz != 'TRY' else tutar
+        alinan = (cek.yon == 'alinan')
+
+        h = CariHareket(
+            id=hid,
+            hareket_tarihi=date.today(),
+            cari_id=cek.cari_id,
+            cari_unvan=cek.cari_unvan,
+            islem_tip=f'Çek {sebep} — alacak iadesi',
+            aciklama=f'{cek.cek_no or cek.id} nolu çek {sebep.lower()}',
+            borc=tutar if alinan else 0,
+            alacak=0 if alinan else tutar,
+            borc_try=try_karsilik if alinan else 0,
+            alacak_try=0 if alinan else try_karsilik,
+            doviz=doviz,
+            kur_uygulanan=kur,
+            # Vade BUGUN: alacak artik muaccel, beklemede degil.
+            vade_tarihi=date.today(),
+            kaynak='cek_olu',
+            baglanti_tip='cek',
+            baglanti_id=cek.id,
+            kullanici=session.get('kullanici'))
+        db.session.add(h)
+        return h
+
+    def _cek_olu_hareket_ve_fatura(cek, sebep):
+        """Ters hareketi acar ve bagli faturanin durumunu tazeler.
+
+        Ikisi BIRLIKTE olmali: ters hareket cari bakiyeyi duzeltir,
+        fatura durumu tazelemesi de faturayi "Tahsil Edildi"
+        olmaktan cikarir. Biri yapilip oteki atlanirsa yine iki
+        celiskili gercek olusur.
+        """
+        h = _cek_olu_ters_hareket(cek, sebep)
+        try:
+            if getattr(cek, 'fatura_id', None):
+                db.session.flush()
+                _fatura_tahsilat_durumu(cek.fatura_id)
+        except Exception:
+            pass
+        return h
+
     def _fatura_odenen_esdeger(f):
         """
         Faturaya bağlı TÜM ödemeleri (tahsilat + çek, farklı dövizler dahil)
@@ -15821,10 +15981,16 @@ def create_app():
         hs = CariHareket.query.filter(
             CariHareket.baglanti_tip == 'fatura', CariHareket.baglanti_id == f.id,
             CariHareket.alacak > 0).all()
+        # OLU cekler odeme SAYILMAZ. Karsiliksiz cikan bir cek
+        # faturayi kapatmis gibi durursa fatura "Tahsil Edildi"
+        # kalir ve kalan bakiye 0 gorunur — para hic gelmedigi halde.
         cek_hs = CariHareket.query.filter(
             CariHareket.baglanti_tip == 'cek', CariHareket.alacak > 0,
             CariHareket.baglanti_id.in_(
-                db.session.query(Cek.id).filter_by(fatura_id=f.id))).all()
+                db.session.query(Cek.id).filter(
+                    Cek.fatura_id == f.id,
+                    db.or_(Cek.durum.is_(None),
+                           Cek.durum.notin_(CEK_OLU_DURUMLAR))))).all()
         gorulen, toplam = set(), 0.0
         for h in hs + cek_hs:
             if h.id in gorulen:
