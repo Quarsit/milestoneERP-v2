@@ -326,8 +326,9 @@
         <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
       </div>
       <div class="form-alan" id="hKasaAlan" style="margin-bottom:12px"><label>Kasa / Banka Hesabı</label>
-        <select id="hKasa"><option value="">— kasaya işleme —</option></select>
-        <div style="font-size:.72rem;color:var(--soluk);margin-top:4px">Seçilirse tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur.</div>
+        <select id="hKasa"><option value="">— kasa seçin (zorunlu) —</option></select>
+        <div style="font-size:.72rem;color:var(--soluk);margin-top:4px">Tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur.
+        <strong>Zorunludur</strong> — para takip etmediğiniz bir hesaba geliyorsa önce o hesabı kasa olarak tanımlayın.</div>
       </div>
       <div class="form-alan" id="hSiparisAlan" style="margin-bottom:12px"><label>Sipariş (opsiyonel)</label>
         <select id="hSiparisSec"><option value="">— sipariş bağlama —</option></select>
@@ -1142,8 +1143,18 @@ function hareketTipiDegisti() {
   if (kasali) {
     const ks = document.getElementById('hKasa');
     if (ks.options.length <= 1 && HAR_KASALAR.length) {
-      ks.innerHTML = '<option value="">— kasaya işleme —</option>' +
+      ks.innerHTML = '<option value="">— kasa seçin (zorunlu) —</option>' +
         HAR_KASALAR.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('');
+    }
+    /* Tahsilat/ödemede para BİR YERE gider. Boş seçenek varsayılan
+       olursa unutuluyor ve para iki ekran arasında kayboluyor:
+       cari bakiyesi değişiyor, kasada karşılığı olmuyor.
+       Bu yüzden aynı dövizli ilk kasa kendiliğinden seçilir;
+       "kasaya işleme" bilinçli bir tercih olarak kalır. */
+    if (!ks.value) {
+      const dv = document.getElementById('hDoviz').value;
+      const uygun = HAR_KASALAR.find(k => k.doviz === dv);
+      if (uygun) ks.value = String(uygun.id);
     }
   }
 
@@ -1276,9 +1287,19 @@ async function hareketKaydet() {
   if (document.getElementById('hSiparisSec').value &&
       (tip !== 'Bakiye Transfer' || document.getElementById('hTransferYon').value === 'cari'))
     govde.siparis_id = document.getElementById('hSiparisSec').value;
-  if (['Tahsilat', 'Avans Tahsilati', 'Odeme', 'Avans Odemesi'].includes(tip) &&
-      document.getElementById('hKasa').value)
-    govde.kasa_id = parseInt(document.getElementById('hKasa').value);
+  if (['Tahsilat', 'Avans Tahsilati', 'Odeme', 'Avans Odemesi'].includes(tip)) {
+    const _kv = document.getElementById('hKasa').value;
+    if (_kv) {
+      govde.kasa_id = parseInt(_kv);
+    } else {
+      /* Kasa ZORUNLU — sunucu da reddediyor (CH1). Burada erken
+         durdurmak, kullanıcıyı sunucu hatasına göndermekten iyi. */
+      bildir(tip + ' kaydında kasa seçimi zorunlu. Para takip etmediğiniz '
+           + 'bir hesaba geldiyse önce o hesabı kasa olarak tanımlayın.', true);
+      document.getElementById('hKasa').focus();
+      return;
+    }
+  }
   // Borç/alacak yönü: backend bazı tiplerde 'tutar', bazılarında borc/alacak bekler
   if (BORC_TIPLERI.includes(tip)) govde.borc = tutar;
   else govde.alacak = tutar;

@@ -387,13 +387,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       {% endif %}
       {% if alan_var(a_kasa)|trim %}
       <div class="ray-oge">
-      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') %}aktif{% endif %}">
+      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 11h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/></svg>
         <span>Finans</span>
       </a>
       <div class="ray-ucan"><div class="ray-ucan-ic">
         <div class="ray-ucan-bas">Finans</div>
-        {% for hedef, ad, modul in [('/kasa','Kasalar','kasa'), ('/cari','Cari Hesaplar','cari'), ('/cek','Çek / Senet','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
+        {% for hedef, ad, modul in [('/kasa','Kasalar','kasa'), ('/cari','Cari Hesaplar','cari'), ('/cek','Çek / Senet','kasa'), ('/kasa-defteri','Kasa Defteri','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
           <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
@@ -485,9 +485,12 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       {% set alan_sekmeleri = [('/stok','Stok','stok'), ('/rezervasyon','Rezervasyonlar','rezervasyon'),
                                ('/kesim','Kesim','kesim'), ('/maliyet','Maliyetler','maliyet')] %}
     {% elif yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek')
-            or yol.startswith('/nakit') or yol.startswith('/sabit-gider') %}
+            or yol.startswith('/nakit') or yol.startswith('/sabit-gider')
+            or yol.startswith('/kasa-defteri') %}
       {% set alan_sekmeleri = [('/kasa','Kasalar','kasa'), ('/cari','Cari Hesaplar','cari'),
-                               ('/cek','Çek / Senet','kasa'), ('/nakit','Nakit Akışı','kasa'),
+                               ('/cek','Çek / Senet','kasa'),
+                               ('/kasa-defteri','Kasa Defteri','kasa'),
+                               ('/nakit','Nakit Akışı','kasa'),
                                ('/sabit-gider','Sabit Giderler','kasa')] %}
     {% elif yol.startswith('/raporlar') or yol.startswith('/karlilik') %}
       {% set alan_sekmeleri = [('/raporlar','Raporlar','raporlar'), ('/karlilik','Karlılık','karlilik')] %}
@@ -704,13 +707,19 @@ function yazabilir(modul){ return window.ADMIN || window.YETKI[modul] === 'yazma
 window.CSRF_TOKEN = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
 
 async function api(yol, secenek = {}) {
+  /* SIRA ÖNEMLİ — `headers` EN SONDA olmalı.
+     Önceki sürümde `...secenek` en sonda yayılıyordu; çağıran kendi
+     `headers` nesnesini geçtiyse birleştirilmiş başlıkların tamamını
+     eziyor ve X-CSRF-Token kayboluyordu. Sunucu 403 döner, istek
+     sessizce başarısız olurdu. */
+  const { headers: _cagiranBaslik, ...digerSecenekler } = secenek;
   const c = await fetch(yol, {
+    ...digerSecenekler,
     headers: {
       'Content-Type': 'application/json',
       'X-CSRF-Token': window.CSRF_TOKEN,
-      ...(secenek.headers || {})
-    },
-    ...secenek
+      ...(_cagiranBaslik || {})
+    }
   });
   if (c.status === 403) {
     /* Token eskiyse (sunucu yeniden başladı, oturum yenilendi)

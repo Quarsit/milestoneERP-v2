@@ -50,9 +50,10 @@
   .na-satir{cursor:pointer}
   .na-satir:hover{background:var(--notr-bg)}
   .na-gecmis td{opacity:.62;font-style:italic}
-  .na-gecmis .rozet{display:inline-block;font-size:.62rem;font-weight:700;
+  .rozet{display:inline-block;font-size:.62rem;font-weight:700;
     letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:20px;
-    background:var(--notr-bg);color:var(--soluk);margin-left:8px;font-style:normal}
+    background:var(--notr-bg);color:var(--soluk);margin-left:8px;font-style:normal;
+    vertical-align:middle}
   .na-eksi{color:var(--kirmizi);font-weight:600}
   .na-arti{color:var(--verde-koyu)}
   /* Kümülatif negatife düşen dönem — nakit sıkışıklığı */
@@ -135,6 +136,15 @@
     <option value="3">3 ay geriden</option>
     <option value="6">6 ay geriden</option>
     <option value="12">12 ay geriden</option>
+  </select>
+  <select id="naDoviz" class="na-sec" onchange="naYukle()" aria-label="Döviz">
+    <option value="" selected>Tüm dövizler (ayrı)</option>
+    <option value="s:TRY">Yalnızca ₺ TRY</option>
+    <option value="s:USD">Yalnızca $ USD</option>
+    <option value="s:EUR">Yalnızca € EUR</option>
+    <option value="c:TRY">Hepsi ₺ TRY'ye çevrili</option>
+    <option value="c:USD">Hepsi $ USD'ye çevrili</option>
+    <option value="c:EUR">Hepsi € EUR'ya çevrili</option>
   </select>
   <select id="naKirilim" class="na-sec" onchange="naYukle()" aria-label="Kırılım">
     <option value="ay" selected>Aylık</option>
@@ -238,6 +248,11 @@ function naSorgu() {
   const geri = parseInt(document.getElementById('naGecmis').value, 10) || 0;
   const kirilim = document.getElementById('naKirilim').value;
   let q = 'ay=' + (ileri + geri) + '&kirilim=' + kirilim;
+  /* 's:USD' → süzgeç (yalnız o dövizi göster)
+     'c:TRY' → çevrim (hepsini tek para birimine getir) */
+  const dv = document.getElementById('naDoviz').value;
+  if (dv.startsWith('s:')) q += '&doviz=' + dv.slice(2);
+  else if (dv.startsWith('c:')) q += '&cevir=' + dv.slice(2);
   if (geri > 0) {
     const t = new Date();
     t.setDate(1);
@@ -311,6 +326,21 @@ function naCiz() {
   const vszAdet = Object.values((d.vadesiz || {}).ozet || {}).reduce((t, o) => t + o.adet, 0);
   if (vszAdet) uy.push('<strong>' + vszAdet + ' hareketin vadesi belirsiz</strong> — '
     + 'projeksiyona dahil DEĞİL. "Nakit kalemi ekle" ile tahmini tarih verebilirsiniz.');
+  /* Çevrilmiş görünümde kur riski GİZLENİR — hangi kurla
+     çevrildiği açıkça yazılmalı, yoksa rakam olduğundan kesin
+     görünür. */
+  if (d.cevrim) {
+    const kl = Object.entries(d.cevrim.kurlar || {})
+      .filter(([k]) => k !== 'TRY')
+      .map(([k, v]) => k + ' ' + Number(v).toLocaleString('tr-TR',
+           {minimumFractionDigits: 4, maximumFractionDigits: 4}))
+      .join(' · ');
+    uy.unshift('<strong>Çevrilmiş görünüm (' + d.cevrim.hedef + ').</strong> '
+      + 'Tüm dövizler ' + d.cevrim.tarih.split('-').reverse().join('.')
+      + ' kuruyla tek para birimine getirildi'
+      + (kl ? ' — ' + kl : '') + '. Kur değişirse bu rakamlar değişir; '
+      + 'kur riskini görmek için "Tüm dövizler (ayrı)" seçin.');
+  }
   document.getElementById('naUyarilar').innerHTML = uy.length
     ? '<div class="na-uyari">' + uy.join('<br>') + '</div>' : '';
 
@@ -340,15 +370,20 @@ function naCiz() {
          + ' onclick="naDetayAc(\'' + id + '\')">'
          + '<td>' + naDonemAd(s.donem, d.kirilim)
          + (gec ? '<span class="rozet">geçmiş</span>' : '') + '</td>'
-         + '<td class="' + (v.giris ? 'na-arti' : '') + '">' + (v.giris ? naPara(v.giris, dv) : '—') + '</td>'
-         + '<td class="' + (v.cikis ? 'na-eksi' : '') + '">' + (v.cikis ? naPara(v.cikis, dv) : '—') + '</td>'
+         + '<td class="' + (v.giris ? 'na-arti' : '') + '">' + (v.giris ? naPara(v.giris, dv) : '—')
+         + ((v.gerceklesmis_giris && !gec) ? '<span class="rozet">'
+             + naPara(v.gerceklesmis_giris, dv) + ' tahsil</span>' : '') + '</td>'
+         + '<td class="' + (v.cikis ? 'na-eksi' : '') + '">' + (v.cikis ? naPara(v.cikis, dv) : '—')
+         + ((v.gerceklesmis_cikis && !gec) ? '<span class="rozet">'
+             + naPara(v.gerceklesmis_cikis, dv) + ' ödendi</span>' : '') + '</td>'
          + '<td class="' + (v.net < 0 ? 'na-eksi' : 'na-arti') + '">'
          + (v.net >= 0 ? '+' : '') + naPara(v.net, dv) + '</td>'
          + '<td>' + (gec ? '<span style="color:var(--soluk)">—</span>'
              : '<strong>' + naPara(v.kumulatif, dv) + '</strong>') + '</td></tr>';
       h += '<tr class="na-detay" id="' + id + '" style="display:none"><td colspan="5">'
          + '<div class="na-detay-ic">'
-         + (v.kalemler || []).map(k => '<div><span>' + naKacinc(k.aciklama) + '</span>'
+         + (v.kalemler || []).map(k => '<div' + (k.gerceklesmis ? ' style="opacity:.55"' : '')
+             + '><span>' + naKacinc(k.aciklama) + (k.gerceklesmis ? ' · gerçekleşti' : '') + '</span>'
              + '<span class="t">' + (k.yon === 'giris' ? '+' : '−')
              + naPara(k.tutar, k.doviz) + '</span></div>').join('')
          + '</div></td></tr>';

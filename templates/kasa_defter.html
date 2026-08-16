@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+{% block title %}Kasa Defteri{% endblock %}
+
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="kdYazdir()" title="Yazdır">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>
+    Yazdır
+  </button>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+/* ── KASA DEFTERİ (KD2) ────────────────────────────────────────────
+   KasaHareket üzerine GÖRÜNÜM. Yeni tablo yok — defterin verisi
+   zaten vardı, eksik olan yürüyen bakiye ve devirdi. */
+  .kd-ust{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 14px}
+  .kd-sec,.kd-tar{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:8px 11px;font-family:var(--govde);font-size:.86rem;
+    background:var(--yuzey);color:var(--murekkep)}
+  .kd-sec{cursor:pointer}
+  .kd-sec:focus,.kd-tar:focus{outline:none;border-color:var(--verde);
+    box-shadow:0 0 0 3px var(--verde-acik)}
+  .kd-hizli button{background:none;border:1px solid var(--cizgi-koyu);
+    border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);
+    font-size:.8rem;cursor:pointer;color:var(--soluk)}
+  .kd-hizli button:hover{border-color:var(--verde);color:var(--verde-koyu)}
+
+  .kd-kartlar{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+    gap:12px;margin-bottom:16px}
+  .kd-kart{background:var(--yuzey);border:1px solid var(--cizgi);
+    border-radius:var(--r);padding:14px 16px}
+  .kd-kart label{display:block;font-size:.7rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .kd-kart .deger{font-family:var(--baslik);font-size:1.3rem;font-weight:700;
+    letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+
+  .kd-tablo{width:100%;border-collapse:collapse;font-size:.86rem}
+  .kd-tablo th{text-align:left;padding:9px 12px;font-size:.7rem;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);
+    border-bottom:1px solid var(--cizgi);white-space:nowrap}
+  .kd-tablo th.sag,.kd-tablo td.sag{text-align:right}
+  .kd-tablo td{padding:9px 12px;border-bottom:1px solid var(--cizgi);vertical-align:top}
+  .kd-tablo tbody tr:hover{background:var(--notr-bg)}
+  .kd-devir td,.kd-kapanis td{background:var(--notr-bg);font-weight:700}
+  .kd-sayi{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .kd-arti{color:var(--verde-koyu);font-weight:600}
+  .kd-eksi{color:var(--kirmizi);font-weight:600}
+  .kd-bakiye{font-weight:700;font-variant-numeric:tabular-nums}
+  .kd-bakiye.neg{color:var(--kirmizi)}
+  .kd-alt{display:block;font-size:.76rem;color:var(--soluk);margin-top:2px}
+  .kd-cari{color:var(--verde-koyu);text-decoration:none}
+  .kd-cari:hover{text-decoration:underline}
+  .kd-bos{padding:34px;text-align:center;color:var(--soluk);font-size:.9rem}
+
+  .kd-uyari{border-radius:var(--r-kucuk);padding:11px 15px;margin-bottom:14px;
+    font-size:.86rem;line-height:1.6}
+  .kd-uyari.kotu{background:var(--kirmizi-bg);border:1px solid var(--kirmizi)}
+  .kd-uyari.iyi{background:var(--verde-acik);border:1px solid var(--verde);
+    color:var(--verde-koyu)}
+
+  @media print{
+    .ray,.ust-bar,.alt-sekme,.kd-ust,.disa{display:none !important}
+    .kd-kart{break-inside:avoid}
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Kasa Defteri</h1>
+<p class="g-alt">Seçilen dönemin devir bakiyesi, hareketleri ve yürüyen bakiyesi. Kasa hareketlerinin kendisi gösterilir — ayrı bir kayıt tutulmaz, dolayısıyla defter ile kasa bakiyesi ayrışamaz.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kd-ust">
+  <select id="kdKasa" class="kd-sec" onchange="kdYukle()" aria-label="Kasa"></select>
+  <input id="kdBas" type="date" class="kd-tar" onchange="kdYukle()" aria-label="Başlangıç" data-buyuk-harf="hayir">
+  <input id="kdSon" type="date" class="kd-tar" onchange="kdYukle()" aria-label="Bitiş" data-buyuk-harf="hayir">
+  <span class="kd-hizli">
+    <button onclick="kdAralik('ay')">Bu ay</button>
+    <button onclick="kdAralik('gecenay')">Geçen ay</button>
+    <button onclick="kdAralik('yil')">Bu yıl</button>
+  </span>
+  <button class="blok-btn" onclick="location.href='/nakit'">Nakit akışı →</button>
+  <span id="kdDurum" style="font-size:.8rem;color:var(--soluk)"></span>
+</div>
+
+<div id="kdMutabakat"></div>
+<div class="kd-kartlar" id="kdKartlar"></div>
+
+<div class="tablo-kutu">
+  <div id="kdTablo"><div class="kd-bos">Yükleniyor…</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let KD_VERI = null;
+
+function kdPara(v, d) {
+  const n = Number(v || 0);
+  const s = n.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return s + ' ' + (d === 'TRY' ? '₺' : d === 'USD' ? '$' : d === 'EUR' ? '€' : (d || ''));
+}
+
+function kdKacinc(s) {
+  const e = document.createElement('div');
+  e.textContent = s || '';
+  return e.innerHTML;
+}
+
+function kdTarih(t) {
+  return t ? t.split('-').reverse().join('.') : '';
+}
+
+function kdIso(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+       + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function kdAralik(hangi) {
+  const g = new Date();
+  let bas, son;
+  if (hangi === 'ay') {
+    bas = new Date(g.getFullYear(), g.getMonth(), 1);
+    son = new Date(g.getFullYear(), g.getMonth() + 1, 0);
+  } else if (hangi === 'gecenay') {
+    bas = new Date(g.getFullYear(), g.getMonth() - 1, 1);
+    son = new Date(g.getFullYear(), g.getMonth(), 0);
+  } else {
+    bas = new Date(g.getFullYear(), 0, 1);
+    son = new Date(g.getFullYear(), 11, 31);
+  }
+  document.getElementById('kdBas').value = kdIso(bas);
+  document.getElementById('kdSon').value = kdIso(son);
+  kdYukle();
+}
+
+async function kdKasalar() {
+  const s = document.getElementById('kdKasa');
+  try {
+    const d = await api('/api/kasa');
+    const liste = Array.isArray(d) ? d : (d.data || []);
+    if (!liste.length) {
+      document.getElementById('kdTablo').innerHTML =
+        '<div class="kd-bos">Tanımlı kasa yok.</div>';
+      return false;
+    }
+    s.innerHTML = liste.map(k => '<option value="' + k.id + '">'
+      + kdKacinc(k.ad) + ' (' + (k.doviz || '') + ')</option>').join('');
+    return true;
+  } catch (e) {
+    document.getElementById('kdTablo').innerHTML =
+      '<div class="kd-bos">Kasalar alınamadı</div>';
+    return false;
+  }
+}
+
+async function kdYukle() {
+  const kasa = document.getElementById('kdKasa').value;
+  if (!kasa) return;
+  const bas = document.getElementById('kdBas').value;
+  const son = document.getElementById('kdSon').value;
+  const durum = document.getElementById('kdDurum');
+  durum.textContent = 'yükleniyor…';
+  try {
+    KD_VERI = await api('/api/kasa/defter?kasa_id=' + kasa
+      + '&baslangic=' + bas + '&bitis=' + son);
+    kdCiz();
+  } catch (e) {
+    document.getElementById('kdTablo').innerHTML =
+      '<div class="kd-bos">Defter alınamadı</div>';
+  }
+  durum.textContent = '';
+}
+
+function kdCiz() {
+  if (!KD_VERI) return;
+  const d = KD_VERI;
+  const dv = d.kasa.doviz;
+
+  /* Mutabakat: defterin kapanışı + sonraki hareketler, kasa
+     bakiyesini tutmalı. Tutmuyorsa sessiz geçmek yerine söyle. */
+  const m = d.mutabakat;
+  let uy = '';
+  if (m && !m.tutuyor) {
+    uy = '<div class="kd-uyari kotu"><strong>Mutabakatsızlık:</strong> '
+       + 'defterden hesaplanan ' + kdPara(m.beklenen, dv) + ', kasada kayıtlı '
+       + kdPara(m.kayitli_bakiye, dv) + '. Fark <strong>'
+       + kdPara(m.fark, dv) + '</strong>. Bir hareket eklenirken kasa bakiyesi '
+       + 'güncellenmemiş olabilir — <code>degismezlik_denetim.py</code> çalıştırın.</div>';
+  } else if (m) {
+    uy = '<div class="kd-uyari iyi">Defter kasa bakiyesiyle mutabık — '
+       + kdPara(m.kayitli_bakiye, dv) + '</div>';
+  }
+  if (d.bilinmeyen_tip) {
+    uy += '<div class="kd-uyari kotu">' + d.bilinmeyen_tip + ' hareketin tipi '
+        + 'giriş/çıkış değil; bakiyeye katılmadı.</div>';
+  }
+  document.getElementById('kdMutabakat').innerHTML = uy;
+
+  const o = d.ozet;
+  document.getElementById('kdKartlar').innerHTML =
+      '<div class="kd-kart"><label>Devir</label><div class="deger">'
+    + kdPara(d.devir, dv) + '</div></div>'
+    + '<div class="kd-kart"><label>Dönem girişi</label><div class="deger kd-arti">'
+    + kdPara(o.giris, dv) + '</div></div>'
+    + '<div class="kd-kart"><label>Dönem çıkışı</label><div class="deger kd-eksi">'
+    + kdPara(o.cikis, dv) + '</div></div>'
+    + '<div class="kd-kart"><label>Kapanış</label><div class="deger">'
+    + kdPara(o.kapanis, dv) + '</div></div>';
+
+  if (!d.hareketler.length) {
+    document.getElementById('kdTablo').innerHTML =
+      '<div class="kd-bos">Bu dönemde hareket yok. Devir bakiyesi '
+      + kdPara(d.devir, dv) + '</div>';
+    return;
+  }
+
+  let h = '<table class="kd-tablo"><thead><tr><th>Tarih</th><th>Açıklama</th>'
+        + '<th>Belge</th><th class="sag">Giriş</th><th class="sag">Çıkış</th>'
+        + '<th class="sag">Bakiye</th></tr></thead><tbody>';
+  h += '<tr class="kd-devir"><td>' + kdTarih(d.baslangic) + '</td>'
+     + '<td colspan="4">DEVİR</td>'
+     + '<td class="sag kd-bakiye' + (d.devir < 0 ? ' neg' : '') + '">'
+     + kdPara(d.devir, dv) + '</td></tr>';
+
+  for (const x of d.hareketler) {
+    /* Cari bağlantısı modelde vardı ama API'de dönmüyordu; artık
+       satırdan doğrudan cari hesaba geçilebiliyor. */
+    const cari = x.cari_id
+      ? '<a class="kd-cari" href="/cari?id=' + encodeURIComponent(x.cari_id) + '">'
+        + kdKacinc(x.cari_unvan || x.cari_id) + '</a>'
+      : '';
+    const belge = [x.evrak_no, x.baglanti_tip, x.siparis_id]
+      .filter(Boolean).map(kdKacinc).join(' · ');
+    h += '<tr><td class="kd-sayi">' + kdTarih(x.tarih) + '</td>'
+       + '<td>' + kdKacinc(x.aciklama || '—')
+       + (cari ? '<span class="kd-alt">' + cari + '</span>' : '')
+       + (x.kasa_adi && d.kasa.ana_kasa
+            ? '<span class="kd-alt">' + kdKacinc(x.kasa_adi) + '</span>' : '')
+       + '</td>'
+       + '<td class="kd-alt" style="margin:0">' + (belge || '—') + '</td>'
+       + '<td class="sag kd-sayi kd-arti">' + (x.giris ? kdPara(x.giris, dv) : '') + '</td>'
+       + '<td class="sag kd-sayi kd-eksi">' + (x.cikis ? kdPara(x.cikis, dv) : '') + '</td>'
+       + '<td class="sag kd-bakiye' + (x.bakiye < 0 ? ' neg' : '') + '">'
+       + kdPara(x.bakiye, dv) + '</td></tr>';
+  }
+
+  h += '<tr class="kd-kapanis"><td>' + kdTarih(d.bitis) + '</td>'
+     + '<td colspan="2">KAPANIŞ (' + o.adet + ' hareket)</td>'
+     + '<td class="sag kd-sayi kd-arti">' + kdPara(o.giris, dv) + '</td>'
+     + '<td class="sag kd-sayi kd-eksi">' + kdPara(o.cikis, dv) + '</td>'
+     + '<td class="sag kd-bakiye' + (o.kapanis < 0 ? ' neg' : '') + '">'
+     + kdPara(o.kapanis, dv) + '</td></tr>';
+  h += '</tbody></table>';
+  document.getElementById('kdTablo').innerHTML = h;
+}
+
+function kdYazdir() { window.print(); }
+
+(async function () {
+  if (await kdKasalar()) kdAralik('ay');
+})();
+</script>
+{% endblock %}

@@ -2684,13 +2684,32 @@ def create_app():
                       ('odeme','Mal Mukabili'),('odeme','Vesaik Mukabili'),('odeme','Banka Havalesi (T/T)'),
                       ('teslim','EXW'),('teslim','FOB'),('teslim','CIF'),('teslim','CFR'),
                       ('teslim','FCA'),('teslim','DAP'),('teslim','DDP'),('teslim','CPT')])
+        # ── TOHUMLAMA: KATEGORI BAZINDA ──
+        #
+        # Onceden kontrol SATIR bazindaydi ("bu deger yoksa ekle").
+        # Sonucu: Ayarlar > Listeler'den silinen her kalem bir
+        # sonraki acilista GERI GELIYORDU. Oysa silinmis olmasi tam
+        # olarak "bunu istemiyorum" demek.
+        #
+        # Artik: kategoride HIC kayit yoksa varsayilanlar yuklenir
+        # (ilk kurulum); en az bir kayit varsa o kategoriye HIC
+        # DOKUNULMAZ.
+        #
+        # Kategoriyi tamamen bosaltirsaniz varsayilanlar geri doner —
+        # bu KASITLI: bos liste formlari calismaz hale getirir.
+        def _kategori_bos_mu(kat):
+            return Veriler.query.filter_by(kategori=kat).first() is None
+
         # Ulkeler: kisaltma = ISO3 kodu
-        for _ad, _kod in _ulkeler:
-            if not Veriler.query.filter_by(kategori='ulke', deger=_ad).first():
+        if _kategori_bos_mu('ulke'):
+            for _ad, _kod in _ulkeler:
                 db.session.add(Veriler(kategori='ulke', deger=_ad, kisaltma=_kod))
 
+        _bos_kategoriler = {}
         for kat, deger in _lookup:
-            if not Veriler.query.filter_by(kategori=kat, deger=deger).first():
+            if kat not in _bos_kategoriler:
+                _bos_kategoriler[kat] = _kategori_bos_mu(kat)
+            if _bos_kategoriler[kat]:
                 db.session.add(Veriler(kategori=kat, deger=deger))
         db.session.commit()
 
@@ -3238,6 +3257,14 @@ def create_app():
         if not _yetki_var_mi('cari', 'okuma'):
             return redirect(url_for('dashboard'))
         return render_template('cari.html')
+
+    @app.route('/kasa-defteri')
+    def kasa_defter_sayfa():
+        """Kasa defteri — devir + yuruyen bakiyeli hareket dokumu."""
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('kasa', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('kasa_defter.html')
 
     @app.route('/nakit')
     def nakit_sayfa():
@@ -6970,6 +6997,28 @@ def create_app():
         karsilik_fatura_id = (data.get('karsilik_fatura_id') or '').strip() or None
         islem_tutar = q3(float(data.get('tutar') or data.get('borc') or data.get('alacak') or 0))
 
+        # ── TAHSILAT/ODEMEDE KASA ZORUNLU ──
+        # Bu tipler tanimi geregi "para el degistirdi" demek. Nereye
+        # gittigi soylenmezse cari bakiyesi degisir ama para hicbir
+        # kasada gorunmez — iki ekran arasinda kaybolur.
+        #
+        # Kural SUNUCUDA: yalnizca formda dursaydi API'ye dogrudan
+        # gelen istek ya da baska bir ekran onu atlardi.
+        #
+        # Takip edilmeyen bir banka hesabi varsa cozum onu KASA
+        # olarak tanimlamaktir; "hicbir yere girmedi" demek degil.
+        KASA_ZORUNLU_TIPLER = ('Tahsilat', 'Odeme', 'Ödeme',
+                               'Avans Tahsilati', 'Avans Tahsilatı',
+                               'Avans Odemesi', 'Avans Ödemesi')
+        if islem_tip in KASA_ZORUNLU_TIPLER and not data.get('kasa_id'):
+            return jsonify({
+                'ok': False,
+                'mesaj': f'{islem_tip} kaydında kasa seçimi zorunludur. '
+                         'Seçilmezse cari bakiyesi değişir ama para hiçbir '
+                         'kasaya girmez/çıkmaz. Para takip etmediğiniz bir '
+                         'hesaba geldiyse önce o hesabı kasa olarak tanımlayın.'
+            }), 400
+
         # ═══ KDV AYRIMI (fatura nitelikli hareketlerde) ═══
         # Kullanıcı tutarı KDV dahil VEYA hariç girebilir:
         #   • kdv_dahil_mi=True  → girilen tutar genel toplamdır, matrah geriye hesaplanır
@@ -8929,9 +8978,52 @@ def create_app():
     # olabilir. Ikisi zit yonde nakit demek. Ayrimi kaynak yapar.
 
     # YUKUMLULUK: gelecekte nakit hareketi DOGURAN kayitlar.
-    NAKIT_YUKUMLULUK = ('fatura', 'maliyet', 'stok', 'siparis_teslim',
-                        'sicak_satis', 'rezervasyon', 'sabit',
-                        'elle', 'manuel')
+    # 'cari_fatura' = cari ekranindan kesilen fatura. Onceden bu
+    # deger HICBIR listede yoktu ve hareket sessizce yok sayiliyordu;
+    # 100.000'lik bir satis faturasi projeksiyonda gorunmuyordu.
+    NAKIT_YUKUMLULUK = ('fatura', 'cari_fatura', 'maliyet', 'stok',
+                        'siparis_teslim', 'sicak_satis', 'rezervasyon',
+                        'sabit')
+
+    # ELLE GIRILEN HAREKETLER
+    # `CariHareket.kaynak` alaninin model varsayilani 'manuel'. Cari
+    # ekranindan girilen HER hareket bu degeri aliyor — satis
+    # faturasi da, tahsilat da. Yani kaynak burada AYIRT EDICI
+    # DEGIL; ayrimi islem_tip yapar.
+    NAKIT_ELLE_KAPATMA = ('tahsilat', 'odeme',
+                          'avans tahsilati', 'avans odemesi')
+
+    def _nakit_sadelestir(s):
+        """Turkce karakterleri sadelestirip kucultur.
+
+        'Ödeme' ile 'Odeme' ayni sayilsin diye — form degerleri
+        zaman icinde iki bicimde de yazilmis olabilir.
+        """
+        s = (s or '').strip().lower()
+        for _a, _b in (('ı', 'i'), ('İ', 'i'), ('ğ', 'g'), ('ü', 'u'),
+                       ('ş', 's'), ('ö', 'o'), ('ç', 'c')):
+            s = s.replace(_a, _b)
+        return s
+
+    def _nakit_rol(h):
+        """Hareketin nakit projeksiyonundaki rolu.
+
+        Doner: 'yukumluluk' | 'kapatma' | None (hesap disi)
+
+        Tanınmayan islem_tip YUKUMLULUK sayilir: boylece ekranda
+        gorunur ve yanlissa fark edilir. Kapatma saysaydik baska
+        faturalari sessizce eritirdi.
+        """
+        _k = (h.kaynak or '')
+        if _k in ('elle', 'manuel'):
+            if _nakit_sadelestir(h.islem_tip) in NAKIT_ELLE_KAPATMA:
+                return 'kapatma'
+            return 'yukumluluk'
+        if _k in NAKIT_YUKUMLULUK:
+            return 'yukumluluk'
+        if _k in NAKIT_KAPATMA:
+            return 'kapatma'
+        return None
 
     # KAPATMA: yukumlulugu azaltan kayitlar. Ya para zaten hareket
     # etti (tahsilat, odeme, virman), ya baska bir enstrumana devredildi
@@ -9033,7 +9125,8 @@ def create_app():
             _grup = h.cari_id or h.cari_unvan or '?'
             _dv = (h.doviz or 'TRY').upper()
 
-            if _k in NAKIT_YUKUMLULUK:
+            _rol = _nakit_rol(h)
+            if _rol == 'yukumluluk':
                 # DIKKAT: burada `kapatildi` bayragina BAKILMAZ.
                 #
                 # Bakilsaydi hareket yukumluluk listesinden cikardi ama
@@ -9056,7 +9149,7 @@ def create_app():
                 _yon = 'giris' if _borc > 0 else 'cikis'
                 _yuk.setdefault((_grup, _dv, _yon), []).append(h)
 
-            elif _k in NAKIT_KAPATMA:
+            elif _rol == 'kapatma':
                 if (_k == 'cek' and h.baglanti_tip == 'cek'
                         and h.baglanti_id in _olu_cek):
                     continue
@@ -9182,6 +9275,77 @@ def create_app():
 
         kalemler = _nakit_kalemleri(bas, son)
 
+        # ── DOVIZ SUZGECI ve CEVRIM ──
+        #
+        # SUZGEC: yalnizca o dovizin satirlarini gosterir. Rakamlara
+        #         dokunmaz; risksiz.
+        # CEVRIM: tum dovizleri tek para birimine cevirip BIRLESTIRIR.
+        #
+        # Cevrim kur riskini ORTADAN KALDIRMAZ, bugunku kura gore
+        # dondurur. Bu yuzden hangi kurun kullanildigi yanitta
+        # aciklanir; ekran da bunu yazar.
+        _suz = (request.args.get('doviz') or '').upper().strip()
+        if _suz in ('', 'HEPSI', 'TUMU'):
+            _suz = None
+        _cev = (request.args.get('cevir') or '').upper().strip()
+        if _cev in ('', 'HEPSI', 'TUMU'):
+            _cev = None
+
+        cevrim = None
+        if _cev:
+            # Cevrim icin gereken TUM kurlar bulunabiliyor mu?
+            # _kur_getir bulamazsa 0 doner; 0 ile carpmak/bolmek tum
+            # tutarlari SESSIZCE sifirlardi. Eksik kurla cevirmektense
+            # acik hata vermek dogru.
+            _dovizler = {x['doviz'] for x in kalemler} | set(acilis.keys()) | {_cev}
+            _kurlar, _eksik = {}, []
+            for _d in _dovizler:
+                _k = float(_kur_getir(_d) or 0)
+                if _k <= 0:
+                    _eksik.append(_d)
+                else:
+                    _kurlar[_d] = _k
+            if _eksik:
+                # DIKKAT: bu fonksiyon Flask Response DONDURMEZ, duz
+                # dict doner (cagiran jsonify ediyor). Buradan
+                # `jsonify(...), 400` dondurmek cagirani cokertirdi.
+                return {
+                    'ok': False,
+                    'hata': 'kur_eksik',
+                    'mesaj': f"Çevrim yapılamadı: {', '.join(sorted(_eksik))} kuru "
+                             f"bulunamadı. Kur güncellendikten sonra tekrar deneyin."
+                }
+
+            _hedef_kur = _kurlar[_cev]
+
+            def _cevir(tutar, kaynak_doviz):
+                # X birim A = X * kur(A) TL = X * kur(A) / kur(B) birim B
+                return q3(float(tutar) * _kurlar[kaynak_doviz] / _hedef_kur)
+
+            for x in kalemler:
+                if x['doviz'] != _cev:
+                    x['ozgun_tutar'] = x['tutar']
+                    x['ozgun_doviz'] = x['doviz']
+                    x['tutar'] = _cevir(x['tutar'], x['doviz'])
+                    x['doviz'] = _cev
+            _yeni_acilis = {}
+            for _d, _v in acilis.items():
+                _yeni_acilis[_cev] = q3(float(_yeni_acilis.get(_cev, 0))
+                                        + float(_cevir(_v, _d)))
+            acilis = _yeni_acilis or {_cev: q3(0)}
+            cevrim = {
+                'hedef': _cev,
+                'kurlar': {_d: q3(_k) for _d, _k in _kurlar.items()},
+                'tarih': date.today().isoformat(),
+                'not': 'Tutarlar bugünkü kurla çevrildi; kur değişirse rakamlar değişir.',
+            }
+
+        if _suz:
+            kalemler = [x for x in kalemler if x['doviz'] == _suz]
+            acilis = {_d: _v for _d, _v in acilis.items() if _d == _suz}
+            if _suz not in acilis:
+                acilis[_suz] = q3(0)
+
         # ── Vadesiz olanlari AYIR ──
         # Gizlemek projeksiyonu iyimser yapar; ayri gostermek dogru.
         vadesiz = [x for x in kalemler if x['vadesiz']]
@@ -9236,14 +9400,41 @@ def create_app():
             for d in sorted(set(list(donemler[a].keys()) + list(yurur.keys()))):
                 s = donemler[a].get(d, {'giris': 0.0, 'cikis': 0.0, 'kalemler': []})
                 net = q3(s['giris'] - s['cikis'])
+
+                # GERCEKLESMIS KALEMLER — tarihi bugunden ONCE olanlar.
+                #
+                # Icinde bulundugumuz ay "gecmis" sayilmaz (henuz
+                # bitmedi) ama ayin basindaki odemeler coktan yapildi
+                # ve acilis bakiyesine yansidi. Kumulatiften bir daha
+                # dusmek onlari IKI KEZ saymak olur.
+                #
+                # Bu yuzden ayrim DONEM degil KALEM duzeyinde:
+                # kumulatif yalnizca bugun ve sonrasindan hesaplanir.
+                _bi = _bugun.isoformat()
+                _gg = _cg = 0.0
+                for _x in s['kalemler']:
+                    _x['gerceklesmis'] = bool(_x['tarih'] and _x['tarih'] < _bi)
+                    if not _x['gerceklesmis']:
+                        continue
+                    if _x['yon'] == 'giris':
+                        _gg += float(_x['tutar'])
+                    else:
+                        _cg += float(_x['tutar'])
+
+                net_bekleyen = q3((s['giris'] - _gg) - (s['cikis'] - _cg))
                 if _gd:
                     kum = None            # ekranda "—"
                 else:
-                    yurur[d] = q3(float(yurur.get(d, 0)) + float(net))
+                    yurur[d] = q3(float(yurur.get(d, 0)) + float(net_bekleyen))
                     kum = yurur[d]
+
                 satir['dovizler'][d] = {
                     'giris': q3(s['giris']), 'cikis': q3(s['cikis']),
                     'net': net, 'kumulatif': kum, 'gecmis': _gd,
+                    # Donem icinde COKTAN gerceklesmis kisim. Ekran
+                    # bunu ayri gosterir; kumulatife katilmaz.
+                    'gerceklesmis_giris': q3(_gg), 'gerceklesmis_cikis': q3(_cg),
+                    'net_bekleyen': net_bekleyen,
                     'kalem_sayisi': len(s['kalemler']),
                     'kalemler': sorted(s['kalemler'], key=lambda x: x['tarih'])[:40],
                 }
@@ -9262,6 +9453,7 @@ def create_app():
             'ok': True,
             'baslangic': bas.isoformat(), 'bitis': son.isoformat(),
             'kirilim': kirilim, 'ay': ay_sayisi,
+            'doviz_suzgec': _suz, 'cevrim': cevrim,
             'acilis': acilis,
             'donemler': sirali,
             'vadesi_gecmis': {'ozet': ozet(gecmis),
@@ -9283,7 +9475,12 @@ def create_app():
             return jsonify({'error': 'Unauthorized'}), 401
         if not _yetki_var_mi('kasa', 'okuma'):
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
-        return jsonify(_nakit_projeksiyon())
+        _sonuc = _nakit_projeksiyon()
+        # Hesap basarisiz olduysa (or. cevrim kuru yok) 200 ile
+        # donmek hatayi basari gibi gosterirdi.
+        if not _sonuc.get('ok'):
+            return jsonify(_sonuc), 400
+        return jsonify(_sonuc)
 
     # ── Disa aktarma yardimcilari (NA4) ───────────────────────
     NAKIT_KAYNAK_ETIKET = {
@@ -11770,11 +11967,70 @@ def create_app():
         # aradigi icin GERCEK YONETICILER 403 aliyordu.
         if (session.get('rol') or '').upper() != 'ADMIN':
             return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
-        data = request.json
-        v = Veriler(kategori=data['kategori'], deger=data['deger'], kisaltma=data.get('kisaltma'))
+        data = request.json or {}
+        # Eksik alan onceden KeyError -> 500 veriyordu. Dogrulanmis
+        # 400 hem daha dogru hem istemcide anlasilir mesaj verir.
+        kategori = (data.get('kategori') or '').strip()
+        deger = (data.get('deger') or '').strip()
+        if not kategori or not deger:
+            return jsonify({'ok': False,
+                            'mesaj': 'Kategori ve değer zorunlu'}), 400
+
+        # MUKERRER KORUMASI — onceden yoktu: ayni degeri iki kez
+        # eklemek iki satir aciyordu, "onerilenleri ekle" dugmesine
+        # iki kez basmak listeyi ikizliyordu.
+        #
+        # Kiyaslama BUYUK/KUCUK HARF DUYARSIZ: ekran degerleri buyuk
+        # harfe cevirse de API'ye dogrudan gelen istek 'nero'
+        # yazabilir ve 'NERO' ile ikizlenirdi.
+        # KIYASLAMA PYTHON'DA, TURKCE KURALLARIYLA.
+        #
+        # Ilk surumde sol taraf SQL lower(), sag taraf Python
+        # .lower() idi ve Turkce 'İ' harfinde ikisi FARKLI sonuc
+        # veriyordu:
+        #     Python  'İ'.lower() -> 'i' + U+0307 (IKI kod noktasi)
+        #     SQL     lower('İ')  -> 'i'          (TEK kod noktasi)
+        # Uretimde gorulen belirti: 'İşlenmiş mermer' GTIP kodu
+        # dugmeye her basista yeniden ekleniyor, digerleri dogru
+        # atlaniyordu — cunku o, oneriler icinde 'İ' iceren TEK
+        # degerdi.
+        #
+        # Iki tarafi da SQL lower()'a vermek PostgreSQL'de calisir
+        # ama SQLite'in lower()'i yalnizca ASCII bilir; ayni kod
+        # veritabanina gore farkli davranirdi. Bu yuzden kiyaslama
+        # tamamen Python'a alindi: IKI TARAF DA ayni fonksiyondan
+        # gectigi surece 'İ' harfinin nasil kuculdugu onemli degil.
+        #
+        # TURKCE'YE OZEL ESLEME YAPILMIYOR — denendi ve YANLISTI:
+        # 'I' -> 'ı' cevirimi, 'YENI CINS' ile 'yeni cins'i AYRI
+        # kayit yapiyordu. Sistem bilincli olarak INGILIZCE buyuk
+        # harf kurali kullaniyor (ayarlar.html: toUpperCase(), yorumu
+        # "PIETRA -> PİETRA olmasin"). Kiyaslama da ayni kurala
+        # uymali.
+        #
+        # 'PIETRA GREY' ile 'PİETRA GREY' yine AYRI kalir; bunlar
+        # gercekten farkli yazimlar.
+        #
+        # Liste kategorileri kucuk (en buyugu ~200 kayit), tam
+        # tarama maliyeti onemsiz.
+        def _liste_anahtar(_s):
+            return (_s or '').strip().lower()
+
+        _hedef = _liste_anahtar(deger)
+        mevcut = next(
+            (v for v in Veriler.query.filter_by(kategori=kategori).all()
+             if _liste_anahtar(v.deger) == _hedef), None)
+        if mevcut:
+            # Hata DEGIL: "onerilenleri ekle" tekrar basildiginda
+            # gurultu cikarmasin, ekran "zaten vardi" desin.
+            return jsonify({'ok': True, 'mevcut': True, 'id': mevcut.id,
+                            'mesaj': f'{deger} zaten listede'})
+
+        v = Veriler(kategori=kategori, deger=deger,
+                    kisaltma=(data.get('kisaltma') or None))
         db.session.add(v)
         db.session.commit()
-        return jsonify({'ok': True})
+        return jsonify({'ok': True, 'mevcut': False, 'id': v.id})
 
     @app.route('/api/rezervasyon/<rez_id>', methods=['DELETE'])
     def api_rezervasyon_iptal(rez_id):
@@ -16729,6 +16985,182 @@ def create_app():
             })
         return jsonify(sonuc)
 
+    # ══════════════════════════════════════════════════════════
+    #  KASA DEFTERİ  (KD1)
+    # ══════════════════════════════════════════════════════════
+
+    def _kasa_defter_filtre(k):
+        """Ana kasa ise alt kasalarini kapsar — mevcut hareket
+        listesiyle AYNI mantik, iki yerde farkli davranmasin diye."""
+        if bool(getattr(k, 'ana_kasa', False)):
+            alt_q = Kasa.query.filter_by(doviz=k.doviz)
+            if hasattr(Kasa, 'ana_kasa'):
+                alt_q = alt_q.filter_by(ana_kasa=False)
+            alt = alt_q.all()
+            ids = [a.id for a in alt]
+            adlar = {a.id: a.ad for a in alt}
+            return (KasaHareket.kasa_id.in_(ids) if ids
+                    else (KasaHareket.kasa_id == -1)), adlar
+        return (KasaHareket.kasa_id == k.id), {k.id: k.ad}
+
+    def _kasa_gercek_bakiye(k):
+        """Kasanin GOSTERILEN bakiyesi.
+
+        Ana kasanin `bakiye` alani hic guncellenmiyor (0 kalir);
+        ona dogrudan hareket girilmiyor, bakiyesi ayni dovizdeki alt
+        kasalarin toplamindan canli hesaplaniyor. Ham alani okumak
+        her ana kasada sahte mutabakatsizlik uretirdi.
+
+        Kural api_kasa_liste ile AYNI olmali — iki yerde farkli
+        davranirsa hangisinin dogru oldugu belirsizlesir.
+        """
+        if not bool(getattr(k, 'ana_kasa', False)):
+            return q3(float(k.bakiye or 0))
+        alt_q = Kasa.query.filter_by(doviz=k.doviz)
+        if hasattr(Kasa, 'ana_kasa'):
+            alt_q = alt_q.filter_by(ana_kasa=False)
+        return q3(sum(float(a.bakiye or 0) for a in alt_q.all()))
+
+    @app.route('/api/kasa/defter', methods=['GET'])
+    def api_kasa_defter():
+        """Kasa defteri: devir + yuruyen bakiyeli hareket dokumu.
+
+        Parametreler:
+            kasa_id=<int>          zorunlu
+            baslangic=YYYY-MM-DD   varsayilan: ayin 1'i
+            bitis=YYYY-MM-DD       varsayilan: bugun
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('kasa', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+
+        try:
+            kasa_id = int(request.args.get('kasa_id') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Geçersiz kasa'}), 400
+        k = db.session.get(Kasa, kasa_id)
+        if not k:
+            return jsonify({'ok': False, 'mesaj': 'Kasa bulunamadı'}), 404
+
+        bugun = date.today()
+        bas = _parse_date(request.args.get('baslangic')) or bugun.replace(day=1)
+        son = _parse_date(request.args.get('bitis')) or bugun
+        if son < bas:
+            return jsonify({'ok': False,
+                            'mesaj': 'Bitiş tarihi başlangıçtan önce olamaz'}), 400
+
+        filtre, kasa_adlari = _kasa_defter_filtre(k)
+
+        def _yon(h):
+            t = (h.tip or '').lower()
+            if t in ('giris', 'giriş'):
+                return 1
+            if t in ('cikis', 'çıkış', 'cikiş'):
+                return -1
+            return 0        # bilinmeyen tip — D1 bunu ihlal sayar
+
+        # ── DEVIR: baslangictan ONCEKI her seyin toplami ──
+        # Kasa.bakiye'den geriye cikarma YAPILMIYOR: o alan bozuksa
+        # defter de sessizce bozuk cikardi. Hareketlerden hesaplamak
+        # defteri kendi kendini dogrulayabilir kilar.
+        devir = 0.0
+        bilinmeyen = 0
+        for h in KasaHareket.query.filter(filtre, KasaHareket.tarih < bas).all():
+            y = _yon(h)
+            if y == 0:
+                bilinmeyen += 1
+            devir += y * float(h.tutar or 0)
+
+        hs = KasaHareket.query.filter(
+            filtre, KasaHareket.tarih >= bas, KasaHareket.tarih <= son).order_by(
+            KasaHareket.tarih.asc(), KasaHareket.id.asc()).all()
+
+        # Cari unvanlarini TEK sorguda coz — satir basina sorgu
+        # atmak uzun defterlerde sayfayi kilitlerdi.
+        cari_idler = {h.cari_id for h in hs if h.cari_id}
+        unvanlar = {}
+        if cari_idler:
+            for c in Cari.query.filter(Cari.id.in_(list(cari_idler))).all():
+                unvanlar[c.id] = c.unvan
+
+        yuruyen = devir
+        toplam_g = toplam_c = 0.0
+        satirlar = []
+        for h in hs:
+            y = _yon(h)
+            if y == 0:
+                bilinmeyen += 1
+            tutar = float(h.tutar or 0)
+            yuruyen += y * tutar
+            if y > 0:
+                toplam_g += tutar
+            elif y < 0:
+                toplam_c += tutar
+            satirlar.append({
+                'id': h.id,
+                'tarih': h.tarih.isoformat() if h.tarih else None,
+                'tip': h.tip,
+                'yon': 'giris' if y > 0 else ('cikis' if y < 0 else 'bilinmiyor'),
+                'tutar': q3(tutar),
+                'giris': q3(tutar) if y > 0 else None,
+                'cikis': q3(tutar) if y < 0 else None,
+                'bakiye': q3(yuruyen),
+                'aciklama': h.aciklama or '',
+                'evrak_no': getattr(h, 'evrak_no', '') or '',
+                'baglanti_tip': getattr(h, 'baglanti_tip', None),
+                'baglanti_id': getattr(h, 'baglanti_id', None),
+                'cari_id': h.cari_id,
+                'cari_unvan': unvanlar.get(h.cari_id) if h.cari_id else None,
+                'siparis_id': getattr(h, 'siparis_id', '') or '',
+                'kasa_id': h.kasa_id,
+                'kasa_adi': kasa_adlari.get(h.kasa_id, ''),
+                'kullanici': getattr(h, 'kullanici', '') or '',
+            })
+
+        kapanis = q3(yuruyen)
+
+        # ── MUTABAKAT ──
+        # "Donem sonu bugunu gectiyse kapanis = Kasa.bakiye olmali"
+        # demek YANLIS olurdu: ileri tarihli hareketler (vadeli
+        # kayitlar) donem disinda kalir ama bakiyeye dahildir.
+        #
+        # Dogru esitlik HER ARALIK icin gecerli:
+        #     kapanis + donemden SONRAKI hareketler = Kasa.bakiye
+        #
+        # Boylece mutabakat hangi tarih araligina bakilirsa bakilsin
+        # anlamli kalir. Tutmuyorsa sessizce gecilmez — yanlis bakiye
+        # gostermek, uyusmazligi bildirmekten kotudur.
+        sonraki = 0.0
+        for h in KasaHareket.query.filter(filtre, KasaHareket.tarih > son).all():
+            sonraki += _yon(h) * float(h.tutar or 0)
+        kayitli = _kasa_gercek_bakiye(k)
+        beklenen = q3(float(kapanis) + sonraki)
+        fark = q3(float(beklenen) - float(kayitli))
+        mutabakat = {
+            'kayitli_bakiye': kayitli,
+            'hesaplanan': kapanis,
+            'sonraki_hareketler': q3(sonraki),
+            'beklenen': beklenen,
+            'fark': fark,
+            'tutuyor': abs(float(fark)) < 0.01,
+        }
+
+        return jsonify({
+            'ok': True,
+            'kasa': {'id': k.id, 'ad': k.ad, 'doviz': k.doviz,
+                     'ana_kasa': bool(getattr(k, 'ana_kasa', False)),
+                     'bakiye': _kasa_gercek_bakiye(k)},
+            'baslangic': bas.isoformat(), 'bitis': son.isoformat(),
+            'devir': q3(devir),
+            'hareketler': satirlar,
+            'ozet': {'giris': q3(toplam_g), 'cikis': q3(toplam_c),
+                     'net': q3(toplam_g - toplam_c), 'kapanis': kapanis,
+                     'adet': len(satirlar)},
+            'mutabakat': mutabakat,
+            'bilinmeyen_tip': bilinmeyen,
+        })
+
     @app.route('/api/kasa/hareket', methods=['POST'])
     def api_kasa_hareket_ekle():
         """Manuel kasa hareketi (giriş/çıkış). Bakiye otomatik güncellenir."""
@@ -17426,6 +17858,8 @@ def create_app():
                 return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
 
             p = _nakit_projeksiyon(tam=(modul == 'nakit_detay'))
+            if not p.get('ok'):
+                return jsonify(p), 400
             kirilim = p['kirilim']
 
             # Ozet blogu — her iki cikti icin ayni
