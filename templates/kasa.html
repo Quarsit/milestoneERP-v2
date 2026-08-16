@@ -448,6 +448,29 @@ async function kasaAc(id) {
 }
 
 /* ── Kasa hareketi ── */
+/* Kasa defterinden "kasa hareketlerine git" ile gelindiginde:
+     ?kasa=<id>          o kasanin hareket listesini acar
+     ?yeni=1&kasa=<id>   elle hareket girisi modalini acar
+   Defter SALT OKUNUR kalir; giris hep bu ekrandan yapilir. */
+async function kasaUrlIleAc() {
+  const p = new URLSearchParams(location.search);
+  const kid = p.get('kasa');
+  if (!kid) return;
+  for (let i = 0; i < 40 && !(Array.isArray(KASALAR) && KASALAR.length); i++) {
+    await new Promise(r => setTimeout(r, 120));
+  }
+  const k = KASALAR.find(x => String(x.id) === String(kid));
+  if (!k) { bildir('Kasa bulunamadı: ' + kid, true); return; }
+  if (p.get('yeni')) {
+    await kasaHareketAc();
+    const sec = document.getElementById('hKasa');
+    if (sec) sec.value = String(kid);
+  } else {
+    sonHareketleriYukle(Number(kid));
+  }
+}
+document.addEventListener('DOMContentLoaded', kasaUrlIleAc);
+
 async function kasaHareketAc() {
   document.getElementById('hareketModal').classList.add('acik');
   ['hTutar','hEvrak','hAciklama'].forEach(i => document.getElementById(i).value = '');

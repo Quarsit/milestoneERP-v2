@@ -414,6 +414,22 @@
                  placeholder="60 — fatura vadesi buna göre hesaplanır"></div>
         <div class="form-alan"></div>
       </div>
+      <!-- CRM-B: sahiplik ve görünürlük. Görünürlük VARSAYILAN OLARAK
+           KAPALI; işaretlemeyi unutan biri müşteriyi gizli bırakır,
+           tersi olsaydı gizli kalması gereken müşteri sessizce
+           herkese açılırdı. -->
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Satış Sorumlusu</label>
+          <select id="cSorumlu"><option value="">— atanmadı —</option></select></div>
+        <div class="form-alan"><label>Görünürlük</label>
+          <select id="cGorunurluk">
+            <option value="kapali">Kapalı — yalnızca sorumlusu ve yönetici</option>
+            <option value="ortak">Ortak — tüm satış ekibi</option>
+          </select>
+          <div style="font-size:.72rem;color:var(--soluk);margin-top:4px">
+            Kapalı müşteriye başka kişilere de erişim vermek için müşteri
+            detayındaki <strong>Erişim</strong> bölümünü kullanın.</div></div>
+      </div>
       <div id="tedarikciAlan" style="display:none">
         <div class="onay">
           <input type="checkbox" id="cUrunTed">
@@ -771,6 +787,22 @@ function _eski_ekstreSecenek_KULLANILMIYOR(id) {
 }
 /* ESKİ SÜRÜM SONU */
 
+/* Kasa defteri gibi baska ekranlardan "kayda git" ile gelindiginde
+   ?ac=<cari_id> ile o carinin detay cekmecesi acilir.
+   Kalip depodaki mevcut ornekten alindi (kesim.html, base.html):
+   URLSearchParams + liste yuklendikten sonra cagirma. */
+async function cariUrlIleAc() {
+  const id = new URLSearchParams(location.search).get('ac');
+  if (!id) return;
+  // TUM listesi dolmadan detayAc calismaz; dolana kadar bekle.
+  for (let i = 0; i < 40 && !(Array.isArray(TUM) && TUM.length); i++) {
+    await new Promise(r => setTimeout(r, 120));
+  }
+  if (TUM.find(x => x.id === id)) detayAc(id);
+  else bildir('Cari kaydı bulunamadı: ' + id, true);
+}
+document.addEventListener('DOMContentLoaded', cariUrlIleAc);
+
 async function detayAc(id) {
   const c = TUM.find(x => x.id === id);
   if (!c) return;
@@ -836,6 +868,34 @@ async function detayAc(id) {
 function yeniAc() { formAc(null); }
 function duzenleAc(id) { formAc(TUM.find(x => x.id === id)); }
 
+let CARI_KULLANICILAR = null;
+
+async function cSorumluDoldur(mevcut) {
+  const sec = document.getElementById('cSorumlu');
+  const gor = document.getElementById('cGorunurluk');
+  if (CARI_KULLANICILAR === null) {
+    try {
+      const d = await api('/api/ayarlar/kullanici');
+      CARI_KULLANICILAR = (Array.isArray(d) ? d : (d.data || []))
+        .map(k => k.ad).filter(Boolean);
+    } catch (e) { CARI_KULLANICILAR = []; }
+  }
+  const adlar = CARI_KULLANICILAR.slice();
+  /* Mevcut sorumlu listede yoksa (admin değiliz ya da kullanıcı
+     pasifleştirildi) yine de seçenek olarak ekle — yoksa değer
+     kaybolur. */
+  if (mevcut && !adlar.includes(mevcut)) adlar.push(mevcut);
+  sec.innerHTML = '<option value="">— atanmadı —</option>'
+    + adlar.map(a => `<option value="${kacar(a)}">${kacar(a)}</option>`).join('');
+  sec.value = mevcut || '';
+  const yetkili = !!window.ADMIN;
+  sec.disabled = !yetkili;
+  gor.disabled = !yetkili;
+  if (!yetkili) {
+    sec.title = gor.title = 'Sahiplik ve görünürlüğü yalnızca yönetici değiştirebilir';
+  }
+}
+
 function formAc(c) {
   DUZENLENEN = c || null;
   // Ülke: tam ad seçilir, ISO3 kodu (USA) saklanır
@@ -854,6 +914,14 @@ function formAc(c) {
   document.getElementById('cDoviz').value = c ? (c.para_birimi || 'USD') : 'USD';
   document.getElementById('cRisk').value = c ? (c.risk_limiti || '') : '';
   document.getElementById('cVade').value = c ? (c.odeme_vadesi_gun || '') : '';
+  /* Sorumlu listesini doldur. /api/ayarlar/kullanici admin OLMAYANA
+     BOŞ dizi döner; liste boş kalırsa kaydederken sorumlu null
+     gider ve SAHİPLİK SİLİNİR. Bu yüzden mevcut değer her hâlükârda
+     seçenek olarak eklenir, admin değilse alanlar kilitlenir ve
+     gövdeye hiç konmaz. */
+  cSorumluDoldur(c ? c.sorumlu : null);
+  /* Yeni kayıtta da KAPALI gelsin — güvenli taraf. */
+  document.getElementById('cGorunurluk').value = c ? (c.gorunurluk || 'kapali') : 'kapali';
   document.getElementById('cUrunTed').checked = c ? !!c.urun_tedarikcisi : false;
   document.getElementById('cKisaltma').value = c ? (c.uretici_kisaltma || '') : '';
   tipDegisti();
@@ -915,6 +983,12 @@ async function cariKaydet() {
     para_birimi: document.getElementById('cDoviz').value,
     risk_limiti: parseFloat(document.getElementById('cRisk').value) || null,
     odeme_vadesi_gun: parseInt(document.getElementById('cVade').value, 10) || null,
+    /* Admin değilse bu iki alan gönderilmez — boş açılır listeden
+       gelen null, mevcut sahipliği silerdi. */
+    ...(window.ADMIN ? {
+      sorumlu: document.getElementById('cSorumlu').value || null,
+      gorunurluk: document.getElementById('cGorunurluk').value,
+    } : {}),
     urun_tedarikcisi: (tip === 'Tedarikçi' || tip === 'Üretici') && document.getElementById('cUrunTed').checked,
     uretici_kisaltma: (tip === 'Tedarikçi' || tip === 'Üretici') ? document.getElementById('cKisaltma').value : null
   };

@@ -70,6 +70,12 @@ BEKLENEN_GIZLI = {
     '*': {  # tüm modeller için ortak
         'id', 'olusturma', 'guncelleme', 'kullanici', 'aktif',
         'hareketler', 'kalemler',
+        # cari_id: musteri adindan OTOMATIK dolduruluyor (CRM-A,
+        # models.py'deki before_insert dinleyicisi). Forma konmaz —
+        # kullanicinin ayrica kimlik secmesi hem gereksiz hem de
+        # isimle kimligin celismesine yol acardi.
+        # Bagsiz kayitlar icin ayri denetim: crm_bag_denetim.py
+        'cari_id',
     },
     # Satıcı bilgileri Ayarlar → Firma'dan bir kez girilir ve proforma
     # oluşturulurken otomatik doldurulur (F3). Her belgede elle yazılmaz.

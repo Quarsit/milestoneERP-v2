@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file
+from flask import g, has_request_context   # CRM-C2: kuresel erisim suzgeci
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import func
 from flask_migrate import Migrate
@@ -11,6 +12,7 @@ import xml.etree.ElementTree as ET
 from models import db, Kullanici, BlokStok, PlakaStok, EbatliStok, StokCikis, Proforma, ProformaKalem, AuditLog
 from models import Siparis, SiparisKalem, Rezervasyon, Cari, CariHareket, Maliyet, Sevkiyat, DovizKur, Veriler, SatisKaydi, Fatura, Banka, Kasa, KasaHareket, Kesim, KesimDetay
 from models import Cek, CekHareket
+from models import CariErisim, CariKisi   # CRM-B: erisim ve kisiler
 from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
 from models import Konteyner
@@ -4412,13 +4414,153 @@ def create_app():
         db.session.commit()
         return jsonify({'ok': True, 'eklenen': eklenen})
 
+    # ══════════════════════════════════════════════════════════
+    #  MÜŞTERİ ERİŞİM SÜZGECİ  (CRM-C)
+    #
+    #  Kural TEK YERDE. 55+ uc noktada tekrarlansaydi birinin farkli
+    #  yazilmasi sessiz sizinti demekti.
+    # ══════════════════════════════════════════════════════════
+
+    def _erisim_admin_mi():
+        return (session.get('rol') or '').upper() == 'ADMIN'
+
+    def _gorulebilir_cari_idler():
+        """Gecerli kullanicinin gorebilecegi cari kimlikleri.
+
+        None donerse SINIRLAMA YOK (admin) — cagiran bunu boyle
+        yorumlamali. Bos KUME donerse hicbir musteri gorunmez;
+        ikisi FARKLI seydir ve karistirilmasi ya her seyi acar ya
+        her seyi kapatir.
+        """
+        if _erisim_admin_mi():
+            return None
+        ben = session.get('kullanici')
+        idler = set()
+        # 'ortak' olanlar herkese acik. gorunurluk NULL ise GUVENLI
+        # taraf 'kapali' sayilir — bos deger "herkes gorsun"
+        # anlamina gelmemeli.
+        for c in Cari.query.filter(Cari.gorunurluk == 'ortak').all():
+            idler.add(c.id)
+        if ben:
+            for c in Cari.query.filter(Cari.sorumlu == ben).all():
+                idler.add(c.id)
+            for e in CariErisim.query.filter_by(kullanici=ben).all():
+                idler.add(e.cari_id)
+        return idler
+
+    def _cari_gorulebilir_mi(cari_id):
+        """Tek bir musteri icin erisim kontrolu."""
+        izin = _gorulebilir_cari_idler()
+        return izin is None or (cari_id in izin)
+
+    def _cari_suz(sorgu, sutun):
+        """Sorguya erisim suzgecini uygular.
+
+        `sutun` musteri kimligini tutan model sutunu (Cari.id,
+        Proforma.cari_id ...). Admin'de sorgu degismeden doner.
+        """
+        izin = _gorulebilir_cari_idler()
+        if izin is None:
+            return sorgu
+        if not izin:
+            # Hicbir musteri yok: bos sonuc. `in_([])` bazi
+            # surumlerde uyari uretir, acikca yanlis kosul veriyoruz.
+            return sorgu.filter(db.false())
+        return sorgu.filter(sutun.in_(list(izin)))
+
+    # ══════════════════════════════════════════════════════════
+    #  KÜRESEL SATIR SÜZGECİ  (CRM-C2)
+    #
+    #  Suzgec TUM SELECT sorgularina tek yerden uygulanir. 122 uc
+    #  noktayi elle duzenlemek yerine ORM katmaninda; ileride
+    #  eklenecek uc noktalar da kendiliginden kapsanir.
+    # ══════════════════════════════════════════════════════════
+
+    from contextlib import contextmanager as _contextmanager
+
+    from sqlalchemy import event as _sa_event, false as _sa_false
+    from sqlalchemy.orm import Session as _SaSession
+    from sqlalchemy.orm import with_loader_criteria as _wlc
+
+    # (model, musteri kimligini tutan sutun adi)
+    ERISIM_MODELLERI = [
+        (Cari, 'id'), (Proforma, 'cari_id'), (Fatura, 'cari_id'),
+        (SatisKaydi, 'cari_id'), (Sevkiyat, 'cari_id'),
+        (Rezervasyon, 'cari_id'), (CariHareket, 'cari_id'),
+        (Cek, 'cari_id'), (Siparis, 'cari_id'),
+    ]
+
+    @_contextmanager
+    def erisim_atla():
+        """Suzgeci GECICI olarak kapatir — SISTEM islemleri icin.
+
+        Fatura keserken cariyi arayan ic sorgu, kur guncelleme,
+        toplu islemler ve denetim betikleri suzulmemeli; aksi halde
+        sistem kendi isini goremez.
+
+        Tek ve acik kapi olmasi kasitli: dagilirsa suzgec sessizce
+        devre disi kalir. Her kullanimi GEREKCESIYLE yazilmali.
+        """
+        onceki = getattr(g, 'erisim_atla_bayrak', False)
+        g.erisim_atla_bayrak = True
+        try:
+            yield
+        finally:
+            g.erisim_atla_bayrak = onceki
+
+    @_sa_event.listens_for(_SaSession, 'do_orm_execute')
+    def _erisim_suzgeci(durum):
+        # Yalnizca ust duzey SELECT. Sutun/iliski yuklemeleri zaten
+        # suzulmus bir kayittan gelir; tekrar suzmek gereksiz ve
+        # bazi durumlarda hatali olur.
+        if not durum.is_select or durum.is_column_load or durum.is_relationship_load:
+            return
+        if not has_request_context():
+            return                      # CLI, gorev, denetim betigi
+        if getattr(g, 'erisim_atla_bayrak', False):
+            return                      # sistem islemi
+        if (session.get('rol') or '').upper() == 'ADMIN':
+            return                      # admin her seyi gorur
+        ben = session.get('kullanici')
+        if not ben:
+            return                      # oturum yok; _auth_required zaten engeller
+
+        izin = getattr(g, 'erisim_izin', None)
+        if izin is None:
+            # Izin listesini hesaplarken SUZGEC KAPALI olmali,
+            # yoksa kendini sorgulayip ozyinelemeye girer.
+            g.erisim_atla_bayrak = True
+            try:
+                izin = {c.id for c in
+                        Cari.query.filter(Cari.gorunurluk == 'ortak').all()}
+                izin |= {c.id for c in Cari.query.filter(Cari.sorumlu == ben).all()}
+                izin |= {e.cari_id for e in
+                         CariErisim.query.filter_by(kullanici=ben).all()}
+            finally:
+                g.erisim_atla_bayrak = False
+            g.erisim_izin = izin
+
+        idler = list(izin)
+        for _model, _sutun in ERISIM_MODELLERI:
+            # DUZ IFADE — lambda DEGIL.
+            # with_loader_criteria lambdalari KOD NESNESINE gore
+            # onbellekliyor; bir dongude ayni satirdan uretilen iki
+            # lambda birbirine karisiyor ve suzgec yanlis modele
+            # uygulaniyor. Olculdu: fatura listesi 2 yerine 0
+            # donuyordu (sessizce fazla suzme).
+            _kosul = (getattr(_model, _sutun).in_(idler) if idler
+                      else _sa_false())
+            durum.statement = durum.statement.options(
+                _wlc(_model, _kosul, include_aliases=True))
+
     # ---------- API: CARİ VE HAREKETLER ----------
     @app.route('/api/cari', methods=['GET'])
     def api_cari_liste():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         per_page = request.args.get('per_page', type=int, default=100)
         page = request.args.get('page', type=int, default=1)
-        query = Cari.query.order_by(Cari.unvan)
+        # ERISIM SUZGECI (CRM-C) — admin'de sorgu degismez.
+        query = _cari_suz(Cari.query, Cari.id).order_by(Cari.unvan)
         paginated = query.paginate(page=page, per_page=per_page, error_out=False)
         return jsonify({'data': [{'id': c.id, 'unvan': c.unvan, 'cari_tip': c.cari_tip, 'telefon': c.telefon,
                                   'risk_limiti': c.risk_limiti, 'urun_tedarikcisi': c.urun_tedarikcisi,
@@ -4430,7 +4572,10 @@ def create_app():
                                   # Z1: serializer'da yoktu -> duzenlemede bosaliyor,
                                   # kaydedilince siliniyordu (cari.html:594/629).
                                   'odeme_vadesi_gun': c.odeme_vadesi_gun,
-                                  'aciklama': c.aciklama} for c in paginated.items],
+                                  'aciklama': c.aciklama,
+                                  'sorumlu': c.sorumlu,
+                                  'gorunurluk': c.gorunurluk or 'kapali'}
+                                 for c in paginated.items],
                         'meta': {'page': page, 'per_page': per_page, 'total': paginated.total}})
 
     @app.route('/api/cari', methods=['POST'])
@@ -4499,9 +4644,32 @@ def create_app():
         data = request.json or {}
         _eski = {'unvan': c.unvan, 'cari_tip': c.cari_tip, 'ulke': c.ulke}
 
+        # GORUNURLUK DOGRULAMASI
+        # Serbest metin kabul etmek tehlikeli: 'Kapali' ya da 'kapalı'
+        # yazilirsa erisim suzgeci hicbir dala uymaz ve musteri
+        # SESSIZCE herkese acik kalir. Sadece iki deger gecerli.
+        if 'gorunurluk' in data:
+            _g = (data.get('gorunurluk') or '').strip().lower()
+            if _g not in ('ortak', 'kapali'):
+                return jsonify({'ok': False,
+                                'mesaj': "Görünürlük 'ortak' ya da 'kapali' "
+                                         "olmalı"}), 400
+            data['gorunurluk'] = _g
+
+        # SORUMLU DOGRULAMASI
+        # Olmayan bir kullaniciya atanan musteri, hicbir satiscinin
+        # gormedigi yetim kayda donusur.
+        if 'sorumlu' in data:
+            _s = (data.get('sorumlu') or '').strip()
+            if _s and not Kullanici.query.filter_by(ad=_s).first():
+                return jsonify({'ok': False,
+                                'mesaj': f'Kullanıcı bulunamadı: {_s}'}), 400
+            data['sorumlu'] = _s or None
+
         for alan in ('unvan', 'cari_tip', 'ulke', 'telefon', 'email', 'adres',
                      'para_birimi', 'vergi_dairesi', 'vergi_no', 'yetkili', 'iban',
-                     'uretici_kisaltma', 'aciklama', 'odeme_vadesi_gun'):
+                     'uretici_kisaltma', 'aciklama', 'odeme_vadesi_gun',
+                     'sorumlu', 'gorunurluk'):
             if alan in data:
                 d = data.get(alan)
                 setattr(c, alan, (d.strip() if isinstance(d, str) else d) or None)

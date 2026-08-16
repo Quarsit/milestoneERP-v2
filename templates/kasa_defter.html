@@ -85,6 +85,8 @@
     <button onclick="kdAralik('gecenay')">Geçen ay</button>
     <button onclick="kdAralik('yil')">Bu yıl</button>
   </span>
+  <button class="blok-btn" onclick="kdKasayaGit()">Kasa hareketlerine git →</button>
+  <button class="blok-btn" onclick="kdHareketGir()">+ Hareket gir</button>
   <button class="blok-btn" onclick="location.href='/nakit'">Nakit akışı →</button>
   <span id="kdDurum" style="font-size:.8rem;color:var(--soluk)"></span>
 </div>
@@ -232,12 +234,23 @@ function kdCiz() {
   for (const x of d.hareketler) {
     /* Cari bağlantısı modelde vardı ama API'de dönmüyordu; artık
        satırdan doğrudan cari hesaba geçilebiliyor. */
+    /* '?id=' YANLISTI — /cari o parametreyi hiç okumuyordu, bağlantı
+       sessizce sadece listeyi açıyordu. Doğrusu '?ac=' (KD4). */
     const cari = x.cari_id
-      ? '<a class="kd-cari" href="/cari?id=' + encodeURIComponent(x.cari_id) + '">'
+      ? '<a class="kd-cari" href="/cari?ac=' + encodeURIComponent(x.cari_id) + '">'
         + kdKacinc(x.cari_unvan || x.cari_id) + '</a>'
       : '';
-    const belge = [x.evrak_no, x.baglanti_tip, x.siparis_id]
+    /* Belgeye git: bağlantı tipine göre ilgili sayfaya. Hedef
+       sayfaların kayıt seçmesi desteklenmediği için sayfaya
+       götürülür, kayıt vurgulanmaz — olmayan bir davranışı
+       varmış gibi göstermek yanıltıcı olurdu. */
+    const _hedef = { fatura: '/fatura', cek: '/cek',
+                     tahsilat: '/fatura', virman: '/kasa' }[x.baglanti_tip];
+    const _et = [x.evrak_no, x.baglanti_tip, x.siparis_id]
       .filter(Boolean).map(kdKacinc).join(' · ');
+    const belge = _et
+      ? (_hedef ? '<a class="kd-cari" href="' + _hedef + '">' + _et + '</a>' : _et)
+      : '';
     h += '<tr><td class="kd-sayi">' + kdTarih(x.tarih) + '</td>'
        + '<td>' + kdKacinc(x.aciklama || '—')
        + (cari ? '<span class="kd-alt">' + cari + '</span>' : '')
@@ -259,6 +272,28 @@ function kdCiz() {
      + kdPara(o.kapanis, dv) + '</td></tr>';
   h += '</tbody></table>';
   document.getElementById('kdTablo').innerHTML = h;
+}
+
+/* Defter SALT OKUNUR — veri girişi buradan yapılmaz, giriş
+   ekranına yönlendirilir. İkinci bir yazma yolu açmak, defterden
+   girilen hareketin cari bakiyesini güncellememesi ve mutabakatın
+   kendi yazdığını doğrulaması anlamına gelirdi. */
+function kdKasayaGit() {
+  if (!KD_VERI) return;
+  if (KD_VERI.kasa.ana_kasa) {
+    bildir('Ana kasaya doğrudan hareket girilmez; bir alt kasa seçin.', true);
+    return;
+  }
+  location.href = '/kasa?kasa=' + encodeURIComponent(KD_VERI.kasa.id);
+}
+
+function kdHareketGir() {
+  if (!KD_VERI) return;
+  if (KD_VERI.kasa.ana_kasa) {
+    bildir('Ana kasaya doğrudan hareket girilmez; bir alt kasa seçin.', true);
+    return;
+  }
+  location.href = '/kasa?yeni=1&kasa=' + encodeURIComponent(KD_VERI.kasa.id);
 }
 
 function kdYazdir() { window.print(); }

@@ -196,6 +196,10 @@ class Siparis(db.Model):
     id              = db.Column(db.String(20), primary_key=True)
     siparis_tarihi  = db.Column(db.Date, default=date.today)
     musteri         = db.Column(db.String(100))
+    # Musteri KIMLIGI (CRM-A2). CRM-A'da atlanmisti: taramada
+    # `acente_cari_id` gorulup 'cari_id var' sanilmisti. O alan
+    # siparisin ACENTESINI gosterir, musteriyi degil.
+    cari_id         = db.Column(db.String(20), index=True)
 
     # Sipariş geneli para birimi (kalemler bunu inherit eder, override edebilir)
     doviz           = db.Column(db.String(5), default='USD')
@@ -305,6 +309,9 @@ class Rezervasyon(db.Model):
     __tablename__ = 'rezervasyon'
     id              = db.Column(db.String(20), primary_key=True)
     musteri         = db.Column(db.String(100))
+    # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
+    # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
+    cari_id         = db.Column(db.String(20), index=True)
     siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'), nullable=True)
     siparis_kalem_id = db.Column(db.Integer, db.ForeignKey('siparis_kalem.id'), nullable=True)  # YENİ
     proforma_id     = db.Column(db.String(20), db.ForeignKey('proforma.id'), nullable=True)
@@ -346,6 +353,15 @@ class Cari(db.Model):
     # Standart ödeme vadesi (gün). Fatura kesilirken vade_tarihi bundan
     # hesaplanır; yaşlandırma raporu da bu bilgiden beslenir. (F2-2)
     odeme_vadesi_gun = db.Column(db.Integer)
+    # ── CRM: sahiplik ve gorunurluk ──
+    # sorumlu: Kullanici.ad. O alan BENZERSIZ ve degistirilemiyor
+    # (guncelleme ucu yazmiyor), bu yuzden anahtar olarak guvenli.
+    sorumlu         = db.Column(db.String(50), index=True)
+    # 'kapali' (varsayilan) | 'ortak'
+    # Varsayilan KAPALI: isaretlemeyi unutan biri musteriyi gizli
+    # birakir. Tersi olsaydi gizli kalmasi gereken musteri sessizce
+    # herkese acilirdi — sessiz sizinti, gurultulu arizadan kotudur.
+    gorunurluk      = db.Column(db.String(10), default='kapali', index=True)
     olusturma       = db.Column(db.DateTime, default=datetime.now)
     hareketler      = db.relationship('CariHareket', backref='cari_hesap',
                                       lazy=True, cascade='all, delete-orphan')
@@ -408,6 +424,9 @@ class Fatura(db.Model):
     proforma_id     = db.Column(db.String(20))
     siparis_id      = db.Column(db.String(20))
     musteri         = db.Column(db.String(200))
+    # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
+    # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
+    cari_id         = db.Column(db.String(20), index=True)
     musteri_adres   = db.Column(db.Text)
     musteri_ulke    = db.Column(db.String(80))
     toplam          = db.Column(Para, default=0)
@@ -486,6 +505,9 @@ class Sevkiyat(db.Model):
     siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'), nullable=True)
     siparis_li      = db.Column(db.String(15))
     musteri         = db.Column(db.String(100))
+    # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
+    # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
+    cari_id         = db.Column(db.String(20), index=True)
     cikis_noktasi   = db.Column(db.String(100))
     varis_noktasi   = db.Column(db.String(100))
     tah_yukleme     = db.Column(db.Date)
@@ -660,6 +682,9 @@ class Proforma(db.Model):
     olusturma       = db.Column(db.DateTime, default=datetime.now)
     siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'), nullable=True)
     musteri         = db.Column(db.String(200))
+    # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
+    # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
+    cari_id         = db.Column(db.String(20), index=True)
     musteri_adres   = db.Column(db.Text)
     musteri_ulke    = db.Column(db.String(100))
     urun_tip        = db.Column(db.String(20))
@@ -798,6 +823,9 @@ class SatisKaydi(db.Model):
     proforma_id     = db.Column(db.String(20), db.ForeignKey('proforma.id'), nullable=True, index=True)
     sevkiyat_id     = db.Column(db.String(20), nullable=True)
     musteri         = db.Column(db.String(200), index=True)
+    # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
+    # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
+    cari_id         = db.Column(db.String(20), index=True)
     musteri_ulke    = db.Column(db.String(50))
     satis_tarihi    = db.Column(db.Date, default=date.today)
     teslim_tarihi   = db.Column(db.Date)
@@ -1022,3 +1050,83 @@ class AuditLog(db.Model):
     ip_adresi       = db.Column(db.String(50))
     
     
+
+
+class CariErisim(db.Model):
+    """Kapali bir musteriye ISTISNA erisim.
+
+    "Bu musteriyi Ali ve Ayse gorsun, baskasi gormesin" durumu icin.
+    Sorumlu ve admin zaten gorur; bu tablo onlarin disindakileri
+    tek tek yetkilendirir.
+    """
+    __tablename__ = 'cari_erisim'
+    id          = db.Column(db.Integer, primary_key=True)
+    cari_id     = db.Column(db.String(20), index=True, nullable=False)
+    kullanici   = db.Column(db.String(50), index=True, nullable=False)
+    veren       = db.Column(db.String(50))
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+    __table_args__ = (
+        db.UniqueConstraint('cari_id', 'kullanici', name='uq_cari_erisim'),
+    )
+
+
+class CariKisi(db.Model):
+    """Musterideki kisiler.
+
+    Cari'de tek bir `yetkili` alani vardi. Ihracatta bir musteride
+    satin almaci, lojistik sorumlusu ve muhasebe AYRI kisilerdir;
+    hangisine ne zaman yazilacagi satis ekibinin gunluk sorusudur.
+    """
+    __tablename__ = 'cari_kisi'
+    id          = db.Column(db.Integer, primary_key=True)
+    cari_id     = db.Column(db.String(20), index=True, nullable=False)
+    ad          = db.Column(db.String(120), nullable=False)
+    gorev       = db.Column(db.String(80))
+    telefon     = db.Column(db.String(50))
+    email       = db.Column(db.String(120))
+    dil         = db.Column(db.String(30))
+    birincil    = db.Column(db.Boolean, default=False)
+    aktif       = db.Column(db.Boolean, default=True)
+    aciklama    = db.Column(db.Text)
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+# ══════════════════════════════════════════════════════════════════
+#  MUSTERI KIMLIGI OTOMATIK DOLDURMA  (CRM-A)
+#
+#  Asagidaki bes tabloyu 11 ayri fonksiyon olusturuyor. Her birine
+#  elle `cari_id=` eklemek, 12.'si yazildiginda unutulmasi demekti —
+#  kayit sessizce sahipsiz kalirdi. Bunun yerine kayit yazilirken
+#  `musteri` adindan cozuluyor; ileride eklenecek her kod
+#  kendiliginden kapsaniyor.
+#
+#  Ham baglanti uzerinden SELECT yapiliyor: oturumu kullanmak flush
+#  icinde ozyineleme riski dogururdu.
+#
+#  Eslesme bulunamazsa cari_id NULL kalir ve kayit REDDEDILMEZ.
+#  Fatura kesilmesini engellemek, eksik bagdan kotu olurdu.
+#  Acikta kalanlari bulmak icin: crm_bag_denetim.py
+# ══════════════════════════════════════════════════════════════════
+from sqlalchemy import event as _event, text as _text
+
+
+def cari_id_otomatik_doldur(mapper, connection, target):
+    if getattr(target, 'cari_id', None):
+        return
+    unvan = (getattr(target, 'musteri', None) or '').strip()
+    if not unvan:
+        return
+    try:
+        r = connection.execute(
+            _text('SELECT id FROM cariler WHERE unvan = :u LIMIT 1'),
+            {'u': unvan}).fetchone()
+        if r:
+            target.cari_id = r[0]
+    except Exception:
+        # Baglanti cozulmezse kayit YINE DE yazilir; eksik bag
+        # denetimle bulunur, veri kaybi olmaz.
+        pass
+
+
+for _model in (Proforma, Fatura, SatisKaydi, Sevkiyat, Rezervasyon, Siparis):
+    _event.listen(_model, 'before_insert', cari_id_otomatik_doldur)
