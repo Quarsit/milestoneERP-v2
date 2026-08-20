@@ -727,6 +727,23 @@ class Proforma(db.Model):
     avans_yuzdesi   = db.Column(Olcu, default=0)
     avans_tutari    = db.Column(Para, default=0)
     avans_tip       = db.Column(db.String(5), default='%')
+
+    # ── SATIŞ TAKİBİ (PF2) ──
+    # temsilci: teklifi HAZIRLAYAN satisci (Kullanici.ad). Var olan
+    # `onaya_gonderen` ONAY akisinin parcasi, sahiplik degil.
+    temsilci        = db.Column(db.String(50), index=True)
+
+    # KAYIP KAYDI.
+    # 'Iptal' ile 'Kaybedildi' AYRI seylerdir: iptal TEKLIFI GERI
+    # CEKMEK, kayip MUSTERININ BASKASINI SECMESI. Ayni kutuya
+    # koymak kazanma oranini olculemez yapar.
+    #
+    # Sebep alani asil degerli olan: "kac teklif kaybettik" tek
+    # basina bir sey ogretmez, "neden kaybettik" ogretir.
+    # fiyat | termin | rakip | musteri_vazgecti | stok_yok | diger
+    kayip_sebep     = db.Column(db.String(30), index=True)
+    kayip_not       = db.Column(db.Text)
+    kayip_tarihi    = db.Column(db.Date)
     avans_sabit     = db.Column(Para, default=0)
     tur             = db.Column(db.String(20), default='ihracat')
     kdv_oran        = db.Column(Olcu, default=0)

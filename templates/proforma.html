@@ -347,6 +347,44 @@
     </div>
   </div>
 </div>
+
+<!-- KAYIP KAYDI -->
+<div class="modal-ortu" id="kayipModal" onclick="if(event.target===this)kayipKapat()">
+  <div class="modal" style="width:480px" role="dialog" aria-label="Kayıp kaydı">
+    <div class="modal-bas"><h3>Teklif Kaybedildi</h3>
+      <p>Müşteri başkasını seçti — bu, teklifi geri çekmekten (İptal) farklıdır</p></div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Sebep <span style="color:var(--kirmizi)">*</span></label>
+          <select id="kySebep">
+            <option value="">— seçin —</option>
+            <option value="fiyat">Fiyat — rakip daha ucuz</option>
+            <option value="termin">Termin — teslim süresi uymadı</option>
+            <option value="rakip">Rakip — başka tedarikçi seçildi</option>
+            <option value="musteri_vazgecti">Müşteri vazgeçti / proje iptal</option>
+            <option value="stok_yok">Stok yok — talebi karşılayamadık</option>
+            <option value="diger">Diğer</option>
+          </select></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Not</label>
+          <textarea id="kyNot" rows="3" data-buyuk-harf="hayir"
+            placeholder="Rakip firma, verilen fiyat, müşterinin gerekçesi…"></textarea></div>
+      </div>
+      <div style="font-size:.78rem;color:var(--soluk);line-height:1.55;margin-top:8px;
+                  padding-top:8px;border-top:1px solid var(--cizgi)">
+        <strong>Sebep zorunlu.</strong> "Kaç teklif kaybettik" tek başına bir şey
+        öğretmez; <strong>neden</strong> kaybettiğimiz öğretir. Bu kayıtlar
+        dönüşüm raporunda toplanır.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="kayipKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="kayipKaydet()">Kaybedildi olarak işaretle</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -713,6 +751,13 @@ async function detayAc(id) {
     // E-posta ile gönder: Onaylandı ve sonrasında (belge seçimli pencere)
     if (onayli)
       eylem.push(`<button class="blok-btn" style="border-color:var(--verde);color:var(--verde)" onclick="epostaModalAc('${kacar(id)}')">✉ E-posta gönder</button>`);
+    /* KAYBEDİLDİ — 'İptal' ile AYNI ŞEY DEĞİL.
+       İptal teklifi GERİ ÇEKMEK, kayıp MÜŞTERİNİN BAŞKASINI SEÇMESİ.
+       Aynı kutuya koymak kazanma oranını ölçülemez yapar. */
+    if (['Gonderildi','Onaylandi','Taslak','Ic Onay'].includes(p.durum) && p.aktif_surum !== false)
+      eylem.push(`<button class="blok-btn" style="border-color:var(--kirmizi);color:var(--kirmizi)" onclick="kayipAc('${kacar(id)}')">Kaybedildi</button>`);
+    if (p.durum === 'Kaybedildi')
+      eylem.push(`<button class="blok-btn" onclick="kaybiGeriAl('${kacar(id)}')">Kaybı geri al</button>`);
     // Revize Et: aktif ve faturalanmamış her sürümde (müşteri değişiklik istediğinde)
     if (p.durum !== 'Faturalandi' && p.durum !== 'Revize' && p.aktif_surum !== false)
       eylem.push(`<button class="blok-btn" style="border-color:var(--mavi);color:var(--mavi)" onclick="revizeEt('${kacar(id)}')">Revize Et</button>`);
@@ -771,6 +816,40 @@ async function riskKutusuDoldur(id) {
         </div>`;
     }
   } catch (e) { /* risk çekilemezse kutu boş kalır */ }
+}
+
+/* ── KAYIP KAYDI ── */
+let KAYIP_ID = null;
+function kayipAc(id) {
+  KAYIP_ID = id;
+  document.getElementById('kySebep').value = '';
+  document.getElementById('kyNot').value = '';
+  document.getElementById('kayipModal').classList.add('acik');
+}
+function kayipKapat() { document.getElementById('kayipModal').classList.remove('acik'); }
+
+async function kayipKaydet() {
+  const sebep = document.getElementById('kySebep').value;
+  /* Sebep ZORUNLU — sunucu da reddediyor. Sebepsiz kayıt,
+     kaybedildiğini bilmekten başka bir şey öğretmez. */
+  if (!sebep) { bildir('Kayıp sebebi seçin', true); return; }
+  try {
+    const d = await api(`/api/proforma/${encodeURIComponent(KAYIP_ID)}/kaybedildi`, {
+      method: 'POST', body: JSON.stringify({
+        sebep: sebep, not: document.getElementById('kyNot').value })});
+    bildir(d.mesaj || 'Kayıp kaydedildi');
+    kayipKapat(); cekmeceKapat(); await yukle();
+  } catch (e) { /* api() bildiriyor */ }
+}
+
+async function kaybiGeriAl(id) {
+  if (!confirm('Bu teklifin kayıp kaydı geri alınacak.\n\nDevam edilsin mi?')) return;
+  try {
+    const d = await api(`/api/proforma/${encodeURIComponent(id)}/kaybi_geri_al`,
+      { method: 'POST', body: JSON.stringify({}) });
+    bildir(d.mesaj || 'Geri alındı');
+    cekmeceKapat(); await yukle();
+  } catch (e) {}
 }
 
 async function durumGecir(id, yeni) {

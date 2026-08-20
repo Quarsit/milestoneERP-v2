@@ -82,7 +82,17 @@ BEKLENEN_GIZLI = {
     # avans_yuzdesi/tip/sabit: form 'avans_deger' gönderir, backend
     # avans_tutari'na yazar; diğerleri eski gösterim biçimleridir.
     # onay* alanları onay iş akışında sistem tarafından yazılır.
-    'Proforma': {'satici_firma', 'satici_adres', 'satici_tel', 'satici_email',
+    # temsilci: teklifi HAZIRLAYAN, oturumdan otomatik yazılır
+    #   (api_proforma_ekle). Elle girilebilseydi başkası adına teklif
+    #   kaydedilebilirdi.
+    # kayip_*: proforma formunda DEĞİL, kendi ekranında — "Kaybedildi"
+    #   düğmesi + sebep penceresi (proforma.html: kayipModal). Sunucu
+    #   tarafı ayrı uç nokta (/kaybedildi) ve sebep ZORUNLU; durum
+    #   ucundan elle atanamıyor. Alanlar formda kısa adlarla
+    #   (kySebep/kyNot) geçtiği için tarayıcı göremiyor — iskonto_sabit
+    #   ile aynı durum. Kod okunarak doğrulandı.
+    'Proforma': {'temsilci', 'kayip_sebep', 'kayip_not', 'kayip_tarihi',
+                 'satici_firma', 'satici_adres', 'satici_tel', 'satici_email',
                  'avans_yuzdesi', 'avans_tip', 'avans_sabit',
                  'onaya_gonderme_tarihi', 'onay_reddeden',
                  'proforma_no', 'revizyon_no', 'aktif_surum', 'ana_pi_id',
