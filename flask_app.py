@@ -5436,10 +5436,54 @@ def create_app():
     def api_cari_bakiye(cari_id):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         hareketler = CariHareket.query.filter_by(cari_id=cari_id).all()
-        borc = sum(h.borc or 0 for h in hareketler)
-        alacak = sum(h.alacak or 0 for h in hareketler)
-        net = borc - alacak
-        return jsonify({'borc': borc, 'alacak': alacak, 'net': net})
+
+        # DOVIZLER AYRI TOPLANIR.
+        #
+        # Onceki surum farkli dovizleri ayni toplama atiyordu:
+        #     10.000 USD borc + 200.000 TRY tahsilat -> net -190.000
+        # Musteri 5.000 USD BORCLU iken 190.000 ALACAKLI gorunuyordu
+        # ve o sayi hicbir para biriminde anlamli degildi.
+        dovizler = {}
+        for h in hareketler:
+            dv = (h.doviz or 'TRY').upper()
+            k = dovizler.setdefault(dv, {'borc': 0.0, 'alacak': 0.0})
+            k['borc'] += float(h.borc or 0)
+            k['alacak'] += float(h.alacak or 0)
+        for dv, k in dovizler.items():
+            k['borc'] = q3(k['borc'])
+            k['alacak'] = q3(k['alacak'])
+            k['net'] = q3(float(k['borc']) - float(k['alacak']))
+
+        # TRY KARSILIGI — islem gunu kuruyla, `borc_try`/`alacak_try`
+        # alanlarindan. Bu alanlar zaten dolduruluyor ve
+        # api_cari_finansal_ozet onlari boyle kullaniyor.
+        #
+        # Eski TRY kayitlarinda borc_try bos olabilir; o durumda ham
+        # tutar kullanilir (finansal_ozet ile ayni geri dusme).
+        borc_try = alacak_try = 0.0
+        for h in hareketler:
+            _dv = (h.doviz or 'TRY').upper()
+            _bt, _at = float(h.borc_try or 0), float(h.alacak_try or 0)
+            if _dv == 'TRY':
+                if not _bt:
+                    _bt = float(h.borc or 0)
+                if not _at:
+                    _at = float(h.alacak or 0)
+            borc_try += _bt
+            alacak_try += _at
+
+        _c = db.session.get(Cari, cari_id)
+        return jsonify({
+            # TEK ANLAMLI SAYI: TRY karsiligi.
+            'borc': q3(borc_try), 'alacak': q3(alacak_try),
+            'net': q3(borc_try - alacak_try),
+            'birim': 'TRY',
+            # DOVIZ AYRIMI KORUNUR: tek TRY sayisi kolay okunur ama
+            # KUR RISKINI GIZLER. Nakit akisinda da ayni sebeple uc
+            # dovizi ayri gosteriyoruz.
+            'dovizler': dovizler,
+            'para_birimi': (_c.para_birimi if _c else None) or 'TRY',
+        })
 
     @app.route('/api/cari/<cari_id>', methods=['DELETE'])
     def api_cari_sil(cari_id):
@@ -8237,12 +8281,85 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         hareket = CariHareket.query.get(hareket_id)
         if not hareket: return jsonify({'ok': False, 'mesaj': 'Hareket bulunamadı'}), 404
-        data = request.json
-        for key, val in data.items():
-            if key == 'vade_tarihi': val = _parse_date(val)
-            if hasattr(hareket, key): setattr(hareket, key, val)
-        db.session.commit()
-        return jsonify({'ok': True})
+        data = request.json or {}
+
+        # ── FATURA KAYDI KORUMASI ──
+        # DELETE bu kaydi koruyor ama PUT korumuyordu. Olculdu:
+        # `PUT {"borc": 0}` cari borcu sifirliyordu — silmekle AYNI
+        # sonuc. Fatura "Kesildi" gorunurken musterinin borcu yok.
+        # Ayni koruma buraya da kondu.
+        if (hareket.baglanti_tip == 'fatura' and hareket.kaynak == 'fatura'
+                and (hareket.borc or 0) > 0):
+            _f = Fatura.query.get(hareket.baglanti_id)
+            _no = (_f.fatura_no or _f.id) if _f else hareket.baglanti_id
+            return jsonify({
+                'ok': False,
+                'mesaj': f'Bu hareket {_no} faturasının otomatik borç kaydı; '
+                         f'buradan değiştirilemez. Tutarı düzeltmek için '
+                         f'faturayı iptal edip yeniden kesin.'}), 400
+
+        # ── BEYAZ LİSTE ──
+        # Onceden `for key, val in data.items(): setattr(...)` vardi
+        # ve istemciden gelen HER alan yaziliyordu. Olculdu:
+        # kaynak, kapatildi, cari_id ve doviz disaridan
+        # degistirilebiliyordu.
+        #
+        # Asagidakiler DISARIDA birakildi, cunku kaydin KIMLIGINI
+        # olusturuyorlar:
+        #   cari_id  → degisirse hareket baska musteriye tasinir,
+        #              D3 degismezligi kirilir
+        #   borc/alacak/doviz/kur → tutar duzeltmesi iptal+yeniden
+        #              giris ile yapilmali; sessizce degistirilirse
+        #              kasa ve fatura ile ayrisir
+        #   kaynak   → nakit akisi siniflandirmasi buna bagli;
+        #              taninmayan kaynak SESSIZCE yok sayilir (NK5)
+        #   kapatildi→ stok silme korumasi ve kur farki hesabi kullanir
+        GUNCELLENEBILIR = ('aciklama', 'vade_tarihi', 'evrak_no',
+                           'belge_no', 'hareket_tarihi')
+        reddedilen = [k for k in data
+                      if k not in GUNCELLENEBILIR and hasattr(hareket, k)]
+        if reddedilen:
+            return jsonify({
+                'ok': False,
+                'mesaj': f"Bu alanlar buradan değiştirilemez: "
+                         f"{', '.join(sorted(reddedilen))}. "
+                         f"Değiştirilebilir: {', '.join(GUNCELLENEBILIR)}."}), 400
+
+        _eski = {}
+        for key in GUNCELLENEBILIR:
+            if key not in data:
+                continue
+            val = data[key]
+            if key in ('vade_tarihi', 'hareket_tarihi'):
+                val = _parse_date(val)
+                if val is None and data[key]:
+                    return jsonify({'ok': False,
+                                    'mesaj': f'Geçersiz tarih: {key}'}), 400
+            _onceki = getattr(hareket, key, None)
+            if _onceki != val:
+                _eski[key] = str(_onceki)
+                setattr(hareket, key, val)
+
+        if not _eski:
+            return jsonify({'ok': True, 'mesaj': 'Değişiklik yok'})
+
+        # DENETIM KAYDI — bu uc nokta hicbir iz birakmiyordu.
+        try:
+            db.session.add(AuditLog(
+                kullanici=session.get('kullanici'),
+                islem_tipi='GUNCELLEME', tablo_adi='cari_hareket',
+                kayit_id=hareket.id,
+                eski_veri=json.dumps(_eski, ensure_ascii=False),
+                yeni_veri=json.dumps(
+                    {k: str(getattr(hareket, k)) for k in _eski},
+                    ensure_ascii=False)))
+        except Exception as _e:
+            app.logger.warning(f'Denetim kaydi yazilamadi: {_e}')
+
+        ok, hata = _safe_commit(f'Cari hareket guncelleme: {hareket_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'guncellenen': sorted(_eski)})
 
     @app.route('/api/cari/hareket/<hareket_id>', methods=['DELETE'])
     def api_hareket_sil(hareket_id):
