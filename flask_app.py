@@ -13,6 +13,7 @@ from models import db, Kullanici, BlokStok, PlakaStok, EbatliStok, StokCikis, Pr
 from models import Siparis, SiparisKalem, Rezervasyon, Cari, CariHareket, Maliyet, Sevkiyat, DovizKur, Veriler, SatisKaydi, Fatura, Banka, Kasa, KasaHareket, Kesim, KesimDetay
 from models import Cek, CekHareket
 from models import CariErisim, CariKisi   # CRM-B: erisim ve kisiler
+from models import CariAktivite              # CRM-E: temas kaydi
 from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
 from models import Konteyner
@@ -233,7 +234,11 @@ def create_app():
     # Modül listesi (yetki atanabilir)
     YETKI_MODULLERI = ['dashboard', 'stok', 'siparis', 'rezervasyon', 'proforma',
                        'fatura', 'cari', 'maliyet', 'sevkiyat', 'karlilik',
-                       'satislar', 'raporlar', 'kasa', 'kesim', 'ayarlar', 'denetim']
+                       'satislar', 'raporlar', 'kasa', 'kesim', 'ayarlar', 'denetim',
+                       # CRM ayri modul: satisci takip/temas gorsun diye
+                       # finansal `cari` yetkisi almak zorunda kalmasin,
+                       # finans ekibi de gorusme notlarini gormesin.
+                       'crm']
 
     def _kullanici_yetkileri():
         """Aktif kullanıcının modül yetkilerini döner: {modul: 'gizli|okuma|yazma'}.
@@ -299,6 +304,18 @@ def create_app():
         return bool(kayitli.get('proforma_onay', False))
     # ─── YAZMA YETKİ GUARD (POST/PUT/DELETE) ──────────────────────────
     # URL -> Modül eşleşmesi
+    # CRM yollari — ONEK haritasindan ONCE bakilir.
+    # `/api/cari/<id>/aktivite` gibi yollarda ayirt edici kisim
+    # ORTADA oldugu icin onek eslemesi yetmiyor; onek haritasi
+    # bunlari 'cari' sanip satisciyi engelliyordu.
+    import re as _re_modul
+    CRM_YOL_DESENLERI = [
+        (_re_modul.compile(r'^/api/cari/[^/]+/(aktivite|kisi|erisim)/?$'), 'crm'),
+        (_re_modul.compile(r'^/api/(aktivite|kisi|erisim)(/|$)'), 'crm'),
+        (_re_modul.compile(r'^/api/takipler(/|$)'), 'crm'),
+        (_re_modul.compile(r'^/api/crm(/|$)'), 'crm'),
+    ]
+
     URL_MODUL_MAP = [
         ('/api/stok', 'stok'),
         ('/api/siparis', 'siparis'),
@@ -369,7 +386,15 @@ def create_app():
                 return None
         # Modul tespit et
         modul = None
+        # CRM desenleri ONCE: onek haritasi `/api/cari/...` yollarini
+        # 'cari' sanip CRM uclarini engelliyordu.
+        for _desen, _m in CRM_YOL_DESENLERI:
+            if _desen.match(request.path):
+                modul = _m
+                break
         for prefix, m in URL_MODUL_MAP:
+            if modul:
+                break
             if request.path.startswith(prefix):
                 modul = m
                 break
@@ -428,7 +453,15 @@ def create_app():
             if request.path.startswith(muaf):
                 return None
         modul = None
+        # CRM desenleri ONCE: onek haritasi `/api/cari/...` yollarini
+        # 'cari' sanip CRM uclarini engelliyordu.
+        for _desen, _m in CRM_YOL_DESENLERI:
+            if _desen.match(request.path):
+                modul = _m
+                break
         for prefix, m in URL_MODUL_MAP:
+            if modul:
+                break
             if request.path.startswith(prefix):
                 modul = m
                 break
@@ -1500,7 +1533,7 @@ def create_app():
                 iptal_sayisi += 1
         return iptal_sayisi
 
-    def _proformayi_siparise_baglava(proforma, siparis_id):
+    def _proformayi_siparise_baglama(proforma, siparis_id):
         """
         Proforma onaylandığında çağrılır. Mevcut Rezerve stokları Satildi'ya çevir,
         Rezervasyonların siparis_id'sini set et, rez_tip='Siparis' yap.
@@ -3260,6 +3293,110 @@ def create_app():
             return redirect(url_for('dashboard'))
         return render_template('cari.html')
 
+    @app.route('/api/crm/musteri', methods=['GET'])
+    def api_crm_musteri():
+        """CRM mercegiyle musteri listesi.
+
+        FINANSAL VERI DONMEZ — bakiye, borc, alacak, risk limiti yok.
+        "Nasilsa ekranda gostermeyiz" deyip API'den dondurmek,
+        tarayici konsolunu acan herkese sizdirmak olurdu.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+
+        kapsam = (request.args.get('kapsam') or 'tumu').lower()
+        durum = (request.args.get('durum') or '').lower()
+        ara = (request.args.get('ara') or '').strip().lower()
+        bugun = date.today()
+        try:
+            sessiz_gun = max(7, min(365, int(request.args.get('sessiz_gun', 60))))
+        except (TypeError, ValueError):
+            sessiz_gun = 60
+
+        # Kuresel suzgec zaten gorunmeyenleri eliyor; kapsam=bana
+        # bunun UZERINE "yalnizca benim sorumlulugumdakiler" ekler.
+        q = Cari.query
+        if kapsam == 'bana':
+            q = q.filter(Cari.sorumlu == session.get('kullanici'))
+        cariler = q.order_by(Cari.unvan).all()
+        if not cariler:
+            return jsonify({'ok': True, 'data': [], 'sessiz_gun': sessiz_gun})
+
+        idler = [c.id for c in cariler]
+
+        # Kisi sayilari — TEK sorgu. Musteri basina sorgu atmak
+        # 200 musteride sayfayi kilitlerdi.
+        kisi_say = {}
+        for k in CariKisi.query.filter(CariKisi.cari_id.in_(idler)).all():
+            kisi_say[k.cari_id] = kisi_say.get(k.cari_id, 0) + 1
+
+        son_temas, bekleyen, en_yakin = {}, {}, {}
+        for a in CariAktivite.query.filter(
+                CariAktivite.cari_id.in_(idler)).all():
+            if a.tarih and (a.cari_id not in son_temas
+                            or a.tarih > son_temas[a.cari_id][0]):
+                son_temas[a.cari_id] = (a.tarih, a.ozet)
+            if a.sonraki_tarih and not a.tamamlandi:
+                bekleyen[a.cari_id] = bekleyen.get(a.cari_id, 0) + 1
+                if (a.cari_id not in en_yakin
+                        or a.sonraki_tarih < en_yakin[a.cari_id]):
+                    en_yakin[a.cari_id] = a.sonraki_tarih
+
+        cikti = []
+        for c in cariler:
+            if ara and ara not in (c.unvan or '').lower():
+                continue
+            st = son_temas.get(c.id)
+            yk = en_yakin.get(c.id)
+            gecen = (bugun - st[0]).days if st else None
+            satir = {
+                'id': c.id, 'unvan': c.unvan, 'ulke': c.ulke,
+                'cari_tip': c.cari_tip, 'sorumlu': c.sorumlu,
+                'gorunurluk': c.gorunurluk or 'kapali',
+                'kisi_sayisi': kisi_say.get(c.id, 0),
+                'son_temas': st[0].isoformat() if st else None,
+                'son_temas_ozet': st[1] if st else None,
+                'temassiz_gun': gecen,
+                'bekleyen_takip': bekleyen.get(c.id, 0),
+                'en_yakin_takip': yk.isoformat() if yk else None,
+                'gecikmis': bool(yk and yk < bugun),
+            }
+            # "Sessiz" musteri satista en kolay kaybedilendir: kimse
+            # aramadigi icin sessizdir, sessiz oldugu icin akla
+            # gelmez. Hic temas kurulmamis olanlar da sessiz sayilir.
+            satir['sessiz'] = (gecen is None) or (gecen >= sessiz_gun)
+            cikti.append(satir)
+
+        if durum == 'geciken':
+            cikti = [x for x in cikti if x['gecikmis']]
+        elif durum == 'sessiz':
+            cikti = [x for x in cikti if x['sessiz']]
+
+        return jsonify({'ok': True, 'sessiz_gun': sessiz_gun,
+                        'bugun': bugun.isoformat(), 'data': cikti})
+
+    @app.route('/musteri')
+    def musteri_sayfa():
+        """Satis mercegiyle musteri ekrani — finansal veri yok."""
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('crm', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('musteri.html')
+
+    @app.route('/takipler')
+    def takipler_sayfa():
+        """Vadesi gelen/gecen takipler.
+
+        YETKI: 'cari' — takipler musteri temaslarindan geliyor,
+        cari goremeyenin takip gormesi anlamsiz.
+        """
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('crm', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('takipler.html')
+
     @app.route('/kasa-defteri')
     def kasa_defter_sayfa():
         """Kasa defteri — devir + yuruyen bakiyeli hareket dokumu."""
@@ -4552,6 +4689,404 @@ def create_app():
                       else _sa_false())
             durum.statement = durum.statement.options(
                 _wlc(_model, _kosul, include_aliases=True))
+
+    # ── YAZMA KORUMASI KANCASI  (CRM-D) ──
+    # models.py'deki before_insert dinleyicisi, gorunurlugu bilmek
+    # icin bu kancayi cagirir. Kural TEK YERDE kalsin diye mantik
+    # burada; models.py yalnizca cagirir.
+    def _erisim_kontrol_kancasi(cari_id):
+        if not has_request_context():
+            return True                      # CLI, gorev, goc
+        if getattr(g, 'erisim_atla_bayrak', False):
+            return True                      # sistem islemi
+        if (session.get('rol') or '').upper() == 'ADMIN':
+            return True
+        if not session.get('kullanici'):
+            return True                      # _auth_required zaten engeller
+        return _cari_gorulebilir_mi(cari_id)
+
+    import models as _models_modulu
+    _models_modulu._erisim_kontrol_kancasi = _erisim_kontrol_kancasi
+
+    @app.errorhandler(_models_modulu.ErisimHatasi)
+    def _erisim_hatasi_isle(hata):
+        # Temiz 403 — aksi halde kullanici 500 gorur ve neyin yanlis
+        # oldugunu anlamaz.
+        db.session.rollback()
+        return jsonify({'ok': False, 'mesaj': str(hata)}), 403
+
+    # ══════════════════════════════════════════════════════════
+    #  CRM: AKTİVİTE, KİŞİLER, ERİŞİM  (CRM-E2)
+    # ══════════════════════════════════════════════════════════
+
+    AKTIVITE_TIPLERI = ('telefon', 'eposta', 'ziyaret', 'fuar',
+                        'numune', 'teklif', 'diger')
+
+    def _crm_cari_al(cari_id):
+        """Cariyi getirir; gorunmuyorsa None doner.
+
+        Kuresel suzgec zaten gizliyor ama ACIK kontrol tercih
+        edildi: bos liste donmek yerine 403 demek, kullaniciya
+        "veri yok mu yetki mi yok" sorusunu yasatmaz.
+        """
+        c = db.session.get(Cari, cari_id)
+        if not c or not _cari_gorulebilir_mi(cari_id):
+            return None
+        return c
+
+    def _aktivite_json(a):
+        return {
+            'id': a.id, 'cari_id': a.cari_id, 'kisi_id': a.kisi_id,
+            'tarih': a.tarih.isoformat() if a.tarih else None,
+            'tip': a.tip, 'ozet': a.ozet, 'detay': a.detay,
+            'sonraki_adim': a.sonraki_adim,
+            'sonraki_tarih': a.sonraki_tarih.isoformat() if a.sonraki_tarih else None,
+            'tamamlandi': bool(a.tamamlandi),
+            'tamamlanma': a.tamamlanma.isoformat() if a.tamamlanma else None,
+            'kullanici': a.kullanici,
+        }
+
+    @app.route('/api/cari/<cari_id>/aktivite', methods=['GET'])
+    def api_aktivite_liste(cari_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _crm_cari_al(cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+        al = CariAktivite.query.filter_by(cari_id=cari_id).order_by(
+            CariAktivite.tarih.desc(), CariAktivite.id.desc()).all()
+        return jsonify({'ok': True, 'data': [_aktivite_json(a) for a in al]})
+
+    @app.route('/api/cari/<cari_id>/aktivite', methods=['POST'])
+    def api_aktivite_ekle(cari_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _crm_cari_al(cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+        d = request.json or {}
+        ozet = (d.get('ozet') or '').strip()
+        if not ozet:
+            return jsonify({'ok': False, 'mesaj': 'Özet zorunlu'}), 400
+        tip = (d.get('tip') or 'diger').strip().lower()
+        if tip not in AKTIVITE_TIPLERI:
+            return jsonify({'ok': False,
+                            'mesaj': f"Tip: {', '.join(AKTIVITE_TIPLERI)}"}), 400
+        sonraki = _parse_date(d.get('sonraki_tarih'))
+        adim = (d.get('sonraki_adim') or '').strip()
+        # Tarihsiz bir "sonraki adim" hatirlatilamaz; takip listesine
+        # girmez ve sessizce unutulur. Ikisi birlikte istenir.
+        if adim and not sonraki:
+            return jsonify({'ok': False,
+                            'mesaj': 'Sonraki adım girdiyseniz tarihini de '
+                                     'belirtin; tarihsiz takip hatırlatılamaz'}), 400
+        a = CariAktivite(
+            cari_id=cari_id, kisi_id=d.get('kisi_id') or None,
+            tarih=_parse_date(d.get('tarih')) or date.today(),
+            tip=tip, ozet=ozet, detay=(d.get('detay') or '').strip() or None,
+            sonraki_adim=adim or None, sonraki_tarih=sonraki,
+            tamamlandi=False, kullanici=session.get('kullanici'))
+        db.session.add(a)
+        ok, hata = _safe_commit(f'Aktivite ekleme: {cari_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'id': a.id, 'mesaj': 'Temas kaydedildi'})
+
+    @app.route('/api/aktivite/<int:aktivite_id>', methods=['PUT'])
+    def api_aktivite_guncelle(aktivite_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        a = db.session.get(CariAktivite, aktivite_id)
+        if not a or not _cari_gorulebilir_mi(a.cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        d = request.json or {}
+        if 'ozet' in d:
+            _o = (d.get('ozet') or '').strip()
+            if not _o:
+                return jsonify({'ok': False, 'mesaj': 'Özet boş olamaz'}), 400
+            a.ozet = _o
+        if 'tip' in d:
+            _t = (d.get('tip') or '').strip().lower()
+            if _t not in AKTIVITE_TIPLERI:
+                return jsonify({'ok': False,
+                                'mesaj': f"Tip: {', '.join(AKTIVITE_TIPLERI)}"}), 400
+            a.tip = _t
+        for alan in ('detay', 'sonraki_adim'):
+            if alan in d:
+                setattr(a, alan, (d.get(alan) or '').strip() or None)
+        if 'tarih' in d:
+            a.tarih = _parse_date(d.get('tarih')) or a.tarih
+        if 'sonraki_tarih' in d:
+            a.sonraki_tarih = _parse_date(d.get('sonraki_tarih'))
+        if 'kisi_id' in d:
+            a.kisi_id = d.get('kisi_id') or None
+        if a.sonraki_adim and not a.sonraki_tarih:
+            return jsonify({'ok': False,
+                            'mesaj': 'Sonraki adım girdiyseniz tarihini de '
+                                     'belirtin'}), 400
+        ok, hata = _safe_commit(f'Aktivite guncelleme: {aktivite_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': 'Güncellendi'})
+
+    @app.route('/api/aktivite/<int:aktivite_id>/tamamla', methods=['POST'])
+    def api_aktivite_tamamla(aktivite_id):
+        """Takibi kapatir ya da geri alir.
+
+        ELLE isaretleme: sistemin "herhalde yapilmistir" diye
+        varsaymasi, yapilmamis bir takibi yapilmis gostermekten
+        daha kotu sonuc verir.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        a = db.session.get(CariAktivite, aktivite_id)
+        if not a or not _cari_gorulebilir_mi(a.cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        d = request.json or {}
+        a.tamamlandi = bool(d.get('tamamlandi', True))
+        a.tamamlanma = date.today() if a.tamamlandi else None
+        ok, hata = _safe_commit(f'Aktivite tamamlama: {aktivite_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'tamamlandi': a.tamamlandi,
+                        'mesaj': 'Takip kapatıldı' if a.tamamlandi else 'Geri alındı'})
+
+    @app.route('/api/aktivite/<int:aktivite_id>', methods=['DELETE'])
+    def api_aktivite_sil(aktivite_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        a = db.session.get(CariAktivite, aktivite_id)
+        if not a or not _cari_gorulebilir_mi(a.cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        db.session.delete(a)
+        ok, hata = _safe_commit(f'Aktivite silme: {aktivite_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': 'Silindi'})
+
+    @app.route('/api/takipler', methods=['GET'])
+    def api_takipler():
+        """Vadesi gelen/gecen takipler.
+
+        Bir CRM'i not defterinden ayiran sey burasi: gecmisi degil
+        GELECEGI hatirlatmasi.
+
+        gun=7  → onumuzdeki 7 gun (varsayilan)
+        Vadesi GECMIS olanlar her zaman dahil ve basta.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        try:
+            gun = max(0, min(90, int(request.args.get('gun', 7))))
+        except (TypeError, ValueError):
+            gun = 7
+        bugun = date.today()
+        sinir = bugun + timedelta(days=gun)
+
+        q = CariAktivite.query.filter(
+            CariAktivite.tamamlandi.isnot(True),
+            CariAktivite.sonraki_tarih.isnot(None),
+            CariAktivite.sonraki_tarih <= sinir)
+        # Kuresel suzgec CariAktivite'yi kapsamiyor; erisimi burada
+        # ACIKCA uyguluyoruz.
+        izin = _gorulebilir_cari_idler()
+        if izin is not None:
+            q = q.filter(CariAktivite.cari_id.in_(list(izin)) if izin
+                         else db.false())
+        kayitlar = q.order_by(CariAktivite.sonraki_tarih).all()
+
+        unvanlar = {}
+        if kayitlar:
+            _idler = {a.cari_id for a in kayitlar}
+            for c in Cari.query.filter(Cari.id.in_(list(_idler))).all():
+                unvanlar[c.id] = c.unvan
+
+        cikti = []
+        for a in kayitlar:
+            j = _aktivite_json(a)
+            j['cari_unvan'] = unvanlar.get(a.cari_id, a.cari_id)
+            j['gecikmis'] = a.sonraki_tarih < bugun
+            j['kalan_gun'] = (a.sonraki_tarih - bugun).days
+            cikti.append(j)
+        return jsonify({'ok': True, 'bugun': bugun.isoformat(),
+                        'gecikmis': sum(1 for x in cikti if x['gecikmis']),
+                        'data': cikti})
+
+    # ── KİŞİLER ──
+    def _kisi_json(k):
+        return {'id': k.id, 'cari_id': k.cari_id, 'ad': k.ad,
+                'gorev': k.gorev, 'telefon': k.telefon, 'email': k.email,
+                'dil': k.dil, 'birincil': bool(k.birincil),
+                'aktif': k.aktif is not False, 'aciklama': k.aciklama}
+
+    @app.route('/api/cari/<cari_id>/kisi', methods=['GET'])
+    def api_kisi_liste(cari_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _crm_cari_al(cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+        kl = CariKisi.query.filter_by(cari_id=cari_id).order_by(
+            CariKisi.birincil.desc(), CariKisi.ad).all()
+        return jsonify({'ok': True, 'data': [_kisi_json(k) for k in kl]})
+
+    @app.route('/api/cari/<cari_id>/kisi', methods=['POST'])
+    def api_kisi_ekle(cari_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _crm_cari_al(cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+        d = request.json or {}
+        ad = (d.get('ad') or '').strip()
+        if not ad:
+            return jsonify({'ok': False, 'mesaj': 'Kişi adı zorunlu'}), 400
+        birincil = bool(d.get('birincil'))
+        if birincil:
+            # Tek birincil kisi olmali; yoksa "kime yazayim"
+            # sorusunun cevabi belirsizlesir.
+            for k in CariKisi.query.filter_by(cari_id=cari_id, birincil=True).all():
+                k.birincil = False
+        k = CariKisi(cari_id=cari_id, ad=ad,
+                     gorev=(d.get('gorev') or '').strip() or None,
+                     telefon=(d.get('telefon') or '').strip() or None,
+                     email=(d.get('email') or '').strip() or None,
+                     dil=(d.get('dil') or '').strip() or None,
+                     birincil=birincil, aktif=True,
+                     aciklama=(d.get('aciklama') or '').strip() or None)
+        db.session.add(k)
+        ok, hata = _safe_commit(f'Kisi ekleme: {cari_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'id': k.id, 'mesaj': f'{ad} eklendi'})
+
+    @app.route('/api/kisi/<int:kisi_id>', methods=['PUT'])
+    def api_kisi_guncelle(kisi_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        k = db.session.get(CariKisi, kisi_id)
+        if not k or not _cari_gorulebilir_mi(k.cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Kişi bulunamadı'}), 404
+        d = request.json or {}
+        if 'ad' in d:
+            _a = (d.get('ad') or '').strip()
+            if not _a:
+                return jsonify({'ok': False, 'mesaj': 'Kişi adı boş olamaz'}), 400
+            k.ad = _a
+        for alan in ('gorev', 'telefon', 'email', 'dil', 'aciklama'):
+            if alan in d:
+                setattr(k, alan, (d.get(alan) or '').strip() or None)
+        if 'aktif' in d:
+            k.aktif = bool(d.get('aktif'))
+        if d.get('birincil'):
+            for x in CariKisi.query.filter_by(cari_id=k.cari_id, birincil=True).all():
+                x.birincil = False
+            k.birincil = True
+        elif 'birincil' in d:
+            k.birincil = False
+        ok, hata = _safe_commit(f'Kisi guncelleme: {kisi_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': 'Güncellendi'})
+
+    @app.route('/api/kisi/<int:kisi_id>', methods=['DELETE'])
+    def api_kisi_sil(kisi_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        k = db.session.get(CariKisi, kisi_id)
+        if not k or not _cari_gorulebilir_mi(k.cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Kişi bulunamadı'}), 404
+        db.session.delete(k)
+        ok, hata = _safe_commit(f'Kisi silme: {kisi_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': 'Silindi'})
+
+    # ── ERİŞİM İSTİSNALARI ──
+    def _erisim_verebilir_mi(c):
+        """Yalnizca ADMIN ya da musterinin SORUMLUSU erisim verebilir.
+
+        Herkes verebilseydi 'kapali' gorunurluk anlamsizlasirdi:
+        erisimi olan biri kendine ait olmayan musteriyi baskasina
+        acabilirdi.
+        """
+        if (session.get('rol') or '').upper() == 'ADMIN':
+            return True
+        return c.sorumlu and c.sorumlu == session.get('kullanici')
+
+    @app.route('/api/cari/<cari_id>/erisim', methods=['GET'])
+    def api_erisim_liste(cari_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        c = _crm_cari_al(cari_id)
+        if not c:
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+        el = CariErisim.query.filter_by(cari_id=cari_id).order_by(
+            CariErisim.kullanici).all()
+        return jsonify({'ok': True, 'yonetebilir': bool(_erisim_verebilir_mi(c)),
+                        'data': [{'id': e.id, 'kullanici': e.kullanici,
+                                  'veren': e.veren} for e in el]})
+
+    @app.route('/api/cari/<cari_id>/erisim', methods=['POST'])
+    def api_erisim_ekle(cari_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        c = _crm_cari_al(cari_id)
+        if not c:
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+        if not _erisim_verebilir_mi(c):
+            return jsonify({'ok': False,
+                            'mesaj': 'Erişim yalnızca müşterinin sorumlusu ya '
+                                     'da yönetici tarafından verilebilir'}), 403
+        d = request.json or {}
+        kim = (d.get('kullanici') or '').strip()
+        if not kim:
+            return jsonify({'ok': False, 'mesaj': 'Kullanıcı zorunlu'}), 400
+        if not Kullanici.query.filter_by(ad=kim).first():
+            return jsonify({'ok': False, 'mesaj': f'Kullanıcı bulunamadı: {kim}'}), 400
+        if CariErisim.query.filter_by(cari_id=cari_id, kullanici=kim).first():
+            return jsonify({'ok': True, 'mevcut': True,
+                            'mesaj': f'{kim} zaten erişebiliyor'})
+        e = CariErisim(cari_id=cari_id, kullanici=kim,
+                       veren=session.get('kullanici'))
+        db.session.add(e)
+        ok, hata = _safe_commit(f'Erisim verme: {cari_id} -> {kim}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'id': e.id, 'mesaj': f'{kim} erişebilir'})
+
+    @app.route('/api/erisim/<int:erisim_id>', methods=['DELETE'])
+    def api_erisim_sil(erisim_id):
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        e = db.session.get(CariErisim, erisim_id)
+        if not e:
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        c = _crm_cari_al(e.cari_id)
+        if not c or not _erisim_verebilir_mi(c):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        kim = e.kullanici
+        db.session.delete(e)
+        ok, hata = _safe_commit(f'Erisim kaldirma: {erisim_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': f'{kim} erişimi kaldırıldı'})
 
     # ---------- API: CARİ VE HAREKETLER ----------
     @app.route('/api/cari', methods=['GET'])
@@ -12554,6 +13089,26 @@ def create_app():
         # Kok surum: ana_pi_id kendi id'sine esitlenir (revizyon zincirinin basi)
         p.ana_pi_id = p.id
         db.session.flush()
+        # URUN TIPI ZORUNLU.
+        # ProformaKalem.urun_tip serbest, SiparisKalem.urun_tip ise
+        # NOT NULL. Arada dogrulama olmadigi icin bos tipli kalem
+        # proformaya giriyor, hata HAFTALAR SONRA siparise
+        # donustururken 500 olarak cikiyordu. Hata GECIKTIGI yerde
+        # degil DOGDUGU yerde cikmali.
+        GECERLI_URUN_TIP = ('BLOK', 'PLAKA', 'EBATLI')
+        for _i, _k in enumerate(data.get('kalemler', [])):
+            _t = (_k.get('urun_tip') or '').strip().upper()
+            if not _t:
+                return jsonify({'ok': False,
+                                'mesaj': f'{_i + 1}. kalemde ürün tipi zorunlu '
+                                         f'({", ".join(GECERLI_URUN_TIP)})'}), 400
+            if _t not in GECERLI_URUN_TIP:
+                return jsonify({'ok': False,
+                                'mesaj': f'{_i + 1}. kalemde geçersiz ürün tipi: '
+                                         f'{_t}. Geçerli: '
+                                         f'{", ".join(GECERLI_URUN_TIP)}'}), 400
+            _k['urun_tip'] = _t
+
         for idx, k in enumerate(data.get('kalemler', [])):
             pk = ProformaKalem(proforma_id=p.id, urun_tip=k.get('urun_tip'), cins=k.get('cins'), yuzey_spec=k.get('ozellik'),
                                blok_no=k.get('blok_no'), en=k.get('en'),
@@ -12697,6 +13252,26 @@ def create_app():
             # degisim), gonderilmezse kalemlere DOKUNULMAZ.
             if 'kalemler' in data:
                 ProformaKalem.query.filter_by(proforma_id=proforma_id).delete()
+            # URUN TIPI ZORUNLU.
+            # ProformaKalem.urun_tip serbest, SiparisKalem.urun_tip ise
+            # NOT NULL. Arada dogrulama olmadigi icin bos tipli kalem
+            # proformaya giriyor, hata HAFTALAR SONRA siparise
+            # donustururken 500 olarak cikiyordu. Hata GECIKTIGI yerde
+            # degil DOGDUGU yerde cikmali.
+            GECERLI_URUN_TIP = ('BLOK', 'PLAKA', 'EBATLI')
+            for _i, _k in enumerate(data.get('kalemler', [])):
+                _t = (_k.get('urun_tip') or '').strip().upper()
+                if not _t:
+                    return jsonify({'ok': False,
+                                    'mesaj': f'{_i + 1}. kalemde ürün tipi zorunlu '
+                                             f'({", ".join(GECERLI_URUN_TIP)})'}), 400
+                if _t not in GECERLI_URUN_TIP:
+                    return jsonify({'ok': False,
+                                    'mesaj': f'{_i + 1}. kalemde geçersiz ürün tipi: '
+                                             f'{_t}. Geçerli: '
+                                             f'{", ".join(GECERLI_URUN_TIP)}'}), 400
+                _k['urun_tip'] = _t
+
             for idx, k in enumerate(data.get('kalemler', [])):
                 pk = ProformaKalem(
                     proforma_id=p.id, urun_tip=k.get('urun_tip'), cins=k.get('cins'),
@@ -12873,7 +13448,8 @@ def create_app():
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
 
         yeni_durum = (request.json or {}).get('durum', '').strip()
-        gecerli_durumlar = ['Taslak', 'Ic Onay', 'Gonderildi', 'Onaylandi', 'Faturalandi', 'Iptal', 'Revize']
+        gecerli_durumlar = ['Taslak', 'Ic Onay', 'Gonderildi', 'Onaylandi',
+                            'Siparise Donustu', 'Faturalandi', 'Iptal', 'Revize']
         if yeni_durum not in gecerli_durumlar:
             return jsonify({'ok': False, 'mesaj': f'Gecersiz durum. Gecerli: {", ".join(gecerli_durumlar)}'}), 400
 
@@ -12888,15 +13464,44 @@ def create_app():
         #   Onaylandi → Gonderildi (HAZIRLAYAN müşteriye gönderir, "gönderdim" işareti)
         #   Gonderildi → Faturalandi (faturaya dönüşür)
         gecisler = {
-            'Taslak':       ['Ic Onay', 'Iptal'],
-            'Ic Onay':      ['Onaylandi', 'Taslak', 'Iptal'],
-            'Onaylandi':    ['Gonderildi', 'Faturalandi', 'Ic Onay', 'Iptal'],
-            'Gonderildi':   ['Faturalandi', 'Onaylandi', 'Iptal'],
-            'Faturalandi':  ['Iptal'],
-            'Iptal':        ['Taslak'],  # Tekrar acmak icin
-            'Revize':       []           # Arsiv — durum degistirilemez (salt okunur)
+            'Taslak':          ['Ic Onay', 'Iptal'],
+            'Ic Onay':         ['Onaylandi', 'Taslak', 'Iptal'],
+            # 'Faturalandi' ELLE HEDEF DEGIL — asagida engelleniyor.
+            'Onaylandi':       ['Gonderildi', 'Ic Onay', 'Iptal'],
+            'Gonderildi':      ['Onaylandi', 'Iptal'],
+            # Siparise donusen proforma: kazanildi. Buradan yalnizca
+            # iptal edilebilir; fatura zinciri siparis uzerinden isler.
+            'Siparise Donustu': ['Iptal'],
+            'Faturalandi':     ['Iptal'],
+            'Iptal':           ['Taslak'],  # Tekrar acmak icin
+            'Revize':          []           # Arsiv — salt okunur
         }
         mevcut = p.durum or 'Taslak'
+
+        # SISTEM DURUMLARI — elle secilemez.
+        #
+        # 'Faturalandi': olculdu ki elle atanabiliyordu ve proforma
+        #   "faturalandi" gorunurken ne siparis ne fatura vardi
+        #   (siparis_id=None, Siparis=0, Fatura=0). Raporlari sessizce
+        #   bozuyordu. Bu durumu yalnizca sistem yazar: fatura
+        #   "Kesildi" yapildiginda.
+        #
+        # 'Siparise Donustu': kazanildi isareti. Elle atanabilseydi
+        #   donusum oranı olcumu anlamsizlasirdi.
+        #
+        # 'Revize': arsivleme, /revize ucu atar.
+        SISTEM_DURUMLARI = {
+            'Faturalandi': 'Bu durum fatura kesildiğinde sistem tarafından '
+                           'atanır. Faturalandırmak için önce siparişe '
+                           'dönüştürüp fatura kesin.',
+            'Siparise Donustu': 'Bu durum siparişe dönüştürüldüğünde sistem '
+                                'tarafından atanır. "Siparişe Dönüştür" '
+                                'düğmesini kullanın.',
+        }
+        if yeni_durum in SISTEM_DURUMLARI:
+            return jsonify({'ok': False,
+                            'mesaj': SISTEM_DURUMLARI[yeni_durum]}), 400
+
         if yeni_durum == 'Revize':
             return jsonify({'ok': False,
                 'mesaj': 'Revize durumu elle atanamaz. "Revize Et" ile yeni surum olusturun.'}), 400
@@ -12972,7 +13577,7 @@ def create_app():
                 sip = Siparis.query.get(p.siparis_id)
                 if sip and sip.durum in ('Teklif Asam.', 'Onaylandi'):
                     sip.durum = 'Onaylandi'
-                guncellenen = _proformayi_siparise_baglava(p, p.siparis_id)
+                guncellenen = _proformayi_siparise_baglama(p, p.siparis_id)
                 if guncellenen > 0:
                     ekstra_mesaj += f' {guncellenen} stok Satildi durumuna gecti.'
 
@@ -15219,6 +15824,14 @@ def create_app():
 
             # Proformayi siparise bagla
             p.siparis_id = sip.id
+            # KAZANILDI ISARETI.
+            # Onceden yalnizca siparis_id yaziliyordu; proforma
+            # 'Onaylandi' kalıyor ve cevap BEKLEYEN teklif ile
+            # KAZANILMIS teklif listede ayni gorunuyordu. Donusum
+            # oranı olculemiyordu.
+            # Iptal edilmis proformanin durumu EZILMEZ.
+            if (p.durum or '') not in ('Iptal', 'Revize'):
+                p.durum = 'Siparise Donustu'
             if (p.proforma_tipi or 'teklif') == 'teklif':
                 p.proforma_tipi = 'satis'
 
@@ -15262,7 +15875,8 @@ def create_app():
 
         # ONAY KONTROLÜ: sadece onaylanmış (ve sonrası) proformadan fatura kesilebilir.
         # Onaylanmamış proformanın cariye borç yazması engellenir.
-        if p.durum not in ('Onaylandi', 'Gonderildi', 'Faturalandi'):
+        if p.durum not in ('Onaylandi', 'Gonderildi', 'Siparise Donustu',
+                           'Faturalandi'):
             return jsonify({'ok': False, 'error': 'onaysiz',
                 'mesaj': f'Bu proforma henuz onaylanmadi (durum: {p.durum}). '
                          f'Faturaya donusturmek icin once ic onaydan gecmeli.'}), 400

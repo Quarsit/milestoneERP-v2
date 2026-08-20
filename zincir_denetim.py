@@ -119,6 +119,14 @@ BEKLENEN_SERIALIZER_YOK = {
     #   'iskonto': p.iskonto_sabit        'avans_deger': p.avans_tutari
     # Form da aynı adları kullanıyor, yani zincir SAĞLAM. Tarayıcı
     # model alan adını aradığı için göremiyor. Kod okunarak doğrulandı.
+    # Cari'de TEKIL GET ucu YOK — /api/cari/<id> yalnizca PUT ve
+    # DELETE. Duzenleme formu liste yanitindan (TUM dizisi,
+    # /api/cari) besleniyor ve orada 'sorumlu'/'gorunurluk'
+    # DONUYOR (flask_app: api_cari_liste, CRM-B2). Ayrica form bu
+    # iki alani yalnizca window.ADMIN ise govdeye koyuyor
+    # (cari.html), yani admin olmayan biri duzenlerken sahiplik
+    # SILINMIYOR — test edildi. Kod okunarak dogrulandi.
+    'Cari':       {'sorumlu', 'gorunurluk'},
     'Proforma':   {'iskonto_sabit', 'avans_tutari'},
     'BlokStok':   {'giris_tarihi', 'alis_tarihi'},
     'PlakaStok':  {'giris_tarihi', 'alis_tarihi'},

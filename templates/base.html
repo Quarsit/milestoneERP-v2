@@ -355,13 +355,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       </a>
       {% if alan_var(a_satis)|trim %}
       <div class="ray-oge">
-      <a href="/siparis" class="ray-btn {% if yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/fatura') or yol.startswith('/satislar') or yol.startswith('/sevkiyat') %}aktif{% endif %}">
+      <a href="/siparis" class="ray-btn {% if yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/fatura') or yol.startswith('/satislar') or yol.startswith('/sevkiyat') or yol.startswith('/takipler') or yol.startswith('/musteri') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 17l5-5 4 4 7-8"/><path d="M15 8h5v5"/></svg>
         <span>Satış</span>
       </a>
       <div class="ray-ucan"><div class="ray-ucan-ic">
         <div class="ray-ucan-bas">Satış</div>
-        {% for hedef, ad, modul in [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'), ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/sevkiyat','Sevkiyat','sevkiyat'), ('/satislar','Satışlar','satislar')] %}
+        {% for hedef, ad, modul in [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'), ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/sevkiyat','Sevkiyat','sevkiyat'), ('/satislar','Satışlar','satislar'), ('/musteri','Müşteriler','crm'), ('/takipler','Takipler','crm')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
           <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
@@ -387,7 +387,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       {% endif %}
       {% if alan_var(a_kasa)|trim %}
       <div class="ray-oge">
-      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') %}aktif{% endif %}">
+      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') or yol.startswith('/takipler') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 11h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/></svg>
         <span>Finans</span>
       </a>
@@ -469,7 +469,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 
     {# Çalışma alanı alt sekmeleri — hangi alandaysan onun modülleri #}
     {% set alan_sekmeleri = [] %}
-    {% if yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/fatura')
+    {% if yol.startswith('/musteri') or yol.startswith('/takipler') or yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/fatura')
           or yol.startswith('/satislar') or yol.startswith('/sevkiyat') %}
       {% set alan_sekmeleri = [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'),
                                ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'),

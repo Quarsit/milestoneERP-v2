@@ -41,6 +41,26 @@
   .hsil:hover{color:var(--kirmizi)}
   .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--verde-acik);color:var(--verde)}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr}
+  /* ── CRM bölümleri ── */
+  .crm-bas{font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--soluk);margin:14px 0 6px;display:flex;align-items:center;gap:8px}
+  .crm-liste{border:1px solid var(--cizgi);border-radius:var(--r-kucuk);overflow:hidden}
+  .crm-akt,.crm-kisi,.crm-takip{display:grid;grid-template-columns:64px 1fr auto;
+    gap:10px;align-items:start;padding:8px 12px;border-bottom:1px solid var(--cizgi);font-size:.85rem}
+  .crm-akt:last-child,.crm-kisi:last-child,.crm-takip:last-child{border-bottom:none}
+  .crm-kisi{grid-template-columns:1fr auto}
+  .crm-akt .t,.crm-takip .t{font-variant-numeric:tabular-nums;color:var(--soluk);font-size:.78rem}
+  .crm-akt .alt,.crm-kisi .alt,.crm-takip .alt{color:var(--soluk);font-size:.75rem;margin-top:2px}
+  .crm-tip{font-size:.72rem;color:var(--soluk);margin-right:6px}
+  /* Vadesi geçmiş takip — göze batmalı, yoksa hatırlatma işe yaramaz */
+  .crm-takip{background:var(--verde-acik)}
+  .crm-takip.gec{background:var(--kirmizi-bg)}
+  .crm-takip.gec .t{color:var(--kirmizi);font-weight:700}
+  .crm-rozet{font-size:.65rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 6px;border-radius:20px;background:var(--verde-acik);color:var(--verde-koyu)}
+  .crm-mini{background:none;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:3px 9px;font-family:var(--govde);font-size:.72rem;cursor:pointer;color:var(--murekkep)}
+  .crm-mini:hover{border-color:var(--verde);color:var(--verde-koyu)}
   .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
   .modal-ortu.acik{display:grid}
   .modal{width:640px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
@@ -469,6 +489,84 @@
     </div>
   </div>
 </div>
+
+<!-- CRM: temas kaydı -->
+<div class="modal-ortu" id="aktiviteModal" onclick="if(event.target===this)aktiviteKapat()">
+  <div class="modal" style="width:520px" role="dialog" aria-label="Temas kaydet">
+    <div class="modal-bas"><h3>Temas Kaydet</h3>
+      <p>Görüşme, e-posta, ziyaret — ve varsa sonraki adım</p></div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Tarih</label>
+          <input id="akTarih" type="date" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>Tür</label>
+          <select id="akTip">
+            <option value="telefon">Telefon</option>
+            <option value="eposta">E-posta</option>
+            <option value="ziyaret">Ziyaret</option>
+            <option value="fuar">Fuar</option>
+            <option value="numune">Numune</option>
+            <option value="teklif">Teklif</option>
+            <option value="diger">Diğer</option>
+          </select></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Özet <span style="color:var(--kirmizi)">*</span></label>
+          <input id="akOzet" maxlength="200" placeholder="ÖRN. FİYAT GÖRÜŞMESİ"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Detay</label>
+          <textarea id="akDetay" rows="3" data-buyuk-harf="hayir"
+            placeholder="Ne konuşuldu, ne söz verildi"></textarea></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Sonraki adım</label>
+          <input id="akAdim" maxlength="200" placeholder="ÖRN. TEKLİF GÖNDER"></div>
+        <div class="form-alan"><label>Ne zaman</label>
+          <input id="akSonTarih" type="date" data-buyuk-harf="hayir"></div>
+      </div>
+      <div style="font-size:.78rem;color:var(--soluk);line-height:1.55;margin-top:8px;
+                  padding-top:8px;border-top:1px solid var(--cizgi)">
+        Sonraki adım girerseniz <strong>tarihi zorunludur</strong> — tarihsiz bir takip
+        hatırlatılamaz, listeye girmez ve unutulur.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="aktiviteKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="aktiviteKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- CRM: kişi -->
+<div class="modal-ortu" id="kisiModal" onclick="if(event.target===this)kisiKapat()">
+  <div class="modal" style="width:470px" role="dialog" aria-label="Kişi ekle">
+    <div class="modal-bas"><h3>Kişi Ekle</h3>
+      <p>İhracatta satın almacı, lojistik ve muhasebe ayrı kişilerdir</p></div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Ad Soyad <span style="color:var(--kirmizi)">*</span></label>
+          <input id="kiAd" maxlength="120"></div>
+        <div class="form-alan"><label>Görev</label>
+          <input id="kiGorev" maxlength="80" placeholder="SATIN ALMA"></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Telefon</label>
+          <input id="kiTel" maxlength="50" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>E-posta</label>
+          <input id="kiEposta" maxlength="120" data-buyuk-harf="hayir"></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer">
+        <input type="checkbox" id="kiBirincil"> Birincil kişi (yazışmalarda bu kişi)
+      </label>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="kisiKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="kisiKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -850,9 +948,26 @@ async function detayAc(id) {
           ${yazabilir('cari') ? `<button class="hsil" onclick="hareketSil('${kacar(h.id)}','${kacar(id)}')" title="Hareketi sil">✕</button>` : ''}
         </div>`).join('')
       : '<div class="bos" style="padding:12px">Hareket yok.</div>'}
+    </div>
+
+    <!-- CRM: temas geçmişi, kişiler ve erişim. İçerik çekmece
+         açıldıktan SONRA yükleniyor; hareketleri beklemesin. -->
+    <div id="crmBolum" style="margin-top:14px">
+      <div class="yukleniyor" style="font-size:.8rem">CRM bilgileri yükleniyor…</div>
     </div>`;
 
+  /* CRM bölümleri 'crm' yetkisine bağlı — finans ekibi görüşme
+     notlarını görmesin. Yetki yoksa bölüm hiç çizilmez. */
+  /* base.html'de okuma için yardımcı yok; YETKI sözlüğü doğrudan
+     kullanılıyor (yazabilir() de aynı kaynaktan besleniyor). */
+  const _crmVar = window.ADMIN || (window.YETKI && window.YETKI['crm'] &&
+                                   window.YETKI['crm'] !== 'gizli');
+  if (_crmVar) crmYukle(id, c.unvan);
+  else { const kx = document.getElementById('crmBolum'); if (kx) kx.remove(); }
+
   const eylem = [];
+  if (yazabilir('crm'))
+    eylem.push(`<button class="blok-btn" onclick="aktiviteAc('${kacar(id)}')">+ Temas kaydet</button>`);
   if (yazabilir('cari'))
     eylem.push(`<button class="blok-btn birincil" onclick="hareketAc('${kacar(id)}','${kacar(c.unvan)}')">Hareket ekle</button>`);
   if (yazabilir('cari'))
@@ -862,6 +977,191 @@ async function detayAc(id) {
   if (yazabilir('cari'))
     eylem.push(`<button class="blok-btn" onclick="duzenleAc('${kacar(id)}')">Bilgi Düzenle</button>`);
   cekmeceAc(kacar(c.unvan), kacar(c.cari_tip || '') + (c.ulke ? ' · ' + kacar(c.ulke) : ''), govde, eylem.join(''));
+}
+
+/* ══════════════════════════════════════════════════════════════
+   CRM: temas geçmişi · kişiler · erişim
+   ══════════════════════════════════════════════════════════════ */
+let CRM_CARI = null, CRM_UNVAN = '';
+
+const AKTIVITE_ETIKET = {
+  telefon: '☎ Telefon', eposta: '✉ E-posta', ziyaret: '👤 Ziyaret',
+  fuar: '🏛 Fuar', numune: '📦 Numune', teklif: '📄 Teklif', diger: '• Diğer'
+};
+
+function crmTarih(t) { return t ? t.split('-').reverse().join('.') : ''; }
+
+async function crmYukle(id, unvan) {
+  CRM_CARI = id; CRM_UNVAN = unvan || '';
+  const kutu = document.getElementById('crmBolum');
+  if (!kutu) return;
+  let akt = [], kisiler = [], erisim = { data: [], yonetebilir: false };
+  try {
+    const [a, k, e] = await Promise.all([
+      api(`/api/cari/${encodeURIComponent(id)}/aktivite`),
+      api(`/api/cari/${encodeURIComponent(id)}/kisi`),
+      api(`/api/cari/${encodeURIComponent(id)}/erisim`)
+    ]);
+    akt = a.data || []; kisiler = k.data || []; erisim = e || erisim;
+  } catch (err) {
+    kutu.innerHTML = '<div class="bos" style="padding:12px">CRM bilgileri alınamadı.</div>';
+    return;
+  }
+  const yz = yazabilir('crm');
+  const bugun = new Date().toISOString().slice(0, 10);
+
+  /* Bekleyen takipler EN ÜSTTE: bir CRM'in asıl işi geçmişi
+     göstermek değil, yapılacakları hatırlatmak. */
+  const bekleyen = akt.filter(x => x.sonraki_tarih && !x.tamamlandi);
+
+  kutu.innerHTML = `
+    ${bekleyen.length ? `
+    <h4 class="crm-bas">Bekleyen takip · ${bekleyen.length}</h4>
+    <div class="crm-liste">
+      ${bekleyen.map(x => `
+        <div class="crm-takip ${x.sonraki_tarih < bugun ? 'gec' : ''}">
+          <span class="t">${crmTarih(x.sonraki_tarih)}</span>
+          <div><div>${kacar(x.sonraki_adim || '')}</div>
+            <div class="alt">${kacar(x.ozet)}</div></div>
+          ${yz ? `<button class="crm-mini" onclick="aktiviteTamamla(${x.id})">Yapıldı</button>` : ''}
+        </div>`).join('')}
+    </div>` : ''}
+
+    <h4 class="crm-bas">Temas geçmişi ${akt.length ? '· ' + akt.length : ''}</h4>
+    <div class="crm-liste">
+      ${akt.length ? akt.slice(0, 12).map(x => `
+        <div class="crm-akt">
+          <span class="t">${crmTarih(x.tarih)}</span>
+          <div>
+            <div><span class="crm-tip">${AKTIVITE_ETIKET[x.tip] || x.tip || ''}</span>
+              ${kacar(x.ozet)}</div>
+            ${x.detay ? `<div class="alt">${kacar(x.detay.slice(0, 90))}</div>` : ''}
+            ${x.sonraki_adim ? `<div class="alt">→ ${kacar(x.sonraki_adim)}
+              (${crmTarih(x.sonraki_tarih)})${x.tamamlandi ? ' ✓' : ''}</div>` : ''}
+            <div class="alt" style="opacity:.7">${kacar(x.kullanici || '')}</div>
+          </div>
+          ${yz ? `<button class="hsil" onclick="aktiviteSil(${x.id})" title="Sil">✕</button>` : ''}
+        </div>`).join('')
+      : '<div class="bos" style="padding:12px">Henüz temas kaydı yok.</div>'}
+    </div>
+
+    <h4 class="crm-bas">Kişiler ${kisiler.length ? '· ' + kisiler.length : ''}
+      ${yz ? `<button class="crm-mini" onclick="kisiAc()">+ Kişi</button>` : ''}</h4>
+    <div class="crm-liste">
+      ${kisiler.length ? kisiler.map(k => `
+        <div class="crm-kisi">
+          <div><div>${kacar(k.ad)}${k.birincil ? ' <span class="crm-rozet">birincil</span>' : ''}</div>
+            <div class="alt">${[k.gorev, k.telefon, k.email].filter(Boolean).map(kacar).join(' · ')}</div></div>
+          ${yz ? `<button class="hsil" onclick="kisiSil(${k.id})" title="Sil">✕</button>` : ''}
+        </div>`).join('')
+      : '<div class="bos" style="padding:12px">Kişi tanımlı değil.</div>'}
+    </div>
+
+    ${erisim.yonetebilir ? `
+    <h4 class="crm-bas">Erişim
+      <button class="crm-mini" onclick="erisimAc()">+ Kişiye aç</button></h4>
+    <div class="crm-liste">
+      ${(erisim.data || []).length ? erisim.data.map(e => `
+        <div class="crm-kisi">
+          <div><div>${kacar(e.kullanici)}</div>
+            <div class="alt">veren: ${kacar(e.veren || '—')}</div></div>
+          <button class="hsil" onclick="erisimSil(${e.id})" title="Kaldır">✕</button>
+        </div>`).join('')
+      : '<div class="bos" style="padding:12px">Ek erişim verilmemiş.</div>'}
+    </div>` : ''}`;
+}
+
+function crmYenile() { if (CRM_CARI) crmYukle(CRM_CARI, CRM_UNVAN); }
+
+/* ── Temas kaydı ── */
+function aktiviteAc(id) {
+  CRM_CARI = id || CRM_CARI;
+  document.getElementById('akTarih').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('akTip').value = 'telefon';
+  ['akOzet', 'akDetay', 'akAdim', 'akSonTarih'].forEach(x =>
+    document.getElementById(x).value = '');
+  document.getElementById('aktiviteModal').classList.add('acik');
+}
+function aktiviteKapat() {
+  document.getElementById('aktiviteModal').classList.remove('acik');
+}
+async function aktiviteKaydet() {
+  const ozet = document.getElementById('akOzet').value.trim();
+  if (!ozet) { bildir('Özet zorunlu', true); return; }
+  const adim = document.getElementById('akAdim').value.trim();
+  const sonTarih = document.getElementById('akSonTarih').value;
+  /* Tarihsiz takip hatırlatılamaz — sunucu da reddediyor, burada
+     erken uyarmak kullanıcıyı sunucu hatasına göndermekten iyi. */
+  if (adim && !sonTarih) {
+    bildir('Sonraki adım girdiyseniz tarihini de belirtin', true); return;
+  }
+  try {
+    await api(`/api/cari/${encodeURIComponent(CRM_CARI)}/aktivite`, {
+      method: 'POST', body: JSON.stringify({
+        tarih: document.getElementById('akTarih').value,
+        tip: document.getElementById('akTip').value,
+        ozet: ozet,
+        detay: document.getElementById('akDetay').value,
+        sonraki_adim: adim, sonraki_tarih: sonTarih })});
+    bildir('Temas kaydedildi');
+    aktiviteKapat(); crmYenile();
+  } catch (e) { /* api() bildiriyor */ }
+}
+async function aktiviteTamamla(aid) {
+  try {
+    const d = await api(`/api/aktivite/${aid}/tamamla`,
+      { method: 'POST', body: JSON.stringify({ tamamlandi: true }) });
+    bildir(d.mesaj || 'İşaretlendi'); crmYenile();
+  } catch (e) {}
+}
+async function aktiviteSil(aid) {
+  if (!confirm('Bu temas kaydı silinecek.\n\nDevam edilsin mi?')) return;
+  try { await api(`/api/aktivite/${aid}`, { method: 'DELETE' });
+    bildir('Silindi'); crmYenile(); } catch (e) {}
+}
+
+/* ── Kişiler ── */
+function kisiAc() {
+  ['kiAd', 'kiGorev', 'kiTel', 'kiEposta'].forEach(x =>
+    document.getElementById(x).value = '');
+  document.getElementById('kiBirincil').checked = false;
+  document.getElementById('kisiModal').classList.add('acik');
+}
+function kisiKapat() { document.getElementById('kisiModal').classList.remove('acik'); }
+async function kisiKaydet() {
+  const ad = document.getElementById('kiAd').value.trim();
+  if (!ad) { bildir('Kişi adı zorunlu', true); return; }
+  try {
+    await api(`/api/cari/${encodeURIComponent(CRM_CARI)}/kisi`, {
+      method: 'POST', body: JSON.stringify({
+        ad: ad, gorev: document.getElementById('kiGorev').value,
+        telefon: document.getElementById('kiTel').value,
+        email: document.getElementById('kiEposta').value,
+        birincil: document.getElementById('kiBirincil').checked })});
+    bildir(ad + ' eklendi'); kisiKapat(); crmYenile();
+  } catch (e) {}
+}
+async function kisiSil(kid) {
+  if (!confirm('Bu kişi silinecek.\n\nDevam edilsin mi?')) return;
+  try { await api(`/api/kisi/${kid}`, { method: 'DELETE' });
+    bildir('Silindi'); crmYenile(); } catch (e) {}
+}
+
+/* ── Erişim istisnası ── */
+async function erisimAc() {
+  const kim = prompt('Bu müşteriyi hangi kullanıcı görebilsin?\n\n'
+    + 'Kullanıcı adını yazın:');
+  if (!kim) return;
+  try {
+    const d = await api(`/api/cari/${encodeURIComponent(CRM_CARI)}/erisim`, {
+      method: 'POST', body: JSON.stringify({ kullanici: kim.trim() }) });
+    bildir(d.mesaj || 'Erişim verildi'); crmYenile();
+  } catch (e) {}
+}
+async function erisimSil(eid) {
+  if (!confirm('Bu kullanıcının erişimi kaldırılacak.\n\nDevam edilsin mi?')) return;
+  try { const d = await api(`/api/erisim/${eid}`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Kaldırıldı'); crmYenile(); } catch (e) {}
 }
 
 /* ── Yeni / düzenle ── */

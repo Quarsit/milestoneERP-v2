@@ -1071,6 +1071,41 @@ class CariErisim(db.Model):
     )
 
 
+class CariAktivite(db.Model):
+    """Musteriyle yapilan temaslar ve SONRAKI ADIM.
+
+    Sistemde musteriyle ne konusuldugunu tutan hicbir yer yoktu;
+    bilgi satiscinin kafasinda kaliyordu. Ekip buyudugunde bu
+    paylasilamaz hale gelir.
+
+    `sonraki_adim` + `sonraki_tarih` en onemli alanlar: bir CRM'i
+    not defterinden ayiran sey gecmisi kaydetmesi degil, GELECEGI
+    hatirlatmasidir.
+    """
+    __tablename__ = 'cari_aktivite'
+    id            = db.Column(db.Integer, primary_key=True)
+    cari_id       = db.Column(db.String(20), index=True, nullable=False)
+    # Kiminle konusuldugu — CariKisi.id. Zorunlu degil: fuarda
+    # tanismadigi biriyle de konusulabilir.
+    kisi_id       = db.Column(db.Integer, index=True)
+    tarih         = db.Column(db.Date, index=True, default=date.today)
+    # telefon | eposta | ziyaret | fuar | numune | teklif | diger
+    tip           = db.Column(db.String(20), index=True)
+    ozet          = db.Column(db.String(200), nullable=False)
+    detay         = db.Column(db.Text)
+
+    # ── TAKIP ──
+    sonraki_adim  = db.Column(db.String(200))
+    sonraki_tarih = db.Column(db.Date, index=True)
+    # Takip yapildi mi. Vadesi gecmis takipleri listelemek icin
+    # sonraki_tarih ile birlikte kullanilir.
+    tamamlandi    = db.Column(db.Boolean, default=False, index=True)
+    tamamlanma    = db.Column(db.Date)
+
+    kullanici     = db.Column(db.String(50), index=True)
+    olusturma     = db.Column(db.DateTime, default=datetime.now)
+
+
 class CariKisi(db.Model):
     """Musterideki kisiler.
 
@@ -1110,22 +1145,44 @@ class CariKisi(db.Model):
 from sqlalchemy import event as _event, text as _text
 
 
+class ErisimHatasi(Exception):
+    """Kullanicinin GORMEDIGI bir musteri adina kayit acilmaya
+    calisildi. flask_app bunu 403'e cevirir."""
+
+
 def cari_id_otomatik_doldur(mapper, connection, target):
-    if getattr(target, 'cari_id', None):
-        return
-    unvan = (getattr(target, 'musteri', None) or '').strip()
-    if not unvan:
-        return
-    try:
-        r = connection.execute(
-            _text('SELECT id FROM cariler WHERE unvan = :u LIMIT 1'),
-            {'u': unvan}).fetchone()
-        if r:
-            target.cari_id = r[0]
-    except Exception:
-        # Baglanti cozulmezse kayit YINE DE yazilir; eksik bag
-        # denetimle bulunur, veri kaybi olmaz.
-        pass
+    if not getattr(target, 'cari_id', None):
+        unvan = (getattr(target, 'musteri', None) or '').strip()
+        if unvan:
+            try:
+                r = connection.execute(
+                    _text('SELECT id FROM cariler WHERE unvan = :u LIMIT 1'),
+                    {'u': unvan}).fetchone()
+                if r:
+                    target.cari_id = r[0]
+            except Exception:
+                # Baglanti cozulmezse kayit YINE DE yazilir; eksik bag
+                # denetimle bulunur, veri kaybi olmaz.
+                pass
+
+    # ── GORUNURLUK DENETIMI (CRM-D) ──
+    # Olculdu: kullanici GORMEDIGI musteri adina kayit acabiliyordu.
+    # Kayit o musteriye yaziliyor; acan kisi sonra goremiyor,
+    # sorumlu satisci ise acmadigi bir belge buluyor.
+    #
+    # Kontrol 11 olusturma noktasina tek tek yazilmadi: 12.'si
+    # eklendiginde unutulurdu. Dinleyici ileride eklenecek kodu da
+    # kendiliginden kapsar.
+    cid = getattr(target, 'cari_id', None)
+    if not cid:
+        return                      # bagsiz kayit — crm_bag_denetim yakalar
+    kontrol = globals().get('_erisim_kontrol_kancasi')
+    if kontrol is None:
+        return                      # flask_app henuz baglamadi (CLI, goc)
+    if not kontrol(cid):
+        raise ErisimHatasi(
+            'Bu müşteri adına kayıt açma yetkiniz yok. '
+            'Müşteri size kapalı; sorumlusundan erişim isteyin.')
 
 
 for _model in (Proforma, Fatura, SatisKaydi, Sevkiyat, Rezervasyon, Siparis):

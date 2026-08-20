@@ -1,0 +1,421 @@
+{% extends "base.html" %}
+{% block title %}Müşteriler{% endblock %}
+
+{% block head %}
+<style>
+/* ── MÜŞTERİLER · satış merceği (CRM-H) ────────────────────────────
+   Bu ekranda BİLEREK finansal veri yok: bakiye, borç, alacak, risk
+   limiti gösterilmez ve API'den de dönmez. */
+  .ms-ust{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 14px}
+  .ms-sec,.ms-ara{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:8px 11px;font-family:var(--govde);font-size:.86rem;
+    background:var(--yuzey);color:var(--murekkep)}
+  .ms-sec{cursor:pointer}
+  .ms-ara{min-width:220px}
+  .ms-sec:focus,.ms-ara:focus{outline:none;border-color:var(--verde);
+    box-shadow:0 0 0 3px var(--verde-acik)}
+
+  .ms-kartlar{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+    gap:12px;margin-bottom:16px}
+  .ms-kart{background:var(--yuzey);border:1px solid var(--cizgi);
+    border-radius:var(--r);padding:14px 16px;cursor:pointer}
+  .ms-kart:hover{border-color:var(--verde)}
+  .ms-kart label{display:block;font-size:.7rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .ms-kart .deger{font-family:var(--baslik);font-size:1.5rem;font-weight:700}
+  .ms-kart.acil{border-color:var(--kirmizi)} .ms-kart.acil .deger{color:var(--kirmizi)}
+
+  .ms-tablo{width:100%;border-collapse:collapse;font-size:.88rem}
+  .ms-tablo th{text-align:left;padding:9px 12px;font-size:.7rem;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);
+    border-bottom:1px solid var(--cizgi);white-space:nowrap}
+  .ms-tablo td{padding:10px 12px;border-bottom:1px solid var(--cizgi);vertical-align:top}
+  .ms-tablo tbody tr{cursor:pointer}
+  .ms-tablo tbody tr:hover{background:var(--notr-bg)}
+  .ms-ad{font-weight:700}
+  .ms-alt{display:block;font-size:.76rem;color:var(--soluk);margin-top:2px}
+  .ms-rozet{display:inline-block;font-size:.65rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;padding:2px 7px;border-radius:20px;margin-left:6px;
+    background:var(--notr-bg);color:var(--soluk)}
+  .ms-rozet.gec{background:var(--kirmizi-bg);color:var(--kirmizi)}
+  .ms-rozet.sessiz{background:var(--kehribar-bg);color:var(--murekkep)}
+  .ms-bos{padding:40px;text-align:center;color:var(--soluk);font-size:.9rem}
+
+  /* Çekmece — CRM içeriği */
+  .ms-bas{font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--soluk);margin:14px 0 6px;display:flex;align-items:center;gap:8px}
+  .ms-liste{border:1px solid var(--cizgi);border-radius:var(--r-kucuk);overflow:hidden}
+  .ms-sat{display:grid;grid-template-columns:64px 1fr auto;gap:10px;padding:8px 12px;
+    border-bottom:1px solid var(--cizgi);font-size:.85rem;align-items:start}
+  .ms-sat:last-child{border-bottom:none}
+  .ms-sat.kisi{grid-template-columns:1fr auto}
+  .ms-sat .t{font-variant-numeric:tabular-nums;color:var(--soluk);font-size:.78rem}
+  .ms-takip{background:var(--verde-acik)}
+  .ms-takip.gec{background:var(--kirmizi-bg)}
+  .ms-takip.gec .t{color:var(--kirmizi);font-weight:700}
+  .ms-mini{background:none;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:3px 9px;font-family:var(--govde);font-size:.72rem;cursor:pointer;color:var(--murekkep)}
+  .ms-mini:hover{border-color:var(--verde);color:var(--verde-koyu)}
+
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;
+    z-index:60;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:520px;max-width:100%;background:var(--yuzey);border-radius:14px;
+    box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;
+    display:flex;flex-direction:column}
+  .modal-bas{padding:18px 22px 0}
+  .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
+  .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
+  .modal-gov{padding:18px 22px;overflow-y:auto}
+  .form-satir{display:grid;gap:12px;margin-bottom:12px}
+  .f2{grid-template-columns:1fr 1fr}
+  .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select,.form-alan textarea{width:100%;
+    border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;
+    font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+  .form-alan input:focus,.form-alan select:focus,.form-alan textarea:focus{
+    outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;
+    border-top:1px solid var(--cizgi)}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Müşteriler</h1>
+<p class="g-alt">Satış görünümü — kişiler, temas geçmişi ve takipler. Finansal bilgiler (bakiye, borç, risk) bu ekranda yer almaz.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="ms-ust">
+  <select id="msKapsam" class="ms-sec" onchange="msYukle()" aria-label="Kapsam">
+    <option value="bana" selected>Bana atananlar</option>
+    <option value="tumu">Görebildiğim tüm müşteriler</option>
+  </select>
+  <select id="msDurum" class="ms-sec" onchange="msYukle()" aria-label="Durum">
+    <option value="">Tümü</option>
+    <option value="geciken">Takibi gecikenler</option>
+    <option value="sessiz">Uzun süredir temassız</option>
+  </select>
+  <input id="msAra" class="ms-ara" placeholder="Müşteri ara…" oninput="msCiz()"
+         data-buyuk-harf="hayir">
+  <button class="blok-btn" onclick="location.href='/takipler'">Takipler →</button>
+  <span id="msDurumYazi" style="font-size:.8rem;color:var(--soluk)"></span>
+</div>
+
+<div class="ms-kartlar" id="msKartlar"></div>
+
+<div class="tablo-kutu">
+  <div id="msTablo"><div class="ms-bos">Yükleniyor…</div></div>
+</div>
+
+<!-- Temas kaydet -->
+<div class="modal-ortu" id="msAktModal" onclick="if(event.target===this)msAktKapat()">
+  <div class="modal" role="dialog" aria-label="Temas kaydet">
+    <div class="modal-bas"><h3 id="msAktBaslik">Temas Kaydet</h3>
+      <p>Görüşme, e-posta, ziyaret — ve varsa sonraki adım</p></div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Tarih</label>
+          <input id="maTarih" type="date" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>Tür</label>
+          <select id="maTip">
+            <option value="telefon">Telefon</option><option value="eposta">E-posta</option>
+            <option value="ziyaret">Ziyaret</option><option value="fuar">Fuar</option>
+            <option value="numune">Numune</option><option value="teklif">Teklif</option>
+            <option value="diger">Diğer</option>
+          </select></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Özet <span style="color:var(--kirmizi)">*</span></label>
+          <input id="maOzet" maxlength="200" placeholder="ÖRN. FİYAT GÖRÜŞMESİ"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Detay</label>
+          <textarea id="maDetay" rows="3" data-buyuk-harf="hayir"
+            placeholder="Ne konuşuldu, ne söz verildi"></textarea></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Sonraki adım</label>
+          <input id="maAdim" maxlength="200" placeholder="ÖRN. TEKLİF GÖNDER"></div>
+        <div class="form-alan"><label>Ne zaman</label>
+          <input id="maSonTarih" type="date" data-buyuk-harf="hayir"></div>
+      </div>
+      <div style="font-size:.78rem;color:var(--soluk);line-height:1.55;margin-top:8px;
+                  padding-top:8px;border-top:1px solid var(--cizgi)">
+        Sonraki adım girerseniz <strong>tarihi zorunludur</strong> — tarihsiz bir takip
+        hatırlatılamaz ve unutulur.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="msAktKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="msAktKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Kişi ekle -->
+<div class="modal-ortu" id="msKisiModal" onclick="if(event.target===this)msKisiKapat()">
+  <div class="modal" style="width:470px" role="dialog" aria-label="Kişi ekle">
+    <div class="modal-bas"><h3>Kişi Ekle</h3>
+      <p>İhracatta satın almacı, lojistik ve muhasebe ayrı kişilerdir</p></div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Ad Soyad <span style="color:var(--kirmizi)">*</span></label>
+          <input id="mkAd" maxlength="120"></div>
+        <div class="form-alan"><label>Görev</label>
+          <input id="mkGorev" maxlength="80" placeholder="SATIN ALMA"></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Telefon</label>
+          <input id="mkTel" maxlength="50" data-buyuk-harf="hayir"></div>
+        <div class="form-alan"><label>E-posta</label>
+          <input id="mkEposta" maxlength="120" data-buyuk-harf="hayir"></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer">
+        <input type="checkbox" id="mkBirincil"> Birincil kişi
+      </label>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="msKisiKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="msKisiKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let MS_VERI = null, MS_SECILI = null, MS_UNVAN = '';
+const MS_ETIKET = {
+  telefon: '☎ Telefon', eposta: '✉ E-posta', ziyaret: '👤 Ziyaret',
+  fuar: '🏛 Fuar', numune: '📦 Numune', teklif: '📄 Teklif', diger: '• Diğer'
+};
+
+function msK(s) { const e = document.createElement('div'); e.textContent = s || ''; return e.innerHTML; }
+function msT(t) { return t ? t.split('-').reverse().join('.') : ''; }
+
+async function msYukle() {
+  const d = document.getElementById('msDurumYazi');
+  d.textContent = 'yükleniyor…';
+  try {
+    MS_VERI = await api('/api/crm/musteri?kapsam='
+      + document.getElementById('msKapsam').value
+      + '&durum=' + document.getElementById('msDurum').value);
+    msCiz();
+  } catch (e) {
+    document.getElementById('msTablo').innerHTML =
+      '<div class="ms-bos">Müşteriler alınamadı</div>';
+  }
+  d.textContent = '';
+}
+
+function msCiz() {
+  if (!MS_VERI) return;
+  const ara = (document.getElementById('msAra').value || '').toLowerCase();
+  const hepsi = MS_VERI.data || [];
+  const d = ara ? hepsi.filter(x => (x.unvan || '').toLowerCase().includes(ara)) : hepsi;
+
+  const gec = hepsi.filter(x => x.gecikmis).length;
+  const ses = hepsi.filter(x => x.sessiz).length;
+  document.getElementById('msKartlar').innerHTML =
+      '<div class="ms-kart" onclick="msFiltre(\'\')"><label>Müşteri</label>'
+    + '<div class="deger">' + hepsi.length + '</div></div>'
+    + '<div class="ms-kart' + (gec ? ' acil' : '') + '" onclick="msFiltre(\'geciken\')">'
+    + '<label>Takibi geciken</label><div class="deger">' + gec + '</div></div>'
+    + '<div class="ms-kart" onclick="msFiltre(\'sessiz\')"><label>'
+    + MS_VERI.sessiz_gun + '+ gün temassız</label><div class="deger">' + ses + '</div></div>';
+
+  if (!d.length) {
+    document.getElementById('msTablo').innerHTML =
+      '<div class="ms-bos">Bu süzgeçte müşteri yok.<br>'
+      + 'Size müşteri atanmadıysa yöneticinizden sorumluluk atanmasını isteyin.</div>';
+    return;
+  }
+
+  let h = '<table class="ms-tablo"><thead><tr><th>Müşteri</th><th>Kişi</th>'
+        + '<th>Son temas</th><th>Sonraki adım</th><th></th></tr></thead><tbody>';
+  for (const x of d) {
+    h += '<tr onclick="msAc(\'' + x.id + '\')">'
+       + '<td><span class="ms-ad">' + msK(x.unvan) + '</span>'
+       + (x.gecikmis ? '<span class="ms-rozet gec">gecikmiş</span>' : '')
+       + (x.sessiz && !x.gecikmis ? '<span class="ms-rozet sessiz">sessiz</span>' : '')
+       + '<span class="ms-alt">' + msK([x.ulke, x.cari_tip].filter(Boolean).join(' · ')) + '</span></td>'
+       + '<td>' + (x.kisi_sayisi || '—') + '</td>'
+       + '<td>' + (x.son_temas ? msT(x.son_temas)
+            + '<span class="ms-alt">' + x.temassiz_gun + ' gün önce</span>'
+            : '<span style="color:var(--soluk)">hiç</span>') + '</td>'
+       + '<td>' + (x.en_yakin_takip ? msT(x.en_yakin_takip)
+            + '<span class="ms-alt">' + x.bekleyen_takip + ' bekleyen</span>' : '—') + '</td>'
+       + '<td style="text-align:right"><button class="ms-mini" onclick="event.stopPropagation();'
+       + 'msAktAc(\'' + x.id + '\',\'' + msK(x.unvan).replace(/'/g, "\\'") + '\')">+ Temas</button></td>'
+       + '</tr>';
+  }
+  h += '</tbody></table>';
+  document.getElementById('msTablo').innerHTML = h;
+}
+
+function msFiltre(durum) {
+  document.getElementById('msDurum').value = durum;
+  msYukle();
+}
+
+/* ── Müşteri çekmecesi — CRM içeriği, finansal veri YOK ── */
+async function msAc(id) {
+  const x = (MS_VERI.data || []).find(k => k.id === id);
+  if (!x) return;
+  MS_SECILI = id; MS_UNVAN = x.unvan;
+  /* cekmeceAc başlık ve altı textContent ile yazıyor — kaçırılmış
+     HTML ham metin olarak görünürdü. Ham değer veriliyor. */
+  cekmeceAc(x.unvan, [x.ulke, x.cari_tip].filter(Boolean).join(' · '),
+    '<div class="yukleniyor">Yükleniyor…</div>',
+    `<button class="blok-btn birincil" onclick="msAktAc('${id}')">+ Temas kaydet</button>`);
+
+  let akt = [], kisiler = [];
+  try {
+    const [a, k] = await Promise.all([
+      api(`/api/cari/${encodeURIComponent(id)}/aktivite`),
+      api(`/api/cari/${encodeURIComponent(id)}/kisi`)
+    ]);
+    akt = a.data || []; kisiler = k.data || [];
+  } catch (e) {}
+
+  const bugun = new Date().toISOString().slice(0, 10);
+  const bekleyen = akt.filter(a => a.sonraki_tarih && !a.tamamlandi);
+  const yz = yazabilir('crm');
+
+  cekmeceIcerik(`
+    ${bekleyen.length ? `
+    <h4 class="ms-bas">Bekleyen takip · ${bekleyen.length}</h4>
+    <div class="ms-liste">
+      ${bekleyen.map(a => `
+        <div class="ms-sat ms-takip ${a.sonraki_tarih < bugun ? 'gec' : ''}">
+          <span class="t">${msT(a.sonraki_tarih)}</span>
+          <div><div>${msK(a.sonraki_adim || '')}</div>
+            <div class="ms-alt">${msK(a.ozet)}</div></div>
+          ${yz ? `<button class="ms-mini" onclick="msTamamla(${a.id})">Yapıldı</button>` : ''}
+        </div>`).join('')}
+    </div>` : ''}
+
+    <h4 class="ms-bas">Kişiler ${kisiler.length ? '· ' + kisiler.length : ''}
+      ${yz ? `<button class="ms-mini" onclick="msKisiAc()">+ Kişi</button>` : ''}</h4>
+    <div class="ms-liste">
+      ${kisiler.length ? kisiler.map(k => `
+        <div class="ms-sat kisi">
+          <div><div>${msK(k.ad)}${k.birincil ? ' <span class="ms-rozet">birincil</span>' : ''}</div>
+            <div class="ms-alt">${[k.gorev, k.telefon, k.email].filter(Boolean).map(msK).join(' · ')}</div></div>
+        </div>`).join('')
+      : '<div class="ms-bos" style="padding:14px">Kişi tanımlı değil.</div>'}
+    </div>
+
+    <h4 class="ms-bas">Temas geçmişi ${akt.length ? '· ' + akt.length : ''}</h4>
+    <div class="ms-liste">
+      ${akt.length ? akt.slice(0, 15).map(a => `
+        <div class="ms-sat">
+          <span class="t">${msT(a.tarih)}</span>
+          <div><div><span class="ms-alt" style="display:inline">${MS_ETIKET[a.tip] || ''}</span>
+            ${msK(a.ozet)}</div>
+            ${a.detay ? `<div class="ms-alt">${msK(a.detay.slice(0, 100))}</div>` : ''}
+            ${a.sonraki_adim ? `<div class="ms-alt">→ ${msK(a.sonraki_adim)}
+              (${msT(a.sonraki_tarih)})${a.tamamlandi ? ' ✓' : ''}</div>` : ''}
+            <div class="ms-alt" style="opacity:.7">${msK(a.kullanici || '')}</div></div>
+        </div>`).join('')
+      : '<div class="ms-bos" style="padding:14px">Henüz temas kaydı yok.</div>'}
+    </div>`);
+}
+
+/* Çekmece gövdesini tazele. base.html'de tazeleme yardımcısı yok;
+   gövdenin gerçek id'si 'cekGov' — kodu yazarken 'cekmeceGovde'
+   diye tahmin etmiştim ve içerik hiç görünmüyordu. */
+function cekmeceIcerik(html) {
+  const g = document.getElementById('cekGov');
+  if (g) g.innerHTML = html;
+}
+
+function msYenile() { if (MS_SECILI) msAc(MS_SECILI); }
+
+/* ── Temas kaydet ── */
+function msAktAc(id, unvan) {
+  MS_SECILI = id || MS_SECILI;
+  if (unvan) MS_UNVAN = unvan;
+  document.getElementById('msAktBaslik').textContent = 'Temas Kaydet — ' + MS_UNVAN;
+  document.getElementById('maTarih').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('maTip').value = 'telefon';
+  ['maOzet', 'maDetay', 'maAdim', 'maSonTarih'].forEach(x =>
+    document.getElementById(x).value = '');
+  document.getElementById('msAktModal').classList.add('acik');
+}
+function msAktKapat() { document.getElementById('msAktModal').classList.remove('acik'); }
+
+async function msAktKaydet() {
+  const ozet = document.getElementById('maOzet').value.trim();
+  if (!ozet) { bildir('Özet zorunlu', true); return; }
+  const adim = document.getElementById('maAdim').value.trim();
+  const sonTarih = document.getElementById('maSonTarih').value;
+  if (adim && !sonTarih) {
+    bildir('Sonraki adım girdiyseniz tarihini de belirtin', true); return;
+  }
+  try {
+    await api(`/api/cari/${encodeURIComponent(MS_SECILI)}/aktivite`, {
+      method: 'POST', body: JSON.stringify({
+        tarih: document.getElementById('maTarih').value,
+        tip: document.getElementById('maTip').value,
+        ozet: ozet, detay: document.getElementById('maDetay').value,
+        sonraki_adim: adim, sonraki_tarih: sonTarih })});
+    bildir('Temas kaydedildi');
+    msAktKapat(); msYukle(); msYenile();
+  } catch (e) {}
+}
+
+async function msTamamla(aid) {
+  try {
+    const d = await api('/api/aktivite/' + aid + '/tamamla',
+      { method: 'POST', body: JSON.stringify({ tamamlandi: true }) });
+    bildir(d.mesaj || 'İşaretlendi'); msYukle(); msYenile();
+  } catch (e) {}
+}
+
+/* ── Kişi ── */
+function msKisiAc() {
+  ['mkAd', 'mkGorev', 'mkTel', 'mkEposta'].forEach(x =>
+    document.getElementById(x).value = '');
+  document.getElementById('mkBirincil').checked = false;
+  document.getElementById('msKisiModal').classList.add('acik');
+}
+function msKisiKapat() { document.getElementById('msKisiModal').classList.remove('acik'); }
+
+async function msKisiKaydet() {
+  const ad = document.getElementById('mkAd').value.trim();
+  if (!ad) { bildir('Kişi adı zorunlu', true); return; }
+  try {
+    await api(`/api/cari/${encodeURIComponent(MS_SECILI)}/kisi`, {
+      method: 'POST', body: JSON.stringify({
+        ad: ad, gorev: document.getElementById('mkGorev').value,
+        telefon: document.getElementById('mkTel').value,
+        email: document.getElementById('mkEposta').value,
+        birincil: document.getElementById('mkBirincil').checked })});
+    bildir(ad + ' eklendi'); msKisiKapat(); msYukle(); msYenile();
+  } catch (e) {}
+}
+
+/* Takipler sayfasından "müşteriye git" ile gelindiğinde ?ac=<id>
+   ile o müşterinin çekmecesi açılır. Kalıp depodaki mevcut
+   örnekten (kesim.html, cari.html) alındı. */
+(async function () {
+  await msYukle();
+  const id = new URLSearchParams(location.search).get('ac');
+  if (!id) return;
+  /* Müşteri "bana atananlar" süzgecinde olmayabilir; bulunamazsa
+     kapsamı genişletip tekrar dene. */
+  if (!(MS_VERI.data || []).some(x => x.id === id)) {
+    document.getElementById('msKapsam').value = 'tumu';
+    document.getElementById('msDurum').value = '';
+    await msYukle();
+  }
+  if ((MS_VERI.data || []).some(x => x.id === id)) msAc(id);
+  else bildir('Müşteri bulunamadı ya da erişiminiz yok: ' + id, true);
+})();
+</script>
+{% endblock %}

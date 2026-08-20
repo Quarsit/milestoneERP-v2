@@ -50,8 +50,11 @@ SUZGEC = ('_cari_suz', '_gorulebilir_cari_idler', '_cari_gorulebilir_mi')
 # CRM-C2 ile KURESEL suzgec geldi: SELECT'ler ORM katmaninda
 # otomatik suzuluyor, uc nokta basina kod GEREKMIYOR. Bu yuzden
 # okuma uclari artik bulgu degil bilgi; asil risk YAZMA uclarinda.
-KURESEL_VAR = '_erisim_suzgeci' in Path('flask_app.py').read_text(
-    encoding='utf-8', errors='replace')
+_FA = Path('flask_app.py').read_text(encoding='utf-8', errors='replace')
+KURESEL_VAR = '_erisim_suzgeci' in _FA
+# CRM-D: olusturma tarafi models.py'deki before_insert dinleyicisinde
+# denetleniyor (ErisimHatasi -> 403).
+YAZMA_KORUMASI = '_erisim_kontrol_kancasi' in _FA
 
 kaynak = APP.read_text(encoding='utf-8', errors='replace').replace('\r\n', '\n')
 satirlar = kaynak.split('\n')
@@ -156,8 +159,27 @@ else:
     _yaz("A · OKUMA UÇLARI — SÜZGEÇ YOK   [SIZINTI]", acik_okuma,
          "kapalı müşteri bu kapıdan görünür")
 
-_yaz("B · YAZMA UÇLARI — KONTROL YOK   [ASIL RİSK]", acik_yazma,
-     "küresel süzgeç YALNIZCA SELECT'i kapsar; UPDATE/DELETE korunmaz")
+if YAZMA_KORUMASI:
+    print("─" * 74)
+    print(" B · YAZMA UÇLARI   [iki katmanla korunuyor]")
+    print("─" * 74)
+    print(f"   {len(acik_yazma)} uç noktada yerel kontrol yok, ama:")
+    print()
+    print("   GÜNCELLEME/SİLME → uçlar önce query.get() yapıyor; görünmeyen")
+    print("     kayıt bulunamıyor ve 404 dönüyor. Ölçüldü: başkasının")
+    print("     cari/proforma/fatura/hareket kaydına yazma denemesi 404,")
+    print("     hiçbir kayıt değişmedi.")
+    print()
+    print("   OLUŞTURMA → models.py'deki before_insert dinleyicisi")
+    print("     görünürlüğü denetliyor; görülmeyen müşteri adına kayıt")
+    print("     açılamıyor (CRM-D, 403).")
+    print()
+    print("   Bu liste yine de tutuluyor: uçlardan biri ileride kaydı")
+    print("   query.get() yerine başka yolla bulursa örtük koruma kalkar.")
+    print()
+else:
+    _yaz("B · YAZMA UÇLARI — KONTROL YOK   [ASIL RİSK]", acik_yazma,
+         "küresel süzgeç YALNIZCA SELECT'i kapsar; UPDATE/DELETE korunmaz")
 
 _yaz("C · YALNIZCA ADMİN   [bilgi]", admin_ozel,
      "admin'e kapalı müşteri diye bir şey yok, sorun değil")
@@ -171,13 +193,12 @@ if not KURESEL_VAR and acik_okuma:
     print("   bu kapılardan görünüyor.")
     sys.exit(1)
 print(" ✓ OKUMA tarafı kapalı" + (" (küresel süzgeç)" if KURESEL_VAR else ""))
-if acik_yazma:
+if acik_yazma and not YAZMA_KORUMASI:
     print()
     print(f" ⚠ {len(acik_yazma)} YAZMA ucunda erişim kontrolü YOK.")
-    print("   Küresel süzgeç SELECT'i kapsar; UPDATE/DELETE'i KAPSAMAZ.")
-    print("   Kimliği bilen biri başkasının müşterisini güncelleyebilir.")
-    print()
     print("   Eklenecek kontrol:")
     print("     if not _cari_gorulebilir_mi(kayit.cari_id):")
     print("         return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403")
+elif YAZMA_KORUMASI:
+    print(" ✓ YAZMA tarafı kapalı (404 + oluşturma denetimi)")
 print("═" * 74)

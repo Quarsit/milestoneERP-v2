@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}Takipler{% endblock %}
+
+{% block head %}
+<style>
+/* ── TAKİPLER (CRM-F) ──────────────────────────────────────────────
+   Bir CRM'i not defterinden ayıran ekran bu: geçmişi değil
+   YAPILACAKLARI gösterir. */
+  .tk-ust{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 14px}
+  .tk-sec{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:8px 11px;font-family:var(--govde);font-size:.86rem;
+    background:var(--yuzey);color:var(--murekkep);cursor:pointer}
+  .tk-sec:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+
+  .tk-kartlar{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:12px;margin-bottom:16px}
+  .tk-kart{background:var(--yuzey);border:1px solid var(--cizgi);
+    border-radius:var(--r);padding:15px 17px}
+  .tk-kart label{display:block;font-size:.7rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .tk-kart .deger{font-family:var(--baslik);font-size:1.5rem;font-weight:700;
+    letter-spacing:-.02em}
+  .tk-kart.acil{border-color:var(--kirmizi)}
+  .tk-kart.acil .deger{color:var(--kirmizi)}
+
+  .tk-tablo{width:100%;border-collapse:collapse;font-size:.88rem}
+  .tk-tablo th{text-align:left;padding:9px 12px;font-size:.7rem;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);
+    border-bottom:1px solid var(--cizgi);white-space:nowrap}
+  .tk-tablo td{padding:10px 12px;border-bottom:1px solid var(--cizgi);vertical-align:top}
+  .tk-tablo tbody tr:hover{background:var(--notr-bg)}
+  /* Gecikmiş takip göze batmalı — batmazsa hatırlatma işe yaramaz */
+  .tk-gec td{background:var(--kirmizi-bg)}
+  .tk-gec .gun{color:var(--kirmizi);font-weight:700}
+  .tk-gun{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tk-alt{display:block;font-size:.76rem;color:var(--soluk);margin-top:2px}
+  .tk-cari{color:var(--verde-koyu);text-decoration:none;font-weight:600}
+  .tk-cari:hover{text-decoration:underline}
+  .tk-btn{background:none;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:5px 10px;font-family:var(--govde);font-size:.76rem;cursor:pointer;
+    color:var(--murekkep);white-space:nowrap}
+  .tk-btn:hover{border-color:var(--verde);color:var(--verde-koyu)}
+  .tk-bos{padding:40px;text-align:center;color:var(--soluk);font-size:.9rem}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Takipler</h1>
+<p class="g-alt">Söz verdiğiniz ve vadesi gelen işler. Geçmiş temaslar müşteri kartında; burada yalnızca <strong>yapılacaklar</strong> var.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="tk-ust">
+  <select id="tkGun" class="tk-sec" onchange="tkYukle()" aria-label="Süre">
+    <option value="0">Bugüne kadar</option>
+    <option value="7" selected>Önümüzdeki 7 gün</option>
+    <option value="30">Önümüzdeki 30 gün</option>
+    <option value="90">Önümüzdeki 90 gün</option>
+  </select>
+  <button class="blok-btn" onclick="location.href='/musteri'">Müşteriler →</button>
+  <span id="tkDurum" style="font-size:.8rem;color:var(--soluk)"></span>
+</div>
+
+<div class="tk-kartlar" id="tkKartlar"></div>
+
+<div class="tablo-kutu">
+  <div id="tkTablo"><div class="tk-bos">Yükleniyor…</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let TK_VERI = null;
+const TK_ETIKET = {
+  telefon: '☎ Telefon', eposta: '✉ E-posta', ziyaret: '👤 Ziyaret',
+  fuar: '🏛 Fuar', numune: '📦 Numune', teklif: '📄 Teklif', diger: '• Diğer'
+};
+
+function tkKacinc(s) {
+  const e = document.createElement('div');
+  e.textContent = s || '';
+  return e.innerHTML;
+}
+function tkTarih(t) { return t ? t.split('-').reverse().join('.') : ''; }
+
+/* Kalan günü insan diliyle söyle. "-5" görmek "5 gün gecikti"
+   kadar hızlı anlaşılmaz. */
+function tkGunYazi(g) {
+  if (g < 0) return Math.abs(g) + ' gün gecikti';
+  if (g === 0) return 'bugün';
+  if (g === 1) return 'yarın';
+  return g + ' gün sonra';
+}
+
+async function tkYukle() {
+  const gun = document.getElementById('tkGun').value;
+  const durum = document.getElementById('tkDurum');
+  durum.textContent = 'yükleniyor…';
+  try {
+    TK_VERI = await api('/api/takipler?gun=' + gun);
+    tkCiz();
+  } catch (e) {
+    document.getElementById('tkTablo').innerHTML =
+      '<div class="tk-bos">Takipler alınamadı</div>';
+  }
+  durum.textContent = '';
+}
+
+function tkCiz() {
+  if (!TK_VERI) return;
+  const d = TK_VERI.data || [];
+  const gec = TK_VERI.gecikmis || 0;
+  const bugun = d.filter(x => x.kalan_gun === 0).length;
+
+  document.getElementById('tkKartlar').innerHTML =
+      '<div class="tk-kart' + (gec ? ' acil' : '') + '"><label>Gecikmiş</label>'
+    + '<div class="deger">' + gec + '</div></div>'
+    + '<div class="tk-kart"><label>Bugün</label><div class="deger">' + bugun + '</div></div>'
+    + '<div class="tk-kart"><label>Toplam</label><div class="deger">' + d.length + '</div></div>';
+
+  if (!d.length) {
+    document.getElementById('tkTablo').innerHTML =
+      '<div class="tk-bos">Bu aralıkta bekleyen takip yok.<br>'
+      + 'Müşteri kartından temas kaydederken "sonraki adım" girerseniz burada görünür.</div>';
+    return;
+  }
+
+  let h = '<table class="tk-tablo"><thead><tr><th>Ne zaman</th><th>Müşteri</th>'
+        + '<th>Yapılacak</th><th>Sorumlu</th><th></th></tr></thead><tbody>';
+  for (const x of d) {
+    h += '<tr class="' + (x.gecikmis ? 'tk-gec' : '') + '">'
+       + '<td class="tk-gun"><span class="gun">' + tkGunYazi(x.kalan_gun) + '</span>'
+       + '<span class="tk-alt">' + tkTarih(x.sonraki_tarih) + '</span></td>'
+       /* '/cari?ac=' FİNANS sayfasıydı; satış ekibi oraya hiç gitmemeli.
+          Satış merceğindeki müşteri ekranına yönlendiriliyor. */
+       + '<td><a class="tk-cari" href="/musteri?ac=' + encodeURIComponent(x.cari_id) + '">'
+       + tkKacinc(x.cari_unvan) + '</a></td>'
+       + '<td>' + tkKacinc(x.sonraki_adim || '—')
+       + '<span class="tk-alt">' + (TK_ETIKET[x.tip] || '') + ' '
+       + tkKacinc(x.ozet) + '</span></td>'
+       + '<td>' + tkKacinc(x.kullanici || '—') + '</td>'
+       + '<td style="text-align:right"><button class="tk-btn" onclick="tkTamamla('
+       + x.id + ')">Yapıldı</button></td></tr>';
+  }
+  h += '</tbody></table>';
+  document.getElementById('tkTablo').innerHTML = h;
+}
+
+/* ELLE işaretleme. Sistemin "herhalde yapılmıştır" diye varsayması,
+   yapılmamış bir takibi yapılmış göstermekten kötü sonuç verir. */
+async function tkTamamla(id) {
+  try {
+    const d = await api('/api/aktivite/' + id + '/tamamla',
+      { method: 'POST', body: JSON.stringify({ tamamlandi: true }) });
+    bildir(d.mesaj || 'İşaretlendi');
+    tkYukle();
+  } catch (e) { /* api() bildiriyor */ }
+}
+
+tkYukle();
+</script>
+{% endblock %}
