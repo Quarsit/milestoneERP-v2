@@ -9,7 +9,7 @@
 #    konteyner. R1 ile sıfırlarsanız bu tablolardaki test verisi
 #    kalırdı.
 #
-#  ══ KORUNUR (4 tablo) ══
+#  ══ KORUNUR (6 tablo) ══
 #    cariler       Cari firma kayıtları (unvan, vergi no, adres,
 #                  risk limiti, ödeme vadesi...). Cari'de ÖNBELLEK
 #                  BAKİYE ALANI YOK — bakiye hareketlerden
@@ -20,7 +20,7 @@
 #                  firma bilgileri, LOGO, SMTP, KDV oranları
 #    doviz_kur     TCMB kur arşivi (yeniden çekmek uzun sürer)
 #
-#  ══ SİLİNİR (26 tablo) ══
+#  ══ SİLİNİR (27 tablo) ══
 #    Tüm işlem verisi: stok, sipariş, proforma, fatura, sevkiyat,
 #    kesim, maliyet, çek, kasa+hareketleri, cari hareketleri,
 #    KDV iade, konteyner, sabit gider, nakit planı, denetim izi,
@@ -66,8 +66,19 @@ if not VT_URL:
     print("  Adres olmadan yanlış veritabanına bağlanabilirdim.")
     sys.exit(1)
 
-# ── Silinecek: ÇOCUK TABLO ÖNCE (yabancı anahtar sırası) ──
-SIL_SIRASI = [
+# ── Silinecek tablolar ──
+#
+# SIRA ELLE TUTULMUYOR — aşağıda modelin topolojik sırasından
+# TÜRETİLİYOR. Bu liste yalnızca "hangi tablolar silinecek"i söyler.
+#
+# NEDEN: elle sıralanan sürüm üretimde patladı. `konteyner`
+# tablosu `proforma`ya yabancı anahtarla bağlıydı ama listede
+# proformadan SONRA geliyordu:
+#     ForeignKeyViolation: "konteyner_proforma_id_fkey"
+# Tek transaction sayesinde hiçbir şey silinmedi, ama elle
+# sıralama her yeni yabancı anahtarda aynı hatayı üretir.
+# SQLAlchemy bağımlılık sırasını zaten biliyor; ondan alalım.
+SILINECEK_TABLOLAR = [
     # Denetim izi
     'audit_log',
     # Çek
@@ -90,6 +101,9 @@ SIL_SIRASI = [
     'stok_cikis', 'blok_stok', 'plaka_stok', 'ebatli_stok',
     # Nakit akışı
     'nakit_plan', 'sabit_gider',
+    # CRM — cari_kisi ve cari_erisim KORUNUYOR (aşağıda), yalnızca
+    # aktivite siliniyor.
+    'cari_aktivite',
     # Finans — cariler KORUNUYOR, yalnızca hareketleri siliniyor
     'kasa_hareket', 'cari_hareket', 'kasa', 'banka',
 ]
@@ -99,11 +113,54 @@ KORUNAN = {
     'kullanicilar': 'Kullanıcılar, şifreler, yetkiler',
     'veriler': 'Listeler, firma bilgisi, LOGO, SMTP, KDV ayarları',
     'doviz_kur': 'TCMB kur arşivi',
+
+    # ── CRM (R3) ──
+    # Bu ikisi CARİ KAYDININ PARÇASI, işlem verisi değil:
+    #
+    #   cari_kisi   Müşterideki kişiler — satın almacı, lojistik,
+    #               muhasebe. Cari kartını koruyup kişilerini silmek,
+    #               kartın yarısını atmak olurdu. Üstelik göç bunları
+    #               eski `yetkili` alanından taşıdı; silinirse o bilgi
+    #               bir daha geri gelmez.
+    #
+    #   cari_erisim Kapalı müşterilere verilmiş istisna erişimler.
+    #               Silinirse satış ekibi sessizce müşteri kaybeder;
+    #               kimse "erişimim kalktı" diye uyarı almaz.
+    #
+    # cari_aktivite ise SİLİNİR: temas geçmişi işlem verisidir ve
+    # sıfırlanan siparişlere/tekliflere atıfta bulunur. Tutmak,
+    # olmayan belgelerden söz eden notlar bırakırdı.
+    'cari_kisi': 'Müşteri kişileri (satın alma, lojistik, muhasebe)',
+    'cari_erisim': 'Kapalı müşterilere verilmiş istisna erişimler',
 }
 
 # Tamsayı birincil anahtarlı tablolar — dizileri 1'e çekilir.
 DIZI_SIFIRLA = ['banka', 'kasa', 'kasa_hareket', 'kesim_detay',
-                'cek_hareket', 'audit_log', 'konteyner']
+                'cek_hareket', 'audit_log', 'konteyner', 'cari_aktivite']
+
+# ── SİLME SIRASI: modelin topolojik sırasından, TERS ──
+# metadata.sorted_tables ebeveynden çocuğa sıralı; silmek için
+# tersi gerekiyor (çocuk önce).
+try:
+    os.environ.setdefault('MILESTONE_ACILIS_ATLA', '1')
+    sys.path.insert(0, str(Path('.').resolve()))
+    import flask_app as _fa  # noqa: F401
+    from models import db as _db
+    _sirali = [t.name for t in _db.metadata.sorted_tables]
+    _sirali.reverse()
+    _hedef = set(SILINECEK_TABLOLAR)
+    # Modelde bilinen tablolar doğru sırayla; modelde olmayanlar
+    # (varsa) sona.
+    SIL_SIRASI = [t for t in _sirali if t in _hedef]
+    SIL_SIRASI += [t for t in SILINECEK_TABLOLAR if t not in _sirali]
+    if set(SIL_SIRASI) != _hedef:
+        print(" ✗ Sıra türetilemedi — DOSYAYA DOKUNULMADI.")
+        sys.exit(1)
+except Exception as _e:
+    print(f" ✗ Silme sırası modelden türetilemedi: {_e}")
+    print("   Elle sıralamaya düşmek yabancı anahtar hatası riski")
+    print("   taşır; çalışmayı reddediyorum.")
+    sys.exit(1)
 
 motor = create_engine(VT_URL)
 denetci = inspect(motor)
@@ -121,7 +178,7 @@ print()
 # ── TAM KAPSAMA DENETİMİ ──
 # Her tablo ya korunmalı ya silinmeli. Ucu acik tablo kalirsa
 # sessizce test verisi kalir; bunu HATA sayiyoruz.
-bilinen = set(SIL_SIRASI) | set(KORUNAN)
+bilinen = set(SILINECEK_TABLOLAR) | set(KORUNAN)
 gozden_kacan = sorted(t for t in mevcut
                       if t not in bilinen and t != 'alembic_version')
 if gozden_kacan:
