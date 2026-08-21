@@ -273,13 +273,14 @@ async function msAc(id) {
     '<div class="yukleniyor">Yükleniyor…</div>',
     `<button class="blok-btn birincil" onclick="msAktAc('${id}')">+ Temas kaydet</button>`);
 
-  let akt = [], kisiler = [];
+  let akt = [], kisiler = [], ozet = null;
   try {
-    const [a, k] = await Promise.all([
+    const [a, k, o] = await Promise.all([
       api(`/api/cari/${encodeURIComponent(id)}/aktivite`),
-      api(`/api/cari/${encodeURIComponent(id)}/kisi`)
+      api(`/api/cari/${encodeURIComponent(id)}/kisi`),
+      api(`/api/crm/musteri/${encodeURIComponent(id)}/ozet`)
     ]);
-    akt = a.data || []; kisiler = k.data || [];
+    akt = a.data || []; kisiler = k.data || []; ozet = o;
   } catch (e) {}
 
   const bugun = new Date().toISOString().slice(0, 10);
@@ -298,6 +299,8 @@ async function msAc(id) {
           ${yz ? `<button class="ms-mini" onclick="msTamamla(${a.id})">Yapıldı</button>` : ''}
         </div>`).join('')}
     </div>` : ''}
+
+    ${msOzetHTML(ozet)}
 
     <h4 class="ms-bas">Kişiler ${kisiler.length ? '· ' + kisiler.length : ''}
       ${yz ? `<button class="ms-mini" onclick="msKisiAc()">+ Kişi</button>` : ''}</h4>
@@ -324,6 +327,71 @@ async function msAc(id) {
         </div>`).join('')
       : '<div class="ms-bos" style="padding:14px">Henüz temas kaydı yok.</div>'}
     </div>`);
+}
+
+/* ── MÜŞTERİ 360 ──
+   Ürün tercihi, fiyat geçmişi ve dönüşüm. HİÇBİRİ SAKLANMIYOR;
+   hepsi satış kayıtlarından hesaplanıyor. */
+function msPara(v, dv) {
+  return (Number(v) || 0).toLocaleString('tr-TR', {maximumFractionDigits: 0})
+    + ' ' + (dv === 'TRY' ? '₺' : dv === 'USD' ? '$' : dv === 'EUR' ? '€' : dv);
+}
+
+function msOzetHTML(o) {
+  if (!o || !o.ok) return '';
+  const z = o.ozet || {};
+  const dn = o.donusum || {};
+  let h = '';
+
+  if (z.satis_sayisi) {
+    h += `<h4 class="ms-bas">Satış özeti</h4>
+      <div class="ms-liste"><div class="ms-sat kisi">
+        <div><div>${z.satis_sayisi} satış · ${z.farkli_urun} farklı ürün</div>
+          <div class="ms-alt">son satış ${msT(z.son_satis)}
+            ${z.temassiz_gun != null ? '(' + z.temassiz_gun + ' gün önce)' : ''}</div></div>
+      </div></div>`;
+  }
+
+  if (dn.sonuclanan) {
+    /* İptal edilen teklifler orana KATILMAZ — iptal teklifi geri
+       çekmek, kayıp müşterinin başkasını seçmesi. */
+    const sb = Object.entries(dn.kayip_sebepleri || {})
+      .map(([k, v]) => k + ' (' + v + ')').join(', ');
+    h += `<h4 class="ms-bas">Teklif dönüşümü</h4>
+      <div class="ms-liste"><div class="ms-sat kisi">
+        <div><div>%${dn.oran} — ${dn.kazanilan} kazanıldı, ${dn.kaybedilen} kaybedildi</div>
+          ${sb ? `<div class="ms-alt">kayıp sebebi: ${msK(sb)}</div>` : ''}</div>
+      </div></div>`;
+  }
+
+  if ((o.urunler || []).length) {
+    h += `<h4 class="ms-bas">Ne alıyor</h4><div class="ms-liste">`
+      + o.urunler.slice(0, 8).map(u => `
+        <div class="ms-sat kisi">
+          <div><div>${msK(u.cins)}${u.ozellik !== '—' ? ' · ' + msK(u.ozellik) : ''}</div>
+            <div class="ms-alt">${u.adet} satış · son ${msT(u.son_tarih)}</div></div>
+          <div style="text-align:right;font-size:.8rem">
+            ${Object.entries(u.tutar || {}).map(([d, v]) =>
+              msPara(v, d)).join('<br>')}</div>
+        </div>`).join('') + `</div>`;
+  }
+
+  if ((o.fiyatlar || []).length) {
+    /* Dövizler AYRI satırlarda — ortalama için toplamak kur
+       riskini gizlerdi. */
+    h += `<h4 class="ms-bas">Verdiğimiz fiyatlar</h4><div class="ms-liste">`
+      + o.fiyatlar.slice(0, 8).map(f => `
+        <div class="ms-sat kisi">
+          <div><div>${msK(f.cins)}${f.ozellik !== '—' ? ' · ' + msK(f.ozellik) : ''}</div>
+            <div class="ms-alt">${f.satis_sayisi} satış${f.satis_sayisi > 1
+              ? ' · aralık ' + msPara(f.en_dusuk, f.doviz) + ' – ' + msPara(f.en_yuksek, f.doviz)
+              : ''}</div></div>
+          <div style="text-align:right;font-size:.8rem">
+            <div><strong>${msPara(f.son_fiyat, f.doviz)}</strong>/${msK(f.birim || '')}</div>
+            <div class="ms-alt">${msT(f.son_tarih)}</div></div>
+        </div>`).join('') + `</div>`;
+  }
+  return h;
 }
 
 /* Çekmece gövdesini tazele. base.html'de tazeleme yardımcısı yok;

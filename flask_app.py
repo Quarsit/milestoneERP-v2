@@ -3377,6 +3377,133 @@ def create_app():
         return jsonify({'ok': True, 'sessiz_gun': sessiz_gun,
                         'bugun': bugun.isoformat(), 'data': cikti})
 
+    @app.route('/api/crm/musteri/<cari_id>/ozet', methods=['GET'])
+    def api_crm_musteri_ozet(cari_id):
+        """Musteri 360 — urun tercihi, fiyat gecmisi, donusum.
+
+        HICBIRI SAKLANMIYOR, hepsi mevcut veriden hesaplaniyor.
+        Ozet tabloya yazsaydik kaynak degistiginde kopya eskirdi;
+        bu projede tam olarak o sinifin bes ayri hatasini duzelttik.
+
+        FINANSAL ALAN DONMEZ — /api/crm/musteri ile ayni kural.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('crm', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        c = db.session.get(Cari, cari_id)
+        if not c or not _cari_gorulebilir_mi(cari_id):
+            return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
+
+        bugun = date.today()
+        satislar = SatisKaydi.query.filter_by(cari_id=cari_id).all()
+
+        # ── ÜRÜN TERCİHİ ──
+        # Neyi ne kadar aliyor. Miktar birimi urune gore degistigi
+        # icin (m2 / m3 / ton) ADET ve TUTAR ayri tutuluyor;
+        # farkli birimleri toplamak anlamsiz olurdu.
+        urunler = {}
+        for s in satislar:
+            anahtar = ((s.cins or '—').strip(),
+                       (s.ozellik or '').strip() or '—')
+            u = urunler.setdefault(anahtar, {
+                'cins': anahtar[0], 'ozellik': anahtar[1],
+                'adet': 0, 'tutar': {}, 'son_tarih': None})
+            u['adet'] += 1
+            dv = (s.doviz or 'USD').upper()
+            u['tutar'][dv] = q3(float(u['tutar'].get(dv, 0))
+                                + float(s.tutar or 0))
+            if s.satis_tarihi and (u['son_tarih'] is None
+                                   or s.satis_tarihi > u['son_tarih']):
+                u['son_tarih'] = s.satis_tarihi
+
+        urun_listesi = []
+        for (cins, ozellik), u in urunler.items():
+            urun_listesi.append({
+                'cins': cins, 'ozellik': ozellik, 'adet': u['adet'],
+                'tutar': u['tutar'],
+                'son_tarih': u['son_tarih'].isoformat() if u['son_tarih'] else None,
+            })
+        urun_listesi.sort(key=lambda x: -x['adet'])
+
+        # ── FİYAT GEÇMİŞİ ──
+        # DOVIZLER AYRI. Ayni cinsi bir musteriye USD, digerine EUR
+        # vermis olabilirsiniz; ortalama icin toplamak bu projede
+        # defalarca duzelttigimiz hatanin aynisi olurdu.
+        fiyatlar = {}
+        for s in satislar:
+            if not s.birim_fiyat:
+                continue
+            dv = (s.doviz or 'USD').upper()
+            anahtar = f"{(s.cins or '—').strip()}|{(s.ozellik or '').strip() or '—'}|{dv}"
+            f = fiyatlar.setdefault(anahtar, {
+                'cins': (s.cins or '—').strip(),
+                'ozellik': (s.ozellik or '').strip() or '—',
+                'doviz': dv, 'birim': s.birim or '',
+                'fiyatlar': [], 'son_fiyat': None, 'son_tarih': None})
+            f['fiyatlar'].append(float(s.birim_fiyat))
+            if s.satis_tarihi and (f['son_tarih'] is None
+                                   or s.satis_tarihi > f['son_tarih']):
+                f['son_tarih'] = s.satis_tarihi
+                f['son_fiyat'] = q3(float(s.birim_fiyat))
+
+        fiyat_listesi = []
+        for f in fiyatlar.values():
+            fl = f['fiyatlar']
+            fiyat_listesi.append({
+                'cins': f['cins'], 'ozellik': f['ozellik'],
+                'doviz': f['doviz'], 'birim': f['birim'],
+                'satis_sayisi': len(fl),
+                'en_dusuk': q3(min(fl)), 'en_yuksek': q3(max(fl)),
+                'ortalama': q3(sum(fl) / len(fl)),
+                'son_fiyat': f['son_fiyat'],
+                'son_tarih': f['son_tarih'].isoformat() if f['son_tarih'] else None,
+            })
+        fiyat_listesi.sort(key=lambda x: (x['cins'], x['doviz']))
+
+        # ── DÖNÜŞÜM (müşteri bazlı) ──
+        # PF3'teki kural birebir: 'Iptal' paydaya GIRMEZ (teklifi
+        # geri cekmek, kaybetmek degil), bekleyen de girmez.
+        proformalar = Proforma.query.filter(
+            Proforma.cari_id == cari_id,
+            Proforma.aktif_surum.isnot(False)).all()
+        KAZANILAN = ('Siparise Donustu', 'Faturalandi')
+        kazanilan = [p for p in proformalar if p.durum in KAZANILAN]
+        kaybedilen = [p for p in proformalar if p.durum == 'Kaybedildi']
+        sonuclanan = len(kazanilan) + len(kaybedilen)
+        sebepler = {}
+        for p in kaybedilen:
+            s = p.kayip_sebep or 'belirtilmemis'
+            sebepler[s] = sebepler.get(s, 0) + 1
+
+        son_satis = max((s.satis_tarihi for s in satislar if s.satis_tarihi),
+                        default=None)
+        ilk_satis = min((s.satis_tarihi for s in satislar if s.satis_tarihi),
+                        default=None)
+
+        return jsonify({
+            'ok': True,
+            'cari': {'id': c.id, 'unvan': c.unvan, 'ulke': c.ulke,
+                     'sorumlu': c.sorumlu},
+            'ozet': {
+                'satis_sayisi': len(satislar),
+                'ilk_satis': ilk_satis.isoformat() if ilk_satis else None,
+                'son_satis': son_satis.isoformat() if son_satis else None,
+                'temassiz_gun': (bugun - son_satis).days if son_satis else None,
+                'farkli_urun': len(urun_listesi),
+            },
+            'urunler': urun_listesi[:20],
+            'fiyatlar': fiyat_listesi[:20],
+            'donusum': {
+                'kazanilan': len(kazanilan), 'kaybedilen': len(kaybedilen),
+                'sonuclanan': sonuclanan,
+                'oran': (round(100.0 * len(kazanilan) / sonuclanan, 1)
+                         if sonuclanan else None),
+                'kayip_sebepleri': dict(sorted(sebepler.items(),
+                                               key=lambda x: -x[1])),
+            },
+        })
+
     @app.route('/musteri')
     def musteri_sayfa():
         """Satis mercegiyle musteri ekrani — finansal veri yok."""
