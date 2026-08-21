@@ -10137,9 +10137,50 @@ def create_app():
                     _kap.get((_grup, _dv, _yon), 0.0)
                     + (_alacak if _alacak > 0 else _borc))
 
+        # ── ÇAPRAZ DÖVİZ KAPATMA (NK7) ──
+        # Kapatma havuzu (cari, DOVIZ, yon) uclusune gore
+        # gruplaniyordu; TRY tahsilat USD alacagi kapatamiyordu.
+        # Olculdu: 10.000 USD fatura + 200.000 TRY tahsilat sonrasi
+        # USD alacak 10.000 kaliyor, 200.000 TRY bosta duruyordu.
+        #
+        # Artik kendi dovizinde artan kapatma, BASKA dovizdeki
+        # yukumluluklere ODEME GUNU KURUYLA aktarilabiliyor.
+        # Musteri o gun eline gecen parayla borcunu kapatir; kac
+        # USD'ye denk geldigi o gunku kurla bellidir.
+        _bugun_kur = {}
+
+        def _kur_ile(tutar, kaynak_dv, hedef_dv):
+            """kaynak_dv cinsinden tutari hedef_dv'ye cevirir.
+
+            Kur bulunamazsa None doner — 0 ile carpmak tutari
+            SESSIZCE sifirlardi (NK6'da ayni tuzagi gorduk).
+            """
+            if kaynak_dv == hedef_dv:
+                return float(tutar)
+            for _d in (kaynak_dv, hedef_dv):
+                if _d not in _bugun_kur:
+                    _bugun_kur[_d] = (1.0 if _d == 'TRY'
+                                      else float(_kur_getir(_d) or 0))
+            _k, _hd = _bugun_kur[kaynak_dv], _bugun_kur[hedef_dv]
+            if _k <= 0 or _hd <= 0:
+                return None
+            return float(tutar) * _k / _hd
+
         for _anahtar, _hs in _yuk.items():
             _grup, _dv, _yon = _anahtar
             _kalan_kapatma = _kap.get(_anahtar, 0.0)
+
+            # ÖNCE KENDİ DÖVİZİ, sonra çapraz.
+            # Tersi olsaydi USD tahsilat dururken TRY ile kapatip
+            # gereksiz kur cevrimi yapardik.
+            _capraz = []
+            for _k_anahtar, _k_tutar in _kap.items():
+                if _k_anahtar == _anahtar or _k_tutar <= 0.005:
+                    continue
+                _kg, _kdv, _kyon = _k_anahtar
+                if _kg != _grup or _kyon != _yon or _kdv == _dv:
+                    continue
+                _capraz.append(_k_anahtar)
             # En eski vade once kapanir. Vadesizler en sona — vadesi
             # belli olan bir borc, belirsiz olandan once odenir.
             _hs.sort(key=lambda x: (x.vade_tarihi is None,
@@ -10150,6 +10191,26 @@ def create_app():
                     _dus = min(_tutar, _kalan_kapatma)
                     _tutar -= _dus
                     _kalan_kapatma -= _dus
+
+                # KENDI dovizi bittiyse CAPRAZ havuzlardan kapat.
+                # Kapatilan tutar kaynak dovizinden DUSULUR ki ayni
+                # para iki yukumlulugu kapatmasin.
+                for _ca in _capraz:
+                    if _tutar <= 0.005:
+                        break
+                    _havuz = _kap.get(_ca, 0.0)
+                    if _havuz <= 0.005:
+                        continue
+                    _kdv = _ca[1]
+                    _esdeger = _kur_ile(_havuz, _kdv, _dv)
+                    if _esdeger is None:
+                        continue      # kur yok — capraz kapatma ATLANIR
+                    _dus = min(_tutar, _esdeger)
+                    _tutar -= _dus
+                    _geri = _kur_ile(_dus, _dv, _kdv)
+                    _kap[_ca] = q3(max(0.0, _havuz - (_geri if _geri
+                                                      is not None else 0.0)))
+
                 if _tutar <= 0.005:   # kurus artigi — kapanmis say
                     continue
                 _vade = h.vade_tarihi
