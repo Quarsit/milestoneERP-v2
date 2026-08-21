@@ -84,11 +84,69 @@ def calistir(argumanlar):
         [sys.executable, '-m', 'flask'] + argumanlar, env=ORTAM).returncode
 
 
+def _veritabani_bos_mu():
+    """Şema hiç kurulmamış mı? (alembic_version dışında tablo yok)
+
+    Boş veritabanında `uygula` çalıştırmak anlamsız bir hataya
+    yol açıyordu:
+
+        relation "blok_stok" does not exist
+
+    Sebebi: ilk göç ("baseline: mevcut sema") `pass` — var olan bir
+    şemayı damgalamak için yazılmış, tablo OLUŞTURMUYOR. Sonraki
+    göçler o tabloların varlığını varsayıyor. Tablolar normalde
+    uygulama açılışındaki `db.create_all()` ile kuruluyor ama
+    `goc.py` o adımı bilerek atlıyor (MILESTONE_ACILIS_ATLA).
+
+    Hata mesajı kullanıcıya ne yapacağını söylemiyordu; bu kontrol
+    onu söylüyor.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    url = os.environ.get('DATABASE_URL')
+    if not url:
+        return False          # adres yoksa karar veremeyiz, karışma
+    try:
+        from sqlalchemy import create_engine, inspect
+        tablolar = set(inspect(create_engine(url)).get_table_names())
+    except Exception:
+        return False          # bağlanamadıysa asıl hata zaten çıkacak
+    return not (tablolar - {'alembic_version'})
+
+
 if len(sys.argv) < 2:
     yardim()
     sys.exit(0)
 
 eylem = sys.argv[1].lower()
+
+# BOŞ VERİTABANI KORUMASI — yalnızca şema değiştiren eylemlerde.
+if eylem in ('uygula', 'geri') and _veritabani_bos_mu():
+    print("═" * 66)
+    print(" ✗ VERİTABANI BOŞ — göç uygulanamaz")
+    print("═" * 66)
+    print()
+    print(" Hiç tablo yok. İlk göç ('baseline: mevcut sema') var olan")
+    print(" bir şemayı damgalamak için yazılmış; tablo OLUŞTURMAZ.")
+    print(" Şimdi 'uygula' derseniz sonraki göç olmayan bir tabloyu")
+    print(' değiştirmeye çalışır: relation "blok_stok" does not exist')
+    print()
+    print(" YENİ KURULUMDA doğru sıra — önce şemayı kurun, sonra damgalayın:")
+    print()
+    print("   venv/bin/python -c \"import flask_app; from models import db; \\")
+    print("       app=flask_app.app; ctx=app.app_context(); ctx.push(); \\")
+    print("       db.create_all(); print('sema kuruldu')\"")
+    print()
+    print("   venv/bin/python goc.py ham db stamp head")
+    print("   venv/bin/python goc.py durum")
+    print()
+    print(" `db.create_all()` modelden EN GÜNCEL şemayı kurar; ardından")
+    print(" tüm göçleri uygulanmış saymak tutarlıdır.")
+    print("═" * 66)
+    sys.exit(1)
 
 if eylem in ('yardim', '--help', '-h', 'help'):
     yardim()

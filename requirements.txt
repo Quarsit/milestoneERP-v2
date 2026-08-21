@@ -25,9 +25,17 @@ Jinja2==3.1.6
 
 # ----- ORM / Veritabanı -----
 SQLAlchemy==2.0.50
-# PostgreSQL sürücüsü — Windows'ta hazır wheel olarak gelir,
-# Visual C++ derleme aracı GEREKTİRMEZ.
-# psycopg2-binary==2.9.10
+# PostgreSQL sürücüsü. requirements_pardus.txt'te AÇIK olmasına
+# rağmen burada yorumdaydı; Windows'ta PostgreSQL'e bağlanmak
+# isteyen herkes "No module named 'psycopg2'" duvarına çarpıyordu.
+#
+# NOT: hazır wheel yalnızca desteklenen Python sürümleri için var.
+# Python 3.14 gibi çok yeni bir sürümde pip kaynaktan derlemeye
+# çalışır ve Visual C++ ister. O durumda ya Python 3.13 kullanın
+# ya da psycopg3'e geçin:
+#     pip install "psycopg[binary]"
+#     DATABASE_URL=postgresql+psycopg://...
+psycopg2-binary==2.9.10
 
 # ----- ASGI sunucu katmanı (server.py FastAPI köprüsü) -----
 fastapi==0.110.1

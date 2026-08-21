@@ -65,7 +65,14 @@ else
         [ -f "$D.py" ] || continue
         printf "  %-18s " "$D"
         CIKTI=$("$PY" "$D.py" 2>&1)
-        if echo "$CIKTI" | grep -qE "TEMİZ|temiz$"; then
+        # BASARI KELIMESI ARACA GORE DEGISIYOR:
+        #   js/form/zincir/akis -> "TEMİZ"
+        #   sema_denetim        -> "Şema modellerle uyumlu"
+        # Ilk surum yalnizca "TEMİZ" ariyordu ve sema_denetim'i
+        # "calistirilamadi" saniyordu. Iki tur boyunca "sema
+        # dogrulanmadi" diye uyardik; oysa dogrulanmisti.
+        # Yanlis rapor, hic rapor vermemekten kotudur.
+        if echo "$CIKTI" | grep -qE "TEMİZ|temiz$|uyumlu"; then
             echo "temiz"
         elif echo "$CIKTI" | grep -qE "BULGU|✗ "; then
             echo "✗ BULGU"

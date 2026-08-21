@@ -50,6 +50,30 @@ SILINECEK=()
 KALACAK=()
 ASILMIS=()
 
+# ── COMMIT EDİLMEMİŞ DEĞİŞİKLİK KORUMASI ──
+# Bu betik gonder.sh'nin BAŞARIYLA çalıştığını varsayıyordu.
+# Üretimde gonder.sh izin hatası verdi, temizlik yine de çalıştı
+# ve HİÇ COMMIT EDİLMEMİŞ bir yamayı sildi: etkisi flask_app.py'de
+# kaldı ama gerekçesini anlatan betik depoya hiç girmeden kayboldu.
+#
+# Artık depoda bekleyen değişiklik varsa silme YAPILMAZ.
+if [ -d .git ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "══════════════════════════════════════════════════════════════════════"
+    echo " ✗ COMMIT EDİLMEMİŞ DEĞİŞİKLİK VAR — temizlik YAPILMADI"
+    echo "══════════════════════════════════════════════════════════════════════"
+    echo
+    git status --short | sed 's/^/   /'
+    echo
+    echo "   Yamaları silmek, henüz push edilmemiş bir düzeltmenin"
+    echo "   gerekçesini kaybetmek olurdu. Önce gönderin:"
+    echo
+    echo "     ./gonder.sh \"ne degisti ve neden\""
+    echo
+    echo "   Sonra tekrar:  ./temizle.sh --uygula"
+    echo "══════════════════════════════════════════════════════════════════════"
+    exit 1
+fi
+
 shopt -s nullglob
 YAMALAR=(yama_*.py)
 shopt -u nullglob

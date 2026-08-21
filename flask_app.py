@@ -1,3 +1,34 @@
+# ══════════════════════════════════════════════════════════════════
+#  .env DOSYASINI OKU  (ENV1)
+#
+#  EN USTTE, digger her seyden ONCE. Asagidaki kod os.environ'dan
+#  SECRET_KEY ve DATABASE_URL okuyor; bunlar okunmadan once .env
+#  yuklenmis olmali.
+#
+#  ONCEDEN CAGRILMIYORDU. Depodaki on bes yardimci betik
+#  (sema_denetim, sifirla2, crm_bag_denetim...) cagiriyordu ama
+#  uygulama cagirmiyordu. Pardus'ta systemd degiskenleri sagladigi
+#  icin fark edilmedi; servis DISINDA calistirildiginda iki sessiz
+#  hata olusuyordu:
+#
+#    · SECRET_KEY okunmuyor -> depoda yazili sabit gelistirme
+#      anahtari kullaniliyor (.env.ornek bunu guvenlik sorunu
+#      olarak isaretlemis)
+#    · DATABASE_URL okunmuyor -> sqlite:///milestone.db'ye dusuyor;
+#      Windows'ta OLCULDU: db.create_all() PostgreSQL sanip SQLite'a
+#      yazdi, uygulama "calisiyor" gorunurken YANLIS VERITABANINA
+#      yaziyordu
+#
+#  override=False (varsayilan): MEVCUT ortam degiskenleri EZILMEZ.
+#  systemd'nin verdigi degerler gecerli kalir, .env yalnizca
+#  eksikleri tamamlar — uretim davranisi degismez.
+# ══════════════════════════════════════════════════════════════════
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except ImportError:  # python-dotenv kurulu degilse uygulama yine calissin
+    pass
+
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file
 from flask import g, has_request_context   # CRM-C2: kuresel erisim suzgeci
 from werkzeug.security import generate_password_hash, check_password_hash
