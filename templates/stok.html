@@ -572,6 +572,19 @@
     </div>
   </div>
 </div>
+
+<!-- MALİ KARAR (SF1): stok düzeltmesi ≠ mali düzeltme -->
+<div class="modal-ortu" id="maliModal" onclick="if(event.target===this)maliKapat()">
+  <div class="modal" style="width:520px" role="dialog" aria-label="Mali karar">
+    <div class="modal-bas"><h3>Faturaya Ne Yapılsın?</h3>
+      <p>Stok düzeltmesi ile mali düzeltme aynı şey değildir</p></div>
+    <div class="modal-gov" id="maliGovde"></div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="maliKapat()">Vazgeç</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -1738,11 +1751,10 @@ async function topluKaydet() {
 
   /* BAŞARIYLA BİTTİYSE FORMU KAPAT.
      Form açık kalınca kullanıcı "aktarım oldu mu olmadı mı" diye
-     tereddüt ediyordu. Liste arkada zaten tazelendi; kapatınca
-     sonucu doğrudan görüyor.
+     tereddüt ediyordu. Liste arkada zaten tazelendi.
 
-     HATALI SATIR VARSA AÇIK KALIR — hata listesi penceredeki
-     sonuç kutusunda; kapatmak onu okunmadan yok etmek olurdu. */
+     HATALI SATIR VARSA AÇIK KALIR — hata listesi sonuç kutusunda;
+     kapatmak onu okunmadan yok etmek olurdu. */
   if (!hatali && basarili) {
     setTimeout(() => {
       topluKapat();
@@ -1899,15 +1911,68 @@ function kesimeGonder(id, tip) {
   );
 }
 
-async function stokSil(id, tip, no) {
+async function stokSil(id, tip, no, maliIslem) {
   const ad = no || id;
-  if (!confirm(`${ad} silinsin mi?\n\nBu stoğa ait maliyet kayıtları ve cari hareketler de temizlenir. Bu işlem geri alınamaz.`)) return;
+  /* Onay yalnızca İLK çağrıda; mali seçim yapıldıktan sonra
+     kullanıcıyı ikinci kez sormak gereksiz. */
+  if (!maliIslem &&
+      !confirm(`${ad} silinsin mi?\n\nBu stoğa ait maliyet kayıtları temizlenir. Bu işlem geri alınamaz.`)) return;
   try {
-    const d = await api(`/api/stok/${encodeURIComponent(tip)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const yol = `/api/stok/${encodeURIComponent(tip)}/${encodeURIComponent(id)}`
+      + (maliIslem ? `?mali_islem=${encodeURIComponent(maliIslem)}` : '');
+    const d = await api(yol, { method: 'DELETE' });
     bildir(d.mesaj || 'Stok silindi');
-    cekmeceKapat();
+    maliKapat(); cekmeceKapat();
     await Promise.all([listeyiCiz(), kpiYukle()]);
-  } catch (e) { /* */ }
+  } catch (e) {
+    /* Sunucu faturaya bağlı stokta MALİ SEÇİM istiyor (SF1).
+       api() 400'de hata fırlatıyor; yanıtı okuyup seçim
+       penceresini açıyoruz. */
+    const y = (e && e.yanit) || null;
+    if (y && y.error === 'mali_islem_gerekli') maliAc(id, tip, no, y);
+  }
+}
+
+/* ── MALİ KARAR PENCERESİ (SF1) ──
+   Stok düzeltmesi ile mali düzeltme AYNI ŞEY DEĞİLDİR; hangisinin
+   yapılacağını yalnızca kullanıcı bilir. Varsayılan seçenek YOK —
+   birini işaretlemek, kullanıcı adına muhasebe kararı vermek
+   olurdu. */
+let MALI_HEDEF = null;
+
+function maliAc(id, tip, no, y) {
+  MALI_HEDEF = { id, tip, no };
+  const kutu = document.getElementById('maliGovde');
+  const para = (Number(y.pay) || 0).toLocaleString('tr-TR',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (y.doviz || '');
+  kutu.innerHTML = `
+    <p style="font-size:.88rem;line-height:1.6;margin-bottom:12px">
+      Bu stok <strong>${kacar(y.fatura_no || '')}</strong> numaralı alış faturasına
+      bağlı (<strong>${para}</strong> pay). Faturaya ne yapılacağını seçin.
+    </p>
+    <div style="font-size:.8rem;color:var(--soluk);line-height:1.55;
+         padding:10px 12px;background:var(--notr-bg);border-radius:8px;margin-bottom:14px">
+      <strong>Stok yanlış girildiyse</strong> fatura doğrudur — "Sadece stok".<br>
+      <strong>İade / hurda / konsinye</strong> ise fatura korunmalı — "Karşı kayıt".<br>
+      <strong>Fatura da yanlışsa</strong> — "Fatura bedeli düzeltilsin".
+    </div>
+    ${Object.entries(y.secenekler || {}).map(([k, ad]) => `
+      <button class="blok-btn" style="display:block;width:100%;text-align:left;
+              margin-bottom:8px;padding:11px 13px"
+              onclick="maliSec('${k}')">${kacar(ad)}</button>`).join('')}`;
+  document.getElementById('maliModal').classList.add('acik');
+}
+
+function maliKapat() {
+  const m = document.getElementById('maliModal');
+  if (m) m.classList.remove('acik');
+  MALI_HEDEF = null;
+}
+
+function maliSec(secim) {
+  if (!MALI_HEDEF) return;
+  const h = MALI_HEDEF;
+  stokSil(h.id, h.tip, h.no, secim);
 }
 
 /* ═══ MALİYET EKLE (stok çekmecesinden) ═══

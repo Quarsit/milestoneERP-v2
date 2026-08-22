@@ -4705,6 +4705,77 @@ def create_app():
         _fno = (getattr(stok, 'fatura_no', '') or '').strip()
         _grup = CariHareket.query.filter_by(
             baglanti_tip='stok_fatura', baglanti_id=_fno).first() if _fno else None
+
+        # ══════════════════════════════════════════════════════
+        #  MALİ KARAR KULLANICIYA AİT  (SF1)
+        #
+        #  Onceden fatura borcundan pay SESSIZCE dusuluyordu. Ama
+        #  stok miktarindaki degisiklik ile fatura tutarindaki
+        #  degisiklik AYNI SEY DEGILDIR:
+        #
+        #   · Stok yanlis girildi, fatura dogru  -> faturaya
+        #     dokunulmamali (sadece_stok)
+        #   · Iade/hurda/konsinye -> orijinal fatura korunmali,
+        #     KARSI KAYIT acilmali (karsi_kayit)
+        #   · Fatura da yanlissa  -> duzeltilmeli (fatura_duzelt)
+        #
+        #  Ikisini ayirt edebilecek tek kisi KULLANICIDIR; bu yuzden
+        #  varsayilan ATANMAZ, secim istenir.
+        # ══════════════════════════════════════════════════════
+        MALI_SECENEKLER = {
+            'fatura_duzelt': 'Fatura bedeli düzeltilsin (cari borçtan pay düşülür)',
+            'karsi_kayit': 'Karşı kayıt oluşturulsun (orijinal fatura korunur)',
+            'sadece_stok': 'Sadece stok düzeltilsin (fatura değişmez)',
+        }
+        _mali = ((request.json or {}).get('mali_islem')
+                 if request.is_json else None) or request.args.get('mali_islem')
+        _mali = (_mali or '').strip().lower() or None
+
+        if _grup and not _mali:
+            return jsonify({
+                'ok': False, 'error': 'mali_islem_gerekli',
+                'fatura_no': _fno,
+                'pay': _pay, 'doviz': _grup.doviz or 'TRY',
+                'secenekler': MALI_SECENEKLER,
+                'mesaj': f'Bu stok {_fno} numaralı alış faturasına bağlı '
+                         f'({_pay:,.2f} {_grup.doviz or "TRY"} pay). Faturaya ne '
+                         f'yapılacağını seçin — stok düzeltmesi ile mali '
+                         f'düzeltme aynı şey değildir.'}), 400
+
+        if _grup and _mali not in MALI_SECENEKLER:
+            return jsonify({
+                'ok': False, 'error': 'gecersiz_mali_islem',
+                'secenekler': MALI_SECENEKLER,
+                'mesaj': f'Geçersiz mali işlem: {_mali}'}), 400
+
+        # SADECE STOK: finansal tarafa hic dokunulmaz.
+        if _grup and _mali == 'sadece_stok':
+            _grup = None
+
+        # KARSI KAYIT: orijinal fatura KORUNUR, ters hareket acilir.
+        # Iade/hurda/konsinye icin dogru olan budur — belge ile kayit
+        # ayrismaz, stok hareketi ayrica izlenebilir.
+        elif _grup and _mali == 'karsi_kayit':
+            _kk_t, _kk_k = _try_karsilik(_pay, _grup.doviz or 'TRY',
+                                         tarih=date.today())
+            db.session.add(CariHareket(
+                id=_yeni_id('HR'), hareket_tarihi=date.today(),
+                cari_id=_grup.cari_id, cari_unvan=_grup.cari_unvan,
+                islem_tip='Alis Iade / Duzeltme',
+                borc=_pay, alacak=0,
+                doviz=_grup.doviz or 'TRY',
+                borc_try=_kk_t, kur_uygulanan=_kk_k,
+                vade_tarihi=date.today(),
+                kaynak='stok_karsi_kayit',
+                baglanti_tip='stok_fatura', baglanti_id=_fno,
+                aciklama=f'{_fno} · stok çıkışı karşı kaydı '
+                         f'({getattr(stok, "id", "")})',
+                kullanici=session.get('kullanici')))
+            # Orijinal harekete DOKUNULMAZ; yalnizca kalem sayaci
+            # azalir ki son kalemde grup yanlislikla silinmesin.
+            _grup.kalem_sayisi = max(0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
+            _grup = None
+
         if _grup:
             _kalan_kalem = (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1
             if _kalan_kalem <= 0:
