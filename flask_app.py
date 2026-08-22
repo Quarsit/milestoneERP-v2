@@ -903,11 +903,23 @@ def create_app():
             return q3(tutar), 1.0
         return q3(float(tutar) * float(kur)), q_kur(kur)
 
-    def _kur_farki_hesapla_ve_olustur(yeni_hareket):
+    def _kur_farki_hesapla_ve_olustur(yeni_hareket, islet=False):
         """
         Tahsilat/odeme hareketi olusturulduktan sonra cagrilir.
-        Ayni cari + ayni doviz icin kapanmamis (en eski) borc/alacak hareketini bulur,
-        kur farkini hesaplar, otomatik 'Kur Farki' hareketi acar.
+        Ayni cari icin kapanmamis (en eski) borc/alacak hareketini bulur
+        ve kur farkini HESAPLAR.
+
+        ── AÇIK ONAY (EK2) ──
+        `islet=False` (VARSAYILAN) ise hesap yapilir ama KAYIT
+        OLUSTURULMAZ; sonuc yalnizca doner.
+
+        Onceden kosulsuz kayit aciliyordu: kullanici hicbir sey
+        isaretlemeden cari hesabina 'Kur Farki' hareketi dusuyordu.
+        Bir muhasebe kaydini sessizce olusturmak, olusturmamaktan
+        daha zararlidir — sonradan fark edilmesi zor, geri alinmasi
+        zahmetlidir.
+
+        Cagiran taraf `islet=True` gecerse kayit olusur.
         """
         if not yeni_hareket.cari_id or not yeni_hareket.doviz:
             return None
@@ -1072,6 +1084,20 @@ def create_app():
                     kf_borc, kf_alacak = 0, abs(fark)
 
         _capraz_not = f' (çapraz döviz {yeni_hareket.doviz}→{karsi.doviz})' if capraz else ''
+        # ── AÇIK ONAY YOKSA KAYIT YOK (EK2) ──
+        # Hesap yapildi; kullanici istemediyse yalnizca BILGI olarak
+        # donuyoruz. Ekstrede gostermek serbest, cari hesaba islemek
+        # onay ister — ikisi ayri seydir.
+        # Degisken adi `fark` (fark_try DEGIL) — ilk surumde yanlis
+        # ad kullanilmis ve NameError uretmisti; gercek uc noktayla
+        # test ederken yakalandi.
+        if not islet:
+            return {'islendi': False, 'tutar': q3(abs(fark)),
+                    'islem_tip': kf_islem,
+                    'mesaj': f'{q3(abs(fark))} TRY kur farkı hesaplandı '
+                             f'(kayıt OLUŞTURULMADI — işlemek için '
+                             f'"kur farkı işlet" seçeneğini kullanın)'}
+
         kf_hareket = CariHareket(
             id=_yeni_id('HR'),
             hareket_tarihi=yeni_hareket.hareket_tarihi or date.today(),
@@ -8525,17 +8551,29 @@ def create_app():
         # ÇOK DÖVİZLİ: tahsilat/odeme ise otomatik kur farki hesabi
         kur_farki = None
         if islem_tip in tahsilat_odeme_tipleri:
-            kur_farki = _kur_farki_hesapla_ve_olustur(hareket)
+            kur_farki = _kur_farki_hesapla_ve_olustur(
+                hareket, islet=bool((request.json or {}).get('kur_farki_islet')))
 
         db.session.commit()
 
         msg = 'Cari hareket eklendi' + kasa_notu
         if fatura_id:
             msg += f', Fatura {fatura_id} ({fatura_yon}) otomatik olusturuldu (durumu Kesildi)'
-        if kur_farki:
-            msg += f', otomatik kur farki kaydedildi ({kur_farki.islem_tip}: {kur_farki.borc + kur_farki.alacak:,.2f} TRY)'
+        # EK2: onaysiz durumda SOZLUK doner (kayit olusmadi),
+        # onayli durumda CariHareket NESNESI doner.
+        _kf_bilgi = None
+        if isinstance(kur_farki, dict):
+            # Kayit OLUSMADI — yalnizca bilgi.
+            _kf_bilgi = kur_farki
+            msg += f", {kur_farki.get('mesaj', '')}"
+        elif kur_farki:
+            msg += (f', kur farki kaydedildi ({kur_farki.islem_tip}: '
+                    f'{kur_farki.borc + kur_farki.alacak:,.2f} TRY)')
         return jsonify({'ok': True, 'id': hareket.id, 'fatura_id': fatura_id,
-                       'kur_farki_id': kur_farki.id if kur_farki else None,
+                       'kur_farki_id': (kur_farki.id
+                                        if kur_farki and not isinstance(kur_farki, dict)
+                                        else None),
+                       'kur_farki_bilgi': _kf_bilgi,
                        'mesaj': msg})
 
     @app.route('/api/cari/hareket/<hareket_id>', methods=['PUT'])
@@ -14210,6 +14248,15 @@ def create_app():
         toplam_borc_try = 0
         toplam_alacak_try = 0
         kumulatif_try = 0
+        # Hedef dovizde biriken kumulatif (EK1). TRY kumulatifi
+        # toplamlar icin ayrica tutulmaya devam ediyor.
+        #
+        # _tek_doviz_hedef: TUM hareketler hedef dovizde mi? Oyleyse
+        # hicbir kur uygulanmaz ve 'islem' ile 'guncel' AYNI sonucu
+        # verir. Hareket yoksa True kalir; bos ekstre zaten 0 gosterir.
+        _kumulatif_hedef = 0.0
+        _ham_borc = _ham_alacak = 0.0
+        _tek_doviz_hedef = True
         for h in hareketler:
             # Borc TRY karsiligi
             if h.borc_try is not None:
@@ -14230,16 +14277,54 @@ def create_app():
             # YAMA E2: 'islem' kipinde hareketin KENDI gunundeki kur,
             # 'guncel' kipinde BUGUNKU kur. Ikisi de asagidaki
             # toplamlarla AYNI esasi kullanir.
-            if hedef_doviz == 'TRY':
-                h.bakiye = kumulatif_try
-                # 'islem' kipinde her hareketin kendi dovizindeki
-                # katkisini da biriktir (asagida toplam icin)
+            # ── KENDİ DÖVİZİ KÖPRÜYE GİRMEZ (EK1) ──
+            #
+            # Onceden TUM hareketler TRY'ye kopruluyor, sonra hedef
+            # dovize geri ceviriliyordu — hareket ZATEN hedef dovizde
+            # olsa bile. Olculdu: 10.000 USD'lik hareket, USD
+            # ekstrede 'guncel' kipinde 8.547 USD gorunuyordu
+            # (400.000 TRY / 46,8).
+            #
+            # 1 USD her zaman 1 USD'dir; kur cevrimi yalnizca FARKLI
+            # dovizler arasinda anlamlidir. Kumulatif artik HEDEF
+            # DOVIZDE birikiyor:
+            #   · ayni doviz  -> HAM tutar, kur yok
+            #   · farkli doviz-> TRY koprusuyle, secilen kur esasiyla
+            _h_dv = (h.doviz or 'TRY').upper()
+            if _h_dv == hedef_doviz:
+                _katki = float(h.borc or 0) - float(h.alacak or 0)
+            elif hedef_doviz == 'TRY':
+                _katki = float(b_try) - float(a_try)
             else:
                 if kur_modu == 'guncel':
-                    _b_kur = _kur_getir(hedef_doviz, date.today()) or 1
+                    _b_kur = _kur_getir(hedef_doviz, date.today()) or 0
                 else:
-                    _b_kur = _kur_getir(hedef_doviz, h.hareket_tarihi) or 1
-                h.bakiye = kumulatif_try / _b_kur if _b_kur else 0
+                    _b_kur = _kur_getir(hedef_doviz, h.hareket_tarihi) or 0
+                # Kur bulunamazsa 0'a BOLMEK yerine katkiyi atla;
+                # sessizce sifirlamak yanlis bakiye uretirdi.
+                _katki = ((float(b_try) - float(a_try)) / _b_kur
+                          if _b_kur > 0 else 0.0)
+            _kumulatif_hedef += _katki
+            h.bakiye = _kumulatif_hedef
+
+            # TOPLAMLAR da bakiye sutunuyla AYNI esasi kullanmali.
+            # Ilk surumde toplamlar eski koprulu yola dusuyordu ve
+            # KARISIK dovizli ekstrede USD hareketi yine bozuluyordu
+            # (10.000 -> 8.547). Olculdu ve duzeltildi.
+            if _h_dv == hedef_doviz:
+                _ham_borc += float(h.borc or 0)
+                _ham_alacak += float(h.alacak or 0)
+            else:
+                _tek_doviz_hedef = False
+                if hedef_doviz == 'TRY':
+                    _ham_borc += float(b_try)
+                    _ham_alacak += float(a_try)
+                else:
+                    _k = (_kur_getir(hedef_doviz, date.today()) if kur_modu == 'guncel'
+                          else _kur_getir(hedef_doviz, h.hareket_tarihi)) or 0
+                    if _k > 0:
+                        _ham_borc += float(b_try) / _k
+                        _ham_alacak += float(a_try) / _k
             # Son satirin bakiyesi = net bakiye (tutarlilik icin saklanir)
             _son_bakiye = h.bakiye
 
@@ -14248,25 +14333,17 @@ def create_app():
             toplam_borc = toplam_borc_try
             toplam_alacak = toplam_alacak_try
             net_bakiye = toplam_borc_try - toplam_alacak_try
-        elif kur_modu == 'guncel':
-            son_kur = _kur_getir(hedef_doviz, date.today()) or 1
-            toplam_borc = toplam_borc_try / son_kur if son_kur else 0
-            toplam_alacak = toplam_alacak_try / son_kur if son_kur else 0
-            net_bakiye = (toplam_borc_try - toplam_alacak_try) / son_kur if son_kur else 0
         else:
-            # 'islem' kipi: her hareket kendi gunundeki kurla cevrilip
-            # toplanir. Boylece toplam, ham tutarlarin toplamiyla AYNI
-            # cikar ve bakiye sutununun son satiriyla TUTAR.
-            toplam_borc = toplam_alacak = 0.0
-            for h in hareketler:
-                _k = _kur_getir(hedef_doviz, h.hareket_tarihi) or 1
-                if not _k:
-                    continue
-                _bt = h.borc_try if h.borc_try is not None else 0
-                _at = h.alacak_try if h.alacak_try is not None else 0
-                toplam_borc += _bt / _k
-                toplam_alacak += _at / _k
-            net_bakiye = toplam_borc - toplam_alacak
+            # TOPLAMLAR BAKIYE SUTUNUYLA AYNI ESASTA (EK1).
+            # Dongude hedef doviz cinsinden biriktirildi:
+            #   · ayni doviz  -> HAM tutar, kur YOK
+            #   · farkli doviz-> TRY koprusuyle, secilen kur esasiyla
+            # Boylece tek dovizli ekstrede 'islem' ve 'guncel' AYNI
+            # sonucu verir; karisik dovizde yalnizca YABANCI hareket
+            # cevrilir, kendi dovizindeki bozulmaz.
+            toplam_borc = _ham_borc
+            toplam_alacak = _ham_alacak
+            net_bakiye = _ham_borc - _ham_alacak
 
         return render_template('ekstre_print.html', cari=cari, hareketler=hareketler, baslik='Cari Ekstre', bugun=date.today(),
                                firma_adi='Milestone Mermer', toplam_borc=toplam_borc, toplam_alacak=toplam_alacak,
@@ -17985,7 +18062,8 @@ def create_app():
         db.session.flush()
         # ÇOK DÖVİZLİ: otomatik kur farkı eşleştirmesi (çapraz döviz dahil —
         # hareket faturaya bağlı olduğundan faturanın açılış borcunu hedefler)
-        kur_farki = _kur_farki_hesapla_ve_olustur(hareket)
+        kur_farki = _kur_farki_hesapla_ve_olustur(
+                hareket, islet=bool((request.json or {}).get('kur_farki_islet')))
         # Fatura durumunu güncelle (kismi/tam — eşdeğer toplam üzerinden)
         _fatura_tahsilat_durumu(fatura_id)
         _log_audit('EKLE', 'tahsilat', fatura_id,

@@ -901,6 +901,61 @@ async function cariUrlIleAc() {
 }
 document.addEventListener('DOMContentLoaded', cariUrlIleAc);
 
+/* ── BAKİYE KUTULARI ──
+   /api/cari/<id>/bakiye ucu `borc/alacak/net` alanlarını TRY
+   KARŞILIĞI olarak döndürür (CB1); ham döviz tutarları
+   `dovizler` altındadır.
+
+   Eskiden bu alanlar `para()` ile — yani $ sembolüyle —
+   basılıyordu. Sonuç: 6.535,602 USD'lik bir fatura ekranda
+   "305.866 $" görünüyordu (TRY karşılığı, dolar etiketiyle).
+   Hesap doğruydu, BİRİM YANLIŞTI.
+
+   Artık her döviz KENDİ birimiyle, TRY karşılığı ayrıca
+   gösteriliyor. Tek sayıya indirgemek kur riskini gizler —
+   nakit akışında da aynı sebeple dövizleri ayrı tutuyoruz. */
+function bakiyeParaBirim(v, dv) {
+  const n = Number(v) || 0;
+  const s = n.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return s + ' ' + (dv === 'TRY' ? '₺' : dv === 'USD' ? '$' : dv === 'EUR' ? '€' : dv);
+}
+
+function bakiyeKutulari(bakiye, c) {
+  const dovizler = bakiye.dovizler || {};
+  const kodlar = Object.keys(dovizler).sort();
+  if (!kodlar.length) {
+    return `<div class="alan"><label>Bakiye</label>
+      <div class="mono" style="color:var(--soluk)">hareket yok</div></div>`;
+  }
+  let h = kodlar.map(dv => {
+    const k = dovizler[dv];
+    const net = Number(k.net) || 0;
+    return `
+    <div class="alan"><label>${dv} — Borç / Alacak</label>
+      <div class="mono" style="font-size:.86rem">
+        <span style="color:var(--kirmizi)">${bakiyeParaBirim(k.borc, dv)}</span>
+        &nbsp;/&nbsp;
+        <span style="color:var(--verde)">${bakiyeParaBirim(k.alacak, dv)}</span>
+      </div>
+      <div class="mono" style="font-weight:700;margin-top:3px;
+           color:${net < 0 ? 'var(--kirmizi)' : 'var(--murekkep)'}">
+        net ${bakiyeParaBirim(net, dv)}
+        <span style="font-weight:400;color:var(--soluk);font-size:.76rem">
+          ${net > 0 ? '(bizden alacaklı değil — o borçlu)' : net < 0 ? '(biz borçluyuz)' : ''}</span>
+      </div>
+    </div>`;
+  }).join('');
+  /* TRY karşılığı yalnızca BİRDEN FAZLA döviz varsa anlamlı;
+     tek dövizde aynı sayıyı iki kez göstermek kafa karıştırır. */
+  if (kodlar.length > 1) {
+    h += `<div class="alan"><label>Toplam (TRY karşılığı)</label>
+      <div class="mono" style="font-weight:700">${bakiyeParaBirim(bakiye.net, 'TRY')}</div>
+      <div style="color:var(--soluk);font-size:.74rem;margin-top:2px">
+        işlem günü kurlarıyla</div></div>`;
+  }
+  return h;
+}
+
 async function detayAc(id) {
   const c = TUM.find(x => x.id === id);
   if (!c) return;
@@ -920,9 +975,7 @@ async function detayAc(id) {
   const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
   const govde = `
     <div class="alan-grid">
-      <div class="alan"><label>Toplam Borç</label><div class="mono" style="color:var(--kirmizi)">${para(bakiye.borc)}</div></div>
-      <div class="alan"><label>Toplam Alacak</label><div class="mono" style="color:var(--verde)">${para(bakiye.alacak)}</div></div>
-      <div class="alan"><label>Net Bakiye</label><div class="mono" style="font-weight:700">${para(bakiye.net)}</div></div>
+      ${bakiyeKutulari(bakiye, c)}
       ${alan('Vadesi Geçen', bk.gecen > 1
         ? `<span style="color:var(--kirmizi);font-weight:600">${para(bk.gecen)}</span>` : '—')}
       ${alan('Ülke', c.ulke ? kacar(ulkeAdi(c.ulke)) + ' <span class="mono" style="color:var(--soluk)">(' + kacar(c.ulke) + ')</span>' : '—')}

@@ -1460,6 +1460,15 @@ function topluOnizle() {
       else kayit[kod] = String(al(kod) ?? '').trim();
     });
 
+    /* ADET EŞLEŞTİRİLMEMİŞSE 1 SAYILIR.
+       Sütun haritada yoksa al('adet') boş döner, sayi('') = 0 ve
+       önizlemede "0 adet" görünüyordu. Kaydetme tarafı zaten
+       `Math.max(1, ...)` ile 1'e düzeltiyordu — yani kayıt doğru,
+       ÖNİZLEME yanlıştı. İki yerin farklı sayı göstermesi, en kötü
+       hata biçimi: kullanıcı yanlış olanı doğru sanıyor.
+       Her plaka, aksi belirtilmedikçe 1 adettir. */
+    if (!('adet' in harita) || !(kayit.adet > 0)) kayit.adet = 1;
+
     /* Boşsa üstteki satırın değerini al; doluysa hatırla. */
     let buSatirDolduruldu = false;
     DOLDURULACAK.forEach(kod => {
@@ -1726,6 +1735,22 @@ async function topluKaydet() {
   TIP = tip; SAYFA = 1;
   document.querySelectorAll('#tipSecim button').forEach(x => x.classList.toggle('aktif', x.dataset.tip === tip));
   await Promise.all([listeyiCiz(), kpiYukle()]);
+
+  /* BAŞARIYLA BİTTİYSE FORMU KAPAT.
+     Form açık kalınca kullanıcı "aktarım oldu mu olmadı mı" diye
+     tereddüt ediyordu. Liste arkada zaten tazelendi; kapatınca
+     sonucu doğrudan görüyor.
+
+     HATALI SATIR VARSA AÇIK KALIR — hata listesi penceredeki
+     sonuç kutusunda; kapatmak onu okunmadan yok etmek olurdu. */
+  if (!hatali && basarili) {
+    setTimeout(() => {
+      topluKapat();
+      bildir(`${basarili} kayıt içe aktarıldı` +
+             (cari && faturaDurum !== 'faturasiz'
+              ? ` · "${cari}" carisine alış borcu işlendi` : ''));
+    }, 900);
+  }
 }
 
 /* ═══ FATURALANDIRMA / MAL TESLİM / DÜZENLE / SİL ═══
