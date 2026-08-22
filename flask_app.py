@@ -4635,7 +4635,7 @@ def create_app():
         return jsonify({'ok': False, 'mesaj': 'Stok bulunamadı'}), 404
 
     @app.route('/api/stok/<tip>/<stok_id>', methods=['DELETE'])
-    def api_stok_sil(tip, stok_id):
+    def api_stok_sil(tip, stok_id, mali_islem=None, kk_biriktir=None):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if tip == 'BLOK': stok = BlokStok.query.get(stok_id)
         elif tip == 'PLAKA': stok = PlakaStok.query.get(stok_id)
@@ -4703,8 +4703,44 @@ def create_app():
         # cikarsa tedarikciye borcunuz gercekten azalir.
         _pay = q3((getattr(stok, 'matrah', 0) or 0) + (getattr(stok, 'kdv_tutar', 0) or 0))
         _fno = (getattr(stok, 'fatura_no', '') or '').strip()
-        _grup = CariHareket.query.filter_by(
-            baglanti_tip='stok_fatura', baglanti_id=_fno).first() if _fno else None
+        # ── CARİ DE EŞLEŞMELİ (SF2) ──
+        # Onceden yalnizca fatura numarasi araniyordu. "Beklenen
+        # Fatura 1" gibi YER TUTUCU numaralar birden cok tedarikcide
+        # kullanildigi icin `.first()` YANLIS CARIYI seciyordu.
+        #
+        # Uretimde olculdu: LUCENTE'ye ait plaka silindi, karsi
+        # kayitlar ANKA carisine dustu.
+        _grup = None
+        if _fno:
+            _uret = (getattr(stok, 'uretici', '') or '').strip()
+            _aday = CariHareket.query.filter_by(
+                baglanti_tip='stok_fatura', baglanti_id=_fno).all()
+            if len(_aday) == 1 and not _uret:
+                # Tek aday ve tedarikci bilgisi yok — belirsizlik yok.
+                _grup = _aday[0]
+            elif _uret:
+                # Tedarikci ADIYLA eslestir. Stok tablosunda cari_id
+                # YOK; elimizdeki tek bag bu. Eslesme bulunamazsa
+                # MALI ISLEM YAPILMAZ — yanlis cariye yazmaktansa
+                # hic yazmamak yeglenir.
+                _ust = _uret.upper()
+                for _a in _aday:
+                    if (_a.cari_unvan or '').strip().upper() == _ust:
+                        _grup = _a
+                        break
+                if _grup is None:
+                    _c = Cari.query.filter(
+                        func.upper(Cari.unvan) == _ust).first()
+                    if _c:
+                        for _a in _aday:
+                            if _a.cari_id == _c.id:
+                                _grup = _a
+                                break
+            if _grup is None and len(_aday) > 1:
+                app.logger.warning(
+                    f'[SF2] {stok_id}: "{_fno}" için {len(_aday)} aday hareket '
+                    f'var, üretici "{_uret}" ile eşleşen yok — mali işlem '
+                    f'YAPILMADI.')
 
         # ══════════════════════════════════════════════════════
         #  MALİ KARAR KULLANICIYA AİT  (SF1)
@@ -4727,8 +4763,18 @@ def create_app():
             'karsi_kayit': 'Karşı kayıt oluşturulsun (orijinal fatura korunur)',
             'sadece_stok': 'Sadece stok düzeltilsin (fatura değişmez)',
         }
-        _mali = ((request.json or {}).get('mali_islem')
-                 if request.is_json else None) or request.args.get('mali_islem')
+        # SF1-CT: `request.json` KULLANILMAZ. api() her istege
+        # Content-Type: application/json koyuyor, govde bos olsa bile;
+        # o durumda request.json Werkzeug'da 400 (HTML) firlatir ve
+        # kendi kodumuz hic calismaz.
+        # SF3: TOPLU silmede her kalem icin ayri istek YOK; secim
+        # parametre olarak gelir. Parametre yoksa (tekli silme)
+        # istekten okunur — tekli davranis degismez.
+        if mali_islem:
+            _mali = mali_islem
+        else:
+            _govde = request.get_json(silent=True) or {}
+            _mali = _govde.get('mali_islem') or request.args.get('mali_islem')
         _mali = (_mali or '').strip().lower() or None
 
         if _grup and not _mali:
@@ -4740,7 +4786,7 @@ def create_app():
                 'mesaj': f'Bu stok {_fno} numaralı alış faturasına bağlı '
                          f'({_pay:,.2f} {_grup.doviz or "TRY"} pay). Faturaya ne '
                          f'yapılacağını seçin — stok düzeltmesi ile mali '
-                         f'düzeltme aynı şey değildir.'}), 400
+                         f'düzeltme aynı şey değildir.'}), 409
 
         if _grup and _mali not in MALI_SECENEKLER:
             return jsonify({
@@ -4756,9 +4802,27 @@ def create_app():
         # Iade/hurda/konsinye icin dogru olan budur — belge ile kayit
         # ayrismaz, stok hareketi ayrica izlenebilir.
         elif _grup and _mali == 'karsi_kayit':
-            _kk_t, _kk_k = _try_karsilik(_pay, _grup.doviz or 'TRY',
-                                         tarih=date.today())
-            db.session.add(CariHareket(
+            # ── TOPLU İŞLEMDE BİRİKTİR (SF4) ──
+            # Toplu silmede her stok icin ayri satir acmak, 21 plaka
+            # silinince ekstreye 21 satir dusuruyor ve gercek
+            # hareketleri boguyordu. Alis faturasi tarafinda zaten
+            # "tek hareket + N kalem" kalibi var; karsi kayitta
+            # farkli davranmanin sebebi yok.
+            #
+            # `kk_biriktir` verilmisse kayit ACILMAZ, cagirana
+            # bildirilir; toplu silme sonunda TEK satir acar.
+            if kk_biriktir is not None:
+                kk_biriktir.append({
+                    'cari_id': _grup.cari_id, 'cari_unvan': _grup.cari_unvan,
+                    'doviz': _grup.doviz or 'TRY', 'fatura_no': _fno,
+                    'pay': _pay, 'stok_id': stok_id})
+                _grup.kalem_sayisi = max(
+                    0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
+                _grup = None
+            else:
+                _kk_t, _kk_k = _try_karsilik(_pay, _grup.doviz or 'TRY',
+                                             tarih=date.today())
+                db.session.add(CariHareket(
                 id=_yeni_id('HR'), hareket_tarihi=date.today(),
                 cari_id=_grup.cari_id, cari_unvan=_grup.cari_unvan,
                 islem_tip='Alis Iade / Duzeltme',
@@ -4768,13 +4832,14 @@ def create_app():
                 vade_tarihi=date.today(),
                 kaynak='stok_karsi_kayit',
                 baglanti_tip='stok_fatura', baglanti_id=_fno,
-                aciklama=f'{_fno} · stok çıkışı karşı kaydı '
-                         f'({getattr(stok, "id", "")})',
-                kullanici=session.get('kullanici')))
-            # Orijinal harekete DOKUNULMAZ; yalnizca kalem sayaci
-            # azalir ki son kalemde grup yanlislikla silinmesin.
-            _grup.kalem_sayisi = max(0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
-            _grup = None
+                    aciklama=f'{_fno} · stok çıkışı karşı kaydı '
+                             f'({getattr(stok, "id", "")})',
+                    kullanici=session.get('kullanici')))
+                # Orijinal harekete DOKUNULMAZ; yalnizca kalem sayaci
+                # azalir ki son kalemde grup yanlislikla silinmesin.
+                _grup.kalem_sayisi = max(
+                    0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
+                _grup = None
 
         if _grup:
             _kalan_kalem = (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1
@@ -4853,9 +4918,19 @@ def create_app():
         silinen, atlanan = [], []
         toplam_maliyet = toplam_ch = 0
 
+        # SF3: mali secim toplu silmede de gecerli. Gelmezse alt
+        # cagri faturaya bagli stoklarda 409 doner ve o kalem
+        # atlanir — tekli silmedeki kuralla ayni.
+        _toplu_mali = ((request.get_json(silent=True) or {}).get('mali_islem')
+                       or request.args.get('mali_islem') or None)
+
+        secim_bekleyen = []
+        # SF4: karsi kayitlar biriktirilir, sonda TEK satir acilir.
+        _kk_havuz = [] if _toplu_mali == 'karsi_kayit' else None
         for sid in idler:
             try:
-                sonuc = api_stok_sil(tip, sid)
+                sonuc = api_stok_sil(tip, sid, mali_islem=_toplu_mali,
+                                     kk_biriktir=_kk_havuz)
                 # Flask view (yanit, durum_kodu) ya da yalnizca yanit doner
                 yanit, kod = (sonuc if isinstance(sonuc, tuple) else (sonuc, 200))
                 govde = yanit.get_json() or {}
@@ -4863,6 +4938,13 @@ def create_app():
                     silinen.append(sid)
                     toplam_maliyet += govde.get('silinen_maliyet') or 0
                     toplam_ch += govde.get('silinen_cari_hareket') or 0
+                elif kod == 409:
+                    # Mali secim gerekiyor — HATA DEGIL, SORU.
+                    # Ayri sayilir ki kullaniciya "secim yapin" denebilsin.
+                    secim_bekleyen.append({
+                        'stok_id': sid, 'fatura_no': govde.get('fatura_no'),
+                        'pay': govde.get('pay'), 'doviz': govde.get('doviz'),
+                        'secenekler': govde.get('secenekler')})
                 else:
                     atlanan.append({'stok_id': sid,
                                     'sebep': govde.get('mesaj') or f'HTTP {kod}'})
@@ -4870,6 +4952,36 @@ def create_app():
                 db.session.rollback()
                 app.logger.warning(f'Toplu stok silme ({sid}): {exc}')
                 atlanan.append({'stok_id': sid, 'sebep': str(exc)[:150]})
+
+        # ── BİRİKTİRİLEN KARŞI KAYITLARI TEK SATIRA TOPLA (SF4) ──
+        # Gruplama anahtari (cari_id, fatura_no, doviz): ayni toplu
+        # islemde FARKLI faturalar varsa her biri AYRI satir olur —
+        # birlestirmek, hangi faturanin ne kadar duzeltildigini
+        # kaybetmek olurdu.
+        if _kk_havuz:
+            _gruplu = {}
+            for _k in _kk_havuz:
+                _a = (_k['cari_id'], _k['fatura_no'], _k['doviz'])
+                _g = _gruplu.setdefault(_a, {'tutar': 0.0, 'adet': 0,
+                                             'unvan': _k['cari_unvan']})
+                _g['tutar'] += float(_k['pay'] or 0)
+                _g['adet'] += 1
+            for (_cid, _fn, _dv), _g in _gruplu.items():
+                _tut = q3(_g['tutar'])
+                _t, _k2 = _try_karsilik(_tut, _dv, tarih=date.today())
+                db.session.add(CariHareket(
+                    id=_yeni_id('HR'), hareket_tarihi=date.today(),
+                    cari_id=_cid, cari_unvan=_g['unvan'],
+                    islem_tip='Alis Iade / Duzeltme',
+                    borc=_tut, alacak=0, doviz=_dv,
+                    borc_try=_t, kur_uygulanan=_k2,
+                    vade_tarihi=date.today(),
+                    kaynak='stok_karsi_kayit',
+                    baglanti_tip='stok_fatura', baglanti_id=_fn,
+                    aciklama=f'{_fn} · stok çıkışı karşı kaydı '
+                             f'· {_g["adet"]} kalem',
+                    kullanici=session.get('kullanici')))
+            _safe_commit(f'Toplu karsi kayit: {len(_gruplu)} satir')
 
         mesaj = f'{len(silinen)} stok silindi'
         _ek = []
@@ -4884,6 +4996,8 @@ def create_app():
 
         return jsonify({'ok': True, 'silinen': len(silinen),
                         'atlanan': len(atlanan), 'atlanan_detay': atlanan,
+                        # SF3: mali secim bekleyenler AYRI — hata degil, soru.
+                        'secim_bekleyen': secim_bekleyen,
                         'silinen_maliyet': toplam_maliyet,
                         'silinen_cari_hareket': toplam_ch, 'mesaj': mesaj})
 

@@ -882,8 +882,24 @@ async function secilenleriSil() {
   if (btn) { btn.disabled = true; btn.textContent = 'Siliniyor…'; }
   try {
     const d = await api('/api/stok/toplu_sil', {
-      method: 'POST', body: JSON.stringify({ tip: TIP, stok_idler: idler })
+      method: 'POST',
+      body: JSON.stringify({ tip: TIP, stok_idler: idler,
+                             mali_islem: TOPLU_MALI || undefined })
     });
+
+    /* MALİ SEÇİM BEKLEYENLER (SF3).
+       Faturaya bağlı stoklar için sunucu seçim istiyor. Bunlar HATA
+       DEĞİL, SORU — ayrı listede gelir. Seçim yapılınca aynı toplu
+       silme, bu kez seçimle tekrarlanır. */
+    if ((d.secim_bekleyen || []).length) {
+      TOPLU_BEKLEYEN = d.secim_bekleyen;
+      topluMaliAc(d.secim_bekleyen, d.silinen || 0);
+      SECILENLER.clear();
+      await Promise.all([listeyiCiz(), kpiYukle()]);
+      secDurumGuncelle();
+      return;
+    }
+    TOPLU_MALI = null;
     bildir(d.mesaj || `${d.silinen} stok silindi`, (d.atlanan || 0) > 0);
     if (d.atlanan_detay && d.atlanan_detay.length) {
       /* Atlananları kullanıcıya GÖSTER — sessizce yutmak, "sildim
@@ -1926,11 +1942,68 @@ async function stokSil(id, tip, no, maliIslem) {
     await Promise.all([listeyiCiz(), kpiYukle()]);
   } catch (e) {
     /* Sunucu faturaya bağlı stokta MALİ SEÇİM istiyor (SF1).
-       api() 400'de hata fırlatıyor; yanıtı okuyup seçim
-       penceresini açıyoruz. */
+       409 kullanılıyor çünkü base.html'deki api() 409'u "çağıran
+       özel ele alacak" sayıp uyarı BASMIYOR. 400 olsaydı kullanıcı
+       karar penceresinden önce kırmızı "istek başarısız" görürdü —
+       oysa bu bir hata değil, bir SORU. */
     const y = (e && e.yanit) || null;
     if (y && y.error === 'mali_islem_gerekli') maliAc(id, tip, no, y);
   }
+}
+
+/* ── TOPLU SİLMEDE MALİ KARAR (SF3) ──
+   Tek tek sormak 20 plakada 20 pencere demek olurdu; seçim BİR KEZ
+   alınır ve tümüne uygulanır. Farklı faturalara ait stoklar aynı
+   anda seçilmişse de kural aynı: kullanıcı ne yapılacağını söyler. */
+let TOPLU_MALI = null, TOPLU_BEKLEYEN = [];
+
+function topluMaliAc(bekleyen, silinenSayi) {
+  const faturalar = [...new Set(bekleyen.map(x => x.fatura_no).filter(Boolean))];
+  const toplam = bekleyen.reduce((t, x) => t + (Number(x.pay) || 0), 0);
+  const dv = (bekleyen[0] && bekleyen[0].doviz) || '';
+  const sec = (bekleyen[0] && bekleyen[0].secenekler) || {};
+  document.getElementById('maliGovde').innerHTML = `
+    <p style="font-size:.88rem;line-height:1.6;margin-bottom:12px">
+      ${silinenSayi ? `<strong>${silinenSayi}</strong> stok silindi. ` : ''}
+      <strong>${bekleyen.length}</strong> stok alış faturasına bağlı
+      (toplam <strong>${toplam.toLocaleString('tr-TR',
+        {minimumFractionDigits:2, maximumFractionDigits:2})} ${kacar(dv)}</strong>${
+      faturalar.length > 1 ? `, ${faturalar.length} farklı fatura` : ''}).
+      Faturaya ne yapılacağını seçin.
+    </p>
+    <div style="font-size:.8rem;color:var(--soluk);line-height:1.55;
+         padding:10px 12px;background:var(--notr-bg);border-radius:8px;margin-bottom:14px">
+      <strong>Stok yanlış girildiyse</strong> fatura doğrudur — "Sadece stok".<br>
+      <strong>İade / hurda / konsinye</strong> ise fatura korunmalı — "Karşı kayıt".<br>
+      <strong>Fatura da yanlışsa</strong> — "Fatura bedeli düzeltilsin".<br>
+      <em>Seçim, bekleyen ${bekleyen.length} stoğun TÜMÜNE uygulanır.</em>
+    </div>
+    ${Object.entries(sec).map(([k, ad]) => `
+      <button class="blok-btn" style="display:block;width:100%;text-align:left;
+              margin-bottom:8px;padding:11px 13px"
+              onclick="topluMaliSec('${k}')">${kacar(ad)}</button>`).join('')}`;
+  document.getElementById('maliModal').classList.add('acik');
+}
+
+async function topluMaliSec(secim) {
+  const idler = TOPLU_BEKLEYEN.map(x => x.stok_id);
+  TOPLU_MALI = secim;
+  maliKapat();
+  try {
+    const d = await api('/api/stok/toplu_sil', {
+      method: 'POST',
+      body: JSON.stringify({ tip: TIP, stok_idler: idler, mali_islem: secim })
+    });
+    bildir(d.mesaj || `${d.silinen} stok silindi`, (d.atlanan || 0) > 0);
+    if (d.atlanan_detay && d.atlanan_detay.length) {
+      alert('SİLİNEMEYENLER:\n\n' + d.atlanan_detay
+        .map(x => `• ${x.stok_id}: ${x.sebep}`).join('\n'));
+    }
+  } catch (e) { /* api() bildiriyor */ }
+  TOPLU_MALI = null; TOPLU_BEKLEYEN = [];
+  SECILENLER.clear();
+  await Promise.all([listeyiCiz(), kpiYukle()]);
+  secDurumGuncelle();
 }
 
 /* ── MALİ KARAR PENCERESİ (SF1) ──
