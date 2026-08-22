@@ -11309,6 +11309,16 @@ def create_app():
                     'fatura_no': s.fatura_no,
                     'tarih': (s.alis_tarihi or s.giris_tarihi)}
 
+        def _maliyet_alis_bedeli(m):
+            """Bagli stogun ALIS BEDELI (matrah). Stok disi
+            baglantilarda None doner — 0 dondurmek "bedava alinmis"
+            gibi gorunurdu."""
+            # Sozluk adi `stok_bilgi_map` — ilk surumde `_stok_bilgi`
+            # yazmistim, oyle bir degisken yok ve uc nokta NameError
+            # ile 500 veriyordu. Gercek uc noktayla test yakaladi.
+            _b = stok_bilgi_map.get(m.baglanti_id) if m.baglanti_id else None
+            return (_b or {}).get('matrah') if _b else None
+
         def _maliyet_stok_tip(m):
             """Maliyetin bagli oldugu stogun GERCEK tipi: BLOK/PLAKA/EBATLI.
 
@@ -11388,6 +11398,10 @@ def create_app():
                 # cins ve cari suzgecleri bos, stok tipi tek secenekliydi.
                 'stok_tip': _maliyet_stok_tip(m),
                 'cins': _maliyet_cins(m),
+                # ML1: ALIS BEDELI (bagli stogun matrahi). Ekrandaki
+                # "Alis Bedeli" suzgeci ve toplam maliyet hesabi
+                # bundan besleniyor. Stok disi baglantilarda None.
+                'alis_bedeli': _maliyet_alis_bedeli(m),
                 'cari_unvan': _maliyet_cari(m),
                 'tutar': m.tutar, 'doviz': m.doviz,
                 'usd_karsilik': m.usd_karsilik,
@@ -19459,13 +19473,40 @@ def create_app():
 
         elif modul == 'maliyet':
             baslik = 'Maliyet Listesi'
-            headers = ['Maliyet No', 'Tarih', 'Tip', 'Bağlantı', 'Kayıt', 'Tutar', 'Döviz', 'USD Karşılık', 'Fatura No']
-            sayisal = [5, 7]
+            # ALIS BEDELI maliyet kaydinda DEGIL, bagli STOKTA
+            # (`matrah`). Disa aktarima eklenmesi istendi.
+            headers = ['Maliyet No', 'Tarih', 'Tip', 'Bağlantı', 'Kayıt',
+                       'Alış Bedeli', 'Tutar', 'Döviz', 'USD Karşılık',
+                       'Fatura No']
+            sayisal = [5, 6, 8]
             q = Maliyet.query.filter(Maliyet.aktif == True).order_by(Maliyet.maliyet_tarihi.desc()).all()
+
+            # STOK MATRAHLARI TEK SORGUDA.
+            # Satir basina sorgu atmak 500 maliyet kaydinda sayfayi
+            # kilitlerdi; bu projede ayni tuzagi CRM listesinde de
+            # gormustuk.
+            _ids = {(m.baglanti_tip or '').upper(): set() for m in q}
             for m in q:
+                if m.baglanti_id:
+                    _ids.setdefault((m.baglanti_tip or '').upper(), set()).add(
+                        m.baglanti_id)
+            _matrah = {}
+            for _tip, _M in (('BLOK', BlokStok), ('PLAKA', PlakaStok),
+                             ('EBATLI', EbatliStok)):
+                _kume = _ids.get(_tip) or set()
+                if not _kume:
+                    continue
+                for _s in _M.query.filter(_M.id.in_(list(_kume))).all():
+                    _matrah[(_tip, _s.id)] = _s.matrah or 0
+
+            for m in q:
+                _ab = _matrah.get(((m.baglanti_tip or '').upper(),
+                                   m.baglanti_id))
                 rows.append([m.id, _tarih(m.maliyet_tarihi), m.maliyet_tip or '',
                              m.baglanti_tip or '', m.baglanti_id or '',
-                             _f(m.tutar, True), m.doviz or '', _f(m.usd_karsilik, True),
+                             _f(_ab, True) if _ab else '',
+                             _f(m.tutar, True), m.doviz or '',
+                             _f(m.usd_karsilik, True),
                              m.fatura_no or ''])
             dosya = 'maliyet_listesi'
 

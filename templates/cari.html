@@ -350,6 +350,23 @@
         <div style="font-size:.72rem;color:var(--soluk);margin-top:4px">Tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur.
         <strong>Zorunludur</strong> — para takip etmediğiniz bir hesaba geliyorsa önce o hesabı kasa olarak tanımlayın.</div>
       </div>
+      <!-- KUR FARKI: hesaplamak ile CARİYE İŞLEMEK ayrı şeylerdir.
+           Varsayılan KAPALI — bir muhasebe kaydını sessizce
+           oluşturmak, oluşturmamaktan daha zararlıdır. -->
+      <div class="form-alan" id="hKurFarkiAlan" style="margin-bottom:12px;display:none">
+        <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;
+               font-weight:400;text-transform:none;letter-spacing:0;font-size:.88rem">
+          <input type="checkbox" id="hKurFarkiIslet" style="margin-top:3px">
+          <span>
+            <strong>Kur farkını cari hesaba işle</strong>
+            <span id="hKurFarkiTutar" style="color:var(--soluk)"></span>
+            <span style="display:block;font-size:.74rem;color:var(--soluk);margin-top:3px">
+              İşaretlemezseniz kur farkı yalnızca <strong>hesaplanır ve bildirilir</strong>;
+              cari hesaba kayıt düşmez.
+            </span>
+          </span>
+        </label>
+      </div>
       <div class="form-alan" id="hSiparisAlan" style="margin-bottom:12px"><label>Sipariş (opsiyonel)</label>
         <select id="hSiparisSec"><option value="">— sipariş bağlama —</option></select>
       </div>
@@ -774,7 +791,27 @@ function belgeTarihiVarsayilan() {
 
 /* ═══ SÖZLEŞME KURU (SK1) ═══
    TRY işlemlerde anlamsız olduğu için gizlenir. */
+/* Kur farkı kutucuğu YALNIZCA tahsilat/ödemede anlamlıdır:
+   kur farkı ancak bir borç/alacak KAPANIRKEN doğar. Fatura
+   girişinde göstermek, olmayan bir seçenek sunmak olurdu. */
+function kurFarkiAlaniGoster() {
+  const alan = document.getElementById('hKurFarkiAlan');
+  if (!alan) return;
+  /* Alan adı 'hIslem' — ilk sürümde 'hIslemTip' yazmıştım, öyle bir
+     alan yok ve kutucuk hiç görünmüyordu. */
+  const tip = (document.getElementById('hIslem') || {}).value || '';
+  const dov = (document.getElementById('hDoviz') || {}).value || '';
+  const uygun = ['Tahsilat', 'Ödeme', 'Odeme'].some(x => tip.includes(x));
+  /* TRY hareketlerde kur farkı doğmaz — 1 TL her zaman 1 TL. */
+  alan.style.display = (uygun && dov && dov !== 'TRY') ? '' : 'none';
+  if (alan.style.display === 'none') {
+    const k = document.getElementById('hKurFarkiIslet');
+    if (k) k.checked = false;
+  }
+}
+
 function kurAlaniGoster() {
+  kurFarkiAlaniGoster();
   const dov = (document.getElementById('hDoviz') || {}).value;
   const alan = document.getElementById('hKurAlan');
   if (!alan) return;
@@ -1554,6 +1591,10 @@ function kdvOnizle() {
 }
 
 function hareketTipiDegisti() {
+  /* Kur farkı kutucuğu işlem tipine bağlı — tip değişince
+     yeniden değerlendirilmeli, yoksa fatura seçilip tahsilata
+     dönüldüğünde kutucuk gizli kalırdı. */
+  kurFarkiAlaniGoster();
   const tip = document.getElementById('hIslem').value;
   const transfer = tip === 'Bakiye Transfer';
   document.getElementById('hTransferAlan').style.display = transfer ? '' : 'none';
@@ -1748,8 +1789,19 @@ async function hareketKaydet() {
   }
 
   try {
+    /* Kullanıcı AÇIKÇA işaretlediyse kur farkı cari hesaba işlenir.
+       İşaretlemezse sunucu hesaplar, bildirir ama KAYIT AÇMAZ. */
+    const kfKutu = document.getElementById('hKurFarkiIslet');
+    if (kfKutu && kfKutu.checked) govde.kur_farki_islet = true;
+
     const d = await api('/api/cari/hareket', { method: 'POST', body: JSON.stringify(govde) });
     bildir(d.mesaj || 'Hareket kaydedildi · ' + para(tutar, govde.doviz));
+
+    /* Kur farkı hesaplandı ama İŞLENMEDİ — kullanıcıya söyle.
+       Sessiz geçmek, "kur farkı yok sandım" durumuna yol açar. */
+    if (d.kur_farki_bilgi && d.kur_farki_bilgi.tutar) {
+      setTimeout(() => bildir(d.kur_farki_bilgi.mesaj, true), 1200);
+    }
     hareketKapat();
     await yukle();
   } catch (e) { /* */ }
