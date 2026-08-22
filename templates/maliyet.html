@@ -94,10 +94,10 @@
        gorunuyorlardi. KDV izleme yaparken tam bu kayitlara bakiliyor. -->
   <button class="cip" data-t="KDV">KDV</button>
   <button class="cip" data-t="Diğer">Diğer</button>
-  <!-- ML1: alış bedeli olan/olmayan ayrımı. Alış bedeli maliyet
-       kaydında değil BAĞLI STOKTA durur; stok dışı bağlantılarda
-       (genel gider vb.) hiç yoktur. -->
-  <button class="cip" data-ab="var">Alış Bedeli Olanlar</button>
+  <!-- ML1: sistem her stok icin sanal bir 'Alış Bedeli' satiri
+       uretiyor (maliyet_tip='Alış Bedeli'). Digerleri gibi
+       DUZ TIP filtresi — ayri bir mekanizmaya gerek yok. -->
+  <button class="cip" data-t="Alış Bedeli">Alış Bedeli</button>
   <div class="suz"><input id="ara" placeholder="Fatura no, açıklama ara…" autocomplete="off"></div>
 </div>
 
@@ -125,11 +125,6 @@
 .msuz:focus{outline:2px solid var(--verde);outline-offset:1px}
 .msuz.dolu{border-color:var(--verde);background:var(--verde-acik);font-weight:600}
 </style>
-<!-- ML1: ürün bazında toplam maliyet özeti. Liste ÜSTÜNDE
-     duruyor çünkü kullanıcı "bu ürün bana kaça mal oldu"
-     sorusuna kalemleri taramadan cevap arıyor. -->
-<div id="mOzet"></div>
-
 <div class="tablo-kutu">
   <table>
     <thead><tr><th>Tip</th><th>Bağlantı</th><th>Fatura No</th><th class="sag">Tutar</th><th class="sag">Tarih</th></tr></thead>
@@ -392,73 +387,6 @@ function mSuzBilgiGuncelle(toplam, gosterilen) {
   }
 }
 
-let AB_SUZ = '';
-
-function ozetCiz(liste) {
-  const kutu = document.getElementById('mOzet');
-  if (!kutu) return;
-  /* Ürün = bağlı stok. Stok dışı maliyetler (genel gider) ürün
-     bazına dağıtılamaz; ayrı sayılır. */
-  const urun = {};
-  let stokDisi = 0, stokDisiDoviz = '';
-  for (const m of liste) {
-    const anahtar = m.baglanti_id;
-    const dv = m.doviz || 'USD';
-    if (!anahtar || !m.stok_tip) {
-      stokDisi += Number(m.usd_karsilik) || 0; stokDisiDoviz = 'USD';
-      continue;
-    }
-    const u = urun[anahtar] || (urun[anahtar] = {
-      no: m.baglanti_no || anahtar, cins: m.cins || '',
-      tip: m.stok_tip, alis: Number(m.alis_bedeli) || 0,
-      ek: 0, doviz: dv, adet: 0 });
-    u.ek += Number(m.usd_karsilik) || 0;
-    u.adet += 1;
-  }
-  const satirlar = Object.values(urun);
-  if (!satirlar.length && !stokDisi) { kutu.innerHTML = ''; return; }
-  satirlar.sort((a, b) => (b.alis + b.ek) - (a.alis + a.ek));
-
-  const p = v => (Number(v) || 0).toLocaleString('tr-TR',
-    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  kutu.innerHTML = `
-    <div style="font-size:.72rem;font-weight:700;letter-spacing:.05em;
-         text-transform:uppercase;color:var(--soluk);margin:14px 0 6px">
-      Ürün bazında toplam maliyet · ${satirlar.length} ürün
-    </div>
-    <div style="border:1px solid var(--cizgi);border-radius:var(--r-kucuk);overflow:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:.84rem">
-        <thead><tr>
-          ${['Ürün','Cins','Alış Bedeli','Ek Maliyet','TOPLAM','Kalem']
-            .map((h, i) => `<th style="text-align:${i > 1 && i < 5 ? 'right' : 'left'};
-                 padding:7px 10px;font-size:.7rem;text-transform:uppercase;
-                 color:var(--soluk);border-bottom:1px solid var(--cizgi)">${h}</th>`).join('')}
-        </tr></thead>
-        <tbody>
-          ${satirlar.slice(0, 40).map(u => `
-            <tr>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--cizgi)">${kacar(u.no)}</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--cizgi);
-                  color:var(--soluk)">${kacar(u.cins)}</td>
-              <td style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--cizgi);
-                  font-variant-numeric:tabular-nums">${u.alis ? p(u.alis) + ' $' : '—'}</td>
-              <td style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--cizgi);
-                  font-variant-numeric:tabular-nums">${p(u.ek)} $</td>
-              <td style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--cizgi);
-                  font-weight:700;font-variant-numeric:tabular-nums">${p(u.alis + u.ek)} $</td>
-              <td style="padding:6px 10px;border-bottom:1px solid var(--cizgi);
-                  color:var(--soluk)">${u.adet}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>
-    ${satirlar.length > 40 ? `<div style="font-size:.74rem;color:var(--soluk);
-        margin-top:5px">İlk 40 ürün gösteriliyor — süzgeçle daraltın.</div>` : ''}
-    ${stokDisi ? `<div style="font-size:.78rem;color:var(--soluk);margin-top:6px">
-        Ürüne bağlanamayan maliyet: <strong>${p(stokDisi)} $</strong>
-        (genel gider — ürün bazına dağıtılmadı)</div>` : ''}`;
-}
 
 function ciz() {
   mSecenekleriDoldur(TUM);   // M1: seçenekleri tazele
@@ -470,21 +398,10 @@ function ciz() {
     (!M_STOKTIP || (m.stok_tip || '') === M_STOKTIP) &&
     (!M_CINS    || (m.cins || '') === M_CINS) &&
     (!M_CARI    || (m.cari_unvan || m.cari_id || '') === M_CARI) &&
-    (!AB_SUZ || (Number(m.alis_bedeli) || 0) > 0) &&
     (!s || [m.fatura_no, m.aciklama, m.baglanti_no, m.baglanti_id, m.maliyet_tip].filter(Boolean)
             .join(' ').toLocaleLowerCase('tr').includes(s)));
   liste.sort((a, b) => (b.maliyet_tarihi || '').localeCompare(a.maliyet_tarihi || ''));
 
-  /* ── ÜRÜN BAZINDA TOPLAM MALİYET (ML1) ──
-     TOPLAM MALİYET ≠ maliyetlerin toplamı. Bir ürünün gerçek
-     maliyeti ALIŞ BEDELİ + üzerine eklenenler (nakliye, gümrük,
-     işleme...). Yalnızca maliyet kalemlerini toplamak, malı
-     "bedava alınmış" gibi gösterirdi.
-
-     Birim maliyet miktara bölünür; miktar birimi ürüne göre
-     değiştiği için (m², m³, ton) birim de yazılır — çıplak sayı
-     yanıltıcı olurdu. */
-  ozetCiz(liste);
 
 
   const RENK = { 'Nakliye':'--mavi', 'Gümrük':'--kehribar', 'Kesim':'--verde', 'Komisyon':'--cizgi-koyu' };
@@ -641,12 +558,7 @@ async function maliyetKaydet() {
 
 document.querySelectorAll('.cip').forEach(b => b.onclick = () => {
   document.querySelectorAll('.cip').forEach(x => x.classList.remove('aktif'));
-  b.classList.add('aktif');
-  /* ML1: "Alış Bedeli Olanlar" tip filtresi DEĞİL, ayrı bir süzgeç.
-     data-t yoksa tip sıfırlanır ve alış bedeli süzgeci açılır. */
-  if (b.dataset.ab) { TIP = ''; AB_SUZ = b.dataset.ab; }
-  else { TIP = b.dataset.t; AB_SUZ = ''; }
-  ciz();
+  b.classList.add('aktif'); TIP = b.dataset.t; ciz();
 });
 let araZaman;
 document.getElementById('ara').addEventListener('input', e => {
