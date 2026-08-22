@@ -532,6 +532,11 @@ function sifreGorunurlukDegistir(alanId, btn) {
    Listeler : /api/ayarlar/lookup?kategori= (GET/POST), /<id> (PUT/DELETE)
    NOT: lookup POST/PUT/DELETE yalnızca ADMIN rolüne açıktır (backend kuralı). */
 
+/* Alt işlev listesi SUNUCUDAN gelir (flask_app: ALT_YETKILER).
+   Burada ikinci kez yazmak paralel gerçek olurdu — sunucuya alt
+   işlev eklenir, ekran bilmez. */
+const ALT_YETKILER = {{ (alt_yetkiler | default({})) | tojson }};
+
 const MODULLER = [
   ['dashboard','Bugün'], ['stok','Stok'], ['siparis','Siparişler'], ['rezervasyon','Rezervasyonlar'],
   ['kesim','Kesim'], ['maliyet','Maliyetler'], ['proforma','Proforma'], ['fatura','Faturalar'],
@@ -663,21 +668,56 @@ function rolDegisti() {
   document.getElementById('yetkiKutu').style.display = admin ? 'none' : '';
 }
 
+let ACIK_MODUL = {};
+function altAc(k) { ACIK_MODUL[k] = !ACIK_MODUL[k]; yetkiCiz(); }
+
+function yetkiDugmeleri(anahtar, mevcut, miras) {
+  return ['gizli', 'okuma', 'yazma'].map(y => `
+    <button class="${mevcut === y ? 'aktif' : ''}" data-y="${y}"
+            onclick="yetkiSec('${anahtar}','${y}')">
+      ${y === 'gizli' ? 'Gizli' : y === 'okuma' ? 'Okuma' : 'Yazma'}
+    </button>`).join('')
+    + (miras ? `<button onclick="yetkiSil('${anahtar}')"
+         title="Modül seviyesini miras al" style="opacity:.7">Miras</button>` : '');
+}
+
 function yetkiCiz() {
   document.getElementById('yetkiGovde').innerHTML = MODULLER.map(([k, ad]) => {
     const mevcut = YETKILER[k] || 'gizli';
-    return `
+    const altlar = ALT_YETKILER[k] || [];
+    const ozel = altlar.filter(([a]) => YETKILER[a] !== undefined).length;
+    let h = `
     <tr>
-      <td>${ad} <span style="color:var(--soluk);font-family:var(--mono);font-size:.75rem">${k}</span></td>
       <td>
-        <div class="yetki-sec">
-          ${['gizli', 'okuma', 'yazma'].map(y => `
-            <button class="${mevcut === y ? 'aktif' : ''}" data-y="${y}" onclick="yetkiSec('${k}','${y}')">
-              ${y === 'gizli' ? 'Gizli' : y === 'okuma' ? 'Okuma' : 'Yazma'}
-            </button>`).join('')}
-        </div>
+        ${altlar.length ? `<button class="mini-btn" onclick="altAc('${k}')"
+            style="margin-right:6px">${ACIK_MODUL[k] ? '▾' : '▸'}</button>` : ''}
+        ${ad} <span style="color:var(--soluk);font-family:var(--mono);font-size:.75rem">${k}</span>
+        ${ozel ? `<span style="font-size:.7rem;color:var(--kehribar-koyu,#8a6d1f);
+            margin-left:6px">${ozel} alt kural</span>` : ''}
       </td>
+      <td><div class="yetki-sec">${yetkiDugmeleri(k, mevcut, false)}</div></td>
     </tr>`;
+
+    /* Alt işlevler: tanımlanmayan MODÜLÜ MİRAS ALIR. "Miras"
+       düğmesi kuralı kaldırır, satır tekrar modüle bağlanır. */
+    if (ACIK_MODUL[k]) {
+      h += altlar.map(([anahtar, aciklama]) => {
+        const tanimli = YETKILER[anahtar] !== undefined;
+        const gecerli = tanimli ? YETKILER[anahtar] : mevcut;
+        return `
+        <tr style="background:var(--notr-bg)">
+          <td style="padding-left:34px">
+            <span style="font-size:.86rem">${aciklama}</span>
+            <span style="color:var(--soluk);font-family:var(--mono);font-size:.72rem;
+                  margin-left:6px">${anahtar}</span>
+            ${tanimli ? '' : `<span style="font-size:.7rem;color:var(--soluk);
+                margin-left:6px">modülden miras</span>`}
+          </td>
+          <td><div class="yetki-sec">${yetkiDugmeleri(anahtar, gecerli, tanimli)}</div></td>
+        </tr>`;
+      }).join('');
+    }
+    return h;
   }).join('') + `
     <tr style="border-top:2px solid var(--cizgi-koyu)">
       <td>Proforma İç Onay <span style="color:var(--soluk);font-family:var(--mono);font-size:.75rem">özel</span>
@@ -691,7 +731,16 @@ function yetkiCiz() {
       </td>
     </tr>`;
 }
-function yetkiSec(modul, yetki) { YETKILER[modul] = yetki; yetkiCiz(); }
+function yetkiSec(anahtar, yetki) { YETKILER[anahtar] = yetki; yetkiCiz(); }
+
+/* Alt kuralı kaldır — satır tekrar modül seviyesini miras alır.
+   Silmek ile 'gizli' yapmak AYNI ŞEY DEĞİL: gizli açıkça kapatır,
+   miras modül ne olursa onu izler. */
+function yetkiSil(anahtar) { delete YETKILER[anahtar]; yetkiCiz(); }
+
+/* Toplu atama yalnızca MODÜL satırlarına. Alt kuralları da
+   ezmek, kullanıcının tek tek kurduğu istisnaları sessizce
+   silmek olurdu. */
 function hepsi(yetki) { MODULLER.forEach(([k]) => YETKILER[k] = yetki); yetkiCiz(); }
 
 async function kullaniciKaydet() {

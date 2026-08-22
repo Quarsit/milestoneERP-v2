@@ -291,14 +291,102 @@ def create_app():
         # Kayitli yetki JSON'i varsa: tanimsiz modul -> 'gizli' (yeni eklenen modullere otomatik erisim yok)
         if not kayitli:
             return {m: 'yazma' for m in YETKI_MODULLERI}
-        return {m: kayitli.get(m, 'gizli') for m in YETKI_MODULLERI}
+        _sonuc = {m: kayitli.get(m, 'gizli') for m in YETKI_MODULLERI}
+        # ALT YETKILER KORUNUR (YT2). Ustteki sozluk kavramasi
+        # yalnizca MODUL anahtarlarini aliyordu; 'fatura.tahsilat'
+        # gibi alt anahtarlar sessizce eleniyor ve kisitlama hic
+        # uygulanmiyordu.
+        for _k, _v in kayitli.items():
+            if '.' in _k and _v in ('gizli', 'okuma', 'yazma'):
+                _sonuc[_k] = _v
+        return _sonuc
+
+    # ══════════════════════════════════════════════════════════
+    #  ALT İŞLEV YETKİLERİ  (YT2)
+    #
+    #  Alt islevler KODDAN cikarildi; her modulun gercek uc
+    #  noktalari incelenip DOGAL ayrim noktalari alindi. Ayrimi
+    #  olmayan modul (sevkiyat, kesim...) burada YOK — yapay
+    #  bolme, kullaniciya anlamsiz secenek gostermek olurdu.
+    # ══════════════════════════════════════════════════════════
+    ALT_YETKILER = {
+        'cari': [
+            ('cari.kayit', 'Müşteri kartı (ekle / düzenle / sil)'),
+            ('cari.hareket', 'Finansal hareket, bakiye, ekstre'),
+        ],
+        'fatura': [
+            ('fatura.kayit', 'Fatura oluşturma ve düzenleme'),
+            ('fatura.tahsilat', 'Tahsilat girişi'),
+            ('fatura.iptal', 'Fatura silme / iptal'),
+        ],
+        'proforma': [
+            ('proforma.kayit', 'Teklif oluşturma ve düzenleme'),
+            ('proforma.durum', 'Durum değiştirme, kayıp kaydı'),
+            ('proforma.donusum', 'Siparişe / faturaya dönüştürme'),
+        ],
+        'kasa': [
+            ('kasa.tanim', 'Kasa ve banka tanımlama'),
+            ('kasa.hareket', 'Kasa giriş / çıkış'),
+            ('kasa.virman', 'Kasalar arası virman'),
+        ],
+        'stok': [
+            ('stok.kayit', 'Stok girişi ve düzenleme'),
+            ('stok.cikis', 'Stok çıkışı / hurda'),
+        ],
+        'ayarlar': [
+            ('ayarlar.firma', 'Firma bilgileri, logo, SMTP'),
+            ('ayarlar.liste', 'Listeler (cins, yüzey, ülke...)'),
+            ('ayarlar.kullanici', 'Kullanıcı ve yetki yönetimi'),
+        ],
+    }
+
+    # Yol → alt islev. Onek haritasindan ONCE bakilir.
+    # Bir yolun burada olmasi TEK BASINA kisitlama getirmez: alt
+    # yetki tanimlanmamissa modul seviyesine duser.
+    import re as _re_alt
+    ALT_YOL_DESENLERI = [
+        (_re_alt.compile(r'^/api/fatura/[^/]+/tahsilat'), 'fatura.tahsilat'),
+        (_re_alt.compile(r'^/api/tahsilat'), 'fatura.tahsilat'),
+        (_re_alt.compile(r'^/api/fatura/[^/]+/?$'), 'fatura.kayit'),
+        (_re_alt.compile(r'^/api/cari/hareket'), 'cari.hareket'),
+        (_re_alt.compile(r'^/api/cari/[^/]+/(bakiye|hareketler|ekstre)'), 'cari.hareket'),
+        (_re_alt.compile(r'^/api/cari/finansal_ozet'), 'cari.hareket'),
+        (_re_alt.compile(r'^/api/proforma/[^/]+/(durum|kaybedildi|kaybi_geri_al|revize)'),
+         'proforma.durum'),
+        (_re_alt.compile(r'^/api/proforma/[^/]+/\w*donustur'), 'proforma.donusum'),
+        (_re_alt.compile(r'^/api/kasa/virman'), 'kasa.virman'),
+        (_re_alt.compile(r'^/api/kasa/hareket'), 'kasa.hareket'),
+        (_re_alt.compile(r'^/api/kasa/[^/]+/hareket'), 'kasa.hareket'),
+        (_re_alt.compile(r'^/api/stok/cikis'), 'stok.cikis'),
+        (_re_alt.compile(r'^/api/ayarlar/kullanici'), 'ayarlar.kullanici'),
+        (_re_alt.compile(r'^/api/ayarlar/(firma|logo|smtp)'), 'ayarlar.firma'),
+        (_re_alt.compile(r'^/api/(ayarlar/)?lookup'), 'ayarlar.liste'),
+    ]
+
+    def _yetki_seviye(anahtar):
+        """Bir modul ya da alt islev icin gecerli seviye.
+
+        ALT YETKI = ISTEGE BAGLI GECERSIZ KILMA:
+          · 'fatura.tahsilat' tanimliysa o kullanilir
+          · tanimli degilse 'fatura' seviyesine DUSER
+
+        Bu yuzden alt yetki tanimlanmadigi surece davranis
+        BUGUNKUYLE AYNI kalir.
+        """
+        yetkiler = _kullanici_yetkileri()
+        if anahtar in yetkiler:
+            return yetkiler[anahtar]
+        if '.' in anahtar:
+            return yetkiler.get(anahtar.split('.', 1)[0], 'gizli')
+        return yetkiler.get(anahtar, 'gizli')
 
     def _yetki_var_mi(modul, seviye='okuma'):
         """Aktif kullanıcının modüle erişimi var mı?
         seviye='okuma' -> okuma veya yazma yeterli
         seviye='yazma' -> sadece yazma yeterli"""
-        yetkiler = _kullanici_yetkileri()
-        mevcut = yetkiler.get(modul, 'gizli')
+        # Alt islev anahtari ('fatura.tahsilat') verildiginde once
+        # kendisi, yoksa modul seviyesi kullanilir.
+        mevcut = _yetki_seviye(modul)
         if seviye == 'yazma':
             return mevcut == 'yazma'
         return mevcut in ('okuma', 'yazma')
@@ -423,6 +511,15 @@ def create_app():
             if _desen.match(request.path):
                 modul = _m
                 break
+        # ALT ISLEV desenleri: eslesirse 'fatura.tahsilat' gibi bir
+        # anahtar doner. O anahtar tanimli degilse _yetki_seviye
+        # modul seviyesine duser — yani desen eklemek TEK BASINA
+        # hicbir seyi kisitlamaz.
+        if not modul:
+            for _desen, _m in ALT_YOL_DESENLERI:
+                if _desen.match(request.path):
+                    modul = _m
+                    break
         for prefix, m in URL_MODUL_MAP:
             if modul:
                 break
@@ -434,8 +531,7 @@ def create_app():
             return None
         # Yazma yetkisi var mi?
         try:
-            yetkiler = _kullanici_yetkileri()
-            mevcut = yetkiler.get(modul, 'gizli')
+            mevcut = _yetki_seviye(modul)
             if mevcut != 'yazma':
                 return jsonify({
                     'ok': False,
@@ -490,6 +586,15 @@ def create_app():
             if _desen.match(request.path):
                 modul = _m
                 break
+        # ALT ISLEV desenleri: eslesirse 'fatura.tahsilat' gibi bir
+        # anahtar doner. O anahtar tanimli degilse _yetki_seviye
+        # modul seviyesine duser — yani desen eklemek TEK BASINA
+        # hicbir seyi kisitlamaz.
+        if not modul:
+            for _desen, _m in ALT_YOL_DESENLERI:
+                if _desen.match(request.path):
+                    modul = _m
+                    break
         for prefix, m in URL_MODUL_MAP:
             if modul:
                 break
@@ -499,8 +604,7 @@ def create_app():
         if not modul:
             return None  # tanimlanmamis API — sessizce gec
         try:
-            yetkiler = _kullanici_yetkileri()
-            mevcut = yetkiler.get(modul, 'gizli')
+            mevcut = _yetki_seviye(modul)
             # okuma veya yazma yeterli; sadece 'gizli' engellenir
             if mevcut not in ('okuma', 'yazma'):
                 return jsonify({
@@ -3637,7 +3741,7 @@ def create_app():
         if _auth_required(): return _auth_required()
         if not _yetki_var_mi('ayarlar', 'okuma'):
             return redirect(url_for('dashboard'))
-        return render_template('ayarlar.html')
+        return render_template('ayarlar.html', alt_yetkiler=ALT_YETKILER)
 
     @app.route('/proforma')
     def proforma_sayfa():
@@ -13212,6 +13316,15 @@ def create_app():
             m: (gelen_yetki.get(m)
                 if gelen_yetki.get(m) in ('gizli', 'okuma', 'yazma') else 'gizli')
             for m in YETKI_MODULLERI}
+        # ALT ISLEV YETKILERI (YT2) — istege bagli gecersiz kilma.
+        # Yalnizca ALT_YETKILER'de TANIMLI anahtarlar kabul edilir;
+        # istemciden gelen serbest metin yetki sozlugune giremez.
+        _gecerli_alt = {a for _liste in ALT_YETKILER.values()
+                        for a, _ in _liste}
+        for _k, _v in gelen_yetki.items():
+            if _k in _gecerli_alt and _v in ('gizli', 'okuma', 'yazma'):
+                temiz_yetki[_k] = _v
+
         # Özel yetki: proforma iç onay (çift kontrol için ayrı bayrak)
         if gelen_yetki.get('proforma_onay'):
             temiz_yetki['proforma_onay'] = True
