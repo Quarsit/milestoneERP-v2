@@ -8637,7 +8637,21 @@ def create_app():
         alacak_try, _ = _try_karsilik(alacak, doviz, kullanilan_kur)
 
         # Tahsilat/odeme islem tipleri (acıklama ve kur farkı için)
-        tahsilat_odeme_tipleri = ['Tahsilat', 'Avans Tahsilati', 'Odeme', 'Avans Odemesi']
+        # Ö'LU YAZIM DA TANINIR (KH1).
+        # Bu liste kasa hareketi uretimini kontrol ediyor. Ö'lu
+        # yazim eksik oldugu icin 'Ödeme' secildiginde cari borcu
+        # dusuyor ama KASADAN PARA CIKMIYORDU — hata sessizdi,
+        # cunku hic kasa hareketi yazilmadigi icin D1 degismezligi
+        # de ihlal edilmiyordu.
+        #
+        # Olculdu (10.000 USD kasa, 1.000 USD odeme):
+        #   'Odeme' -> kasa 9.000 ✓   'Ödeme' -> kasa 10.000 ✗
+        #
+        # KASA_ZORUNLU_TIPLER zaten ikisini de taniyordu; tutarsizlik
+        # oradaydi.
+        tahsilat_odeme_tipleri = ['Tahsilat', 'Avans Tahsilati',
+                                  'Odeme', 'Ödeme',
+                                  'Avans Odemesi', 'Avans Ödemesi']
 
         # AÇIKLAMA: Kullanıcı yazmadıysa, otomatik üret (sipariş/fatura bağlantısı varsa)
         if not aciklama or not aciklama.strip():
@@ -8671,6 +8685,15 @@ def create_app():
             kdv_tutar=q3(kdv_tutar), matrah=q3(matrah),
             kullanici=session['kullanici']
         )
+        # AF1: STOK ALIS BORCUNA MAHSUP.
+        # Odeme ekrani stok alis borcunu secince bu alanlari
+        # gonderiyor; okunmazsa odeme borca baglanmaz ve acik borc
+        # listesinden DUSMEZDI.
+        _bg_tip = (data.get('baglanti_tip') or '').strip()
+        if _bg_tip == 'stok_fatura' and data.get('baglanti_id'):
+            hareket.baglanti_tip = 'stok_fatura'
+            hareket.baglanti_id = str(data.get('baglanti_id')).strip()
+
         # Fatura olusturulduysa cari hareketi ona bagla (cift kayit korumasi icin)
         if fatura_id:
             hareket.baglanti_tip = 'fatura'
@@ -8711,6 +8734,9 @@ def create_app():
                     return jsonify({'ok': False,
                         'mesaj': f'{e_kasa.doviz} kuru alınamadı — farklı dövizli kasa için kur gerekli.'}), 400
                 k_tutar = q3(tutar_try / k_kur)
+            # Tahsilat = kasaya GIRIS, odeme = CIKIS. Odeme
+            # yazimlari yukarida genisletildi; burada tahsilat
+            # tarafi zaten tek yazimli.
             giris_mi = islem_tip in ('Tahsilat', 'Avans Tahsilati')
             if not giris_mi and q3((e_kasa.bakiye or 0)) < k_tutar:
                 # Uyarı ver ama engelleme — eksi bakiye bilinçli olabilir
@@ -12402,6 +12428,54 @@ def create_app():
         if not cari:
             return jsonify({'ok': False, 'mesaj': 'Cari bulunamadı', 'faturalar': []}), 404
         yon = request.args.get('yon', 'satis')  # satis | alis
+
+        # ── STOK ALIŞ BORÇLARI (AF1) ──
+        # Stok kaydi `Fatura` tablosunda kayit ACMAZ; borcu dogrudan
+        # CariHareket olarak yazar (kaynak='stok_fatura'). Bu uc
+        # nokta yalnizca Fatura tablosuna baktigi icin o borclar
+        # tahsilat ekraninda GORUNMUYORDU — kullanici odemeyi hangi
+        # alisa mahsup edecegini secemiyordu.
+        #
+        # Fatura kaydi uretmek daha temiz gorunurdu ama stok
+        # alisinda fatura numarasi cogu zaman HENUZ BELLI DEGIL
+        # ("Beklenen Fatura 1"); sahte kayit fatura listesini
+        # gercek olmayan belgelerle doldururdu.
+        stok_borclari = []
+        if yon == 'alis':
+            for h in CariHareket.query.filter(
+                    CariHareket.cari_id == cari_id,
+                    # DIKKAT: `kaynak` degeri 'stok'tur, 'stok_fatura'
+                    # DEGIL — 'stok_fatura' olan `baglanti_tip`.
+                    # Ilk surumde kaynak'a gore filtreledim ve liste
+                    # BOS geldi; uretimde goruldu.
+                    CariHareket.baglanti_tip == 'stok_fatura',
+                    CariHareket.alacak > 0).order_by(
+                        CariHareket.hareket_tarihi).all():
+                _fno = h.baglanti_id or h.id
+                # Bu alisa yapilmis ODEMELER: ayni fatura numarasina
+                # bagli borc hareketleri (odeme = bizim borcumuzu
+                # azaltir).
+                _odenen = db.session.query(
+                    db.func.sum(CariHareket.borc)).filter(
+                    CariHareket.cari_id == cari_id,
+                    CariHareket.baglanti_tip == 'stok_fatura',
+                    CariHareket.baglanti_id == _fno,
+                    # Alis hareketinin KENDISI haric; odemeler
+                    # borc sutununda ve kaynak 'stok' degil.
+                    CariHareket.kaynak != 'stok').scalar() or 0
+                _kalan = q3(float(h.alacak or 0) - float(_odenen))
+                if _kalan <= 0.01:
+                    continue
+                stok_borclari.append({
+                    'id': h.id, 'fatura_no': _fno,
+                    'toplam': q3(h.alacak or 0), 'odenen': q3(_odenen),
+                    'kalan': _kalan, 'doviz': h.doviz or 'USD',
+                    'tarih': (h.hareket_tarihi.strftime('%d.%m.%Y')
+                              if h.hareket_tarihi else ''),
+                    'durum': 'Stok Alışı',
+                    'kaynak': 'stok_fatura',
+                    'aciklama': h.aciklama or ''})
+
         # Cari unvanına göre açık faturalar (Kesildi veya Kısmi Tahsil)
         faturalar = Fatura.query.filter(
             Fatura.musteri == cari.unvan,
@@ -12421,12 +12495,16 @@ def create_app():
             if kalan <= 0.01:
                 continue  # tam kapanmış, atla
             sonuc.append({
+                'kaynak': 'fatura',
                 'id': f.id, 'fatura_no': f.fatura_no or f.id,
                 'toplam': q3(f.toplam or 0), 'odenen': q3(odenen), 'kalan': kalan,
                 'doviz': f.doviz or 'USD',
                 'tarih': f.fatura_tarihi.strftime('%d.%m.%Y') if f.fatura_tarihi else '',
                 'durum': f.durum,
             })
+        # Stok alis borclari EN ONE: genelde daha eski ve
+        # kullanicinin aradigi kayit bu.
+        sonuc = stok_borclari + sonuc
         return jsonify({'ok': True, 'faturalar': sonuc})
 
     @app.route('/api/cari/finansal_ozet', methods=['GET'])

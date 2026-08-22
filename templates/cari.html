@@ -350,6 +350,19 @@
         <div style="font-size:.72rem;color:var(--soluk);margin-top:4px">Tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur.
         <strong>Zorunludur</strong> — para takip etmediğiniz bir hesaba geliyorsa önce o hesabı kasa olarak tanımlayın.</div>
       </div>
+      <!-- KAPATILACAK FATURA (BF1).
+           Eskiden bu seçim YALNIZCA ayrı "Tahsilat / Ödeme"
+           formunda vardı; o formda ise DÖVİZ seçimi yoktu. İki
+           form da işi yarım yapıyordu. Seçim buraya taşındı,
+           tahsilat düğmesi de bu formu açıyor. -->
+      <div class="form-alan" id="hFaturaAlan" style="margin-bottom:12px;display:none">
+        <label>Kapatılacak Fatura / Alış</label>
+        <select id="hFatura" onchange="hFaturaSecildi()">
+          <option value="">— fatura seçilmeden (serbest hareket) —</option>
+        </select>
+        <div id="hFaturaNot" style="font-size:.76rem;color:var(--soluk);margin-top:4px"></div>
+      </div>
+
       <!-- KUR FARKI: hesaplamak ile CARİYE İŞLEMEK ayrı şeylerdir.
            Varsayılan KAPALI — bir muhasebe kaydını sessizce
            oluşturmak, oluşturmamaktan daha zararlıdır. -->
@@ -791,6 +804,60 @@ function belgeTarihiVarsayilan() {
 
 /* ═══ SÖZLEŞME KURU (SK1) ═══
    TRY işlemlerde anlamsız olduğu için gizlenir. */
+/* ── KAPATILACAK FATURA (BF1) ── */
+let HAR_ACIK_FATURALAR = [];
+
+async function hFaturalariYukle() {
+  const alan = document.getElementById('hFaturaAlan');
+  const sel = document.getElementById('hFatura');
+  if (!alan || !sel) return;
+  const tip = (document.getElementById('hIslem') || {}).value || '';
+  const tahsilat = tip.includes('Tahsilat');
+  const odeme = tip.includes('Ödeme') || tip.includes('Odeme');
+  if (!tahsilat && !odeme) {
+    alan.style.display = 'none'; sel.value = '';
+    HAR_ACIK_FATURALAR = []; return;
+  }
+  alan.style.display = '';
+  sel.innerHTML = '<option value="">— fatura seçilmeden (serbest hareket) —</option>';
+  document.getElementById('hFaturaNot').textContent = '';
+  try {
+    /* Yön önemli: tahsilat SATIŞ faturalarına, ödeme ALIŞ
+       borçlarına mahsup edilir. */
+    const yon = odeme ? 'alis' : 'satis';
+    const d = await api(`/api/cari/${encodeURIComponent(HAR_CARI)}/acik_faturalar?yon=${yon}`);
+    HAR_ACIK_FATURALAR = d.faturalar || [];
+    HAR_ACIK_FATURALAR.forEach(f => {
+      /* Stok alış borcunun `Fatura` kaydı YOK; önekle işaretlenir
+         ki kaydederken doğru uç noktaya gitsin. */
+      const v = f.kaynak === 'stok_fatura'
+        ? 'STOK:' + (f.fatura_no || f.id) : f.id;
+      const et = f.kaynak === 'stok_fatura' ? ' (stok alışı)' : '';
+      sel.innerHTML += `<option value="${kacar(v)}">${kacar(f.fatura_no || f.id)}${et} · kalan ${para(f.kalan, f.doviz)}</option>`;
+    });
+    if (!HAR_ACIK_FATURALAR.length) {
+      document.getElementById('hFaturaNot').textContent =
+        'Bu carinin açık ' + (odeme ? 'alış borcu' : 'satış faturası') + ' yok.';
+    }
+  } catch (e) { HAR_ACIK_FATURALAR = []; }
+}
+
+/* Fatura seçilince tutar ve dövizi ondan doldur — kullanıcı
+   kalanı elle yazmak zorunda kalmasın, döviz de uyuşsun. */
+function hFaturaSecildi() {
+  const v = document.getElementById('hFatura').value;
+  const not = document.getElementById('hFaturaNot');
+  if (!v) { not.textContent = ''; return; }
+  const f = HAR_ACIK_FATURALAR.find(
+    x => (x.kaynak === 'stok_fatura' ? 'STOK:' + (x.fatura_no || x.id) : x.id) === v);
+  if (!f) return;
+  const tut = document.getElementById('hTutar');
+  if (tut && !tut.value) tut.value = f.kalan;
+  const dov = document.getElementById('hDoviz');
+  if (dov && f.doviz) { dov.value = f.doviz; kurAlaniGoster(); }
+  not.textContent = `Kalan ${para(f.kalan, f.doviz)} · fazla girerseniz fark serbest hareket olur.`;
+}
+
 /* Kur farkı kutucuğu YALNIZCA tahsilat/ödemede anlamlıdır:
    kur farkı ancak bir borç/alacak KAPANIRKEN doğar. Fatura
    girişinde göstermek, olmayan bir seçenek sunmak olurdu. */
@@ -1424,40 +1491,21 @@ let TAH_CARI = null, ACIK_FATURALAR = [];
    Fatura seçilirse → POST /api/fatura/<id>/tahsilat  (cari VE kasa birlikte güncellenir)
    Fatura seçilmezse → POST /api/cari/hareket         (yalnızca cari defteri) */
 async function tahsilatAc(id) {
-  const c = TUM.find(x => x.id === id);
-  if (!c) return;
-  TAH_CARI = c;
-  cekmeceKapat();
-  const b = BAKIYE[id] || { net: 0 };
-  const odeme = b.net < 0;
-  document.getElementById('tBaslik').textContent = odeme ? 'Ödeme Yap' : 'Tahsilat Gir';
-  document.getElementById('tAlt').textContent = `${c.unvan} · net ${(odeme ? '−' : '') + para(Math.abs(b.net))}`;
-  document.getElementById('tTutar').value = '';
-  document.getElementById('tEvrak').value = '';
-  document.getElementById('tAciklama').value = '';
-  document.getElementById('tTarih').valueAsDate = new Date();
-  document.getElementById('tNot').style.display = 'none';
-  document.getElementById('tFatura').innerHTML = '<option value="">— fatura seçilmeden (serbest hareket) —</option>';
-  document.getElementById('tahModal').classList.add('acik');
-
-  if (!HAR_KASALAR.length) {
-    try { HAR_KASALAR = (await api('/api/kasa')).filter(k => !k.ana_kasa); } catch (e) { HAR_KASALAR = []; }
-  }
-  document.getElementById('tKasa').innerHTML = HAR_KASALAR.length
-    ? HAR_KASALAR.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('')
-    : '<option value="">— kasa yok —</option>';
-
-  ACIK_FATURALAR = [];
-  if (!odeme) {
-    try {
-      const d = await api(`/api/cari/${encodeURIComponent(id)}/acik_faturalar`);
-      ACIK_FATURALAR = d.faturalar || [];
-      const sel = document.getElementById('tFatura');
-      ACIK_FATURALAR.forEach(f => {
-        sel.innerHTML += `<option value="${kacar(f.id)}">${kacar(f.fatura_no || f.id)} · kalan ${para(f.kalan, f.doviz)}</option>`;
-      });
-      if (ACIK_FATURALAR.length) { sel.value = ACIK_FATURALAR[0].id; faturaSecildi(); }
-    } catch (e) { /* */ }
+  /* TEK FORM (BF1).
+     Eskiden ayrı bir "Tahsilat / Ödeme" formu vardı; onda fatura
+     seçimi vardı ama DÖVİZ yoktu, hareket formunda ise tersi.
+     İkisi de işi yarım yapıyordu. Artık tahsilat düğmesi de tam
+     donanımlı hareket formunu açıyor, işlem tipi hazır seçili. */
+  const c = (TUM || []).find(x => x.id === id) || {};
+  await hareketAc(id, c.unvan || id);
+  const sel = document.getElementById('hIslem');
+  if (sel) {
+    /* Tedarikçiye ÖDEME, müşteriden TAHSİLAT varsayılanı. */
+    const tedarikci = String(c.cari_tip || '').toLowerCase().includes('tedarik');
+    const hedef = tedarikci ? 'Ödeme' : 'Tahsilat';
+    const uy = [...sel.options].find(o => o.value.includes(hedef)
+      || o.value.includes(hedef.replace('Ö', 'O')));
+    if (uy) { sel.value = uy.value; hareketTipiDegisti(); }
   }
 }
 function tahsilatKapat() { document.getElementById('tahModal').classList.remove('acik'); }
@@ -1487,7 +1535,27 @@ async function tahsilatKaydet() {
   const btn = document.getElementById('tKaydet');
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';
   try {
-    if (fid) {
+    if (fid && fid.startsWith('STOK:')) {
+      /* STOK ALIŞ BORCU (AF1): `Fatura` kaydı yok, o yüzden
+         /api/fatura/<id>/tahsilat çalışmaz (404 verirdi).
+         Cari hareket olarak yazılır ve `baglanti_id` ile o alışa
+         bağlanır — açık borç listesi ödemeyi buradan düşer. */
+      await api('/api/cari/hareket', {
+        method: 'POST',
+        body: JSON.stringify({
+          cari_id: TAH_CARI.id,
+          islem_tip: odeme ? 'Odeme' : 'Tahsilat',
+          tutar, alacak: odeme ? 0 : tutar, borc: odeme ? tutar : 0,
+          doviz: (ACIK_FATURALAR.find(f => 'STOK:' + (f.fatura_no || f.id) === fid) || {}).doviz || 'USD',
+          kasa_id: kasaId ? parseInt(kasaId) : null,
+          baglanti_tip: 'stok_fatura',
+          baglanti_id: fid.slice(5),
+          vade_tarihi: document.getElementById('tTarih').value || null,
+          evrak_no: document.getElementById('tEvrak').value,
+          aciklama: document.getElementById('tAciklama').value
+        })
+      });
+    } else if (fid) {
       await api(`/api/fatura/${encodeURIComponent(fid)}/tahsilat`, {
         method: 'POST',
         body: JSON.stringify({
@@ -1591,10 +1659,10 @@ function kdvOnizle() {
 }
 
 function hareketTipiDegisti() {
-  /* Kur farkı kutucuğu işlem tipine bağlı — tip değişince
-     yeniden değerlendirilmeli, yoksa fatura seçilip tahsilata
-     dönüldüğünde kutucuk gizli kalırdı. */
+  /* Kur farkı kutucuğu ve fatura listesi işlem tipine bağlı —
+     tip değişince ikisi de yeniden değerlendirilmeli. */
   kurFarkiAlaniGoster();
+  hFaturalariYukle();
   const tip = document.getElementById('hIslem').value;
   const transfer = tip === 'Bakiye Transfer';
   document.getElementById('hTransferAlan').style.display = transfer ? '' : 'none';
@@ -1793,6 +1861,18 @@ async function hareketKaydet() {
        İşaretlemezse sunucu hesaplar, bildirir ama KAYIT AÇMAZ. */
     const kfKutu = document.getElementById('hKurFarkiIslet');
     if (kfKutu && kfKutu.checked) govde.kur_farki_islet = true;
+
+    /* SEÇİLEN FATURAYA MAHSUP (BF1).
+       Stok alışının `Fatura` kaydı YOK — 'STOK:' önekiyle geliyor
+       ve cari harekete `baglanti_id` ile bağlanıyor. Gerçek
+       faturalar ise fatura kimliğiyle bağlanır. */
+    const fSec = (document.getElementById('hFatura') || {}).value || '';
+    if (fSec.startsWith('STOK:')) {
+      govde.baglanti_tip = 'stok_fatura';
+      govde.baglanti_id = fSec.slice(5);
+    } else if (fSec) {
+      govde.karsilik_fatura_id = fSec;
+    }
 
     const d = await api('/api/cari/hareket', { method: 'POST', body: JSON.stringify(govde) });
     bildir(d.mesaj || 'Hareket kaydedildi · ' + para(tutar, govde.doviz));
