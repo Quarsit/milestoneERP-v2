@@ -178,6 +178,18 @@
         ⚑ 1 {{ h.doviz }} = {{ '%.4f'|format(h.kur_uygulanan) }} TL
         ({{ 'sözleşme kuru' if dil == 'TR' else 'contractual rate' }}{% if h.kur_gerekce %} — {{ h.kur_gerekce }}{% endif %})
       </span>
+      {# KU1 — HER HAREKETTE KUR GÖRÜNSÜN.
+         Eskiden kur yalnızca MANUEL (sözleşme) kurda yazılıyordu.
+         Ama 1.000 USD'lik bir hareket TRY ekstrede görüntülendiğinde
+         hangi kurla çevrildiği görünmüyordu — mutabakatta karşı taraf
+         rakamı doğrulayamaz.
+
+         TRY hareketlerde yazılmaz: 1 TL = 1 TL, bilgi taşımaz. #}
+      {% elif h.kur_uygulanan and h.doviz and h.doviz != 'TRY' %}
+      <br><span style="font-size:9px;color:#666;">
+        1 {{ h.doviz }} = {{ '%.4f'|format(h.kur_uygulanan) }} TL
+        {%- if h.kur_kaynak %} ({{ h.kur_kaynak }}){% endif %}
+      </span>
       {% endif %}</td>
       <td class="num text-danger">{{ "%.2f"|format(h.borc) if h.borc else '-' }}</td>
       <td class="num text-success">{{ "%.2f"|format(h.alacak) if h.alacak else '-' }}</td>

@@ -1267,6 +1267,71 @@ def create_app():
                 continue
         return sonuc
 
+    def _stok_tanim(stok):
+        """Stogun OKUNABILIR tanimi (AK1).
+
+        Karsi kayit aciklamasinda ID yaziyordu:
+            "stok cikisi karsi kaydi (PLK-41E833)"
+        Kullanici o ID'den hangi urun oldugunu anlayamiyor. Artik
+        cins + blok/kasa + plaka no yaziliyor:
+            "CEPPO, MLS2991, 36 no'lu plaka"
+
+        Stok tipine gore alanlar farkli:
+          BLOK    -> cins, blok_no
+          PLAKA   -> cins, blok_no, slab_no
+          EBATLI  -> cins, kasa_no
+        """
+        if stok is None:
+            return ''
+        _c = (getattr(stok, 'cins', '') or '').strip()
+        _b = (getattr(stok, 'blok_no', '') or '').strip()
+        _s = getattr(stok, 'slab_no', None)
+        _k = (getattr(stok, 'kasa_no', '') or '').strip()
+        parcalar = [x for x in (_c, _b) if x]
+        if _s:
+            parcalar.append(f"{_s} no'lu plaka")
+        elif _k:
+            parcalar.append(f"{_k} no'lu kasa")
+        elif _b and not _s:
+            parcalar.append('blok')
+        return ', '.join(parcalar) or (getattr(stok, 'id', '') or '')
+
+    def _stok_tanim_grup(stoklar):
+        """Ayni cins+blok'taki plakalari TEK satirda toplar (AK1).
+
+        20 plaka silinince 20 ayri tanim yerine:
+            "CEPPO, MLS2991, 36,37,44,51,56 no'lu plaka"
+        """
+        gruplar = {}
+        for st in stoklar:
+            if st is None:
+                continue
+            _c = (getattr(st, 'cins', '') or '').strip()
+            _b = (getattr(st, 'blok_no', '') or '').strip()
+            _s = getattr(st, 'slab_no', None)
+            _k = (getattr(st, 'kasa_no', '') or '').strip()
+            anahtar = (_c, _b)
+            g = gruplar.setdefault(anahtar, {'plaka': [], 'kasa': [], 'blok': 0})
+            if _s:
+                g['plaka'].append(str(_s))
+            elif _k:
+                g['kasa'].append(_k)
+            else:
+                g['blok'] += 1
+        cikti = []
+        for (_c, _b), g in gruplar.items():
+            bas = ', '.join(x for x in (_c, _b) if x)
+            if g['plaka']:
+                # Sayisal siralama: 7 < 36 (metin siralamada tersi olurdu)
+                _no = sorted(g['plaka'], key=lambda x: (len(x), x))
+                cikti.append(f"{bas}, {','.join(_no)} no'lu plaka")
+            elif g['kasa']:
+                cikti.append(f"{bas}, {','.join(sorted(g['kasa']))} no'lu kasa")
+            else:
+                cikti.append(f"{bas} blok" + (f" ({g['blok']} adet)"
+                                              if g['blok'] > 1 else ''))
+        return ' · '.join(cikti)
+
     def _stok_cari_hareket_olustur(stok_id, uretici_unvan, toplam_tutar, doviz, fatura_no='', aciklama='',
                                    fatura_durumu='faturali', alis_tarihi=None,
                                    matrah=None, kdv_tutar=None, kdv_oran=None):
@@ -4831,7 +4896,11 @@ def create_app():
                 kk_biriktir.append({
                     'cari_id': _grup.cari_id, 'cari_unvan': _grup.cari_unvan,
                     'doviz': _grup.doviz or 'TRY', 'fatura_no': _fno,
-                    'pay': _pay, 'stok_id': stok_id})
+                    'pay': _pay, 'stok_id': stok_id,
+                    # AK1: aciklamada ID degil OKUNABILIR tanim
+                    # yazilacak; stok silinmeden once alanlari
+                    # topluyoruz.
+                    'stok': stok})
                 _grup.kalem_sayisi = max(
                     0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
                 _grup = None
@@ -4848,8 +4917,8 @@ def create_app():
                 vade_tarihi=date.today(),
                 kaynak='stok_karsi_kayit',
                 baglanti_tip='stok_fatura', baglanti_id=_fno,
-                    aciklama=f'{_fno} · stok çıkışı karşı kaydı '
-                             f'({getattr(stok, "id", "")})',
+                    aciklama=f'{_fno} · stok çıkışı karşı kaydı · '
+                             f'{_stok_tanim(stok)}',
                     kullanici=session.get('kullanici')))
                 # Orijinal harekete DOKUNULMAZ; yalnizca kalem sayaci
                 # azalir ki son kalemde grup yanlislikla silinmesin.
@@ -4979,9 +5048,12 @@ def create_app():
             for _k in _kk_havuz:
                 _a = (_k['cari_id'], _k['fatura_no'], _k['doviz'])
                 _g = _gruplu.setdefault(_a, {'tutar': 0.0, 'adet': 0,
-                                             'unvan': _k['cari_unvan']})
+                                             'unvan': _k['cari_unvan'],
+                                             'stoklar': []})
                 _g['tutar'] += float(_k['pay'] or 0)
                 _g['adet'] += 1
+                if _k.get('stok') is not None:
+                    _g['stoklar'].append(_k['stok'])
             for (_cid, _fn, _dv), _g in _gruplu.items():
                 _tut = q3(_g['tutar'])
                 _t, _k2 = _try_karsilik(_tut, _dv, tarih=date.today())
@@ -4994,8 +5066,13 @@ def create_app():
                     vade_tarihi=date.today(),
                     kaynak='stok_karsi_kayit',
                     baglanti_tip='stok_fatura', baglanti_id=_fn,
-                    aciklama=f'{_fn} · stok çıkışı karşı kaydı '
-                             f'· {_g["adet"]} kalem',
+                    # AK1: hangi urunlerden dolayi olustugu yazilir.
+                    # Ayni cins+blok'taki plakalar TEK satirda:
+                    #   "CEPPO, MLS2991, 36,37,44 no'lu plaka"
+                    aciklama=(f'{_fn} · stok çıkışı karşı kaydı · '
+                              f'{_g["adet"]} kalem'
+                              + (f' · {_stok_tanim_grup(_g["stoklar"])}'
+                                 if _g.get('stoklar') else '')),
                     kullanici=session.get('kullanici')))
             _safe_commit(f'Toplu karsi kayit: {len(_gruplu)} satir')
 
@@ -5865,6 +5942,11 @@ def create_app():
                 # Kendi dovizinde tutar
                 'borc': h.borc, 'alacak': h.alacak, 'doviz': h.doviz,
                 'kur_uygulanan': h.kur_uygulanan or 0,
+                # KU1: kurun KAYNAGI da doner (TCMB / MANUEL).
+                # Ekranda "1 USD = 46,8000 ₺ · TCMB" yaziliyor;
+                # kaynak olmadan sozlesme kuru ile piyasa kuru
+                # ayirt edilemezdi.
+                'kur_kaynak': h.kur_kaynak,
                 # Aktif kur (kur_modu'na göre - UI'da gösterilecek)
                 'kur': q_kur(h_kur),
                 'kur_modu': kur_modu,
@@ -14554,6 +14636,21 @@ def create_app():
         cari = Cari.query.get(cari_id)
         if not cari: return "Cari bulunamadı", 404
         hareketler = CariHareket.query.filter_by(cari_id=cari_id).order_by(CariHareket.hareket_tarihi, CariHareket.guncelleme).all()
+
+        # ── İŞLEM TÜRÜ SÜZGECİ (ET1) ──
+        # `?tip=Tahsilat,Odeme` ile yalnizca belirli turler.
+        # Ornek kullanim: "sadece nakit odemeler" ya da "sadece
+        # verilen cekler".
+        #
+        # Suzgec BAKIYE SUTUNUNU da etkiler: gosterilen hareketlerin
+        # kumulatifi yazilir. Tum hareketlerin bakiyesini gostermek,
+        # sutun ile satirlarin uyusmadigi bir belge uretirdi.
+        _tip_suz = [t.strip() for t in
+                    (request.args.get('tip') or '').split(',') if t.strip()]
+        if _tip_suz:
+            _kume = {t.upper() for t in _tip_suz}
+            hareketler = [h for h in hareketler
+                          if (h.islem_tip or '').upper() in _kume]
 
         # YAMA E2 — PARA BIRIMI VE KUR KIPI SECIMI
         #

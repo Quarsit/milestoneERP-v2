@@ -158,6 +158,21 @@
             <option value="guncel">Güncel kur</option>
           </select>
         </div>
+
+      <!-- İŞLEM TÜRÜ SÜZGECİ (ET1).
+           Ekstre tüm hareketleri döküyordu; "sadece nakit ödemeler"
+           ya da "sadece verilen çekler" görmenin yolu yoktu.
+           Boş bırakılırsa TÜMÜ gelir — varsayılan davranış değişmez. -->
+      <div class="form-alan" style="margin-top:12px">
+        <label>İşlem Türü (boş = tümü)</label>
+        <div id="eksTipler" style="display:grid;grid-template-columns:1fr 1fr;
+             gap:4px 10px;max-height:190px;overflow:auto;border:1px solid var(--cizgi);
+             border-radius:var(--r-kucuk);padding:9px 11px"></div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button type="button" class="mini-btn" onclick="eksTipHepsi(true)">Tümünü seç</button>
+          <button type="button" class="mini-btn" onclick="eksTipHepsi(false)">Temizle</button>
+        </div>
+      </div>
       </div>
       <div id="eksAciklama" style="font-size:.79rem;color:var(--soluk);
            line-height:1.5;background:var(--notr-bg);border-radius:8px;padding:10px 12px"></div>
@@ -226,6 +241,11 @@
             <optgroup label="Tahsilat / Ödeme">
               <option value="Tahsilat">Tahsilat</option>
               <option value="Odeme">Ödeme</option>
+              <!-- ÇEK DE BİR TAHSİLAT/ÖDEME ARACI (CK1).
+                   Seçilince çek modülü ön dolu açılır; form burada
+                   TEKRARLANMAZ, yoksa iki ayrı gerçek olurdu. -->
+              <option value="__cek_alinan">Alınan Çek →</option>
+              <option value="__cek_verilen">Verilen Çek →</option>
               <option value="Avans Tahsilati">Avans Tahsilatı</option>
               <option value="Avans Odemesi">Avans Ödemesi</option>
             </optgroup>
@@ -785,6 +805,15 @@ function ekstreSecenek(id) {
   document.getElementById('eksKurModu').value = 'islem';
   ekstreKipGoster();
   document.getElementById('ekstreModal').classList.add('acik');
+
+  /* Tür listesi carinin GERÇEK hareketlerinden doldurulur.
+     Sabit liste yazsaydım yeni bir işlem türü eklendiğinde
+     süzgeçte görünmezdi. */
+  document.getElementById('eksTipler').innerHTML =
+    '<span style="color:var(--soluk);font-size:.8rem">yükleniyor…</span>';
+  api(`/api/cari/${encodeURIComponent(id)}/hareketler`)
+    .then(d => eksTipleriDoldur(d.data || []))
+    .catch(() => eksTipleriDoldur([]));
 }
 
 function ekstreKapat() {
@@ -983,13 +1012,45 @@ function ekstreKipGoster() {
   }
 }
 
+/* ── EKSTRE TÜR SÜZGECİ (ET1) ──
+   Türler EKRANDA sabit yazılmaz; carinin GERÇEK hareketlerinden
+   çıkarılır. Sabit liste, yeni bir işlem türü eklendiğinde
+   süzgeçte görünmemesine yol açardı — bu projede o hata sınıfının
+   birkaç örneğini düzelttik. */
+function eksTipleriDoldur(hareketler) {
+  const kutu = document.getElementById('eksTipler');
+  if (!kutu) return;
+  const tipler = [...new Set((hareketler || [])
+    .map(h => h.islem_tip).filter(Boolean))].sort();
+  if (!tipler.length) {
+    kutu.innerHTML = '<span style="color:var(--soluk);font-size:.8rem">hareket yok</span>';
+    return;
+  }
+  kutu.innerHTML = tipler.map(t => `
+    <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer">
+      <input type="checkbox" class="eks-tip" value="${kacar(t)}"> ${kacar(t)}
+    </label>`).join('');
+}
+
+function eksTipHepsi(sec) {
+  document.querySelectorAll('.eks-tip').forEach(x => x.checked = sec);
+}
+
+function eksSeciliTipler() {
+  return [...document.querySelectorAll('.eks-tip:checked')].map(x => x.value);
+}
+
 function ekstreAc() {
   if (!EKSTRE_CARI) return;
   const d = document.getElementById('eksDoviz').value;
   const m = document.getElementById('eksKurModu').value;
   ekstreKapat();
   window.open(`/api/cari/${encodeURIComponent(EKSTRE_CARI)}/ekstre_pdf` +
-              `?doviz=${encodeURIComponent(d)}&kur_modu=${encodeURIComponent(m)}`, '_blank');
+              `?doviz=${encodeURIComponent(d)}&kur_modu=${encodeURIComponent(m)}`
+              /* Hiçbiri seçilmezse parametre GÖNDERİLMEZ → tümü gelir. */
+              + (eksSeciliTipler().length
+                 ? `&tip=${encodeURIComponent(eksSeciliTipler().join(','))}` : ''),
+              '_blank');
 }
 
 /* ESKİ SÜRÜM (E2) — prompt tabanlıydı, PWA'da çalışmıyordu.
@@ -1133,6 +1194,15 @@ async function detayAc(id) {
           <div>
             <div>${kacar(h.islem_tip || '')}</div>
             ${h.aciklama ? '<div style="color:var(--soluk);font-size:.75rem">' + kacar(h.aciklama.slice(0, 42)) + '</div>' : ''}
+            ${/* KU1: KUR AÇIKÇA GÖRÜNSÜN.
+                  1.000 USD'lik hareketin hangi kurla çevrildiği
+                  görünmüyordu; mutabakatta karşı taraf rakamı
+                  doğrulayamaz. TRY'de yazılmaz — bilgi taşımaz. */
+              (h.kur_uygulanan && h.doviz && h.doviz !== 'TRY')
+                ? `<div style="color:var(--soluk);font-size:.72rem;font-variant-numeric:tabular-nums">
+                     1 ${kacar(h.doviz)} = ${Number(h.kur_uygulanan).toLocaleString('tr-TR',
+                       {minimumFractionDigits:4, maximumFractionDigits:4})} ₺${
+                     h.kur_kaynak ? ' · ' + kacar(h.kur_kaynak) : ''}</div>` : ''}
           </div>
           <span class="tut ${(h.borc || 0) > 0 ? 'borc' : 'alacak'}">
             ${(h.borc || 0) > 0 ? '+' + para(h.borc, h.doviz) : '−' + para(h.alacak, h.doviz)}
@@ -1699,6 +1769,13 @@ function kdvOnizle() {
 }
 
 function hareketTipiDegisti() {
+  /* ÇEK SEÇİLDİYSE çek modülüne git (CK1). Cari ön seçili gelir. */
+  const _t = (document.getElementById('hIslem') || {}).value || '';
+  if (_t === '__cek_alinan' || _t === '__cek_verilen') {
+    const yon = _t === '__cek_alinan' ? 'alinan' : 'verilen';
+    location.href = `/cek?yeni=${yon}&cari=${encodeURIComponent(HAR_CARI || '')}`;
+    return;
+  }
   /* Kur farkı kutucuğu ve fatura listesi işlem tipine bağlı —
      tip değişince ikisi de yeniden değerlendirilmeli. */
   kurFarkiAlaniGoster();

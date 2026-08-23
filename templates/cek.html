@@ -439,7 +439,44 @@ async function yeniAc() {
     ? CARILER.map(c => `<option value="${kacar(c.id)}">${kacar(c.unvan)}</option>`).join('')
     : '<option value="">— cari yok —</option>';
 }
-function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
+/* Cari kartından gelindiyse dönülecek cari. modalKapat'tan ÖNCE
+   bildirilmeli — `let` hoisting'te erişilemez, sonra bildirseydim
+   pencere kapanınca ReferenceError verirdi. */
+let CEK_DONUS_CARI = null;
+
+function modalKapat() {
+  document.getElementById('modal').classList.remove('acik');
+  /* Cariden gelinip VAZGEÇİLDİYSE de geri dön — kullanıcıyı
+     istemediği bir ekranda bırakmayalım. Kaydetme yolunda değişken
+     ÖNCEDEN temizlendiği için burası tetiklenmez. */
+  if (CEK_DONUS_CARI) {
+    const hedef = CEK_DONUS_CARI;
+    CEK_DONUS_CARI = null;
+    location.href = `/cari?ac=${encodeURIComponent(hedef)}`;
+  }
+}
+
+/* ── CARİDEN GELEN ÇEK (CK1) ──
+   Çek bir tahsilat/ödeme aracı; kullanıcı cari kartından
+   "Alınan Çek" / "Verilen Çek" seçtiğinde buraya yönlendiriliyor
+   ve form ÖN DOLU açılıyor. Çek formunu cari ekranına kopyalamak
+   iki ayrı gerçek üretirdi — biri güncellenip diğeri unutulurdu. */
+(async function cekUrlParametresi() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('yeni') !== 'alinan' && q.get('yeni') !== 'verilen') return;
+  /* Cari kartından gelindiyse, kaydettikten sonra oraya DÖNÜLÜR.
+     Kullanıcı cari ekranındaki işine devam ediyordu; onu çek
+     listesinde bırakmak akışı koparır. */
+  CEK_DONUS_CARI = q.get('cari') || null;
+  await yeniAc();
+  const yon = document.getElementById('fYon');
+  if (yon) { yon.value = q.get('yeni'); if (yon.onchange) yon.onchange(); }
+  const cari = q.get('cari');
+  if (cari) {
+    const sel = document.getElementById('fCari');
+    if (sel) sel.value = cari;
+  }
+})();
 
 async function cekKaydet() {
   const tutar = parseFloat(document.getElementById('fTutar').value);
@@ -469,7 +506,23 @@ async function cekKaydet() {
       })
     });
     bildir(d.mesaj || ('Çek kaydedildi · ' + (document.getElementById('fNo').value || '')));
-    modalKapat(); await yukle();
+    /* CARİYE DÖN (CK1).
+       SIRA ÖNEMLİ: hedefi ÖNCE alıp değişkeni temizliyoruz, sonra
+       pencereyi kapatıyoruz. Tersi olsaydı modalKapat() de
+       yönlendirme yapar ve iki yönlendirme çakışırdı.
+
+       Bildirimin okunması için kısa bekleme; anında yönlendirmek
+       kullanıcının "kaydoldu mu" sorusunu cevapsız bırakırdı. */
+    const _hedef = CEK_DONUS_CARI;
+    CEK_DONUS_CARI = null;
+    modalKapat();
+    if (_hedef) {
+      setTimeout(() => {
+        location.href = `/cari?ac=${encodeURIComponent(_hedef)}`;
+      }, 1100);
+      return;
+    }
+    await yukle();
   } catch (e) { /* */ }
   finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
 }
