@@ -199,7 +199,12 @@ def create_app():
                  'Çek Tahsilatı': 'Cheque Collection', 'Mahsup': 'Offset', 'Mahsup (Karşılıklı)': 'Offset (Mutual)',
                  'Mahsup (Fatura)': 'Offset (Invoice)', 'Bakiye Transfer (Giriş)': 'Balance Transfer (In)',
                  'Bakiye Transfer (Çıkış)': 'Balance Transfer (Out)', 'Bakiye Transfer (Kasaya)': 'Balance Transfer (Cash)',
-                 'Acilis Bakiyesi': 'Opening Balance'}
+                 'Acilis Bakiyesi': 'Opening Balance',
+                 # AB1: devir iki yonlu olabilir. Eski sistemden
+                 # aktarirken carinin onceki durumu BORC da olabilir;
+                 # tek tip varken hep alacak yaziliyordu.
+                 'Acilis Bakiyesi (Borc)': 'Opening Balance (Debit)',
+                 'Acilis Bakiyesi (Alacak)': 'Opening Balance (Credit)'}
 
     def _deger_cevir(kategori, deger, dil='en'):
         if deger is None:

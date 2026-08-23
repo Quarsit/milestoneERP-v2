@@ -211,7 +211,13 @@
         <div class="form-alan"><label>İşlem Tipi</label>
           <select id="hIslem" onchange="hareketTipiDegisti()">
             <optgroup label="Açılış">
-              <option value="Acilis Bakiyesi">Açılış Bakiyesi</option>
+              <!-- DEVİR İKİ YÖNLÜ (AB1).
+                   Eski sistemden aktarırken carinin önceki durumu
+                   BORÇ da olabilir. Tek seçenek varken hep alacak
+                   yazılıyordu; diğer tiplerde zaten (borç)/(alacak)
+                   ayrımı vardı, açılışta yoktu. -->
+              <option value="Acilis Bakiyesi (Borc)">Açılış Bakiyesi (borç — bizden alacaklı değil, o borçlu)</option>
+              <option value="Acilis Bakiyesi (Alacak)">Açılış Bakiyesi (alacak — biz borçluyuz)</option>
             </optgroup>
             <optgroup label="Fatura">
               <option value="Fatura (Satis)">Satış Faturası (borç)</option>
@@ -1511,7 +1517,12 @@ document.getElementById('ara').addEventListener('input', e => {
      Odeme/Avans Odemesi      → BORÇ
    DELETE /api/cari/hareket/<id> → hareketi geri al */
 
-const BORC_TIPLERI = ['Fatura (Satis)', 'Odeme', 'Avans Odemesi',
+const BORC_TIPLERI = ['Fatura (Satis)', 'Odeme', 'Ödeme', 'Avans Odemesi',
+                      'Avans Ödemesi',
+                      /* AB1: devir borç yönü. Liste dışında kalan her
+                         tip ALACAK yazılıyor; açılış bakiyesi bu
+                         yüzden hep alacak oluyordu. */
+                      'Acilis Bakiyesi (Borc)',
                       'Vade Farki (Borc)', 'Kur Farki (Borc)', 'Iade (Alis)'];
 let HAR_CARI = null, HAR_KASALAR = [], HAR_SIPARISLER = [];
 let TAH_CARI = null, ACIK_FATURALAR = [];
