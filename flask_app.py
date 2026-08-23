@@ -4713,9 +4713,20 @@ def create_app():
         _grup = None
         if _fno:
             _uret = (getattr(stok, 'uretici', '') or '').strip()
+            # SK1: KIMLIK BAGI ONCELIKLI. `cari_id` doluysa adla
+            # eslestirmeye gerek yok — ad degisse de bag durur.
+            # Bos ise (eski kayit ya da goc esletirememis) ada duser.
+            _stok_cid = (getattr(stok, 'cari_id', None) or '').strip() or None
             _aday = CariHareket.query.filter_by(
                 baglanti_tip='stok_fatura', baglanti_id=_fno).all()
-            if len(_aday) == 1 and not _uret:
+            if _stok_cid:
+                for _a in _aday:
+                    if _a.cari_id == _stok_cid:
+                        _grup = _a
+                        break
+            if _grup is not None:
+                pass          # kimlik bagiyla bulundu (SK1)
+            elif len(_aday) == 1 and not _uret:
                 # Tek aday ve tedarikci bilgisi yok — belirsizlik yok.
                 _grup = _aday[0]
             elif _uret:
@@ -12455,14 +12466,56 @@ def create_app():
                 # Bu alisa yapilmis ODEMELER: ayni fatura numarasina
                 # bagli borc hareketleri (odeme = bizim borcumuzu
                 # azaltir).
-                _odenen = db.session.query(
-                    db.func.sum(CariHareket.borc)).filter(
-                    CariHareket.cari_id == cari_id,
-                    CariHareket.baglanti_tip == 'stok_fatura',
-                    CariHareket.baglanti_id == _fno,
-                    # Alis hareketinin KENDISI haric; odemeler
-                    # borc sutununda ve kaynak 'stok' degil.
-                    CariHareket.kaynak != 'stok').scalar() or 0
+                # ── FARKLI DÖVİZDE ÖDEME (CD1) ──
+                # Odemeler CIPLAK toplanamaz: 200.000 TRY odeme,
+                # 10.000 USD borcu kapatmis gorunuyordu (200.000 >
+                # 10.000). Her odeme BORCUN dovizine cevrilmeli.
+                #
+                # Cevrim ODEME GUNU kuruyla — musteri o gun eline
+                # gecen parayla oduyor; NK7'de ayni kurali capraz
+                # kapatma icin koymustuk.
+                _b_dv = (h.doviz or 'TRY').upper()
+                _odenen = 0.0
+                for _o in CariHareket.query.filter(
+                        CariHareket.cari_id == cari_id,
+                        CariHareket.baglanti_tip == 'stok_fatura',
+                        CariHareket.baglanti_id == _fno,
+                        CariHareket.kaynak != 'stok').all():
+                    _o_dv = (_o.doviz or 'TRY').upper()
+                    _o_tut = float(_o.borc or 0)
+                    if not _o_tut:
+                        continue
+                    if _o_dv == _b_dv:
+                        _odenen += _o_tut
+                        continue
+                    # TRY karsiligi uzerinden koprule. Kur
+                    # bulunamazsa ODEME SAYILMAZ — yanlis kapatma
+                    # gostermektense eksik gostermek yeglenir.
+                    _o_try = float(_o.borc_try or 0) or (
+                        _o_tut * float(_o.kur_uygulanan or 0))
+                    # ── ÖDEME GÜNÜ KURU (kullanici karari) ──
+                    # Ilk surumde BORC gunu kuru kullaniliyordu:
+                    #   90.000 TRY / 40 = 2.250 USD
+                    # Dogrusu ODEME gunu kuru:
+                    #   90.000 TRY / 45 = 2.000 USD
+                    # Musteri o gun eline gecen parayla oduyor; kac
+                    # USD'ye denk geldigi O GUNKU kurla bellidir.
+                    # Aradaki fark KUR FARKIDIR ve ayri hareket
+                    # olarak islenir (EK2) — mahsuba karistirmak
+                    # farki iki kez saymak olurdu.
+                    _o_kur = (float(_o.kur_uygulanan or 0)
+                              or float(_kur_getir(_b_dv, _o.hareket_tarihi) or 0))
+                    if _o_dv == 'TRY' and _b_dv != 'TRY':
+                        # TRY odeme, dovizli borc: odeme gunundeki
+                        # BORC DOVIZI kuru bolen olur.
+                        _bol = (float(_kur_getir(_b_dv, _o.hareket_tarihi) or 0)
+                                or float(h.kur_uygulanan or 0))
+                    else:
+                        _bol = (1.0 if _b_dv == 'TRY'
+                                else float(_kur_getir(_b_dv, _o.hareket_tarihi) or 0)
+                                or float(h.kur_uygulanan or 0))
+                    if _o_try and _bol > 0:
+                        _odenen += _o_try / _bol
                 _kalan = q3(float(h.alacak or 0) - float(_odenen))
                 if _kalan <= 0.01:
                     continue

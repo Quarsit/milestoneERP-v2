@@ -854,8 +854,36 @@ function hFaturaSecildi() {
   const tut = document.getElementById('hTutar');
   if (tut && !tut.value) tut.value = f.kalan;
   const dov = document.getElementById('hDoviz');
+  /* Dövizi faturanınkine ÖNERİ olarak ayarlar; kullanıcı
+     değiştirebilir. USD borca TRY ödeme meşru bir ihtiyaç —
+     fatura ekranında zaten destekleniyor, burada yasaklamak
+     tutarsızlık olurdu (CD1). */
   if (dov && f.doviz) { dov.value = f.doviz; kurAlaniGoster(); }
-  not.textContent = `Kalan ${para(f.kalan, f.doviz)} · fazla girerseniz fark serbest hareket olur.`;
+  faturaDovizNotu();
+}
+
+/* ── FARKLI DÖVİZDE ÖDEME (CD1) ──
+   Fatura dövizi ile ödeme dövizi farklıysa kullanıcı bunu
+   KAYDETMEDEN görmeli. Çevrim sunucuda yapılıyor; burada
+   hesaplasaydım iki yerde iki farklı sonuç riski doğardı —
+   bu projede o hata sınıfını defalarca düzelttik. */
+function faturaDovizNotu() {
+  const not = document.getElementById('hFaturaNot');
+  if (!not) return;
+  const sec = (document.getElementById('hFatura') || {}).value || '';
+  if (!sec) { not.textContent = ''; return; }
+  const f = HAR_ACIK_FATURALAR.find(
+    x => (x.kaynak === 'stok_fatura' ? 'STOK:' + (x.fatura_no || x.id) : x.id) === sec);
+  if (!f) { not.textContent = ''; return; }
+  const odDv = (document.getElementById('hDoviz') || {}).value || f.doviz;
+  const tutar = parseFloat((document.getElementById('hTutar') || {}).value) || 0;
+  let m = `Kalan ${para(f.kalan, f.doviz)}`;
+  if (odDv && odDv !== f.doviz) {
+    m += ` · ${odDv} ödüyorsunuz, borç ${f.doviz} — çevrim işlem günü kuruyla yapılır`;
+  } else if (tutar > Number(f.kalan) + 0.01) {
+    m += ` · fazla girdiniz, fark serbest hareket olur`;
+  }
+  not.textContent = m;
 }
 
 /* Kur farkı kutucuğu YALNIZCA tahsilat/ödemede anlamlıdır:
@@ -879,6 +907,7 @@ function kurFarkiAlaniGoster() {
 
 function kurAlaniGoster() {
   kurFarkiAlaniGoster();
+  faturaDovizNotu();
   const dov = (document.getElementById('hDoviz') || {}).value;
   const alan = document.getElementById('hKurAlan');
   if (!alan) return;

@@ -128,9 +128,16 @@ BEKLENEN_SERIALIZER_YOK = {
     # SILINMIYOR — test edildi. Kod okunarak dogrulandi.
     'Cari':       {'sorumlu', 'gorunurluk'},
     'Proforma':   {'iskonto_sabit', 'avans_tutari'},
-    'BlokStok':   {'giris_tarihi', 'alis_tarihi'},
-    'PlakaStok':  {'giris_tarihi', 'alis_tarihi'},
-    'EbatliStok': {'giris_tarihi', 'alis_tarihi'},
+    # SK1: `cari_id` KULLANICI ALANI DEGIL — `uretici` adindan
+    # before_insert dinleyicisi otomatik cozuyor (models.py:
+    # stok_cari_id_otomatik_doldur). Forma koymak, kullanicinin
+    # kimlik bagini elle bozabilmesi demek olurdu.
+    #
+    # DIKKAT: bu anahtarlar sozlukte TEK KEZ gecmeli. Ayri satir
+    # olarak eklendiginde alttaki tanim sessizce eziyordu.
+    'BlokStok':   {'giris_tarihi', 'alis_tarihi', 'cari_id'},
+    'PlakaStok':  {'giris_tarihi', 'alis_tarihi', 'cari_id'},
+    'EbatliStok': {'giris_tarihi', 'alis_tarihi', 'cari_id'},
 }
 
 # Z2 muafiyeti: PUT'ta güncellenmemesi BİLİNÇLİ olan alanlar.

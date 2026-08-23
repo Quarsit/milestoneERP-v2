@@ -68,6 +68,12 @@ class BlokStok(db.Model):
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
     uretici         = db.Column(db.String(100))
+    # SK1: TEDARIKCI KIMLIK BAGI.
+    # `uretici` bir AD; ad degisirse ya da iki cari benzer adliysa
+    # bag kopar. Uretimde olculdu: stok silinirken bagli fatura
+    # ADLA eslestirilmek zorunda kalindi (SF2).
+    # `uretici` GORUNTU icin kaliyor, cari_id BAG icin.
+    cari_id         = db.Column(db.String(20), index=True)
     cins            = db.Column(db.String(100))
     blok_no         = db.Column(db.String(50))
     boy             = db.Column(Olcu)
@@ -98,6 +104,12 @@ class PlakaStok(db.Model):
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
     uretici         = db.Column(db.String(100))
+    # SK1: TEDARIKCI KIMLIK BAGI.
+    # `uretici` bir AD; ad degisirse ya da iki cari benzer adliysa
+    # bag kopar. Uretimde olculdu: stok silinirken bagli fatura
+    # ADLA eslestirilmek zorunda kalindi (SF2).
+    # `uretici` GORUNTU icin kaliyor, cari_id BAG icin.
+    cari_id         = db.Column(db.String(20), index=True)
     cins            = db.Column(db.String(100))
     blok_no         = db.Column(db.String(50))
     boy             = db.Column(Olcu)
@@ -131,6 +143,12 @@ class EbatliStok(db.Model):
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
     uretici         = db.Column(db.String(100))
+    # SK1: TEDARIKCI KIMLIK BAGI.
+    # `uretici` bir AD; ad degisirse ya da iki cari benzer adliysa
+    # bag kopar. Uretimde olculdu: stok silinirken bagli fatura
+    # ADLA eslestirilmek zorunda kalindi (SF2).
+    # `uretici` GORUNTU icin kaliyor, cari_id BAG icin.
+    cari_id         = db.Column(db.String(20), index=True)
     cins            = db.Column(db.String(100))
     kasa_no         = db.Column(db.String(50))
     boy             = db.Column(Olcu)
@@ -1204,3 +1222,36 @@ def cari_id_otomatik_doldur(mapper, connection, target):
 
 for _model in (Proforma, Fatura, SatisKaydi, Sevkiyat, Rezervasyon, Siparis):
     _event.listen(_model, 'before_insert', cari_id_otomatik_doldur)
+
+
+def stok_cari_id_otomatik_doldur(mapper, connection, hedef):
+    """Stok kaydinda cari_id bos gelirse `uretici` adindan cozer (SK1).
+
+    Stok DORT ayri yerde olusturuluyor (elle giris, toplu ice
+    aktarma, kesim, ebatlama). Her birine ayri ayri cari_id yazmak
+    yerine tek yerde cozuluyor — biri unutulursa bag sessizce
+    kopardi.
+
+    ESLESMEZSE BOS BIRAKILIR. Yanlis cariye baglamak, SF2'de
+    uretimde gordugumuz hatanin ta kendisiydi: karsi kayit baska
+    tedarikcinin hesabina dusmustu.
+    """
+    if getattr(hedef, 'cari_id', None):
+        return
+    ad = (getattr(hedef, 'uretici', '') or '').strip()
+    if not ad:
+        return
+    try:
+        satir = connection.execute(
+            db.text('SELECT id FROM cariler WHERE UPPER(unvan) = :u LIMIT 1'),
+            {'u': ad.upper()}).fetchone()
+        if satir:
+            hedef.cari_id = satir[0]
+    except Exception:
+        # Bag kurulamazsa stok kaydi YINE DE olusmali; cari_id
+        # bos kalir ve ada gore geri dusme calisir.
+        pass
+
+
+for _model in (BlokStok, PlakaStok, EbatliStok):
+    _event.listen(_model, 'before_insert', stok_cari_id_otomatik_doldur)
