@@ -424,6 +424,54 @@ function ciz() {
     </tr>`).join('') : '<tr><td colspan="5" class="bos">Maliyet kaydı yok.</td></tr>';
 }
 
+/* Bağlı stoğun toplam/birim maliyetini stok API'sinden alır ve
+   çekmecenin altına ekler. Ayrı bir hesap DEĞİL, var olanın
+   gösterimi. */
+async function urunMaliyetiYukle(stokId, stokTip) {
+  const gov = document.getElementById('cekGov');
+  if (!gov) return;
+  const kutu = document.createElement('div');
+  kutu.style.marginTop = '14px';
+  kutu.innerHTML = '<div style="color:var(--soluk);font-size:.8rem">ürün maliyeti yükleniyor…</div>';
+  gov.appendChild(kutu);
+  try {
+    const tip = (stokTip || 'PLAKA').toUpperCase();
+    /* `ara` parametresi bu uç noktada YOK (ölçüldü); desteklenen
+       süzgeçler tip/cins/blok_no/durum/uretici. Bu yüzden tip
+       bazında çekip kimlikle eşleştiriyoruz. */
+    const d = await api(`/api/stok?tip=${encodeURIComponent(tip)}&per_page=500`);
+    const liste = d.data || d.stoklar || [];
+    const x = liste.find(s => s.id === stokId);
+    if (!x) { kutu.innerHTML = ''; return; }
+    const p = v => (Number(v) || 0).toLocaleString('tr-TR',
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const toplam = Number(x.toplam_maliyet_usd) || 0;
+    const ek = Number(x.ek_maliyet_toplam) || 0;
+    const birim = Number(x.birim_maliyet_usd) || 0;
+    const birimAd = x.birim_ad || (tip === 'BLOK' ? 'ton' : 'm²');
+    kutu.innerHTML = `
+      <div style="font-size:.72rem;font-weight:700;letter-spacing:.05em;
+           text-transform:uppercase;color:var(--soluk);margin-bottom:6px">
+        Bu ürünün toplam maliyeti
+      </div>
+      <div style="border:1px solid var(--cizgi);border-radius:var(--r-kucuk);
+           padding:11px 13px;font-size:.86rem;line-height:1.9">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--soluk)">Alış bedeli</span>
+          <span class="mono">${p(toplam - ek)} $</span></div>
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--soluk)">Ek maliyetler</span>
+          <span class="mono">${p(ek)} $</span></div>
+        <div style="display:flex;justify-content:space-between;font-weight:700;
+             border-top:1px solid var(--cizgi);margin-top:5px;padding-top:5px">
+          <span>TOPLAM</span><span class="mono">${p(toplam)} $</span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:3px">
+          <span style="color:var(--soluk)">Giydirilmiş birim</span>
+          <span class="mono">${p(birim)} $ / ${kacar(birimAd)}</span></div>
+      </div>`;
+  } catch (e) { kutu.innerHTML = ''; }
+}
+
 function detayAc(id) {
   const m = TUM.find(x => x.id === id);
   if (!m) return;
@@ -450,6 +498,18 @@ function detayAc(id) {
   const ustBilgi = [kacar(m.baglanti_no || m.baglanti_id || ''), para(m.tutar, m.doviz)]
                      .filter(Boolean).join(' · ');
   cekmeceAc(kacar(m.maliyet_tip || id), ustBilgi, govde, eylem.join(''));
+
+  /* ── ÜRÜNÜN TOPLAM MALİYETİ (TM1) ──
+     "Bu ürün bana kaça mal oldu" sorusu kalemler ayrı ayrı
+     listelendiği için elle toplama gerektiriyordu.
+
+     Değerler BURADA HESAPLANMIYOR — stok listesi zaten
+     `toplam_maliyet_usd` ve `birim_maliyet_usd` döndürüyor.
+     Yeniden hesaplasaydım iki yerde iki farklı sonuç riski
+     doğardı; bu projede o hata sınıfını defalarca düzelttik. */
+  if ((m.baglanti_tip || '').toLowerCase() === 'stok' && m.baglanti_id) {
+    urunMaliyetiYukle(m.baglanti_id, m.stok_tip);
+  }
 }
 
 async function maliyetSil(id) {
