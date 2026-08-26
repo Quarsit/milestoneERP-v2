@@ -104,12 +104,23 @@ SILINECEK_TABLOLAR = [
     # CRM — cari_kisi ve cari_erisim KORUNUYOR (aşağıda), yalnızca
     # aktivite siliniyor.
     'cari_aktivite',
-    # Finans — cariler KORUNUYOR, yalnızca hareketleri siliniyor
-    'kasa_hareket', 'cari_hareket', 'kasa', 'banka',
+    # Finans — cariler, KASA ve BANKA korunuyor; yalnızca
+    # hareketleri siliniyor.
+    'kasa_hareket', 'cari_hareket',
 ]
 
 KORUNAN = {
     'cariler': 'Cari firma kayıtları (hareketleri silinir)',
+    # KASA/BANKA KORUNUYOR (KB1).
+    # Eskiden siliniyordu; her sıfırlamada 8 kasa yeniden
+    # tanımlanmak zorunda kalıyordu ve kasa yokken ödeme
+    # kaydedilemiyordu. Tanımlar kalıcıdır, para hareketleri değil.
+    #
+    # BAKİYELER SIFIRLANIR (aşağıda): hareketler silinip bakiye
+    # kalsaydı "hayalet para" olurdu — D1 değişmezliği ihlal
+    # edilirdi. Açılış bakiyelerini kullanıcı yeniden girer.
+    'kasa': 'Kasa/banka tanımları (BAKİYELER SIFIRLANIR)',
+    'banka': 'Banka hesap tanımları',
     'kullanicilar': 'Kullanıcılar, şifreler, yetkiler',
     'veriler': 'Listeler, firma bilgisi, LOGO, SMTP, KDV ayarları',
     'doviz_kur': 'TCMB kur arşivi',
@@ -135,7 +146,9 @@ KORUNAN = {
 }
 
 # Tamsayı birincil anahtarlı tablolar — dizileri 1'e çekilir.
-DIZI_SIFIRLA = ['banka', 'kasa', 'kasa_hareket', 'kesim_detay',
+# KASA/BANKA BURADA YOK (KB1): tablolar artik silinmiyor, id
+# sayacini sifirlamak MEVCUT kayitlarla cakisan id uretirdi.
+DIZI_SIFIRLA = ['kasa_hareket', 'kesim_detay',
                 'cek_hareket', 'audit_log', 'konteyner', 'cari_aktivite']
 
 # ── SİLME SIRASI: modelin topolojik sırasından, TERS ──
@@ -298,6 +311,28 @@ with motor.begin() as b:
                         f"SELECT setval(pg_get_serial_sequence('\"{t}\"','id'), 1, false)"))
                 except Exception:
                     pass
+
+    # ── KASA/BANKA BAKİYELERİNİ SIFIRLA (KB1) ──
+    # Tanımlar korunuyor ama hareketler silindi. Bakiye alanı eski
+    # değerinde kalsaydı "hayalet para" olurdu: kasa 50.000 gösterir,
+    # tek hareketi olmaz — D1 değişmezliği ihlal edilirdi.
+    #
+    # DİKKAT: bu `if pg:` DIŞINDA olmalı. İlk sürümde içinde kalmıştı
+    # ve yalnızca PostgreSQL'de çalışıyordu; SQLite'ta bakiyeler
+    # olduğu gibi kalıyordu.
+    #
+    # Açılış bakiyelerini kullanıcı yeniden girer; sistem o an düzgün
+    # bir `giris` hareketi açar.
+    for _t in ('kasa', 'banka'):
+        if _t in mevcut:
+            try:
+                _n = b.execute(text(
+                    f'UPDATE "{_t}" SET bakiye = 0 WHERE bakiye <> 0'))
+                if getattr(_n, 'rowcount', 0):
+                    print(f"   {_t:<20} {_n.rowcount} kaydın bakiyesi sıfırlandı")
+            except Exception as _e:
+                print(f"   ⚠ {_t} bakiye sıfırlanamadı: {str(_e)[:50]}")
+
 
 # ── Doğrulama ──
 print()

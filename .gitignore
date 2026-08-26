@@ -72,3 +72,5 @@ instance/
 # Dışarıdan gelen yama paketleri geçici — depoda durmamalı.
 *.diff
 *.patch
+veri_disari/
+*.xlsx
