@@ -398,7 +398,7 @@ async function tahAc(id) {
     `${SECILI.cek_no || SECILI.id} · ${SECILI.cari_unvan || ''} · ${para(SECILI.tutar, SECILI.doviz)}`;
   document.getElementById('tKaydet').textContent = odeme ? 'Ödendi' : 'Tahsil Et';
   document.getElementById('tKasa').innerHTML = KASALAR.length
-    ? KASALAR.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('')
+    ? KASALAR.map(k => `<option value="${k.id}">${kasaEtiket(k)}</option>`).join('')
     : '<option value="">— kasa yok, kasasız işlensin —</option>';
   document.getElementById('tahModal').classList.add('acik');
 }

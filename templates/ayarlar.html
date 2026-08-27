@@ -1092,8 +1092,34 @@ async function bankaKaydet() {
       await api(`/api/banka/${DUZ_BANKA.id}`, { method: 'PUT', body: JSON.stringify(govde) });
       bildir('Banka güncellendi · ' + ad);
     } else {
-      await api('/api/banka', { method: 'POST', body: JSON.stringify(govde) });
+      const _yb = await api('/api/banka', { method: 'POST', body: JSON.stringify(govde) });
       bildir('Banka eklendi · ' + ad);
+
+      /* BAĞLI KASA SORULUR (BK2).
+         Banka hesabı tek başına para hareketi taşıyamaz; tahsilat
+         ve ödemeler KASA üzerinden işleniyor. Banka eklenip kasası
+         açılmazsa hesap sistemde görünür ama kullanılamaz.
+
+         Otomatik açmıyoruz, SORUYORUZ: kullanıcı aynı banka için
+         birden çok hesap tanımlıyor olabilir ve hepsine kasa
+         istemeyebilir. */
+      const _bid = _yb && (_yb.id || (_yb.banka && _yb.banka.id));
+      if (_bid && confirm(
+            `"${ad}" için bir kasa oluşturulsun mu?\n\n` +
+            `Tahsilat ve ödemeler kasa üzerinden işlenir; ` +
+            `kasası olmayan banka hesabı kullanılamaz.`)) {
+        try {
+          await api('/api/kasa', {
+            method: 'POST',
+            body: JSON.stringify({
+              ad: ad + (govde.sube ? ' · ' + govde.sube : ''),
+              doviz: govde.doviz || 'TRY',
+              banka_id: _bid, ana_kasa: false, aktif: true
+            })
+          });
+          bildir('Bağlı kasa oluşturuldu · ' + ad);
+        } catch (e) { /* api() zaten bildiriyor */ }
+      }
     }
     bankaKapat();
     await bankaYukle();

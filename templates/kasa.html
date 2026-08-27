@@ -131,7 +131,7 @@
 {% endblock %}
 
 {% block content %}
-<h1 class="g-baslik">Kasalar</h1>
+<h1 class="g-baslik">Banka ve Kasa</h1>
 <p class="g-alt">Nakit ve banka kasaları, döviz bazlı konsolide toplam. Cari bakiyeler için <a href="/cari" style="color:var(--verde);font-weight:600">Cari Hesaplar</a> sekmesine geç.</p>
 <svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
   <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
@@ -352,7 +352,25 @@ function konsolideCiz() {
     : '<div class="kons-kart"><label>Kasa yok</label><div class="deger">—</div><div class="ek">"Yeni Kasa" ile başla</div></div>';
 }
 
+/* BANKA KARTI SATIRI (BK1).
+   Eskiden kartta yalnızca banka ADI yazıyordu; aynı bankada iki
+   hesabı olan kullanıcı hangisinin hangisi olduğunu ayırt
+   edemiyordu. Şube ve hesap no da gösteriliyor; olmayan alan
+   atlanır, boş ayraç bırakılmaz. */
+function bankaSatiri(k) {
+  const ust = [k.banka_adi, k.banka_sube].filter(Boolean).map(kacar).join(' · ');
+  if (!k.banka_hesap_no) return ust;
+  /* Hesap no ayırt edici bilgi — soluk renkte okunmuyordu.
+     Ana metin rengiyle ve biraz daha büyük. */
+  return ust + `<div class="mono" style="font-size:.76rem;color:var(--murekkep);`
+             + `font-weight:600;margin-top:3px">${kacar(k.banka_hesap_no)}</div>`;
+}
+
 function kasaKartlariCiz() {
+  /* BANKA KARTI: ad + şube + hesap no (BK1).
+     Eskiden yalnızca banka ADI yazıyordu; aynı bankada iki hesabı
+     olan kullanıcı hangisinin hangisi olduğunu ayırt edemiyordu.
+     Olmayan alanlar atlanır, boş ayraç bırakılmaz. */
   const kok = document.getElementById('kasalar');
   document.getElementById('kasaAdet').textContent = KASALAR.length ? '· ' + KASALAR.length : '';
   kok.innerHTML = KASALAR.length ? KASALAR.map(k => `
@@ -362,7 +380,8 @@ function kasaKartlariCiz() {
         ${k.banka_adi ? '<span class="rozet rz-mavi">Banka</span>' : ''}</div>
       <div class="bak">${para(k.bakiye, k.doviz)}</div>
       <div class="ek">${k.ana_kasa ? 'alt kasaların toplamı'
-        : (k.banka_adi ? kacar(k.banka_adi) : '↑ ' + para(k.giris_toplam, k.doviz) + ' · ↓ ' + para(k.cikis_toplam, k.doviz))}</div>
+        : (k.banka_adi ? bankaSatiri(k)
+           : '↑ ' + para(k.giris_toplam, k.doviz) + ' · ↓ ' + para(k.cikis_toplam, k.doviz))}</div>
     </div>`).join('')
     : '<div class="kasa-kart"><div class="ad">Kasa tanımlı değil</div><div class="ek">"Yeni Kasa" ile başla</div></div>';
 }
@@ -477,7 +496,7 @@ async function kasaHareketAc() {
   document.getElementById('hTarih').valueAsDate = new Date();
   const alt = KASALAR.filter(k => !k.ana_kasa);
   document.getElementById('hKasa').innerHTML = alt.length
-    ? alt.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz}) · ${para(k.bakiye, k.doviz)}</option>`).join('')
+    ? alt.map(k => `<option value="${k.id}">${kasaEtiket(k)} · ${para(k.bakiye, k.doviz)}</option>`).join('')
     : '<option value="">— alt kasa yok, önce tanımla —</option>';
   if (!CARILER.length) {
     try { CARILER = ((await api('/api/cari?per_page=300')).data || []); } catch (e) { CARILER = []; }
@@ -557,7 +576,7 @@ async function yeniKasaAc() {
     } catch (e) { BANKALAR = []; }
   }
   document.getElementById('nBanka').innerHTML = '<option value="">— Nakit kasa (banka yok) —</option>' +
-    BANKALAR.map(b => `<option value="${b.id}" data-doviz="${kacar(b.doviz || '')}">${kacar(b.banka_adi)}${b.sube ? ' · ' + kacar(b.sube) : ''} (${kacar(b.doviz || '')})</option>`).join('');
+    BANKALAR.map(b => `<option value="${b.id}" data-doviz="${kacar(b.doviz || '')}">${bankaEtiket(b)}</option>`).join('');
   document.getElementById('nAd').value = '';
   document.getElementById('nBakiye').value = 0;
   document.getElementById('nAna').checked = false;
@@ -613,7 +632,7 @@ async function virmanAc() {
   document.getElementById('vTarih').valueAsDate = new Date();
 
   const alt = KASALAR.filter(k => !k.ana_kasa);
-  const sec = k => `<option value="${k.id}">${kacar(k.ad)}${k.banka_adi ? ' · ' + kacar(k.banka_adi) : ''}</option>`;
+  const sec = k => `<option value="${k.id}">${kasaEtiket(k)}</option>`;
   document.getElementById('vKaynak').innerHTML = alt.length ? alt.map(sec).join('') : '<option value="">— kasa yok —</option>';
   document.getElementById('vHedef').innerHTML = alt.length ? alt.map(sec).join('') : '<option value="">— kasa yok —</option>';
   if (alt.length > 1) document.getElementById('vHedef').selectedIndex = 1;

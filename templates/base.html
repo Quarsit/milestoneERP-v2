@@ -355,13 +355,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       </a>
       {% if alan_var(a_satis)|trim %}
       <div class="ray-oge">
-      <a href="/siparis" class="ray-btn {% if yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/fatura') or yol.startswith('/satislar') or yol.startswith('/sevkiyat') or yol.startswith('/takipler') or yol.startswith('/musteri') %}aktif{% endif %}">
+      <a href="/siparis" class="ray-btn {% if yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/satislar') or yol.startswith('/sevkiyat') or yol.startswith('/takipler') or yol.startswith('/musteri') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 17l5-5 4 4 7-8"/><path d="M15 8h5v5"/></svg>
         <span>Satış</span>
       </a>
       <div class="ray-ucan"><div class="ray-ucan-ic">
         <div class="ray-ucan-bas">Satış</div>
-        {% for hedef, ad, modul in [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'), ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/sevkiyat','Sevkiyat','sevkiyat'), ('/satislar','Satışlar','satislar'), ('/musteri','Müşteriler','crm'), ('/takipler','Takipler','crm')] %}
+        {% for hedef, ad, modul in [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'), ('/sevkiyat','Sevkiyat','sevkiyat'), ('/satislar','Satışlar','satislar'), ('/musteri','Müşteriler','crm'), ('/takipler','Takipler','crm')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
           <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
@@ -393,7 +393,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       </a>
       <div class="ray-ucan"><div class="ray-ucan-ic">
         <div class="ray-ucan-bas">Finans</div>
-        {% for hedef, ad, modul in [('/kasa','Kasalar','kasa'), ('/cari','Cari Hesaplar','cari'), ('/cek','Çek / Senet','kasa'), ('/kasa-defteri','Kasa Defteri','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
+        {% for hedef, ad, modul in [('/kasa','Banka ve Kasa','kasa'), ('/cari','Cari Hesaplar','cari'), ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/cek','Çek / Senet','kasa'), ('/kasa-defteri','Kasa Defteri','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
           <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
@@ -469,25 +469,26 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 
     {# Çalışma alanı alt sekmeleri — hangi alandaysan onun modülleri #}
     {% set alan_sekmeleri = [] %}
-    {% if yol.startswith('/musteri') or yol.startswith('/takipler') or yol.startswith('/siparis') or yol.startswith('/proforma') or yol.startswith('/fatura')
+    {# MN1: /fatura ve /kdv-iade artık FİNANS alanında — bu koşuldan
+       çıkarıldı, aşağıdaki finans dalına düşüyorlar. #}
+    {% if yol.startswith('/musteri') or yol.startswith('/takipler') or yol.startswith('/siparis') or yol.startswith('/proforma')
           or yol.startswith('/satislar') or yol.startswith('/sevkiyat') %}
       {% set alan_sekmeleri = [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'),
-                               ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'),
-                               ('/sevkiyat','Sevkiyat','sevkiyat'),
-                               ('/satislar','Satışlar','satislar')] %}
-    {% elif yol.startswith('/kdv-iade') %}
-      {% set alan_sekmeleri = [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'),
-                               ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'),
                                ('/sevkiyat','Sevkiyat','sevkiyat'),
                                ('/satislar','Satışlar','satislar')] %}
     {% elif yol.startswith('/stok') or yol.startswith('/rezervasyon') or yol.startswith('/kesim')
             or yol.startswith('/maliyet') %}
       {% set alan_sekmeleri = [('/stok','Stok','stok'), ('/rezervasyon','Rezervasyonlar','rezervasyon'),
                                ('/kesim','Kesim','kesim'), ('/maliyet','Maliyetler','maliyet')] %}
+    {# Faturalar ve KDV İade artık FİNANS alanında (MN1): muhasebe
+       işlemleri, satış değil. Sekmeleri de finans setinden gelir. #}
     {% elif yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek')
             or yol.startswith('/nakit') or yol.startswith('/sabit-gider')
-            or yol.startswith('/kasa-defteri') %}
-      {% set alan_sekmeleri = [('/kasa','Kasalar','kasa'), ('/cari','Cari Hesaplar','cari'),
+            or yol.startswith('/kasa-defteri') or yol.startswith('/fatura')
+            or yol.startswith('/kdv-iade') %}
+      {% set alan_sekmeleri = [('/kasa','Banka ve Kasa','kasa'), ('/cari','Cari Hesaplar','cari'),
+                               ('/fatura','Faturalar','fatura'),
+                               ('/kdv-iade','KDV İade','fatura'),
                                ('/cek','Çek / Senet','kasa'),
                                ('/kasa-defteri','Kasa Defteri','kasa'),
                                ('/nakit','Nakit Akışı','kasa'),
@@ -772,6 +773,82 @@ function gunFarki(tarih) {
 }
 function kacar(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
+/* ══ BANKA/KASA ETİKETİ (BK4) ══
+   Açılır listelerde AYNI banka, AYNI şube, AYNI dövizde birden
+   çok hesap olabiliyor. Yalnızca banka adı yazınca doğru hesabı
+   seçmek imkânsızdı — hesap no ayırt edici tek bilgi.
+
+   Banka adları KISALTILIR: "ZİRAAT BANKASI A.Ş." → "ZİRAAT".
+   Uzun adlar açılır listede yer kaplıyor ve asıl ayırt edici
+   bilgiyi (hesap no) ekrandan taşırıyordu.
+
+   Kısaltma yalnızca SONEK atar; kurum adının kendisine
+   dokunmaz. "İŞ BANKASI" → "İŞ" güvenli, çünkü atılan sözcükler
+   her bankada ortak.
+
+   TEK YERDE tanımlı: yedi ayrı şablonda aynı kalıp vardı; birini
+   güncelleyip diğerini unutmak bu projede defalarca yaşandı. */
+/* Sonekler AYRI SÖZCÜK olarak atılır (boşlukla başlar).
+   İlk sürümde 'BANK' sözcük içinden de kesiliyordu:
+     DENİZBANK → DENİZ,  HALKBANK → HALK,  AKBANK T.A.Ş. → AKBANK T
+   Bunlar kurumun ADININ parçası; kısaltma sonek atmalı, ad
+   bozmamalı. Ölçüldü ve düzeltildi. */
+const BANKA_SONEK = [
+  ' BANKASI A.Ş.', ' BANKASI AŞ', ' BANKASI A.S.', ' BANKASI',
+  ' BANK A.Ş.', ' BANK AŞ', ' BANK',
+  ' A.Ş.', ' A.S.', ' AŞ', ' T.A.O.', ' T.A.Ş.', ' T.A.O', ' T.A.Ş'
+];
+
+function bankaKisa(ad) {
+  let t = String(ad || '').trim();
+  if (!t) return '';
+  const u = () => t.toLocaleUpperCase('tr-TR');
+  let degisti = true;
+  while (degisti) {
+    degisti = false;
+    for (const sonek of BANKA_SONEK) {
+      const su = sonek.toLocaleUpperCase('tr-TR');
+      if (u().endsWith(su) && t.length > su.length) {
+        t = t.slice(0, t.length - su.length).trim().replace(/[.,·-]+$/, '').trim();
+        degisti = true;
+        break;
+      }
+    }
+  }
+  return t || String(ad || '').trim();
+}
+
+/* Banka açılır listesi etiketi: banka · şube · hesap no (döviz)
+   Kasa değil BANKA listeleyen ekranlar için (proforma ödeme
+   bilgisi gibi). Aynı banka+şube+dövizde birden çok hesap
+   olabildiği için hesap no şart. */
+function bankaEtiket(b) {
+  const p = [bankaKisa(b.banka_adi), b.sube, b.hesap_no].filter(Boolean);
+  let s = p.map(x => kacar(x)).join(' · ');
+  if (b.doviz) s += ` (${kacar(b.doviz)})`;
+  if (b.varsayilan) s += ' ★';
+  return s;
+}
+
+/* Kasa açılır listesi etiketi: ad · banka · şube · hesap no (döviz)
+   Olmayan alan atlanır; boş ayraç bırakılmaz. */
+function kasaEtiket(k) {
+  const p = [k.ad];
+  if (k.banka_adi) {
+    const b = [bankaKisa(k.banka_adi), k.banka_sube].filter(Boolean).join(' ');
+    if (b && !String(k.ad || '').toLocaleUpperCase('tr-TR')
+              .includes(bankaKisa(k.banka_adi).toLocaleUpperCase('tr-TR'))) {
+      p.push(b);
+    } else if (k.banka_sube) {
+      p.push(k.banka_sube);
+    }
+    if (k.banka_hesap_no) p.push(k.banka_hesap_no);
+  }
+  let s = p.filter(Boolean).map(x => kacar(x)).join(' · ');
+  if (k.doviz) s += ` (${kacar(k.doviz)})`;
+  return s;
+}
+
 /** Sağ çekmece */
 function cekmeceAc(baslik, alt, govdeHTML, eylemHTML = '') {
   document.getElementById('cekBaslik').textContent = baslik;
@@ -812,7 +889,7 @@ const P_SAYFA = [
   { g:'Sayfalar', ad:'Kesim',        ek:'blok → plaka',      ik:'✂', yol:'/kesim',     m:'kesim' },
   { g:'Sayfalar', ad:'Maliyetler',   ek:'alış · nakliye',    ik:'▤', yol:'/maliyet',   m:'maliyet' },
   { g:'Sayfalar', ad:'Cari Hesaplar', ek:'bakiye · ekstre',  ik:'◉', yol:'/cari',      m:'cari' },
-  { g:'Sayfalar', ad:'Kasalar',      ek:'nakit · konsolide', ik:'₺', yol:'/kasa',      m:'kasa' },
+  { g:'Sayfalar', ad:'Banka ve Kasa', ek:'nakit · konsolide', ik:'₺', yol:'/kasa',      m:'kasa' },
   { g:'Sayfalar', ad:'Çek / Senet',  ek:'portföy · vade',    ik:'▤', yol:'/cek',       m:'kasa' },
   { g:'Sayfalar', ad:'Raporlar',     ek:'stok · satış · cari', ik:'▥', yol:'/raporlar', m:'raporlar' },
   { g:'Sayfalar', ad:'Karlılık',     ek:'kâr analizi',       ik:'▥', yol:'/karlilik',  m:'karlilik' },
@@ -975,7 +1052,7 @@ function hsOdemeDegisti() {
       api('/api/kasa').then(liste => {
         const altlar = (Array.isArray(liste) ? liste : []).filter(k => !k.ana_kasa);
         ks.innerHTML = '<option value="">— kasaya işleme —</option>' +
-          altlar.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('');
+          altlar.map(k => `<option value="${k.id}">${kasaEtiket(k)}</option>`).join('');
       }).catch(() => { /* kasa yoksa liste boş kalır */ });
     }
   }

@@ -779,7 +779,7 @@ async function tahAc(id) {
     try { KASALAR = (await api('/api/kasa')).filter(k => !k.ana_kasa); } catch (e) { KASALAR = []; }
   }
   document.getElementById('tKasa').innerHTML = KASALAR.length
-    ? KASALAR.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('')
+    ? KASALAR.map(k => `<option value="${k.id}">${kasaEtiket(k)}</option>`).join('')
     : '<option value="">— kasa yok —</option>';
   document.getElementById('tahAlt').textContent =
     `${SECILI.musteri} · ${SECILI.fatura_no || SECILI.id} · kalan ${para(TAHSILAT.kalan, SECILI.doviz)}`;

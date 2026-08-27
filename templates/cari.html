@@ -1797,7 +1797,7 @@ function hareketTipiDegisti() {
     const ks = document.getElementById('hKasa');
     if (ks.options.length <= 1 && HAR_KASALAR.length) {
       ks.innerHTML = '<option value="">— kasa seçin (zorunlu) —</option>' +
-        HAR_KASALAR.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('');
+        HAR_KASALAR.map(k => `<option value="${k.id}">${kasaEtiket(k)}</option>`).join('');
     }
     /* Tahsilat/ödemede para BİR YERE gider. Boş seçenek varsayılan
        olursa unutuluyor ve para iki ekran arasında kayboluyor:
@@ -1832,7 +1832,7 @@ function hareketTipiDegisti() {
       const sel = document.getElementById('hHedef');
       sel.innerHTML = yon === 'kasa'
         ? (HAR_KASALAR.length
-            ? HAR_KASALAR.map(k => `<option value="${k.id}">${kacar(k.ad)} (${k.doviz})</option>`).join('')
+            ? HAR_KASALAR.map(k => `<option value="${k.id}">${kasaEtiket(k)}</option>`).join('')
             : '<option value="">— kasa yok —</option>')
         : TUM.filter(c => c.id !== HAR_CARI)
              .map(c => `<option value="${kacar(c.id)}">${kacar(c.unvan)}</option>`).join('');

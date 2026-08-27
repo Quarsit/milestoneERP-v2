@@ -18649,7 +18649,12 @@ def create_app():
             kasalar = Kasa.query.order_by(Kasa.id).all()
 
         # Banka bagli kasalar icin banka bilgisi (tek sorgu)
-        _banka_map = {b.id: {'banka_adi': b.banka_adi, 'iban': b.iban} for b in Banka.query.all()}
+        # BK1: sube ve hesap_no da tasiniyor. Kartta yalnizca banka
+        # ADI gorunuyordu; ayni bankada iki hesabi olan kullanici
+        # hangisinin hangisi oldugunu ayirt edemiyordu.
+        _banka_map = {b.id: {'banka_adi': b.banka_adi, 'iban': b.iban,
+                             'sube': b.sube, 'hesap_no': b.hesap_no}
+                      for b in Banka.query.all()}
 
         alt_kasa_toplam = {}
         if hasattr(Kasa, 'ana_kasa'):
@@ -18680,6 +18685,9 @@ def create_app():
                 # Banka baglantisi: bagliysa banka adi/IBAN da doner
                 'banka_id': getattr(k, 'banka_id', None),
                 'banka_adi': (_banka_map.get(getattr(k, 'banka_id', None)) or {}).get('banka_adi'),
+                # BK1: kartta banka adi + sube + hesap no gorunsun.
+                'banka_sube': (_banka_map.get(getattr(k, 'banka_id', None)) or {}).get('sube'),
+                'banka_hesap_no': (_banka_map.get(getattr(k, 'banka_id', None)) or {}).get('hesap_no'),
                 'banka_iban': (_banka_map.get(getattr(k, 'banka_id', None)) or {}).get('iban'),
             })
         return jsonify(sonuc)
