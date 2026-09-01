@@ -120,7 +120,7 @@ KORUNAN = {
     # kalsaydı "hayalet para" olurdu — D1 değişmezliği ihlal
     # edilirdi. Açılış bakiyelerini kullanıcı yeniden girer.
     'kasa': 'Kasa/banka tanımları (BAKİYELER SIFIRLANIR)',
-    'banka': 'Banka hesap tanımları',
+    'banka': 'Banka hesap tanımları (bakiye tutmaz)',
     'kullanicilar': 'Kullanıcılar, şifreler, yetkiler',
     'veriler': 'Listeler, firma bilgisi, LOGO, SMTP, KDV ayarları',
     'doviz_kur': 'TCMB kur arşivi',
@@ -323,15 +323,23 @@ with motor.begin() as b:
     #
     # Açılış bakiyelerini kullanıcı yeniden girer; sistem o an düzgün
     # bir `giris` hareketi açar.
-    for _t in ('kasa', 'banka'):
+    # YALNIZCA `kasa` — `banka` tablosunda BAKİYE SÜTUNU YOK.
+    #
+    # İlk sürümde ('kasa', 'banka') yazmıştım. Banka'da böyle bir
+    # sütun olmadığı için PostgreSQL UndefinedColumn attı; başarısız
+    # sorgu işlemi ZEHİRLEDİ ve o ana kadar yapılan TÜM SİLMELER
+    # geri alındı. Ekranda "41 kayıt silindi" yazıp doğrulamada
+    # "hâlâ 41 kayıt var" çıkmasının sebebi buydu.
+    #
+    # try/except yetmez: PostgreSQL'de hatalı sorgudan sonra işlem
+    # ancak ROLLBACK ile kurtulur. Doğru çözüm hatayı hiç
+    # doğurmamak — var olmayan sütuna yazmaya kalkmamak.
+    for _t in ('kasa',):
         if _t in mevcut:
-            try:
-                _n = b.execute(text(
-                    f'UPDATE "{_t}" SET bakiye = 0 WHERE bakiye <> 0'))
-                if getattr(_n, 'rowcount', 0):
-                    print(f"   {_t:<20} {_n.rowcount} kaydın bakiyesi sıfırlandı")
-            except Exception as _e:
-                print(f"   ⚠ {_t} bakiye sıfırlanamadı: {str(_e)[:50]}")
+            _n = b.execute(text(
+                f'UPDATE "{_t}" SET bakiye = 0 WHERE bakiye <> 0'))
+            if getattr(_n, 'rowcount', 0):
+                print(f"   {_t:<20} {_n.rowcount} kaydın bakiyesi sıfırlandı")
 
 
 # ── Doğrulama ──
