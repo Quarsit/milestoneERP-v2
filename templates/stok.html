@@ -1549,9 +1549,56 @@ function topluOnizle() {
 
   const kok = document.getElementById('tOnizleme');
   if (eksikZorunlu.length) {
-    kok.innerHTML = `<div class="tp-not tp-uyari">Zorunlu alan eşleştirilmedi: <b>${kacar(eksikZorunlu.join(', '))}</b></div>`;
+    kok.innerHTML = `
+    ${uyarilar.map(u => `<div class="tp-not tp-uyari" style="margin-bottom:8px">⚠ ${u}</div>`).join('')}<div class="tp-not tp-uyari">Zorunlu alan eşleştirilmedi: <b>${kacar(eksikZorunlu.join(', '))}</b></div>`;
     document.getElementById('tKaydet').disabled = true;
     return;
+  }
+
+  /* ── TİP UYUŞMAZLIĞI UYARISI (TP1) ──
+     Üretimde yaşandı: 7 plaka BLOK tipiyle aktarılmak istendi.
+     Sistem doğru davrandı (blok no benzersiz) ama kullanıcı sebebi
+     ancak 6 hata satırı okuduktan sonra anladı.
+
+     İki işaret aranır:
+       · Aynı blok no'nun tekrarlanması → bunlar aynı bloktan
+         çıkan PLAKA olabilir
+       · Eşleştirilen sütunların başka bir tipe işaret etmesi
+         (slab_no → PLAKA, hacim/tonaj → BLOK, kasa_no → EBATLI)
+
+     UYARIR, ENGELLEMEZ: kullanıcı gerçekten öyle istiyor olabilir. */
+  const uyarilar = [];
+  /* Değişken adı `_uTip` — `tip` bu fonksiyonda ZATEN tanımlı ve
+     yeniden bildirmek tüm dosyanın JS'ini kırıyordu (js_denetim
+     yakaladı: "Identifier 'tip' has already been declared"). */
+  const _uTip = (document.getElementById('tTip') || {}).value || '';
+
+  if (_uTip === 'BLOK' && TP_SATIRLAR.length > 1) {
+    const nolar = TP_SATIRLAR.map(r => String(r.blok_no || '').trim()).filter(Boolean);
+    const tekil = new Set(nolar);
+    if (nolar.length > 1 && tekil.size === 1) {
+      uyarilar.push(`<b>${TP_SATIRLAR.length} satırın tamamı aynı blok numarasına sahip`
+        + ` ("${kacar([...tekil][0])}").</b> Blok numarası benzersizdir — ilki dışındakiler`
+        + ` reddedilir. Bunlar aynı bloktan çıkan <b>plakalar</b> olabilir;`
+        + ` ürün tipini kontrol edin.`);
+    } else if (nolar.length > tekil.size) {
+      uyarilar.push(`<b>${nolar.length - tekil.size} satırda blok numarası tekrar ediyor.</b>`
+        + ` Blok numarası benzersizdir; tekrar edenler reddedilir.`);
+    }
+  }
+
+  /* Sütun → tip ipucu. Eşleştirilmiş sütunlar seçilen tiple
+     çelişiyorsa söyle. */
+  const ipucu = { slab_no: 'PLAKA', hacim_m3: 'BLOK', tonaj: 'BLOK',
+                  kasa_no: 'EBATLI', kasa_adedi: 'EBATLI' };
+  const isaret = {};
+  for (const [alan, hedefTip] of Object.entries(ipucu)) {
+    if (alan in harita) isaret[hedefTip] = (isaret[hedefTip] || 0) + 1;
+  }
+  const baskin = Object.entries(isaret).sort((a, b) => b[1] - a[1])[0];
+  if (baskin && baskin[0] !== _uTip) {
+    uyarilar.push(`Eşleştirdiğiniz sütunlar <b>${kacar(baskin[0])}</b> tipine işaret ediyor`
+      + ` ama <b>${kacar(_uTip)}</b> seçili. Ürün tipini kontrol edin.`);
   }
 
   const ilk = TP_SATIRLAR.slice(0, 8);

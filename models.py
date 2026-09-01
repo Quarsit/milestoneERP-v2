@@ -63,11 +63,15 @@ class Kullanici(db.Model):
     olusturma = db.Column(db.DateTime, default=datetime.now)
 
 # ── STOK ─────────────────────────────────────────────────────────────
+# UZ1: cari ünvanı taşıyan alanlar Cari.unvan (200) ile hizalandı.
+# Üretimde 102 karakterlik bir ünvan varchar(100)'e sığmayıp toplu
+# içe aktarmayı tümüyle engellemişti. Ünvanı kesmek belgede yanlış
+# firma adı yazdırırdı — alan genişletildi.
 class BlokStok(db.Model):
     __tablename__ = 'blok_stok'
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
-    uretici         = db.Column(db.String(100))
+    uretici         = db.Column(db.String(200))
     # SK1: TEDARIKCI KIMLIK BAGI.
     # `uretici` bir AD; ad degisirse ya da iki cari benzer adliysa
     # bag kopar. Uretimde olculdu: stok silinirken bagli fatura
@@ -103,7 +107,7 @@ class PlakaStok(db.Model):
     __tablename__ = 'plaka_stok'
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
-    uretici         = db.Column(db.String(100))
+    uretici         = db.Column(db.String(200))
     # SK1: TEDARIKCI KIMLIK BAGI.
     # `uretici` bir AD; ad degisirse ya da iki cari benzer adliysa
     # bag kopar. Uretimde olculdu: stok silinirken bagli fatura
@@ -142,7 +146,7 @@ class EbatliStok(db.Model):
     __tablename__ = 'ebatli_stok'
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
-    uretici         = db.Column(db.String(100))
+    uretici         = db.Column(db.String(200))
     # SK1: TEDARIKCI KIMLIK BAGI.
     # `uretici` bir AD; ad degisirse ya da iki cari benzer adliysa
     # bag kopar. Uretimde olculdu: stok silinirken bagli fatura
@@ -185,11 +189,11 @@ class StokCikis(db.Model):
     cikis_tarihi    = db.Column(db.Date, default=date.today)
     stok_tip        = db.Column(db.String(10))
     stok_id         = db.Column(db.String(20))
-    uretici         = db.Column(db.String(100))
+    uretici         = db.Column(db.String(200))
     cins            = db.Column(db.String(100))
     ozellik         = db.Column(db.String(50))
     olcu_metraj     = db.Column(db.String(50))
-    musteri         = db.Column(db.String(100))
+    musteri         = db.Column(db.String(200))
     siparis_id      = db.Column(db.String(20))
     rezervasyon_id  = db.Column(db.String(20))
     alis_fiyati     = db.Column(Para)
@@ -213,7 +217,7 @@ class Siparis(db.Model):
     __tablename__ = 'siparis_kayit'
     id              = db.Column(db.String(20), primary_key=True)
     siparis_tarihi  = db.Column(db.Date, default=date.today)
-    musteri         = db.Column(db.String(100))
+    musteri         = db.Column(db.String(200))
     # Musteri KIMLIGI (CRM-A2). CRM-A'da atlanmisti: taramada
     # `acente_cari_id` gorulup 'cari_id var' sanilmisti. O alan
     # siparisin ACENTESINI gosterir, musteriyi degil.
@@ -326,7 +330,7 @@ class SiparisKalem(db.Model):
 class Rezervasyon(db.Model):
     __tablename__ = 'rezervasyon'
     id              = db.Column(db.String(20), primary_key=True)
-    musteri         = db.Column(db.String(100))
+    musteri         = db.Column(db.String(200))
     # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
     # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
     cari_id         = db.Column(db.String(20), index=True)
@@ -522,7 +526,7 @@ class Sevkiyat(db.Model):
     sevk_tip        = db.Column(db.String(30))
     siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'), nullable=True)
     siparis_li      = db.Column(db.String(15))
-    musteri         = db.Column(db.String(100))
+    musteri         = db.Column(db.String(200))
     # Musteri KIMLIGI. Onceden bag yalnizca `musteri` metniydi;
     # unvan duzenlenince gecmis koptugu icin eklendi (CRM-A).
     cari_id         = db.Column(db.String(20), index=True)
