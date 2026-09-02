@@ -203,6 +203,19 @@ a{color:inherit;text-decoration:none}
 
 /* ─── Ortak bileşenler (sayfalar kullanır) ─── */
 .kpiler{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+/* 5 KART TEK SIRADA (KS4).
+   `.kpiler` 4 sütun; beşinci kart alta kayıyordu. Değerler de
+   küçültüldü — 5 kutu yan yana dururken eski boyut ekranın
+   yarısını kaplıyordu. */
+.kpi-bes{grid-template-columns:repeat(5,1fr);gap:8px}
+.kpi-bes .kpi{padding:10px 12px}
+.kpi-bes .deger{font-size:1.22rem;line-height:1.15}
+.kpi-bes .deger small{font-size:.68em}
+.kpi-bes label{font-size:.63rem;letter-spacing:.04em}
+.kpi-bes .ek{font-size:.68rem;margin-top:2px}
+/* Ara boyutta 3 sütun — 5 kutu sığmayınca 2 satırda 3+2 durur,
+   4+1'den dengeli görünür. */
+@media(max-width:1240px){.kpi-bes{grid-template-columns:repeat(3,1fr)}}
 .kpi{background:var(--yuzey);border:1px solid var(--cizgi);border-radius:var(--r);padding:14px 18px}
 .kpi label{font-size:.74rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)}
 .kpi .deger{font-family:var(--baslik);font-weight:800;font-size:1.55rem;letter-spacing:-.02em;margin-top:4px}
@@ -307,6 +320,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   .marka,.ray-bosluk{display:none}
   .icerik{padding:18px 16px 90px}
   .kpiler{grid-template-columns:1fr 1fr}
+  .kpi-bes{grid-template-columns:1fr 1fr}
   .dikkat-izgara{grid-template-columns:1fr}
   .cekmece{width:100%;max-width:100%}
   .arama kbd,.tarih-cip{display:none}

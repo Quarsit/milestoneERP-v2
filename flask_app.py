@@ -4094,7 +4094,58 @@ def create_app():
             else:
                 item.update({'boy': s.boy, 'yukseklik': s.yukseklik, 'kalinlik': s.kalinlik, 'm2': s.metraj_m2, 'kasa_no': s.kasa_no, 'blok_no': s.kasa_no, 'ozellik': s.ozellik, 'kasa_ici_adet': s.kasa_ici_adet})
             items.append(item)
-        return jsonify({'data': items, 'meta': {'page': page, 'per_page': per_page, 'total': paginated.total, 'tip': tip, 'note': 'Endpoint returns a single stok type per call; use ?tip=BLOK|PLAKA|EBATLI for the others.'}})
+        # ── SÜZGEÇLENMİŞ TOPLAMLAR (KS3) ──
+        # KPI kutulari EKRANDAKI SAYFADAN hesaplaniyordu; 50'lik
+        # sayfada 41 kalemlik bir urunun yalnizca bir kismi gelince
+        # kutular yanlis toplam gosteriyordu.
+        #
+        # Toplamlar SUZGECIN TAMAMI uzerinden, sayfalamadan ONCE
+        # hesaplanir. `paginated.total` zaten oyle calisiyor;
+        # miktar ve deger de ayni sorgudan geliyor.
+        _ozet = {'adet': paginated.total, 'm2': 0.0, 'm3': 0.0,
+                 'deger_usd': 0.0, 'serbest': 0, 'rezerve': 0}
+        try:
+            # DIKKAT: sorgu degiskeni `query` (ilk surumde `q` yazip
+            # NameError almistim). Ve `ek_maliyet_map` YALNIZCA BU
+            # SAYFANIN maliyetlerini tasiyor — ozet icin TUM
+            # suzgeclenmis kayitlarin maliyeti ayrica cekiliyor.
+            _tum = query.all()
+            _tum_idler = [_x.id for _x in _tum]
+            _tum_maliyet = {}
+            if _tum_idler:
+                for _mid, _mt in db.session.query(
+                        Maliyet.baglanti_id,
+                        db.func.sum(Maliyet.usd_karsilik)).filter(
+                        Maliyet.baglanti_id.in_(_tum_idler),
+                        Maliyet.aktif.is_(True)).group_by(
+                        Maliyet.baglanti_id).all():
+                    _tum_maliyet[_mid] = float(_mt or 0)
+            for _r in _tum:
+                _d = (getattr(_r, 'durum', '') or '')
+                if _d == 'Serbest':
+                    _ozet['serbest'] += 1
+                elif _d == 'Rezerve':
+                    _ozet['rezerve'] += 1
+                if tip == 'BLOK':
+                    _ozet['m3'] += float(getattr(_r, 'hacim_m3', 0) or 0)
+                else:
+                    _ozet['m2'] += float(getattr(_r, 'metraj_m2', 0) or 0)
+                # Deger = alis bedeli + ek maliyetler (stok listesiyle
+                # ayni tanim; iki yerde iki farkli "deger" olmasin).
+                _ozet['deger_usd'] += _tum_maliyet.get(_r.id, 0.0)
+                _af = float(getattr(_r, 'alis_fiyati', 0) or 0)
+                if _af:
+                    _ob = (float(getattr(_r, 'hacim_m3', 0) or 0) if tip == 'BLOK'
+                           else float(getattr(_r, 'metraj_m2', 0) or 0))
+                    _ozet['deger_usd'] += _alim_usd(
+                        _af * (_ob or 1), getattr(_r, 'doviz', 'USD') or 'USD')
+            for _k in ('m2', 'm3', 'deger_usd'):
+                _ozet[_k] = q3(_ozet[_k])
+        except Exception as _e:
+            app.logger.warning(f'[KS3] özet hesaplanamadı: {_e}')
+            _ozet = None
+
+        return jsonify({'data': items, 'ozet': _ozet, 'meta': {'page': page, 'per_page': per_page, 'total': paginated.total, 'tip': tip, 'note': 'Endpoint returns a single stok type per call; use ?tip=BLOK|PLAKA|EBATLI for the others.'}})
 
     @app.route('/api/blok/<blok_no>/izleme', methods=['GET'])
     def api_blok_izleme(blok_no):
@@ -7757,6 +7808,13 @@ def create_app():
             try:
                 _cr = Cari.query.get(_c.get('cari_id'))
                 _pb = (getattr(_cr, 'para_birimi', None) or 'TRY').upper()
+                # NB1: bakiyenin HANGI DOVIZDE oldugu da doner.
+                # Eskiden yalnizca sayi donuyordu ve liste onu her
+                # zaman $ ile basiyordu: TRY bakiye dolar gibi
+                # gorunuyordu (uretimde -1.460.324 TRY, "-1.460.324 $"
+                # yazildi). Ayni hata sinifini cari ozetinde de
+                # duzeltmistik.
+                _c['net_bakiye_doviz'] = _pb
                 if _pb == 'TRY':
                     _c['net_bakiye'] = _c.get('net_bakiye_try') or 0
                 else:
@@ -7767,6 +7825,7 @@ def create_app():
                                               if (h.doviz or 'TRY').upper() == _pb))
             except Exception:
                 _c['net_bakiye'] = None
+                _c['net_bakiye_doviz'] = None
 
         # Cari'leri net bakiyeye göre sırala (en yüksek borçlu üstte)
         sonuc_cariler.sort(key=lambda x: -x['net_bakiye_try'])

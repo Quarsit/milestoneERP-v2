@@ -98,10 +98,18 @@
   <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
 </svg>
 
-<div class="kpiler" style="grid-template-columns:repeat(3,1fr)">
+<!-- 5 kart YAN YANA (KS4). Satır içi `repeat(3,1fr)` iki
+     satıra düşürüyordu. Dar ekranda 2 sütuna sarar. -->
+<div class="kpiler kpi-bes">
   <div class="kpi"><label>Toplam Stok Değeri</label><div class="deger" id="kDeger">—</div><div class="ek" id="kDegerEk">yükleniyor</div></div>
-  <div class="kpi"><label>Serbest</label><div class="deger" id="kSerbest">—</div><div class="ek" id="kSerbestEk">satışa hazır</div></div>
-  <div class="kpi"><label>Rezerve</label><div class="deger" id="kRezerve">—</div><div class="ek" id="kRezerveEk">siparişe ayrılmış</div></div>
+  <div class="kpi"><label>Serbest Stok</label><div class="deger" id="kSerbest">—</div><div class="ek" id="kSerbestEk">satışa hazır</div></div>
+  <div class="kpi"><label>Rezerve Stok</label><div class="deger" id="kRezerve">—</div><div class="ek" id="kRezerveEk">siparişe ayrılmış</div></div>
+  <!-- ADET ve MİKTAR (KS2). Süzgeç uygulandıkça güncellenir;
+       süzgeç yoksa tüm stoğu gösterir. Değer kutuları sunucudan
+       gelirken bunlar EKRANDAKİ listeden hesaplanır — süzgeç
+       istemcide çalıştığı için tek doğru kaynak orası. -->
+  <div class="kpi"><label>Stok Adedi</label><div class="deger" id="kAdet">—</div><div class="ek" id="kAdetEk">kayıt</div></div>
+  <div class="kpi"><label>Stok Miktarı</label><div class="deger" id="kMiktar">—</div><div class="ek" id="kMiktarEk">—</div></div>
 </div>
 
 <div class="arac-cubugu">
@@ -490,7 +498,7 @@
       <!-- Miktar -->
       <div class="form-satir f3">
         <div class="form-alan" id="tonajAlan"><label>Tonaj</label><input id="sTonaj" type="number" step="0.01" oninput="hesapla()"></div>
-        <div class="form-alan" id="adetAlan" style="display:none"><label>Adet</label><input id="sAdet" type="number" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="adetAlan" style="display:none"><label>Stok Adedi</label><input id="sAdet" type="number" value="1" oninput="hesapla()"></div>
         <div class="form-alan" id="kasaAdediAlan" style="display:none"><label>Kasa Adedi</label><input id="sKasaAdedi" type="number" min="1" value="1" oninput="hesapla()"></div>
         <div class="form-alan" id="kasaIciAlan" style="display:none"><label>Kasa İçi Adet</label><input id="sKasaIci" type="number" min="1" value="1" oninput="hesapla()"></div>
         <div class="form-alan" id="basNoAlan" style="display:none"><label id="basNoLabel">Başlangıç Slab No</label><input id="sBasNo" type="number" value="1"></div>
@@ -682,12 +690,13 @@ function olcu(s) {
    kullanılmaz. Ayarlar'da 19 cins olsa da depoda 3 varsa yalnızca
    o 3'ü gösterir — olmayan seçenek boş sonuç üretmez. */
 function suzgecSecenekleriDoldur(kayitlar) {
-  const kur = (alan, id, etiket, secili) => {
+  const kur = (alan, id, etiket, secili, kaynak) => {
+    const liste = kaynak || kayitlar;
     const el = document.getElementById(id);
     if (!el) return;
     /* Değer → kaç stok. Kullanıcı tıklamadan önce ne bulacağını görsün. */
     const sayac = {};
-    kayitlar.forEach(x => {
+    liste.forEach(x => {
       const v = (x[alan] || '').trim();
       if (v) sayac[v] = (sayac[v] || 0) + 1;
     });
@@ -702,9 +711,25 @@ function suzgecSecenekleriDoldur(kayitlar) {
     el.value = secili || '';
     el.classList.toggle('dolu', !!secili);
   };
-  kur('uretici', 'fUretici', 'Üretici', F_URETICI);
-  kur('cins',    'fCins',    'Cins',    F_CINS);
-  kur('ozellik', 'fOzellik', 'Özellik', F_OZELLIK);
+  /* ── KASKAD SÜZGEÇ (KS1) ──
+     Her süzgecin seçenekleri, DİĞER süzgeçlerden geçmiş kayıtlardan
+     üretilir. Üretici seçilince cins listesi yalnızca o üreticinin
+     cinslerini gösterir.
+
+     Kendi süzgecini kendisi daraltmaz — aksi halde bir değer
+     seçildiğinde listede yalnızca o kalır ve kullanıcı başka bir
+     değere geçemez. */
+  const gecer = (x, haric) =>
+    (haric === 'uretici' || !F_URETICI || (x.uretici || '').trim() === F_URETICI) &&
+    (haric === 'cins'    || !F_CINS    || (x.cins    || '').trim() === F_CINS) &&
+    (haric === 'ozellik' || !F_OZELLIK || (x.ozellik || '').trim() === F_OZELLIK);
+
+  kur('uretici', 'fUretici', 'Üretici', F_URETICI,
+      kayitlar.filter(x => gecer(x, 'uretici')));
+  kur('cins',    'fCins',    'Cins',    F_CINS,
+      kayitlar.filter(x => gecer(x, 'cins')));
+  kur('ozellik', 'fOzellik', 'Özellik', F_OZELLIK,
+      kayitlar.filter(x => gecer(x, 'ozellik')));
 }
 
 function suzgecDegisti() {
@@ -739,11 +764,77 @@ function suzgecBilgiGuncelle(toplam, gosterilen) {
   }
 }
 
+/* ── SÜZGECE DUYARLI KPI (KS2) ──
+   Adet, miktar ve değer kutuları EKRANDAKİ listeden hesaplanır.
+   Süzgeç istemcide çalıştığı için tek doğru kaynak orası; sunucuya
+   sormak süzgeci yok sayardı.
+
+   Süzgeç yoksa `satirlar` zaten tüm stoktur — ayrı bir "tümü"
+   dalına gerek yok. */
+function kpiSuzgecGuncelle(satirlar, ozet) {
+  const yaz = (id, v) => { const e = document.getElementById(id); if (e) e.innerHTML = v; };
+  /* Sunucu özeti varsa O kullanılır — süzgecin TAMAMINI kapsar.
+     Yoksa (eski sürüm/hata) sayfadaki satırlara düşülür. */
+  if (ozet) {
+    const s2 = v => (Number(v) || 0).toLocaleString('tr-TR',
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const p = [];
+    if (ozet.m2 > 0) p.push(`${s2(ozet.m2)} m²`);
+    if (ozet.m3 > 0) p.push(`${s2(ozet.m3)} m³`);
+    yaz('kAdet', (ozet.adet || 0).toLocaleString('tr-TR'));
+    yaz('kMiktar', p.length ? p.join(' · ') : '—');
+    yaz('kMiktarEk', p.length > 1 ? 'blok m³ · plaka m²'
+        : (ozet.m3 > 0 ? 'blok hacmi' : 'yüzey alanı'));
+    yaz('kDeger', para(ozet.deger_usd || 0).replace(' $', '<small>$</small>'));
+    yaz('kDegerEk', `${ozet.adet || 0} kayıt`);
+    yaz('kSerbest', (ozet.serbest || 0).toLocaleString('tr-TR'));
+    yaz('kRezerve', (ozet.rezerve || 0).toLocaleString('tr-TR'));
+    return;
+  }
+  const n = satirlar.length;
+  yaz('kAdet', n.toLocaleString('tr-TR'));
+
+  /* Miktar birimi tipe göre değişir: BLOK → m³, PLAKA/EBATLI → m².
+     Karışık listede ikisini de yazıyoruz; tek sayıya toplamak
+     farklı birimleri karıştırmak olurdu. */
+  let m2 = 0, m3 = 0, deger = 0, serbest = 0, rezerve = 0;
+  for (const x of satirlar) {
+    const t = (x.tip || '').toUpperCase();
+    if (t === 'BLOK') m3 += Number(x.hacim_m3) || 0;
+    else m2 += Number(x.m2 || x.metraj_m2) || 0;
+    deger += Number(x.toplam_maliyet_usd) || 0;
+    if (x.durum === 'Serbest') serbest++;
+    else if (x.durum === 'Rezerve') rezerve++;
+  }
+  const s2 = v => v.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const parcalar = [];
+  if (m2 > 0) parcalar.push(`${s2(m2)} m²`);
+  if (m3 > 0) parcalar.push(`${s2(m3)} m³`);
+  yaz('kMiktar', parcalar.length ? parcalar.join(' · ') : '—');
+  yaz('kMiktarEk', parcalar.length > 1 ? 'blok m³ · plaka m²' : (m3 > 0 ? 'blok hacmi' : 'yüzey alanı'));
+
+  /* Değer/serbest/rezerve kutuları da süzgece uyar — eskiden
+     sunucudan gelen TÜM stok değeri yazıyordu ve süzgeç
+     uygulandığında kutu ile liste birbirini tutmuyordu. */
+  yaz('kDeger', para(deger).replace(' $', '<small>$</small>'));
+  yaz('kDegerEk', n ? `${n} kayıt` : 'kayıt yok');
+  yaz('kSerbest', serbest.toLocaleString('tr-TR'));
+  yaz('kRezerve', rezerve.toLocaleString('tr-TR'));
+}
+
 async function listeyiCiz() {
   const govde = document.getElementById('govde');
   govde.innerHTML = '<tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr>';
   try {
+    /* SÜZGEÇLER SUNUCUYA GİDER (KS3).
+       Eskiden yalnızca sayfa çekilip süzgeç İSTEMCİDE uygulanıyordu:
+       41 kalemlik bir ürünün 8'i sonraki sayfada kalıyordu ve
+       kullanıcı eksik liste görüyordu. Sunucu bu süzgeçleri zaten
+       destekliyormuş; ekran göndermiyordu. */
     const q = new URLSearchParams({ tip: TIP, page: SAYFA, per_page: 50 });
+    if (F_URETICI) q.set('uretici', F_URETICI);
+    if (F_CINS)    q.set('cins', F_CINS);
+    if (F_OZELLIK) q.set('ozellik', F_OZELLIK);
     if (DURUM) q.set('durum', DURUM);
     if (FATURA_DURUM) q.set('fatura_durumu', FATURA_DURUM);
     SON = await api('/api/stok?' + q);
@@ -767,6 +858,9 @@ async function listeyiCiz() {
     [x.cins, x.blok_no, x.uretici, x.id, x.ozellik, x.konum]
       .filter(Boolean).join(' ').toLocaleLowerCase('tr').includes(s));
   suzgecBilgiGuncelle(tumu.length, satirlar.length);
+  /* KPI sunucunun ÖZETİNDEN — sayfadaki satırlardan değil.
+     Sayfa 50 kayıt gösterse de toplam 41/60 ne ise o yazılır. */
+  kpiSuzgecGuncelle(satirlar, SON.ozet);
 
   if (!satirlar.length) {
     /* F1: kullanıcı hangi süzgeç yüzünden boş kaldığını bilmeli */

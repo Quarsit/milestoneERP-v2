@@ -228,6 +228,24 @@
 
       <div class="form-alan" style="margin-bottom:10px">
         <label id="hedefBaslik">Bağlanacak kayıt</label>
+        <!-- SÜZGEÇ + ÇOKLU SEÇİM (MS1).
+             Binlerce stok kaydında aranan ürünü kaydırarak bulmak
+             zahmetliydi. Süzgeçler listeyi daraltır; birden çok
+             kayıt seçilebilir ve tutar aralarında eşit bölünür. -->
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+          <input id="hAra" placeholder="Ara — cins, blok no, kayıt no…"
+                 oninput="hedefSuz()" style="flex:1;min-width:150px">
+          <select id="hUretici" onchange="hedefSuz()" style="max-width:170px"></select>
+          <select id="hCins" onchange="hedefSuz()" style="max-width:140px"></select>
+          <select id="hBlok" onchange="hedefSuz()" style="max-width:130px"></select>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:5px">
+          <!-- "Tümünü seç" = SÜZGEÇTEN GEÇEN tüm kayıtlar.
+               Süzgeç yoksa gerçekten hepsi; varsa listelenenler. -->
+          <button type="button" class="mini-btn" onclick="hedefHepsi(true)">Tümünü seç</button>
+          <button type="button" class="mini-btn" onclick="hedefHepsi(false)">Seçimi temizle</button>
+          <span id="mSecimBilgi" style="font-size:.78rem;color:var(--soluk)"></span>
+        </div>
         <div class="hedef-liste" id="hedefListe"><div class="yukleniyor" style="padding:10px">Yükleniyor…</div></div>
       </div>
 
@@ -264,7 +282,12 @@
    DELETE /api/maliyet/<id>  → sil (stok maliyeti geri düşer)
    Bağlanan kaydın birim maliyeti backend'de yeniden hesaplanır. */
 
-let TUM = [], TIP = '', ARA = '', HEDEFLER = [], SECILI_HEDEF = null, CARILER = [];
+let TUM = [], TIP = '', ARA = '', HEDEFLER = [], CARILER = [];
+/* ÇOKLU SEÇİM (MS1).
+   Eskiden `type="radio"` ile TEK kayıt seçilebiliyordu; aynı
+   nakliye faturasını 30 plakaya tek tek girmek gerekiyordu.
+   Artık küme. */
+let SECILI_HEDEFLER = new Set();
 /* M1 — açılır süzgeçler. Tür sekmesi ve metin aramasıyla AYNI
    katmanda (istemci) çalışır; üçü birlikte uygulanır. */
 let M_STOKTIP = '', M_CINS = '', M_CARI = '';
@@ -524,7 +547,7 @@ async function maliyetSil(id) {
 /* ── Maliyet ekle ── */
 async function yeniAc() {
   document.getElementById('modal').classList.add('acik');
-  SECILI_HEDEF = null;
+  SECILI_HEDEFLER = new Set();
   ['fTutar','fFaturaNo'].forEach(i => document.getElementById(i).value = '');
   document.getElementById('fKdv').value = 20;
   document.getElementById('fKdvDahil').checked = false;
@@ -540,7 +563,7 @@ function modalKapat() { document.getElementById('modal').classList.remove('acik'
 
 async function bagTipDegisti() {
   const tip = document.getElementById('fBagTip').value;
-  SECILI_HEDEF = null;
+  SECILI_HEDEFLER = new Set();
   const kok = document.getElementById('hedefListe');
   const baslik = document.getElementById('hedefBaslik');
   baslik.textContent = { Stok: 'Bağlanacak stok', Siparis: 'Bağlanacak sipariş', Sevkiyat: 'Bağlanacak sevkiyat' }[tip];
@@ -549,12 +572,17 @@ async function bagTipDegisti() {
   try {
     if (tip === 'Stok') {
       for (const t of ['BLOK', 'PLAKA', 'EBATLI']) {
-        const d = await api(`/api/stok?tip=${t}&per_page=100`);
+        /* per_page yükseltildi: 100'de kalırken binlerce kayıtta
+           aranan ürün listeye HİÇ GELMİYORDU — süzgeç de onu
+           bulamazdı. Süzgeç istemcide çalıştığı için tümü gerekli. */
+        const d = await api(`/api/stok?tip=${t}&per_page=2000`);
         (d.data || []).forEach(s => HEDEFLER.push({
           id: s.id,
           ad: `${s.cins || '—'}${s.blok_no ? ' · ' + s.blok_no : ''}`,
           alt: `${s.tip} · ${s.durum}${s.fatura_durumu === 'faturasiz' ? ' · faturasız' : ''}`,
-          ek: s.toplam_maliyet_usd ? para(s.toplam_maliyet_usd) : ''
+          ek: s.toplam_maliyet_usd ? para(s.toplam_maliyet_usd) : '',
+          /* Süzgeç alanları — listede gösterilmez, filtrelemede kullanılır. */
+          _uretici: s.uretici || '', _cins: s.cins || '', _blok: s.blok_no || ''
         }));
       }
     } else if (tip === 'Siparis') {
@@ -572,45 +600,158 @@ async function bagTipDegisti() {
     }
   } catch (e) { HEDEFLER = []; }
 
-  kok.innerHTML = HEDEFLER.length ? HEDEFLER.map(h => `
+  hedefSecenekDoldur();
+  hedefCiz();
+}
+
+/* Süzgeç seçeneklerini HEDEFLER'den üret — sabit liste yazsaydım
+   yeni bir cins/üretici eklendiğinde süzgeçte görünmezdi. */
+function hedefSecenekDoldur() {
+  /* ── KASKAD (MS2) ──
+     Her süzgecin seçenekleri, DİĞER süzgeçlerden geçmiş kayıtlardan
+     üretilir: üretici seçilince cins listesi yalnızca o üreticinin
+     cinslerini gösterir.
+
+     Kendi süzgecini kendisi daraltmaz — aksi halde bir değer
+     seçildiğinde listede yalnız o kalır ve başkasına geçilemez. */
+  const fU = (document.getElementById('hUretici') || {}).value || '';
+  const fC = (document.getElementById('hCins') || {}).value || '';
+  const fB = (document.getElementById('hBlok') || {}).value || '';
+  const gecer = (h, haric) =>
+    (haric === '_uretici' || !fU || h._uretici === fU) &&
+    (haric === '_cins'    || !fC || h._cins === fC) &&
+    (haric === '_blok'    || !fB || h._blok === fB);
+
+  const dold = (id, alan, etiket) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const onceki = sel.value;
+    const degerler = [...new Set(HEDEFLER.filter(h => gecer(h, alan))
+      .map(h => h[alan]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr'));
+    /* Seçili değer daralma sonucu listeden düşerse yine de kalsın;
+       aksi halde süzgeç sessizce sıfırlanır. */
+    if (onceki && !degerler.includes(onceki)) degerler.unshift(onceki);
+    sel.innerHTML = `<option value="">— ${etiket} (tümü) —</option>` +
+      degerler.map(v => `<option value="${kacar(v)}">${kacar(v)}</option>`).join('');
+    if (degerler.includes(onceki)) sel.value = onceki;
+  };
+  dold('hUretici', '_uretici', 'üretici');
+  dold('hCins', '_cins', 'cins');
+  dold('hBlok', '_blok', 'blok no');
+}
+
+function hedefSuz() {
+  hedefSecenekDoldur();   /* kaskad: diğer süzgeçler daralsın */
+  hedefCiz();
+}
+
+function hedefCiz() {
+  const kok = document.getElementById('hedefListe');
+  const ara = ((document.getElementById('hAra') || {}).value || '').toLocaleLowerCase('tr-TR');
+  const fU = (document.getElementById('hUretici') || {}).value || '';
+  const fC = (document.getElementById('hCins') || {}).value || '';
+  const fB = (document.getElementById('hBlok') || {}).value || '';
+  const liste = HEDEFLER.filter(h =>
+    (!fU || h._uretici === fU) &&
+    (!fC || h._cins === fC) &&
+    (!fB || h._blok === fB) &&
+    (!ara || `${h.ad} ${h.id} ${h.alt}`.toLocaleLowerCase('tr-TR').includes(ara)));
+
+  kok.innerHTML = liste.length ? liste.map(h => `
     <label class="hedef-satir" data-id="${kacar(h.id)}">
-      <input type="radio" name="hedef" value="${kacar(h.id)}" onchange="hedefSecildi(this)">
+      <input type="checkbox" name="hedef" value="${kacar(h.id)}" onchange="hedefSecildi(this)">
       <div>
         <div>${kacar(h.ad)}</div>
         <div style="color:var(--soluk);font-size:.75rem">${kacar(h.id)} · ${kacar(h.alt)}</div>
       </div>
       <span class="m">${kacar(h.ek)}</span>
     </label>`).join('')
-    : '<div class="bos" style="padding:14px">Kayıt bulunamadı.</div>';
+    : '<div class="bos" style="padding:14px">Süzgece uyan kayıt yok.</div>';
+
+  /* Seçili kalanları işaretli göster — süzgeç değişince seçim
+     KAYBOLMAZ; kullanıcı farklı süzgeçlerle seçim biriktirebilir. */
+  kok.querySelectorAll('input[name="hedef"]').forEach(x => {
+    if (SECILI_HEDEFLER.has(x.value)) {
+      x.checked = true;
+      x.closest('.hedef-satir').classList.add('secili');
+    }
+  });
+  hedefSayacGuncelle();
 }
 
 function hedefSecildi(el) {
-  SECILI_HEDEF = el.value;
-  document.querySelectorAll('.hedef-satir').forEach(s => s.classList.remove('secili'));
-  el.closest('.hedef-satir').classList.add('secili');
+  if (el.checked) SECILI_HEDEFLER.add(el.value);
+  else SECILI_HEDEFLER.delete(el.value);
+  el.closest('.hedef-satir').classList.toggle('secili', el.checked);
+  hedefSayacGuncelle();
+}
+
+function hedefSayacGuncelle() {
+  const b = document.getElementById('mSecimBilgi');
+  if (!b) return;
+  const n = SECILI_HEDEFLER.size;
+  if (!n) { b.textContent = ''; return; }
+  const tut = parseFloat((document.getElementById('fTutar') || {}).value) || 0;
+  const dv = (document.getElementById('fDoviz') || {}).value || '';
+  /* PAYLAŞTIRMA AÇIK YAZILIR.
+     Tutar seçilen kayıtlara EŞİT bölünür; kullanıcı kaydetmeden
+     önce kalem başına ne düşeceğini görmeli. */
+  b.innerHTML = n === 1
+    ? `<b>1</b> kayıt seçili`
+    : `<b>${n}</b> kayıt seçili` + (tut > 0
+        ? ` · tutar eşit bölünür: <b>${(tut / n).toLocaleString('tr-TR',
+            {minimumFractionDigits: 2, maximumFractionDigits: 2})} ${kacar(dv)}</b> / kayıt`
+        : '');
+}
+
+function hedefHepsi(sec) {
+  document.querySelectorAll('.hedef-satir input[name="hedef"]').forEach(x => {
+    x.checked = sec;
+    if (sec) SECILI_HEDEFLER.add(x.value); else SECILI_HEDEFLER.delete(x.value);
+    x.closest('.hedef-satir').classList.toggle('secili', sec);
+  });
+  hedefSayacGuncelle();
 }
 
 async function maliyetKaydet() {
   const tutar = parseFloat(document.getElementById('fTutar').value);
-  if (!SECILI_HEDEF) { bildir('Bağlanacak kaydı seç.', true); return; }
+  if (!SECILI_HEDEFLER.size) { bildir('Bağlanacak kaydı seç.', true); return; }
   if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar gir.', true); return; }
   const btn = document.getElementById('fKaydet');
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';
   try {
-    const d = await api('/api/maliyet', {
-      method: 'POST',
-      body: JSON.stringify({
-        maliyet_tip: document.getElementById('fTip').value,
-        baglanti_tip: document.getElementById('fBagTip').value,
-        baglanti_id: SECILI_HEDEF,
-        tutar, doviz: document.getElementById('fDoviz').value,
-        kdv_oran: parseFloat(document.getElementById('fKdv').value) || 0,
-        kdv_dahil_mi: document.getElementById('fKdvDahil').checked,
-        fatura_no: document.getElementById('fFaturaNo').value,
-        cari_id: document.getElementById('fCari').value || null
-      })
-    });
-    bildir(d.mesaj || 'Maliyet eklendi');
+    /* HER HEDEFE AYRI KAYIT, tutar EŞİT bölünür.
+       Tek kayıt açıp 30 stoğa bağlamak mümkün değil — maliyet
+       ürün başına hesaplanıyor (birim maliyet, kârlılık).
+       Bölme kalıntısı SON kayda eklenir; yoksa 100/3 dağıtımında
+       birkaç kuruş buharlaşırdı. */
+    const hedefler = [...SECILI_HEDEFLER];
+    const pay = Math.round((tutar / hedefler.length) * 100) / 100;
+    const kalinti = Math.round((tutar - pay * hedefler.length) * 100) / 100;
+    let basarili = 0, hata = 0;
+    for (let i = 0; i < hedefler.length; i++) {
+      const t = pay + (i === hedefler.length - 1 ? kalinti : 0);
+      try {
+        await api('/api/maliyet', {
+          method: 'POST',
+          body: JSON.stringify({
+            maliyet_tip: document.getElementById('fTip').value,
+            baglanti_tip: document.getElementById('fBagTip').value,
+            baglanti_id: hedefler[i],
+            tutar: t, doviz: document.getElementById('fDoviz').value,
+            kdv_oran: parseFloat(document.getElementById('fKdv').value) || 0,
+            kdv_dahil_mi: document.getElementById('fKdvDahil').checked,
+            fatura_no: document.getElementById('fFaturaNo').value,
+            cari_id: document.getElementById('fCari').value || null
+          })
+        });
+        basarili++;
+      } catch (e) { hata++; }
+      btn.textContent = `Kaydediliyor… ${i + 1}/${hedefler.length}`;
+    }
+    bildir(hata
+      ? `${basarili} maliyet eklendi, ${hata} başarısız`
+      : `${basarili} maliyet eklendi`, hata > 0);
     modalKapat(); await yukle();
   } catch (e) { /* */ }
   finally { btn.disabled = false; btn.textContent = 'Kaydet'; }

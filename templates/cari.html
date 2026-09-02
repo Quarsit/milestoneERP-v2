@@ -726,6 +726,11 @@ async function yukle() {
          liste, çekmece ve "işlem günü kuru" ekstresi ÜÇÜ DE aynı. */
       BAKIYE[c.cari_id] = {
         net: (c.net_bakiye != null ? c.net_bakiye : (c.net_bakiye_try || 0) / KUR),
+        /* NB1: bakiyenin DÖVİZİ. Yoksa TRY karşılığı USD'ye
+           bölündüğü için USD'dir. Sembolü buradan seçiyoruz;
+           eskiden hep $ basılıyordu ve TRY bakiye dolar gibi
+           görünüyordu. */
+        doviz: (c.net_bakiye != null ? (c.net_bakiye_doviz || 'TRY') : 'USD'),
         gecen: gecen / KUR };
     });
   } catch (e) { BAKIYE = {}; }
@@ -785,7 +790,7 @@ function ciz() {
         ${kacar(c.telefon || '')}${c.telefon && c.email ? '<br>' : ''}${kacar(c.email || '')}
         ${!c.telefon && !c.email ? '—' : ''}</td>
       <td class="sag mono" style="font-weight:600;color:${bakRenk}">
-        ${b.net < 0 ? '−' : ''}${para(Math.abs(b.net))}
+        ${b.net < 0 ? '−' : ''}${para(Math.abs(b.net), b.doviz)}
         ${gec ? '<div style="font-size:.72rem">⚠ ' + para(b.gecen) + ' geçmiş</div>' : ''}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="5" class="bos">Cari yok.</td></tr>';
@@ -1171,7 +1176,7 @@ async function detayAc(id) {
     bakiye = b || {};
   } catch (e) { /* */ }
 
-  const bk = BAKIYE[id] || { net: 0, gecen: 0 };
+  const bk = BAKIYE[id] || { net: 0, gecen: 0, doviz: 'USD' };
   const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
   const govde = `
     <div class="alan-grid">
