@@ -146,7 +146,6 @@ async function alacakYukle() {
           <div class="detay">${c.kova} gecikmiş${c.ulke ? ' · ' + kacar(c.ulke) : ''}</div>
         </div>
         <span class="tutar">${para(c.gecen_usd)}</span>
-        <a class="mini-btn dolu" href="/cari?cari=${encodeURIComponent(c.cari_id)}">Tahsilat gir</a>
       </div>`).join('');
   } catch (e) {
     kok.innerHTML = bosMesaj('Alacak verisi alınamadı.');
@@ -175,7 +174,6 @@ async function cekYukle() {
           <div class="detay">${gecmis ? Math.abs(c.kalan_gun) + ' gün geçti' : c.kalan_gun + ' gün kaldı'} · ${kacar(c.cari_unvan || '')}</div>
         </div>
         <span class="tutar">${para(c.tutar, c.doviz)}</span>
-        <a class="mini-btn dolu" href="/cek">Tahsile ver</a>
       </div>`;
     }).join('');
   } catch (e) { kok.innerHTML = bosMesaj('Çek verisi alınamadı.'); }
@@ -202,7 +200,7 @@ async function siparisYukle() {
           <div class="detay">${s.bekleme} gündür “${kacar(s.durum)}” — ${s.durum === 'Hazir' ? 'sevkiyat bekliyor' : 'ilerlemedi'}</div>
         </div>
         <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
-        <a class="mini-btn dolu" href="${s.durum === 'Hazir' ? '/sevkiyat' : '/siparis'}">${s.durum === 'Hazir' ? 'Sevkiyat oluştur' : 'Aç'}</a>
+
       </div>`).join('');
   } catch (e) { kok.innerHTML = bosMesaj('Sipariş verisi alınamadı.'); }
 }

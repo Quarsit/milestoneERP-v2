@@ -2412,8 +2412,56 @@ def create_app():
             alacak_try = h.alacak_try if h.alacak_try else (
                 (h.alacak or 0) * (h.kur_uygulanan or _kur_getir(h.doviz, h.hareket_tarihi) or 1))
             acik_try += (borc_try or 0) - (alacak_try or 0)
+        # ── TAHSİL EDİLMEMİŞ ÇEKLER DE RİSKTİR (CR1) ──
+        # Cek alinca cari hareket ALACAK yaziliyor ve borc dusuyor;
+        # ama para HENUZ TAHSIL EDILMEDI. Risk hesabi yalnizca cari
+        # hareketlere baktigi icin o tutar GORUNMEZ oluyordu.
+        #
+        # Olculdu: 40.000 USD fatura + 40.000 USD cek → sistem acik
+        # riski 0 goruyordu. 50.000 limitli musteriye 50.000'lik yeni
+        # is onaylanabilirdi; gercek risk 90.000 olurdu.
+        #
+        # Riskten DUSEN durumlar: Tahsil Edildi (para geldi),
+        # Karsiliksiz ve Iade Edildi (cari borcu geri yuklendi,
+        # zaten hareketlerde gorunur), Ciro Edildi (baskasina
+        # devredildi — bizim riskimiz degil).
+        #
+        # Riskte KALAN: Portfoyde, TahsildeBanka, Teminatta.
+        CEK_RISKLI_DURUM = ('Portfoyde', 'TahsildeBanka', 'Teminatta')
+        cek_riski_try = 0.0
+        try:
+            for _ck in Cek.query.filter(
+                    Cek.cari_id == cari.id,
+                    Cek.yon == 'alinan',
+                    Cek.durum.in_(CEK_RISKLI_DURUM)).all():
+                _ct = float(_ck.tutar or 0)
+                if not _ct:
+                    continue
+                _cd = (_ck.doviz or 'TRY').upper()
+                if _cd == 'TRY':
+                    cek_riski_try += _ct
+                else:
+                    # Cek modelinde KUR ALANI YOK (ilk surumde
+                    # `kur_uygulanan` varsaymistim, AttributeError
+                    # verdi ve cek riski sessizce 0 kaliyordu).
+                    # Vade gunu kuru bilinmedigi icin BUGUNKU kur
+                    # kullanilir — risk ileriye donuk bir olcu,
+                    # gunun kuru dogru yaklasim.
+                    _ckur = float(_kur_getir(_cd) or 0)
+                    # Kur yoksa RISKI YOK SAYMAK yerine atlanir ve
+                    # asagida isaretlenir; eksik gostermek, riski
+                    # sifir gostermekten iyidir ama sessiz olmamali.
+                    if _ckur > 0:
+                        cek_riski_try += _ct * _ckur
+        except Exception as _e:
+            app.logger.warning(f'[CR1] çek riski hesaplanamadı: {_e}')
+            cek_riski_try = 0.0
+
+        acik_try += cek_riski_try
+
         # TRY → risk dövizi
         acik = q3(acik_try / risk_kur) if risk_kur else q3(acik_try)
+        cek_riski = q3(cek_riski_try / risk_kur) if risk_kur else q3(cek_riski_try)
 
         # Yeni proforma tutarını risk dövizine çevir
         ek_risk_doviz = 0.0
@@ -2433,6 +2481,10 @@ def create_app():
             'limit_var': True, 'unvan': cari.unvan, 'risk_doviz': risk_doviz,
             'risk_doviz_gecerli': risk_doviz_gecerli,
             'risk_limiti': q3(limit), 'acik_risk': acik,
+            # CR1: acik riskin ne kadari TAHSIL EDILMEMIS CEK.
+            # Kullanici "borcu yok ama 40.000 ceki var" ayrimini
+            # gorebilmeli.
+            'cek_riski': cek_riski,
             'kullanilabilir': kullanilabilir,
             'ek_tutar': q3(ek_risk_doviz or 0),
             'kalan_sonrasi': sonrasi,
@@ -6095,9 +6147,33 @@ def create_app():
             alacak_try += _at
 
         _c = db.session.get(Cari, cari_id)
+        # ── TAHSİL EDİLMEMİŞ ÇEK RİSKİ (CR2) ──
+        # Cek alininca cari borcu DUSER; bakiyeye bakan kullanici
+        # "borcu yok" saniyor. Cek tahsil edilene kadar risk surer,
+        # bu yuzden cari kartinda AYRI gosteriliyor.
+        _cek_riski = 0.0
+        _cek_doviz = None
+        try:
+            _cekler = Cek.query.filter(
+                Cek.cari_id == cari_id, Cek.yon == 'alinan',
+                Cek.durum.in_(('Portfoyde', 'TahsildeBanka', 'Teminatta'))).all()
+            for _ck in _cekler:
+                _cek_riski += float(_ck.tutar or 0)
+                if _cek_doviz is None:
+                    _cek_doviz = (_ck.doviz or 'TRY').upper()
+                elif _cek_doviz != (_ck.doviz or 'TRY').upper():
+                    # Karisik dovizli cekler tek sayiya toplanmaz —
+                    # yanlis birim gostermektense isaretlenir.
+                    _cek_doviz = 'KARISIK'
+        except Exception as _e:
+            app.logger.warning(f'[CR2] çek riski okunamadı: {_e}')
+            _cek_riski = 0.0
+
         return jsonify({
             # TEK ANLAMLI SAYI: TRY karsiligi.
             'borc': q3(borc_try), 'alacak': q3(alacak_try),
+            'cek_riski': q3(_cek_riski),
+            'cek_doviz': _cek_doviz,
             'net': q3(borc_try - alacak_try),
             'birim': 'TRY',
             # DOVIZ AYRIMI KORUNUR: tek TRY sayisi kolay okunur ama
@@ -6105,6 +6181,15 @@ def create_app():
             # dovizi ayri gosteriyoruz.
             'dovizler': dovizler,
             'para_birimi': (_c.para_birimi if _c else None) or 'TRY',
+            # ── RİSK DURUMU (CR3) ──
+            # Kartta yalnizca TANIMLI LIMIT goruluyordu; "10.000'in
+            # ne kadari kaldi" sorusu ancak proforma acinca
+            # cevaplaniyordu.
+            #
+            # Hesap BURADA TEKRARLANMAZ — `_cari_risk_durumu` zaten
+            # var. Ikinci bir hesap yazmak paralel gercek olurdu;
+            # bu projede o hata sinifinin bes ornegini duzelttik.
+            'risk': (_cari_risk_durumu(_c) if _c else {'limit_var': False}),
         })
 
     @app.route('/api/cari/<cari_id>', methods=['DELETE'])

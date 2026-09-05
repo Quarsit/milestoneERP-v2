@@ -800,6 +800,24 @@ async function riskKutusuDoldur(id) {
     if (!r || !r.limit_var) return;  // limit tanımsız → kutu gösterme
     const D = r.risk_doviz || 'USD';
     const paraD = v => (Number(v)||0).toLocaleString('tr-TR', {maximumFractionDigits:0}) + ' ' + D;
+
+    /* ── LİMİT NEDEN DOLU (CR2) ──
+       Açık riskin ne kadarı gerçek borç, ne kadarı tahsil edilmemiş
+       çek. Çek alınınca cari borcu DÜŞER ama tahsil edilene kadar
+       risk sürer; kullanıcı bunu görmeden limitin neden dolu
+       olduğunu anlayamıyordu. */
+    const cekR = Number(r.cek_riski) || 0;
+    const borcR = (Number(r.acik_risk) || 0) - cekR;
+    const kirilim = cekR > 0
+      ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--cizgi);
+             font-size:.78rem;color:var(--soluk);line-height:1.6">
+           Açık risk <b>${paraD(r.acik_risk)}</b> =
+           ${paraD(borcR)} açık borç +
+           <b style="color:var(--kehribar)">${paraD(cekR)} tahsil edilmemiş çek</b><br>
+           <span style="font-size:.74rem">Çek alındığında cari borcu düşer ama
+           tahsil edilene kadar risk sürer.</span>
+         </div>`
+      : '';
     if (r.asiliyor) {
       kutu.innerHTML =
         `<div style="margin:8px 0;padding:10px 13px;background:var(--kirmizi-bg);border:1px solid var(--kirmizi);border-radius:9px;font-size:.82rem">
@@ -808,11 +826,14 @@ async function riskKutusuDoldur(id) {
             Kullanılabilir limit: <b>${paraD(r.kullanilabilir)}</b> · Bu proforma: <b>${paraD(r.ek_tutar)}</b><br>
             Onay sonrası limit: <b style="color:var(--kirmizi)">${paraD(r.kalan_sonrasi)}</b> (${paraD(r.asim_tutari)} aşım)
           </div>
+          ${kirilim}
         </div>`;
     } else {
       kutu.innerHTML =
         `<div style="margin:8px 0;padding:8px 12px;background:var(--verde-acik);border:1px solid var(--verde);border-radius:9px;font-size:.8rem;color:var(--verde)">
           ✓ Risk limiti uygun · kullanılabilir ${paraD(r.kullanilabilir)}, onay sonrası ${paraD(r.kalan_sonrasi)} kalır
+          ${cekR > 0 ? `<div style="margin-top:5px;font-size:.76rem;color:var(--soluk)">
+            Bunun ${paraD(cekR)} kadarı tahsil edilmemiş çek riski.</div>` : ''}
         </div>`;
     }
   } catch (e) { /* risk çekilemezse kutu boş kalır */ }
@@ -880,6 +901,10 @@ async function proformaOnayla(id) {
         `Bu proforma: ${(Number(r.proforma_tutari)||0).toLocaleString('tr-TR')} ${r.proforma_doviz}` +
         (r.proforma_doviz !== D ? ` (≈ ${paraD(r.ek_tutar)})` : ``) + `\n\n` +
         `Bu onay müşterinin kullanılabilir limitini ${paraD(r.asim_tutari)} AŞACAK.\n` +
+        /* CR2: limitin neden dolu olduğu onay metninde de görünsün —
+           kullanıcı kutuyu kaçırmış olabilir. */
+        ((Number(r.cek_riski) || 0) > 0
+          ? `Açık riskin ${paraD(r.cek_riski)} kadarı TAHSİL EDİLMEMİŞ ÇEK.\n` : '') +
         `(Onay sonrası kalan limit: ${paraD(r.kalan_sonrasi)})\n\n` +
         `Riski bilerek onaylamak istiyor musunuz?`;
     }
@@ -1183,8 +1208,19 @@ async function duzenleAc(id) {
 
   // Müşterinin siparişleri + mevcut sipariş bağı
   await musteriSiparisleriYukle(d.musteri);
-  if (d.siparis_id) document.getElementById('fSiparis').value = d.siparis_id;
-  else if (TUM.find(x => x.id === id)?.siparis_id) document.getElementById('fSiparis').value = TUM.find(x => x.id === id).siparis_id;
+  /* ÖN SEÇİM DOĞRULANIR (ON1).
+     Sipariş listede yoksa (silinmiş, başka müşteriye taşınmış)
+     `.value = X` sessizce başarısız olur ve proforma siparişsiz
+     kaydedilir. Boş seçenek sayesinde görünür bozuluyor ama
+     kullanıcı fark etmeyebilir — söylüyoruz. */
+  const _sipSec = document.getElementById('fSiparis');
+  const _sipId = d.siparis_id || TUM.find(x => x.id === id)?.siparis_id || '';
+  if (_sipId) {
+    _sipSec.value = _sipId;
+    if (_sipSec.value !== _sipId) {
+      bildir(`Sipariş ${_sipId} listede bulunamadı — elle seçin.`, true);
+    }
+  }
 
   KALEMLER = (d.kalemler || []).map(k => ({
     urun_tip: k.urun_tip || 'PLAKA', cins: k.cins || '', ozellik: k.ozellik || '',

@@ -91,7 +91,8 @@
   <div class="modal" role="dialog" aria-label="Yeni çek">
     <div class="modal-bas">
       <h3>Yeni Çek / Senet</h3>
-      <p>Alınan çek portföye girer; verilen çek ödeme takibine düşer.</p>
+      <p>Alınan çek portföye girer; verilen çek ödeme takibine düşer.
+         <span id="cekTani" style="display:none"></span></p>
     </div>
     <div class="modal-gov">
       <div class="form-satir f3">
@@ -421,7 +422,7 @@ async function tahsilEt() {
 }
 
 /* ── Yeni çek ── */
-async function yeniAc() {
+async function yeniAc(onSeciliCari) {
   document.getElementById('modal').classList.add('acik');
   // Ayarlar > Bankalar'da tanımlı hesaplardan öneri
   try {
@@ -435,14 +436,45 @@ async function yeniAc() {
   if (!CARILER.length) {
     try { CARILER = ((await api('/api/cari?per_page=300')).data || []); } catch (e) { CARILER = []; }
   }
-  document.getElementById('fCari').innerHTML = CARILER.length
-    ? CARILER.map(c => `<option value="${kacar(c.id)}">${kacar(c.unvan)}</option>`).join('')
-    : '<option value="">— cari yok —</option>';
+  /* BOŞ İLK SEÇENEK (ON1).
+     Eskiden liste doğrudan cariyle başlıyordu; ön seçim başarısız
+     olursa ALFABETİK İLK CARİ sessizce seçili kalıyordu ve
+     kullanıcı fark etmezse hareket YANLIŞ CARİYE yazılıyordu.
+     Boş seçenek, başarısızlığı görünür kılar. */
+  /* SEÇİM İŞARETLENEREK BASILIR (ON1 — kesin çözüm).
+     Önceki sürümler listeyi basıp SONRA `sel.value = X` yapıyordu.
+     Ölçtük: atama başarılı oluyordu (`sel.value === cari` doğru)
+     ama ekranda yine boş görünüyordu — bir şey sonradan seçimi
+     sıfırlıyordu. Tarayıcısız ortamda onu kovalamak beş tur
+     sürdü ve sonuç vermedi.
+
+     Bu yüzden seçim artık İŞARETLEMEYE gömülü: `selected`
+     özniteliği HTML'in parçası. Sonradan atama yok, yarış yok,
+     sıfırlanacak bir şey yok. */
+  const _sec = onSeciliCari ? String(onSeciliCari) : '';
+  const _bulundu = _sec && CARILER.some(c => String(c.id) === _sec);
+  document.getElementById('fCari').innerHTML =
+    `<option value=""${_bulundu ? '' : ' selected'}>— cari seçin —</option>` +
+    (CARILER.length
+      ? CARILER.map(c => `<option value="${kacar(c.id)}"${
+          String(c.id) === _sec ? ' selected' : ''}>${kacar(c.unvan)}</option>`).join('')
+      : '<option value="">— cari yok —</option>');
 }
 /* Cari kartından gelindiyse dönülecek cari. modalKapat'tan ÖNCE
    bildirilmeli — `let` hoisting'te erişilemez, sonra bildirseydim
    pencere kapanınca ReferenceError verirdi. */
 let CEK_DONUS_CARI = null;
+/* ── SABİT CARİ (ON1 — kesin çözüm) ──
+   Cari kartından gelindiğinde cari SEÇİLECEK bir şey değil,
+   VERİLMİŞ bir şeydir. Açılır listeyle uğraşmak yerine listeyi
+   hiç kullanmıyoruz: ekranda sabit metin gösteriliyor, kayıt bu
+   değişkenden okunuyor.
+
+   Neden: önceki üç sürümde `sel.value = X` BAŞARILI oluyordu
+   (ölçüldü, "cari seçildi" izi çıktı) ama ekranda seçim
+   görünmüyordu. Tarayıcısız ortamda sebebi bulunamadı. Bu çözüm
+   sebebe bağlı değil — seçim diye bir şey kalmıyor. */
+let CEK_SABIT_CARI = null, CEK_SABIT_UNVAN = '';
 
 function modalKapat() {
   document.getElementById('modal').classList.remove('acik');
@@ -468,13 +500,41 @@ function modalKapat() {
      Kullanıcı cari ekranındaki işine devam ediyordu; onu çek
      listesinde bırakmak akışı koparır. */
   CEK_DONUS_CARI = q.get('cari') || null;
-  await yeniAc();
+  const _cari = q.get('cari');
+  await yeniAc(_cari);
+
   const yon = document.getElementById('fYon');
   if (yon) { yon.value = q.get('yeni'); if (yon.onchange) yon.onchange(); }
-  const cari = q.get('cari');
-  if (cari) {
+
+  /* Cari kartından gelindiyse: LİSTEYİ GİZLE, sabit metin göster.
+     Seçim diye bir şey kalmadığı için sıfırlanamaz. */
+  if (_cari) {
+    const c = (CARILER || []).find(x => String(x.id) === String(_cari));
+    CEK_SABIT_CARI = _cari;
+    CEK_SABIT_UNVAN = c ? (c.unvan || _cari) : _cari;
     const sel = document.getElementById('fCari');
-    if (sel) sel.value = cari;
+    if (sel) {
+      const kutu = document.createElement('div');
+      kutu.className = 'mono';
+      kutu.style.cssText = 'padding:9px 11px;border:1px solid var(--cizgi);'
+        + 'border-radius:var(--r-kucuk);background:var(--notr-bg);font-size:.86rem';
+      kutu.textContent = CEK_SABIT_UNVAN;
+      kutu.title = _cari;
+      sel.style.display = 'none';
+      sel.parentNode.appendChild(kutu);
+      /* Değiştirmek isteyene çıkış yolu — kilitlemiyoruz. */
+      const degis = document.createElement('button');
+      degis.type = 'button';
+      degis.className = 'mini-btn';
+      degis.style.marginTop = '5px';
+      degis.textContent = 'Başka cari seç';
+      degis.onclick = () => {
+        CEK_SABIT_CARI = null;
+        sel.style.display = '';
+        kutu.remove(); degis.remove();
+      };
+      sel.parentNode.appendChild(degis);
+    }
   }
 })();
 
@@ -483,7 +543,9 @@ async function cekKaydet() {
   const vade = document.getElementById('fVade').value;
   if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar gir.', true); return; }
   if (!vade) { bildir('Vade tarihi zorunlu.', true); return; }
-  const cariId = document.getElementById('fCari').value;
+  /* SABİT CARİ varsa listeye BAKILMAZ — kaydın doğru cariye
+     gitmesi ekranın ne gösterdiğine bağlı olmamalı. */
+  const cariId = CEK_SABIT_CARI || document.getElementById('fCari').value;
   const cari = CARILER.find(c => c.id === cariId);
   const btn = document.getElementById('fKaydet');
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';

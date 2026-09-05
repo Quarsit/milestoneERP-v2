@@ -1125,6 +1125,52 @@ function bakiyeParaBirim(v, dv) {
   return s + ' ' + (dv === 'TRY' ? '₺' : dv === 'USD' ? '$' : dv === 'EUR' ? '€' : dv);
 }
 
+/* ── RİSK ALANI (CR3) ──
+   Tanımlı limitin yanında KULLANILABİLİR tutarı da gösterir.
+   Kullanıcı "10.000'in ne kadarı kaldı" sorusunu proformaya
+   girmeden görmeli.
+
+   Açık risk NEGATİFSE (biz borçluyuz — tedarikçi ilişkisi) limit
+   dolmaz; bunu açıkça yazıyoruz, yoksa "neden hâlâ 10.000" sorusu
+   doğuyor. */
+function riskAlani(c, bakiye) {
+  /* DİKKAT: `alan()` yardımcısı `detayAc` İÇİNDE tanımlı yerel bir
+     const — buradan erişilemez. İlk sürümde onu çağırıyordum ve
+     risk limiti TANIMLI her caride ReferenceError atıp çekmeceyi
+     "Yükleniyor…" durumunda bırakıyordu. Limitsiz carilerde erken
+     dönüş olduğu için hata görünmüyordu.
+
+     İşaretlemeyi burada kendimiz üretiyoruz. */
+  const kutu = (etiket, deger) =>
+    `<div class="alan"><label>${etiket}</label><div class="mono">${deger}</div></div>`;
+  if (!c.risk_limiti) return '';
+  const r = (bakiye && bakiye.risk) || {};
+  const D = r.risk_doviz || c.para_birimi || 'USD';
+  const p = v => para(v, D);
+  if (!r.limit_var) return kutu('Risk Limiti', p(c.risk_limiti));
+
+  const acik = Number(r.acik_risk) || 0;
+  const kalan = Number(r.kullanilabilir) || 0;
+  const cek = Number(r.cek_riski) || 0;
+  const oran = Number(c.risk_limiti) > 0
+    ? Math.max(0, Math.min(100, (acik / Number(c.risk_limiti)) * 100)) : 0;
+  const renk = oran >= 90 ? 'var(--kirmizi)' : oran >= 70 ? 'var(--kehribar)' : 'var(--verde)';
+
+  let alt;
+  if (acik <= 0) {
+    alt = `<span style="color:var(--soluk)">limit dolu değil${
+      acik < 0 ? ' · bu caride biz borçluyuz' : ''}</span>`;
+  } else {
+    alt = `kullanılabilir <b style="color:${renk}">${p(kalan)}</b>`
+        + ` · ${p(acik)} kullanımda`
+        + (cek > 0 ? ` <span style="color:var(--kehribar)">(${p(cek)} çek)</span>` : '');
+  }
+  return kutu('Risk Limiti',
+    `${p(c.risk_limiti)}<div style="font-size:.76rem;margin-top:3px;line-height:1.5">${alt}</div>`
+    + (acik > 0 ? `<div style="height:4px;background:var(--cizgi);border-radius:3px;margin-top:5px">
+         <div style="height:100%;width:${oran.toFixed(0)}%;background:${renk};border-radius:3px"></div></div>` : ''));
+}
+
 function bakiyeKutulari(bakiye, c) {
   const dovizler = bakiye.dovizler || {};
   const kodlar = Object.keys(dovizler).sort();
@@ -1188,7 +1234,15 @@ async function detayAc(id) {
       ${alan('Telefon', kacar(c.telefon || '—'), true)}
       ${alan('E-posta', kacar(c.email || '—'))}
       ${c.adres ? alan('Adres', kacar(c.adres)) : ''}
-      ${c.risk_limiti ? alan('Risk Limiti', para(c.risk_limiti), true) : ''}
+      ${riskAlani(c, bakiye)}
+      ${/* CR2: tahsil edilmemiş çek riski. Çek alınınca cari borcu
+            DÜŞER, o yüzden bakiyeye bakan kullanıcı "borcu yok"
+            sanıyordu — oysa çek tahsil edilene kadar risk sürer. */
+        (Number(bakiye.cek_riski) || 0) > 0
+          ? alan('Tahsil Edilmemiş Çek',
+                 `<span style="color:var(--kehribar);font-weight:600">${
+                   para(bakiye.cek_riski, bakiye.cek_doviz || 'USD')}</span>`, true)
+          : ''}
     </div>
     <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">
       Son hareketler ${hareketler.length ? '· ' + hareketler.length : ''}</h4>
@@ -1778,7 +1832,17 @@ function hareketTipiDegisti() {
   const _t = (document.getElementById('hIslem') || {}).value || '';
   if (_t === '__cek_alinan' || _t === '__cek_verilen') {
     const yon = _t === '__cek_alinan' ? 'alinan' : 'verilen';
-    location.href = `/cek?yeni=${yon}&cari=${encodeURIComponent(HAR_CARI || '')}`;
+    /* CARİ YOKSA GİTME (ON1).
+       Boş `cari=` ile gidince çek formunda listedeki İLK cari
+       seçili kalıyordu; kullanıcı fark etmezse hareket yanlış
+       cariye yazılırdı. Eksik bilgiyle devam etmektense durmak
+       yeğdir. */
+    if (!HAR_CARI) {
+      bildir('Önce bir cari seçin.', true);
+      document.getElementById('hIslem').value = 'Tahsilat';
+      return;
+    }
+    location.href = `/cek?yeni=${yon}&cari=${encodeURIComponent(HAR_CARI)}`;
     return;
   }
   /* Kur farkı kutucuğu ve fatura listesi işlem tipine bağlı —

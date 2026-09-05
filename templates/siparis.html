@@ -594,6 +594,19 @@ document.querySelectorAll('#gSec button').forEach(b => b.onclick = () => {
   ciz();
 });
 let araZaman;
+/* URL'DEN ARAMA (ON2).
+   Proforma siparişe dönüşünce `/siparis?ara=SIP-123` adresine
+   yönlendiriliyordu ama bu sayfa parametreyi HİÇ OKUMUYORDU:
+   kullanıcı yeni oluşan siparişi göreceğine tüm listeye düşüyordu.
+   Sessiz bağlam kaybı — çek formundaki cari sorununun aynısı. */
+(function urldenArama() {
+  const q = new URLSearchParams(location.search).get('ara');
+  if (!q) return;
+  ARA = q;
+  const kutu = document.getElementById('ara');
+  if (kutu) kutu.value = q;
+})();
+
 document.getElementById('ara').addEventListener('input', e => {
   clearTimeout(araZaman);
   araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
