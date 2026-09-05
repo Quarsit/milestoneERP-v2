@@ -163,6 +163,27 @@ def create_app():
         'toplam_alacak': ('Total Credit', 'Toplam Alacak'),
         'net_ozet': ('Net Summary', 'Net Özet'),
         'musteri_bilgileri': ('Customer Details', 'Müşteri Bilgileri'),
+        # BD2: belgede SABİT YAZILMIŞ Türkçe etiketler sözlüğe
+        # alındı. İngilizce ekstrede "Customer Details" başlığının
+        # altında "Unvan / Yetkili / Adres" yazıyordu.
+        'unvan': ('Company', 'Unvan'),
+        'yetkili': ('Contact', 'Yetkili'),
+        'telefon': ('Phone', 'Telefon'),
+        'para_birimi': ('Currency', 'Para Birimi'),
+        'kur_esasi': ('Rate Basis', 'Kur Esası'),
+        'adres': ('Address', 'Adres'),
+        'ara_toplam': ('Subtotal', 'Ara Toplam'),
+        'guncel_bakiye': ('CURRENT BALANCE', 'GÜNCEL BAKİYE'),
+        'islem_gunu_kuru': ('Transaction-day rate', 'İşlem günü kuru'),
+        'hareket_yok': ('No financial transactions recorded for this account.',
+                        'Bu cariye ait henüz bir finansal hareket bulunmamaktadır.'),
+        # DR/CR BUYUK HARF: kucuk harfli 'Dr' okuyucuda "Doctor"
+        # cagrisimi yapabiliyor. Muhasebede iki yazim da gecerli;
+        # buyuk harf tercih edildi.
+        'aciklama_borclu': ('*(DR): Debit — customer owes us',
+                            '*(B): Müşteri Borçlu / Biz Alacaklıyız'),
+        'aciklama_alacakli': ('*(CR): Credit — we owe customer',
+                              '*(A): Müşteri Alacaklı / Biz Borçluyuz'),
         'musteri_onayi': ('Customer Approval', 'Müşteri Onayı'),
         'kase_imza': ('Stamp & Signature', 'Kaşe & İmza'),
         'yetkili_imza': ('Authorized Signature', 'Yetkili İmza'),
@@ -182,6 +203,34 @@ def create_app():
 
     app.jinja_env.globals['_ceviri'] = _ceviri
     app.jinja_env.globals['dil'] = 'en'  # şablonlar dil değişkeni beklerse varsayılan
+
+    def _belge_dili(ulke):
+        """Belge dili CARİNİN ÜLKESİNDEN belirlenir  ·  BD1
+
+        Türkiye → 'tr', diğer her şey (ülke kayıtlı DEĞİLSE dahil)
+        → 'en'.
+
+        Neden: belgeler Türkçe/İngilizce KARIŞIK basiliyordu —
+        baslik 'Cari Ekstre' ama sutunlar 'DATE / DEBIT / CREDIT',
+        bir satir 'Alış Faturası' digeri 'Sales Invoice'. Is
+        dunyasinda kotu goruntu.
+
+        Sebep: render_template'e `dil` HIC gecilmiyordu ve kuresel
+        varsayilan 'en' kaliyordu; oysa etiket sozlugu zaten iki
+        dilliydi.
+
+        Ulke bos ise 'en': yurt disi ihtimali daha yuksek ve
+        Ingilizce her iki tarafca da okunabilir. Turkce varsaymak,
+        yabanci musteriye anlamadigi belge gondermek olurdu.
+        """
+        u = (ulke or '').strip().upper()
+        if not u:
+            return 'en'
+        # Kayitlarda 'TÜRKİYE', 'TURKIYE', 'TUR', 'TR' gecebiliyor.
+        _tr = u.replace('Ü', 'U').replace('İ', 'I').replace('Ş', 'S')
+        return 'tr' if _tr in ('TURKIYE', 'TUR', 'TR', 'TURKEY') else 'en'
+
+    app.jinja_env.globals['belge_dili'] = _belge_dili
 
     # Kategori bazlı değer çevirileri (yüzey işlemi, cari işlem tipi)
     _YUZEY_EN = {'Cilalı': 'Polished', 'Cilali': 'Polished', 'Honlu': 'Honed', 'Honed': 'Honed',
@@ -14921,7 +14970,9 @@ def create_app():
             toplam_alacak = _ham_alacak
             net_bakiye = _ham_borc - _ham_alacak
 
-        return render_template('ekstre_print.html', cari=cari, hareketler=hareketler, baslik='Cari Ekstre', bugun=date.today(),
+        return render_template('ekstre_print.html', cari=cari, hareketler=hareketler,
+                               dil=_belge_dili(getattr(cari, 'ulke', None)),
+                               baslik='Cari Ekstre', bugun=date.today(),
                                firma_adi='Milestone Mermer', toplam_borc=toplam_borc, toplam_alacak=toplam_alacak,
                                net_bakiye=net_bakiye, hedef_doviz=hedef_doviz, kur_modu=kur_modu)
 
@@ -14971,7 +15022,9 @@ def create_app():
             toplam_alacak = toplam_alacak_try / son_kur if son_kur else 0
             net_bakiye = (toplam_borc_try - toplam_alacak_try) / son_kur if son_kur else 0
 
-        return render_template('ekstre_print.html', cari=cari, hareketler=hareketler, baslik=f'Sipariş Ekstresi - {siparis_id}',
+        return render_template('ekstre_print.html', cari=cari, hareketler=hareketler,
+                               dil=_belge_dili(getattr(cari, 'ulke', None)),
+                               baslik=f'Sipariş Ekstresi - {siparis_id}',
                                bugun=date.today(), firma_adi='Milestone Mermer', toplam_borc=toplam_borc, toplam_alacak=toplam_alacak,
                                net_bakiye=net_bakiye, hedef_doviz=hedef_doviz)
 
@@ -15863,6 +15916,7 @@ def create_app():
             sablon = 'proforma_print.html'
             cikti_kalemler = kalemler
         return render_template(sablon, p=p, kalemler=cikti_kalemler,
+                               dil=_belge_dili(getattr(p, 'musteri_ulke', None)),
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,

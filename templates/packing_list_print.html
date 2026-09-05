@@ -231,7 +231,7 @@ tbody td.c{text-align:center}
       {# Son grubun ara toplami #}
       {% if ns.son_kont != '__BASLANGIC__' and konteynerler %}
       <tr style="background:#F2F2EE;font-weight:600">
-        <td colspan="{{ _sut - 3 }}" style="text-align:right;font-size:8pt">Ara Toplam</td>
+        <td colspan="{{ _sut - 3 }}" style="text-align:right;font-size:8pt">{{ _ceviri('ara_toplam', dil) }}</td>
         <td class="r">{{ ns.g_adet }}</td>
         <td class="r">{{ '%.3f'|format(ns.g_m) }}</td>
         <td class="r">{{ '{:,.0f}'.format(ns.g_kg) if ns.g_kg else '' }}</td>

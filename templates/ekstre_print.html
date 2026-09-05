@@ -107,19 +107,19 @@
 <div class="info-grid">
   <div class="info-box">
     <h3>{{ _ceviri('musteri_bilgileri', dil) }}</h3>
-    <div class="info-row"><span class="info-label">Unvan:</span> <span class="info-value">{{ cari.unvan }}</span></div>
-    <div class="info-row"><span class="info-label">Yetkili:</span> <span class="info-value">{{ cari.yetkili or '-' }}</span></div>
-    <div class="info-row"><span class="info-label">Telefon:</span> <span class="info-value">{{ cari.telefon or '-' }}</span></div>
-    <div class="info-row"><span class="info-label">Para Birimi:</span> <span class="info-value">{{ hedef_doviz or cari.para_birimi }}</span></div>
+    <div class="info-row"><span class="info-label">{{ _ceviri('unvan', dil) }}:</span> <span class="info-value">{{ cari.unvan }}</span></div>
+    <div class="info-row"><span class="info-label">{{ _ceviri('yetkili', dil) }}:</span> <span class="info-value">{{ cari.yetkili or '-' }}</span></div>
+    <div class="info-row"><span class="info-label">{{ _ceviri('telefon', dil) }}:</span> <span class="info-value">{{ cari.telefon or '-' }}</span></div>
+    <div class="info-row"><span class="info-label">{{ _ceviri('para_birimi', dil) }}:</span> <span class="info-value">{{ hedef_doviz or cari.para_birimi }}</span></div>
     {# YAMA E2: Hangi kur esasiyla hesaplandigi BELGEYE yazilir.
        Mutabakatta karsi taraf bunu bilmeli; ayni hesap iki farkli
        esasla iki farkli sayi verir. #}
     {% if (hedef_doviz or cari.para_birimi) != 'TRY' %}
-    <div class="info-row"><span class="info-label">Kur Esası:</span> <span class="info-value">
-      {% if kur_modu == 'guncel' %}Güncel kur ({{ bugun.strftime('%d.%m.%Y') }}){% else %}İşlem günü kuru{% endif %}
+    <div class="info-row"><span class="info-label">{{ _ceviri('kur_esasi', dil) }}:</span> <span class="info-value">
+      {% if kur_modu == 'guncel' %}Güncel kur ({{ bugun.strftime('%d.%m.%Y') }}){% else %}{{ _ceviri('islem_gunu_kuru', dil) }}{% endif %}
     </span></div>
     {% endif %}
-    <div class="info-row"><span class="info-label">Adres:</span> <span class="info-value" style="font-weight:normal;">{{ cari.adres or '-' }}</span></div>
+    <div class="info-row"><span class="info-label">{{ _ceviri('adres', dil) }}:</span> <span class="info-value" style="font-weight:normal;">{{ cari.adres or '-' }}</span></div>
   </div>
   
   <div class="ozet-box">
@@ -127,16 +127,16 @@
     <div class="ozet-row"><span>{{ _ceviri('toplam_borc', dil) }}:</span> <span class="text-danger">{{ "%.2f"|format(toplam_borc) }} {{ hedef_doviz or cari.para_birimi or 'TRY' }}</span></div>
     <div class="ozet-row"><span>{{ _ceviri('toplam_alacak', dil) }}:</span> <span class="text-success">{{ "%.2f"|format(toplam_alacak) }} {{ hedef_doviz or cari.para_birimi or 'TRY' }}</span></div>
     <div class="ozet-row" style="border-top:2px solid #ccc; padding-top:8px; margin-top:8px; font-size:14px;">
-      <span>GÜNCEL BAKİYE:</span> 
+      <span>{{ _ceviri('guncel_bakiye', dil) }}:</span> 
       <!-- Bakiye pozitifse Alacaklıyız (Müşteri borçlu - Kırmızı B), negatifse Borçluyuz (Biz borçluyuz - Yeşil A) -->
       <span class="{{ 'text-success' if net_bakiye <= 0 else 'text-danger' }}">
         {{ "%.2f"|format(net_bakiye|abs) }} {{ hedef_doviz or cari.para_birimi or 'TRY' }}
-        {% if net_bakiye > 0 %} {{ '(B)' if dil=='TR' else '(Dr)' }} {% elif net_bakiye < 0 %} {{ '(A)' if dil=='TR' else '(Cr)' }} {% else %} - {% endif %}
+        {% if net_bakiye > 0 %} {{ '(B)' if (dil or '').lower().startswith('tr') else '(DR)' }} {% elif net_bakiye < 0 %} {{ '(A)' if (dil or '').lower().startswith('tr') else '(CR)' }} {% else %} - {% endif %}
       </span>
     </div>
     <div style="font-size:10px; color:#777; text-align:center; margin-top:5px; font-weight:normal;">
-      *(B): Müşteri Borçlu / Biz Alacaklıyız<br>
-      *(A): Müşteri Alacaklı / Biz Borçluyuz
+      {{ _ceviri('aciklama_borclu', dil) }}<br>
+      {{ _ceviri('aciklama_alacakli', dil) }}
     </div>
   </div>
 </div>
@@ -164,7 +164,7 @@
       <td>{{ h.hareket_tarihi.strftime('%d.%m.%Y') if h.hareket_tarihi else '—' }}</td>
       <td style="font-weight:600;">{{ _deger_cevir('islem', h.islem_tip, dil) }}</td>
       <td>{{ h.evrak_no or '-' }}</td>
-      <td>{{ _aciklama_cevir(h.aciklama, dil) or '-' }} {% if h.siparis_id %}<br><span style="font-size:10px; color:#555;">({{ 'Sip' if dil=='TR' else 'Order' }}: {{ h.siparis_id }})</span>{% endif %}
+      <td>{{ _aciklama_cevir(h.aciklama, dil) or '-' }} {% if h.siparis_id %}<br><span style="font-size:10px; color:#555;">({{ 'Sip' if (dil or '').lower().startswith('tr') else 'Order' }}: {{ h.siparis_id }})</span>{% endif %}
       {# SK2 — SÖZLEŞME KURU NOTU
          GİB özelgesi: sözleşmede belirlenen kur kullanıldıysa belgede
          belirtilmeli. Mutabakatta karşı taraf, TCMB dışı bir kurun
@@ -176,7 +176,7 @@
       {% if h.kur_kaynak == 'MANUEL' and h.kur_uygulanan %}
       <br><span style="font-size:9px;color:#8a6d1f;">
         ⚑ 1 {{ h.doviz }} = {{ '%.4f'|format(h.kur_uygulanan) }} TL
-        ({{ 'sözleşme kuru' if dil == 'TR' else 'contractual rate' }}{% if h.kur_gerekce %} — {{ h.kur_gerekce }}{% endif %})
+        ({{ 'sözleşme kuru' if (dil or '').lower().startswith('tr') else 'contractual rate' }}{% if h.kur_gerekce %} — {{ h.kur_gerekce }}{% endif %})
       </span>
       {# KU1 — HER HAREKETTE KUR GÖRÜNSÜN.
          Eskiden kur yalnızca MANUEL (sözleşme) kurda yazılıyordu.
@@ -198,7 +198,7 @@
     </tr>
     {% else %}
     <tr>
-      <td colspan="8" style="text-align: center; padding: 20px;">Bu cariye ait henüz bir finansal hareket bulunmamaktadır.</td>
+      <td colspan="8" style="text-align: center; padding: 20px;">{{ _ceviri('hareket_yok', dil) }}</td>
     </tr>
     {% endfor %}
   </tbody>
