@@ -60,6 +60,26 @@ class Kullanici(db.Model):
     rol      = db.Column(db.String(20), default='SATIS')
     aktif    = db.Column(db.Boolean, default=True)
     yetkiler = db.Column(db.Text, default='{}')
+    # ── CARİ KAPSAMI (KP1) ──
+    # YETKİ ile KAPSAM ayrı eksenler:
+    #   yetkiler → NE yapabilir (fatura kes, tahsilat gir…)
+    #   kapsam   → HANGİ carilerde yapabilir
+    #
+    # Eskiden ikisi tek eksendeydi: ADMIN her şeyi görürdü, ADMIN
+    # olmayan yalnızca kendine atananları. Muhasebeci tüm carilerde
+    # işlem yapmak için ADMIN olmak zorundaydı — bu da ayarlar ve
+    # kullanıcı yönetimini açıyordu.
+    #
+    #   'atanan' → sorumlusu olduğu + ortak cariler  (satış)
+    #   'tumu'   → bütün cariler                     (muhasebe, yönetim)
+    #
+    # Kapsam YETKİYİ GENİŞLETMEZ: 'tumu' olan biri tüm carileri
+    # görür ama yalnızca yetkisi olan işlemleri yapar.
+    #
+    # Varsayılan 'atanan' — güvenli taraf. Boş/NULL da 'atanan'
+    # sayılır; eksik değer "herkes her şeyi görsün" anlamına
+    # gelmemeli.
+    cari_kapsam = db.Column(db.String(10), default='atanan')
     olusturma = db.Column(db.DateTime, default=datetime.now)
 
 # ── STOK ─────────────────────────────────────────────────────────────

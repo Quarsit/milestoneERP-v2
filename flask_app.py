@@ -363,6 +363,15 @@ def create_app():
     #  olmayan modul (sevkiyat, kesim...) burada YOK — yapay
     #  bolme, kullaniciya anlamsiz secenek gostermek olurdu.
     # ══════════════════════════════════════════════════════════
+    def _kapsam_temizle(deger):
+        """KP1 · gecerli kapsam degerleri: 'atanan' | 'tumu'
+
+        Taninmayan/bos deger 'atanan'a duser — GUVENLI TARAF.
+        Yazim hatasi yuzunden birinin tum carileri gormesi
+        kabul edilemez.
+        """
+        return 'tumu' if str(deger or '').strip().lower() == 'tumu' else 'atanan'
+
     ALT_YETKILER = {
         'cari': [
             ('cari.kayit', 'Müşteri kartı (ekle / düzenle / sil)'),
@@ -5277,7 +5286,53 @@ def create_app():
     # ══════════════════════════════════════════════════════════
 
     def _erisim_admin_mi():
-        return (session.get('rol') or '').upper() == 'ADMIN'
+        """Cari GORUNURLUK sinirini asan kullanicilar  ·  KP1
+
+        Iki yol var:
+          · ADMIN rolu
+          · cari_kapsam = 'tumu'  (muhasebe, yonetim)
+
+        Ikincisi YALNIZCA GORUNURLUGU acar; yetkiler ayri eksende
+        kalir. Muhasebeci tum carileri gorur ama musteri karti
+        duzenleyemez, ayarlara giremez — bunun icin ADMIN olmasi
+        gerekiyordu ve o da her seyi aciyordu.
+        """
+        if (session.get('rol') or '').upper() == 'ADMIN':
+            return True
+        _ad = session.get('kullanici')
+        if not _ad:
+            return False
+
+        # ── İSTEK BAŞINA ÖNBELLEK (KP2) ──
+        # Bu fonksiyon `do_orm_execute` kancasindan cagriliyor, yani
+        # HER SORGUDA. Ilk surumde burada dogrudan `Kullanici.query`
+        # vardi: her sorgu YENI BIR SORGU doguruyor, o da kancayi
+        # tekrar tetikliyordu. Sonuc: admin disindaki her kullanici
+        # icin sayfalar dakikalarca yukleniyordu.
+        #
+        # Cozum: sonuc `g` uzerinde saklanir — istek basina TEK
+        # sorgu. Ayrica sorgu sirasinda kanca ATLANIR
+        # (`erisim_atla_bayrak`), yoksa ayni ozyineleme surer.
+        if not has_request_context():
+            return False
+        _onbellek = getattr(g, '_kp1_kapsam', None)
+        if _onbellek is not None:
+            return _onbellek
+        try:
+            _eski_bayrak = getattr(g, 'erisim_atla_bayrak', False)
+            g.erisim_atla_bayrak = True          # kancayi atla
+            try:
+                _k = Kullanici.query.filter_by(ad=_ad).first()
+            finally:
+                g.erisim_atla_bayrak = _eski_bayrak
+            # NULL/bos → 'atanan' (guvenli taraf). Eksik deger
+            # "herkes her seyi gorsun" anlamina gelmemeli.
+            _sonuc = bool(_k and (_k.cari_kapsam or 'atanan') == 'tumu')
+        except Exception as _e:
+            app.logger.warning(f'[KP1] kapsam okunamadi: {_e}')
+            _sonuc = False
+        g._kp1_kapsam = _sonuc
+        return _sonuc
 
     def _gorulebilir_cari_idler():
         """Gecerli kullanicinin gorebilecegi cari kimlikleri.
@@ -5374,8 +5429,13 @@ def create_app():
             return                      # CLI, gorev, denetim betigi
         if getattr(g, 'erisim_atla_bayrak', False):
             return                      # sistem islemi
-        if (session.get('rol') or '').upper() == 'ADMIN':
-            return                      # admin her seyi gorur
+        # KP1: TEK KAYNAK. Eskiden burada rol DOGRUDAN kontrol
+        # ediliyordu; `_erisim_admin_mi()` icine eklenen
+        # cari_kapsam='tumu' bu yolda ISLEMIYORDU ve muhasebeci
+        # yine yalnizca ortak carileri goruyordu. Iki ayri gorunurluk
+        # hesabi = iki ayri gercek.
+        if _erisim_admin_mi():
+            return                      # admin ya da kapsam='tumu'
         ben = session.get('kullanici')
         if not ben:
             return                      # oturum yok; _auth_required zaten engeller
@@ -7863,8 +7923,22 @@ def create_app():
             'g_90_plus': {'borc': 0, 'alacak': 0, 'net': 0}
         }
 
+        # ── N+1 GİDERİLDİ (PF1) ──
+        # Eskiden DONGU ICINDE her cari icin ayri sorgu vardi:
+        # 166 caride 169 sorgu. Yerel SQLite'ta 250 ms, agdaki
+        # PostgreSQL'de saniyeler suruyordu — cari listesi
+        # "yukleniyor" diye takiliyordu.
+        #
+        # Simdi TEK sorgu, sonuc bellekte cari_id'ye gore gruplanir.
+        _hepsi = {}
+        _cari_idler = [c.id for c in cariler]
+        if _cari_idler:
+            for _h in CariHareket.query.filter(
+                    CariHareket.cari_id.in_(_cari_idler)).all():
+                _hepsi.setdefault(_h.cari_id, []).append(_h)
+
         for cari in cariler:
-            hareketler = CariHareket.query.filter_by(cari_id=cari.id).all()
+            hareketler = _hepsi.get(cari.id) or []
             if not hareketler:
                 continue
 
@@ -13932,6 +14006,7 @@ def create_app():
                 'ad': k.ad,
                 'rol': k.rol,
                 'aktif': k.aktif,
+                'cari_kapsam': (k.cari_kapsam or 'atanan'),
                 # GUVENLIK: tanimsiz modul 'gizli' sayilir — guard'larla (satir 230/301/353)
                 # ayni varsayilan. Eskiden 'yazma' donuyordu; bu, kisitli bir kullaniciyi
                 # duzenlemek icin acip kaydedince ona tum modullerde YAZMA yetkisi
@@ -13982,6 +14057,8 @@ def create_app():
                 sifre=generate_password_hash(data['sifre']),
                 rol=data.get('rol', 'SATIS'),
                 aktif=data.get('aktif', 'true') == 'true',
+                # KP1: kapsam YETKIDEN AYRI eksen
+                cari_kapsam=_kapsam_temizle(data.get('cari_kapsam')),
                 yetkiler=json.dumps(temiz_yetki, ensure_ascii=False)
             )
             db.session.add(k)
@@ -14023,6 +14100,11 @@ def create_app():
             if gelen.get('proforma_onay'):
                 temiz['proforma_onay'] = True
             k.yetkiler = json.dumps(temiz, ensure_ascii=False)
+        # KP1: kapsam GONDERILDIYSE guncellenir. Gonderilmediginde
+        # DOKUNULMAZ — kismi guncelleme kapsami sessizce
+        # daraltmamali.
+        if 'cari_kapsam' in data:
+            k.cari_kapsam = _kapsam_temizle(data.get('cari_kapsam'))
         db.session.commit()
         return jsonify({'ok': True})
 

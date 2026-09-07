@@ -399,6 +399,24 @@
           </select>
         </div>
       </div>
+
+      <!-- ── CARİ KAPSAMI (KP1) ──
+           YETKİ "ne yapabilir", KAPSAM "hangi carilerde yapabilir".
+           Eskiden ikisi tek eksendeydi: muhasebeci tüm carilerde
+           işlem yapmak için ADMIN olmak zorundaydı, o da ayarları
+           ve kullanıcı yönetimini açıyordu. -->
+      <div class="form-alan" id="uKapsamAlan">
+        <label>Cari Kapsamı</label>
+        <select id="uKapsam">
+          <option value="atanan">Atanan cariler — kendine atanan + ortak</option>
+          <option value="tumu">Tüm cariler — muhasebe, yönetim</option>
+        </select>
+        <div style="font-size:.76rem;color:var(--soluk);margin-top:4px;line-height:1.5">
+          Kapsam <b>yetkiyi genişletmez</b>. "Tüm cariler" seçili bir kullanıcı
+          bütün carileri görür ama yalnızca yukarıda verdiğiniz yetkilerin
+          işlemlerini yapabilir.
+        </div>
+      </div>
       <div class="not" id="adminNot" style="display:none">Admin rolü tüm modüllere tam erişir; ayrı yetki seçimi gerekmez.</div>
       <div id="yetkiKutu">
         <div style="display:flex;align-items:center;margin-bottom:8px">
@@ -649,6 +667,11 @@ function kullaniciAc(id) {
   document.getElementById('uAd').value = DUZENLENEN ? DUZENLENEN.ad : '';
   document.getElementById('uSifre').value = '';
   document.getElementById('uRol').value = DUZENLENEN ? (DUZENLENEN.rol || 'PERSONEL') : 'PERSONEL';
+  /* KP1: kapsam da DOLDURULMALI. Doldurulmazsa düzenleme her
+     açılışta 'atanan'a düşer ve yönetici farkında olmadan
+     muhasebecinin görünürlüğünü kapatır — sessiz yetki kaybı. */
+  document.getElementById('uKapsam').value =
+    DUZENLENEN ? (DUZENLENEN.cari_kapsam || 'atanan') : 'atanan';
   YETKILER = {};
   PROFORMA_ONAY_YETKI = DUZENLENEN ? !!DUZENLENEN.proforma_onay : false;
   if (DUZENLENEN) {
@@ -754,7 +777,10 @@ async function kullaniciKaydet() {
   const yetkilerGovde = rol === 'ADMIN' ? {} : { ...YETKILER };
   // Özel yetki: proforma iç onay (admin zaten hepsine sahip)
   if (rol !== 'ADMIN' && PROFORMA_ONAY_YETKI) yetkilerGovde.proforma_onay = true;
-  const govde = { ad, rol, yetkiler: yetkilerGovde };
+  /* KP1: kapsam ayrı eksen — ADMIN'de anlamsız (zaten hepsini
+     görür) ama göndermek zarar vermez, tutarlı kalsın. */
+  const govde = { ad, rol, yetkiler: yetkilerGovde,
+                  cari_kapsam: (document.getElementById('uKapsam') || {}).value || 'atanan' };
   if (sifre) govde.sifre = sifre;
   try {
     if (DUZENLENEN) {

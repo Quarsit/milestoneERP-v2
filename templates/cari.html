@@ -1494,12 +1494,24 @@ let CARI_KULLANICILAR = null;
 async function cSorumluDoldur(mevcut) {
   const sec = document.getElementById('cSorumlu');
   const gor = document.getElementById('cGorunurluk');
+  /* KULLANICI LİSTESİ YALNIZCA ADMİNE AÇIK (YZ1).
+     `/api/ayarlar/kullanici` admin olmayana 403 döndürüyor ve
+     `api()` yakalanmadan ÖNCE kırmızı uyarı basıyordu:
+     "Bu modülü görüntüleme yetkiniz yok — ayarlar.kullanici".
+     Kullanıcının cari yetkisi vardı, hata yanıltıcıydı.
+
+     Sorumlu ataması zaten yönetici işi; admin değilse ucu HİÇ
+     çağırmıyoruz. Mevcut değer aşağıda korunuyor. */
   if (CARI_KULLANICILAR === null) {
-    try {
-      const d = await api('/api/ayarlar/kullanici');
-      CARI_KULLANICILAR = (Array.isArray(d) ? d : (d.data || []))
-        .map(k => k.ad).filter(Boolean);
-    } catch (e) { CARI_KULLANICILAR = []; }
+    if (!window.ADMIN) {
+      CARI_KULLANICILAR = [];
+    } else {
+      try {
+        const d = await api('/api/ayarlar/kullanici');
+        CARI_KULLANICILAR = (Array.isArray(d) ? d : (d.data || []))
+          .map(k => k.ad).filter(Boolean);
+      } catch (e) { CARI_KULLANICILAR = []; }
+    }
   }
   const adlar = CARI_KULLANICILAR.slice();
   /* Mevcut sorumlu listede yoksa (admin değiliz ya da kullanıcı
