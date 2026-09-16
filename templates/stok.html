@@ -505,6 +505,28 @@
         <div class="form-alan"><label id="olcuLabel">Hacim (m³)</label><input id="sOlcu" readonly></div>
       </div>
 
+      <!-- ── ÖLÇÜ GRUPLARI (OG1) ──
+           Bir blokta farklı ölçüde plaka grupları olabiliyor.
+           K6318 örneği: 187×298'den 9 adet, 185×273'ten 1 adet,
+           186×297'den 11+12+12+12 adet, 135×296'dan 6 adet — toplam
+           63 plaka, numaralar kesintisiz 1-63.
+
+           Ortak bilgiler (cins, blok no, yüzey işlemi, fiyat,
+           tedarikçi, fatura) yukarıda BİR KEZ girilir; yalnızca
+           ölçüler ve adet grup grup değişir. -->
+      <div id="olcuGrupAlan" style="display:none;margin-top:4px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px">
+          <label style="margin:0">Ek Ölçü Grupları</label>
+          <button type="button" class="mini-btn" onclick="olcuGrupEkle()">+ Grup ekle</button>
+          <span id="olcuGrupOzet" style="font-size:.78rem;color:var(--soluk)"></span>
+        </div>
+        <div id="olcuGruplar"></div>
+        <div style="font-size:.76rem;color:var(--soluk);margin-top:4px;line-height:1.5">
+          Üstteki ölçü <b>1. grup</b>tur. Ek grup eklerseniz plaka numaraları
+          kesintisiz devam eder.
+        </div>
+      </div>
+
       <!-- Fiyat -->
       <div class="form-satir f4">
         <div class="form-alan"><label>Alış Fiyatı</label><input id="sFiyat" type="number" step="0.01" oninput="hesapla()"></div>
@@ -572,6 +594,21 @@
         <span>Miktar: <b id="ozMiktar">—</b></span>
         <span>Birim maliyet: <b id="ozBirim">—</b></span>
         <span style="margin-left:auto">Toplam: <b id="ozToplam">—</b></span>
+      </div>
+
+      <!-- ── ÖNİZLEME (OZ1) ──
+           Toplu içe aktarmadaki gibi: kaydetmeden önce ne
+           oluşacağını satır satır göster. Ölçü gruplarıyla birlikte
+           63 plaka tek tuşla açılabildiği için hatanın maliyeti
+           arttı — önizleme onu kaydetmeden önce görünür kılar. -->
+      <div id="stokOnizleme" style="display:none;margin-top:10px">
+        <div style="font-size:.72rem;font-weight:700;letter-spacing:.05em;
+             text-transform:uppercase;color:var(--soluk);margin-bottom:5px">
+          Önizleme — oluşacak kayıtlar
+        </div>
+        <div id="stokOnizlemeIcerik"
+             style="border:1px solid var(--cizgi);border-radius:var(--r-kucuk);
+                    overflow:auto;max-height:230px"></div>
       </div>
     </div>
     <div class="modal-alt">
@@ -831,7 +868,7 @@ async function listeyiCiz() {
        41 kalemlik bir ürünün 8'i sonraki sayfada kalıyordu ve
        kullanıcı eksik liste görüyordu. Sunucu bu süzgeçleri zaten
        destekliyormuş; ekran göndermiyordu. */
-    const q = new URLSearchParams({ tip: TIP, page: SAYFA, per_page: 50 });
+    const q = new URLSearchParams({ tip: TIP, page: SAYFA, per_page: 75 });
     if (F_URETICI) q.set('uretici', F_URETICI);
     if (F_CINS)    q.set('cins', F_CINS);
     if (F_OZELLIK) q.set('ozellik', F_OZELLIK);
@@ -1167,6 +1204,96 @@ async function yeniAc() {
 }
 function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
 
+/* ══ ÖLÇÜ GRUPLARI (OG1) ══
+   Bir blokta farklı ölçüde plaka grupları olabiliyor. Ortak bilgiler
+   formda bir kez girilir; ölçü ve adet grup grup değişir.
+
+   Plaka numaraları KESİNTİSİZ akar: 1. grup başlangıç no'dan başlar,
+   sonraki gruplar bir önceki bittiği yerden devam eder. Elle numara
+   vermek 63 plakada hata kaçınılmaz kılardı. */
+let OLCU_GRUP_SAYAC = 0;
+
+function olcuGruplariSifirla() {
+  const k = document.getElementById('olcuGruplar');
+  if (k) k.innerHTML = '';
+  OLCU_GRUP_SAYAC = 0;
+  olcuGrupOzetle();
+}
+
+function olcuGrupEkle(yuk, boy, kal, adet) {
+  const kok = document.getElementById('olcuGruplar');
+  if (!kok) return;
+  const n = ++OLCU_GRUP_SAYAC;
+  const d = document.createElement('div');
+  d.className = 'olcu-grup';
+  d.dataset.n = n;
+  d.style.cssText = 'display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1.3fr auto;'
+    + 'gap:7px;align-items:end;margin-bottom:6px';
+  d.innerHTML = `
+    <div class="form-alan" style="margin:0"><label>Yükseklik (cm)</label>
+      <input type="number" class="og-yuk" value="${yuk || ''}" oninput="olcuGrupOzetle()"></div>
+    <div class="form-alan" style="margin:0"><label>Boy (cm)</label>
+      <input type="number" class="og-boy" value="${boy || ''}" oninput="olcuGrupOzetle()"></div>
+    <div class="form-alan" style="margin:0"><label>Kalınlık</label>
+      <input type="number" step="0.1" class="og-kal" value="${kal || 2}" oninput="olcuGrupOzetle()"></div>
+    <div class="form-alan" style="margin:0"><label>Adet</label>
+      <input type="number" class="og-adet" value="${adet || 1}" oninput="olcuGrupOzetle()"></div>
+    <div class="form-alan" style="margin:0"><label>Plaka No</label>
+      <input class="og-no" readonly style="background:var(--notr-bg)"></div>
+    <button type="button" class="mini-btn" style="color:var(--kirmizi)"
+            onclick="this.closest('.olcu-grup').remove(); olcuGrupOzetle(); onizlemeCiz()">Sil</button>`;
+  kok.appendChild(d);
+  olcuGrupOzetle();
+}
+
+/* Tüm grupları sırayla oku; numaraları ve toplamları hesapla. */
+function olcuGruplariOku() {
+  const bas = parseInt(document.getElementById('sBasNo').value) || 1;
+  const gruplar = [{
+    yuk: parseFloat(document.getElementById('sYuk').value) || 0,
+    boy: parseFloat(document.getElementById('sBoy').value) || 0,
+    kal: parseFloat(document.getElementById('sKal').value) || 0,
+    adet: parseInt(document.getElementById('sAdet').value) || 0,
+    ana: true
+  }];
+  document.querySelectorAll('#olcuGruplar .olcu-grup').forEach(g => {
+    gruplar.push({
+      yuk: parseFloat(g.querySelector('.og-yuk').value) || 0,
+      boy: parseFloat(g.querySelector('.og-boy').value) || 0,
+      kal: parseFloat(g.querySelector('.og-kal').value) || 0,
+      adet: parseInt(g.querySelector('.og-adet').value) || 0,
+      el: g
+    });
+  });
+  let no = bas;
+  for (const gr of gruplar) {
+    gr.bas = no;
+    gr.son = no + Math.max(0, gr.adet) - 1;
+    gr.m2 = (gr.boy * gr.yuk / 10000) * gr.adet;
+    no = gr.son + 1;
+  }
+  return gruplar;
+}
+
+function olcuGrupOzetle() {
+  const gruplar = olcuGruplariOku();
+  gruplar.forEach(gr => {
+    if (gr.el) {
+      const n = gr.el.querySelector('.og-no');
+      if (n) n.value = gr.adet > 1 ? `${gr.bas} - ${gr.son}` : String(gr.bas);
+    }
+  });
+  const ozet = document.getElementById('olcuGrupOzet');
+  if (!ozet) return;
+  const ek = gruplar.filter(g => !g.ana);
+  if (!ek.length) { ozet.textContent = ''; return; }
+  const adet = gruplar.reduce((a, g) => a + (g.adet || 0), 0);
+  const m2 = gruplar.reduce((a, g) => a + (g.m2 || 0), 0);
+  ozet.innerHTML = `<b>${gruplar.length}</b> grup · <b>${adet}</b> plaka · `
+    + `${m2.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2})} m²`;
+  onizlemeCiz();
+}
+
 function tipDegisti() {
   const t = document.getElementById('sTip').value;
   const blok = t === 'BLOK', plaka = t === 'PLAKA', ebatli = t === 'EBATLI';
@@ -1174,6 +1301,9 @@ function tipDegisti() {
   document.getElementById('kalAlan').style.display = blok ? 'none' : '';
   document.getElementById('tonajAlan').style.display = blok ? '' : 'none';
   document.getElementById('adetAlan').style.display = plaka ? '' : 'none';
+  /* OG1: ölçü grupları yalnızca PLAKA'da anlamlı */
+  const og = document.getElementById('olcuGrupAlan');
+  if (og) { og.style.display = plaka ? '' : 'none'; if (!plaka) olcuGruplariSifirla(); }
   document.getElementById('kasaAdediAlan').style.display = ebatli ? '' : 'none';
   document.getElementById('kasaIciAlan').style.display = ebatli ? '' : 'none';
   document.getElementById('basNoAlan').style.display = plaka ? '' : 'none';
@@ -1212,6 +1342,69 @@ function alisTipiDegisti() {
   if (!kdvli) { document.getElementById('sKdv').value = 0; document.getElementById('sKdvDahil').checked = false; }
   else document.getElementById('sKdv').value = 20;
   hesapla();
+}
+
+/* ══ ÖNİZLEME (OZ1) ══
+   Kaydetmeden önce oluşacak kayıtları gösterir. Ölçü grupları
+   varsa her grup ayrı satır; plaka numaraları ve metraj hesaplı. */
+function onizlemeCiz() {
+  const kutu = document.getElementById('stokOnizleme');
+  const ic = document.getElementById('stokOnizlemeIcerik');
+  if (!kutu || !ic) return;
+  const t = document.getElementById('sTip').value;
+  const cins = (document.getElementById('sCins').value || '').trim();
+  const blok = (document.getElementById('sBlokNo').value || '').trim();
+
+  if (t !== 'PLAKA' || !cins) { kutu.style.display = 'none'; return; }
+  const gruplar = olcuGruplariOku().filter(g => g.adet > 0 && g.boy > 0 && g.yuk > 0);
+  if (!gruplar.length) { kutu.style.display = 'none'; return; }
+
+  const fiyat = parseFloat(document.getElementById('sFiyat').value) || 0;
+  const fb = document.getElementById('sFiyatBirim').value;
+  const dov = document.getElementById('sDoviz').value;
+  const kdvOran = parseFloat(document.getElementById('sKdv').value) || 0;
+  const kdvDahil = document.getElementById('sKdvDahil').checked;
+  /* Matrah (KDV hariç) — sunucu da böyle saklıyor; önizlemenin
+     kayıtla aynı sayıyı göstermesi şart. */
+  const net = (kdvDahil && kdvOran > 0) ? fiyat / (1 + kdvOran / 100) : fiyat;
+
+  const s2 = v => (Number(v) || 0).toLocaleString('tr-TR',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let adet = 0, m2 = 0, tutar = 0;
+  const satirlar = gruplar.map((g, i) => {
+    const gm2 = (g.boy * g.yuk / 10000) * g.adet;
+    const gtut = fb === 'adet' ? net * g.adet : net * gm2;
+    adet += g.adet; m2 += gm2; tutar += gtut;
+    return `<tr>
+      <td style="padding:5px 8px">${i + 1}</td>
+      <td style="padding:5px 8px" class="mono">${g.yuk} × ${g.boy} × ${g.kal || '—'}</td>
+      <td style="padding:5px 8px;text-align:right">${g.adet}</td>
+      <td style="padding:5px 8px;text-align:right" class="mono">${g.adet > 1 ? g.bas + ' - ' + g.son : g.bas}</td>
+      <td style="padding:5px 8px;text-align:right" class="mono">${s2(gm2)} m²</td>
+      <td style="padding:5px 8px;text-align:right" class="mono">${s2(gtut)}</td>
+    </tr>`;
+  }).join('');
+
+  ic.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+      <thead><tr style="background:var(--notr-bg)">
+        <th style="padding:6px 8px;text-align:left">#</th>
+        <th style="padding:6px 8px;text-align:left">Ölçü (Y × B × K)</th>
+        <th style="padding:6px 8px;text-align:right">Adet</th>
+        <th style="padding:6px 8px;text-align:right">Plaka No</th>
+        <th style="padding:6px 8px;text-align:right">Metraj</th>
+        <th style="padding:6px 8px;text-align:right">Tutar</th>
+      </tr></thead>
+      <tbody>${satirlar}</tbody>
+      <tfoot><tr style="background:var(--verde-acik);font-weight:700">
+        <td colspan="2" style="padding:6px 8px">${kacar(cins)}${blok ? ' · ' + kacar(blok) : ''}</td>
+        <td style="padding:6px 8px;text-align:right">${adet}</td>
+        <td style="padding:6px 8px;text-align:right" class="mono">${gruplar[0].bas} - ${gruplar[gruplar.length - 1].son}</td>
+        <td style="padding:6px 8px;text-align:right" class="mono">${s2(m2)} m²</td>
+        <td style="padding:6px 8px;text-align:right" class="mono">${s2(tutar)} ${kacar(dov)}</td>
+      </tr></tfoot>
+    </table>`;
+  kutu.style.display = '';
 }
 
 function hesapla() {
@@ -1255,6 +1448,10 @@ function hesapla() {
   document.getElementById('ozMiktar').textContent = miktar ? miktar.toLocaleString('tr-TR', {maximumFractionDigits: 2}) + ' ' + miktarAd : '—';
   document.getElementById('ozBirim').textContent = netFiyat ? para2(netFiyat, dov) + ' /' + miktarAd : '—';
   document.getElementById('ozToplam').textContent = toplam ? para(toplam, dov) + (kdvDahil ? ' (KDV hariç)' : '') : '—';
+  /* Önizleme hesapla()'ya bağlı: her alan değişiminde tazelenir.
+     Ayrı bir tetikleyici yazsaydım biri güncellenip diğeri
+     kalabilirdi. */
+  onizlemeCiz();
 }
 
 async function stokKaydet() {
@@ -1270,9 +1467,24 @@ async function stokKaydet() {
   const btn = document.getElementById('sKaydet');
   btn.disabled = true; btn.textContent = 'Ekleniyor…';
   try {
-    const d = await api('/api/stok/ekle', {
-      method: 'POST',
-      body: JSON.stringify({
+    /* ── ÖLÇÜ GRUPLARI (OG1) ──
+       Her grup AYRI çağrı; sunucu aynı `fatura_no` ile gelen
+       çağrıları tek cari hareketinde topluyor (toplu içe aktarma
+       da böyle çalışıyor), o yüzden 7 grup 7 borç satırı
+       üretmez.
+
+       Plaka numaraları `olcuGruplariOku()` içinde kesintisiz
+       hesaplanıyor; her çağrıya kendi başlangıcı gidiyor. */
+    const _gruplar = (t === 'PLAKA') ? olcuGruplariOku() : [null];
+    const _gecersiz = _gruplar.filter(g => g && (!g.adet || !g.boy || !g.yuk));
+    if (_gecersiz.length) {
+      bildir('Ölçü gruplarında eksik değer var — yükseklik, boy ve adet zorunlu.', true);
+      btn.disabled = false; btn.textContent = 'Stoğu Ekle';
+      return;
+    }
+    let _toplam = 0, _d = null;
+    for (const _g of _gruplar) {
+      const _govde = {
         tip: t,
         uretici: document.getElementById('sUretici').value,
         cins,
@@ -1299,8 +1511,22 @@ async function stokKaydet() {
         fatura_no: document.getElementById('sFaturaNo').value,
         alis_tarihi: document.getElementById('sAlisTarih').value || null,
         giris_tarihi: document.getElementById('sTarih').value || null
-      })
-    });
+      };
+      if (_g) {
+        _govde.yukseklik = _g.yuk;
+        _govde.boy = _g.boy;
+        _govde.kalinlik = _g.kal;
+        _govde.adet = _g.adet;
+        _govde.baslangic_no = _g.bas;
+      }
+      _d = await api('/api/stok/ekle', { method: 'POST', body: JSON.stringify(_govde) });
+      _toplam += (_g ? _g.adet : 1);
+      if (_gruplar.length > 1) {
+        btn.textContent = `Ekleniyor… ${_gruplar.indexOf(_g) + 1}/${_gruplar.length}`;
+      }
+    }
+    const d = _d || {};
+    if (_gruplar.length > 1) d.mesaj = `${_toplam} plaka eklendi (${_gruplar.length} ölçü grubu)`;
     bildir(d.mesaj || 'Stok eklendi');
     modalKapat();
     // Eklenen tipe geç ve tazele

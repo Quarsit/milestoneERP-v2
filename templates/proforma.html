@@ -385,6 +385,93 @@
   </div>
 </div>
 
+
+<!-- ══ KONTEYNER PLANLAMA (KN1) ══
+     Eskiden üç ayrı prompt() ile soruluyordu: adet, tip, sonra
+     düzenlemede numara/mühür/ağırlık. prompt() PWA ve mobil
+     kipte engellenebiliyor, tip ELLE yazıldığı için yazım hatası
+     sunucudan 400 döndürüyordu. Artık tek, geniş bir pencere. -->
+<div class="modal-ortu" id="kontModal" onclick="if(event.target===this)kontKapat()">
+  <div class="modal" style="width:720px">
+    <div class="modal-bas">
+      <h3>Konteyner Planla</h3>
+      <p>Kaç konteyner ve hangi tip — numara ve mühür sevkiyat aşamasında girilir.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Konteyner Adedi</label>
+          <input id="kontAdet" type="number" min="1" value="1" oninput="kontOnizle()"></div>
+        <div class="form-alan"><label>Konteyner Tipi</label>
+          <select id="kontTip" onchange="kontOnizle()">
+            {% for t in (konteyner_tipleri or []) %}
+            <option value="{{ t }}"{% if t == "20' DC" %} selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+          </select></div>
+      </div>
+
+      <!-- Kapasite bilgisi: kullanıcı kaç konteyner gerektiğini
+           tahmin etmek yerine GÖRSÜN. Değerler yaklaşıktır ve
+           öyle etiketlenir — kesin sayı gibi sunmak yanıltıcı olur. -->
+      <div id="kontKapasite" style="margin-top:4px;padding:11px 13px;
+           background:var(--notr-bg);border-radius:var(--r-kucuk);
+           font-size:.83rem;line-height:1.7"></div>
+
+      <div class="form-alan" style="margin-top:12px">
+        <label>Not <span style="font-weight:400;color:var(--soluk)">— opsiyonel</span></label>
+        <input id="kontNot" placeholder="ör. ilk iki konteyner öncelikli">
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="kontKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="kontKaydet" onclick="kontPlanla()">Planla</button>
+    </div>
+  </div>
+</div>
+
+<!-- Kalem → konteyner ataması (KN1): numara yazdırmak yerine seçtir -->
+<div class="modal-ortu" id="ataModal" onclick="if(event.target===this)ataKapat()">
+  <div class="modal" style="width:520px">
+    <div class="modal-bas">
+      <h3 id="ataBaslik">Kalemleri ata</h3>
+      <p>Seçili kalemler bu konteynere atanır.</p>
+    </div>
+    <div class="modal-gov"><div id="ataSecenek"></div></div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="ataKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="ataUygula()">Ata</button>
+    </div>
+  </div>
+</div>
+
+<!-- Konteyner düzenleme — numara, mühür, ağırlık -->
+<div class="modal-ortu" id="kontDuzModal" onclick="if(event.target===this)kontDuzKapat()">
+  <div class="modal" style="width:640px">
+    <div class="modal-bas">
+      <h3 id="kontDuzBaslik">Konteyner Bilgileri</h3>
+      <p>Numara ve mühür sevkiyat aşamasında belli olur; boş bırakılabilir.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Konteyner No</label>
+          <input id="kdNo" placeholder="MSKU 123456-7"></div>
+        <div class="form-alan"><label>Mühür (Seal) No</label>
+          <input id="kdMuhur" placeholder="opsiyonel"></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Net Ağırlık (kg)</label>
+          <input id="kdNet" type="number" step="0.01" placeholder="yükün ağırlığı"></div>
+        <div class="form-alan"><label>Tara (kg)</label>
+          <input id="kdTara" type="number" step="0.01" placeholder="boş konteyner ağırlığı"></div>
+      </div>
+      <div id="kdBrut" style="font-size:.83rem;color:var(--soluk);margin-top:4px"></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="kontDuzKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="kontDuzKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -571,41 +658,140 @@ function atanmamisGuncelle() {
   el.textContent = atanmamis ? `  ·  ${atanmamis} kalem atanmamış` : '';
 }
 
-async function konteynerPlanla() {
-  /* 100 ton blok ya da 1000 m² plaka tek konteynere sığmaz.
-     Kaç konteyner olacağı baştan belirlenir; kalemler sonra dağıtılır. */
-  const a = prompt('Kaç konteyner planlanacak?\n\n(Numara ve mühür sevkiyat aşamasında girilir)', '2');
-  if (a === null) return;
-  const adet = parseInt(a, 10);
-  if (!adet || adet < 1) { bildir('Geçerli bir adet girin', true); return; }
-  const t = prompt("Konteyner tipi:\n\n20' DC · 40' DC · 40' HC · 45' HC", "40' HC");
-  if (t === null) return;
-  try {
-    const d = await api(`/api/proforma/${encodeURIComponent(AKTIF_PROFORMA)}/konteyner_planla`,
-      { method: 'POST', body: JSON.stringify({ adet, tip: (t || '').trim() }) });
-    bildir(d.mesaj || `${adet} konteyner planlandı`);
-    await detayAc(AKTIF_PROFORMA);
-  } catch (e) { /* api() bildiriyor */ }
+/* ══ KONTEYNER PLANLAMA (KN1) ══
+   Eskiden prompt() ile soruluyordu: PWA/mobil kipte engellenebiliyor,
+   tip elle yazıldığı için yazım hatası sunucudan 400 döndürüyordu.
+   Tipler artık sunucudan gelen listeden seçiliyor. */
+/* PL1: Packing List'te plaka no sütunu isteğe bağlı.
+   confirm() KULLANILMADI — bu projede PWA/masaüstü kipinde
+   engellendiği için daha önce ekstre hiç açılmamıştı (YAMA E3).
+   Tercih çekmecedeki onay kutusundan okunuyor. */
+function packingAc(id) {
+  const kutu = document.getElementById('plPlakaGoster');
+  const goster = kutu ? kutu.checked : true;
+  window.open(`/api/proforma/${encodeURIComponent(id)}/html?mod=pl`
+              + (goster ? '' : '&plaka=0'), '_blank');
 }
 
-async function konteynerDuzenle(kid) {
-  const k = KONTEYNERLER.find(x => x.id === kid);
-  if (!k) return;
-  const no = prompt(`${k.etiket_tr} — konteyner numarası:\n\n(sevkiyat aşamasında belli olur, boş bırakılabilir)`, k.konteyner_no || '');
-  if (no === null) return;
-  const mh = prompt('Mühür (seal) numarası:', k.muhur_no || '');
-  if (mh === null) return;
-  const net = prompt('Net ağırlık (kg):', k.net_kg || '');
-  if (net === null) return;
-  const tara = prompt('Tara — boş konteyner ağırlığı (kg):', k.tara_kg || '');
-  if (tara === null) return;
+function kontKapat() { document.getElementById('kontModal').classList.remove('acik'); }
+
+function konteynerPlanla() {
+  if (!AKTIF_PROFORMA) { bildir('Önce bir proforma açın.', true); return; }
+  document.getElementById('kontAdet').value = 1;
+  document.getElementById('kontNot').value = '';
+  kontOnizle();
+  document.getElementById('kontModal').classList.add('acik');
+}
+
+/* Kapasite bilgisi YAKLAŞIKTIR ve öyle etiketlenir. Kesin sayı gibi
+   sunmak, yükleme planını buna göre yapan kullanıcıyı yanıltırdı. */
+const KONT_KAPASITE = {
+  "20' DC": { m3: 33, kg: 28000 }, "40' DC": { m3: 67, kg: 26500 },
+  "40' HC": { m3: 76, kg: 26500 }, "45' HC": { m3: 86, kg: 26000 },
+  "20' OT": { m3: 32, kg: 28000 }, "40' OT": { m3: 65, kg: 26000 },
+  "20' FR": { m3: 30, kg: 31000 }, "40' FR": { m3: 60, kg: 39000 },
+};
+
+function kontOnizle() {
+  const kutu = document.getElementById('kontKapasite');
+  if (!kutu) return;
+  const adet = parseInt(document.getElementById('kontAdet').value) || 0;
+  const tip = document.getElementById('kontTip').value;
+  const k = KONT_KAPASITE[tip];
+  const s2 = v => (Number(v) || 0).toLocaleString('tr-TR',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  /* Proformadaki toplam ağırlık — kaç konteyner gerektiğini
+     kullanıcı tahmin etmek yerine görsün. */
+  let kg = 0;
+  (KALEMLER || []).forEach(x => { kg += Number(x.agirlik_kg || x.kg || 0) || 0; });
+
+  let m = '';
+  if (k) {
+    m += `<b>${tip}</b> · yaklaşık ${k.m3} m³ hacim, ${s2(k.kg)} kg taşıma sınırı<br>`;
+    if (adet > 0) m += `${adet} konteyner → toplam ~${s2(k.kg * adet)} kg kapasite<br>`;
+  }
+  if (kg > 0) {
+    m += `Proformadaki toplam ağırlık: <b>${s2(kg)} kg</b>`;
+    if (k && adet > 0) {
+      const gerek = Math.ceil(kg / k.kg);
+      m += gerek > adet
+        ? ` — <b style="color:var(--kehribar)">bu tip için en az ${gerek} konteyner gerekebilir</b>`
+        : ' — planlanan adet yeterli görünüyor';
+    }
+  } else {
+    m += '<span style="color:var(--soluk)">Kalemlerde ağırlık girilmemiş; '
+       + 'kapasite karşılaştırması yapılamıyor.</span>';
+  }
+  m += '<div style="font-size:.76rem;color:var(--soluk);margin-top:5px">'
+     + 'Kapasiteler yaklaşıktır; kesin değerler taşıyıcıya ve konteynere göre değişir.</div>';
+  kutu.innerHTML = m;
+}
+
+async function kontPlanla() {
+  const adet = parseInt(document.getElementById('kontAdet').value) || 0;
+  if (adet < 1) { bildir('Geçerli bir adet girin.', true); return; }
+  const btn = document.getElementById('kontKaydet');
+  btn.disabled = true; btn.textContent = 'Planlanıyor…';
   try {
-    await api(`/api/konteyner/${kid}`, { method: 'PUT', body: JSON.stringify({
-      konteyner_no: no.trim(), muhur_no: mh.trim(),
-      net_kg: net === '' ? null : net, tara_kg: tara === '' ? null : tara })});
-    bildir('Konteyner güncellendi');
+    const d = await api(`/api/proforma/${encodeURIComponent(AKTIF_PROFORMA)}/konteyner_planla`,
+      { method: 'POST', body: JSON.stringify({
+          adet, tip: document.getElementById('kontTip').value,
+          not: document.getElementById('kontNot').value }) });
+    bildir(d.mesaj || `${adet} konteyner planlandı`);
+    kontKapat();
     await detayAc(AKTIF_PROFORMA);
-  } catch (e) { /* */ }
+  } catch (e) { /* api() bildiriyor */ }
+  finally { btn.disabled = false; btn.textContent = 'Planla'; }
+}
+
+/* ── KONTEYNER DÜZENLEME ── */
+let KONT_DUZ_ID = null;
+function kontDuzKapat() { document.getElementById('kontDuzModal').classList.remove('acik'); }
+
+function konteynerDuzenle(kid) {
+  const k = (KONTEYNERLER || []).find(x => x.id === kid);
+  if (!k) { bildir('Konteyner bulunamadı.', true); return; }
+  KONT_DUZ_ID = kid;
+  document.getElementById('kontDuzBaslik').textContent =
+    `${k.etiket_tr || 'Konteyner'} — Bilgiler`;
+  document.getElementById('kdNo').value = k.konteyner_no || '';
+  document.getElementById('kdMuhur').value = k.muhur_no || '';
+  document.getElementById('kdNet').value = k.net_kg || '';
+  document.getElementById('kdTara').value = k.tara_kg || '';
+  kontBrutHesapla();
+  ['kdNet','kdTara'].forEach(i => {
+    const e = document.getElementById(i);
+    if (e) e.oninput = kontBrutHesapla;
+  });
+  document.getElementById('kontDuzModal').classList.add('acik');
+}
+
+function kontBrutHesapla() {
+  const n = parseFloat(document.getElementById('kdNet').value) || 0;
+  const t = parseFloat(document.getElementById('kdTara').value) || 0;
+  const e = document.getElementById('kdBrut');
+  if (!e) return;
+  e.textContent = (n || t)
+    ? `Brüt (net + tara): ${(n + t).toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2})} kg`
+    : '';
+}
+
+async function kontDuzKaydet() {
+  if (!KONT_DUZ_ID) return;
+  const say = i => {
+    const v = (document.getElementById(i).value || '').trim();
+    return v === '' ? null : v;
+  };
+  try {
+    await api(`/api/konteyner/${KONT_DUZ_ID}`, { method: 'PUT', body: JSON.stringify({
+      konteyner_no: (document.getElementById('kdNo').value || '').trim(),
+      muhur_no: (document.getElementById('kdMuhur').value || '').trim(),
+      net_kg: say('kdNet'), tara_kg: say('kdTara') })});
+    bildir('Konteyner güncellendi');
+    kontDuzKapat();
+    await detayAc(AKTIF_PROFORMA);
+  } catch (e) { /* api() bildiriyor */ }
 }
 
 async function konteynerSil(kid) {
@@ -634,18 +820,44 @@ async function kalemAta(kalemId, kontId) {
 async function secilenleriAta() {
   const idler = [...document.querySelectorAll('.kal-sec:checked')].map(x => parseInt(x.dataset.id, 10));
   if (!idler.length) { bildir('Önce kalem seçin (satırlardaki kutular)', true); return; }
-  const secenek = KONTEYNERLER.map((k, i) => `${i + 1}) ${k.etiket_tr}`).join('\n');
-  const c = prompt(`${idler.length} kalem hangi konteynere?\n\n${secenek}\n\n(0 = atamayı kaldır)`, '1');
-  if (c === null) return;
-  const n = parseInt(c, 10);
-  const kid = (n === 0) ? null : (KONTEYNERLER[n - 1] || {}).id;
-  if (n !== 0 && !kid) { bildir('Geçersiz seçim', true); return; }
+  if (!KONTEYNERLER.length) { bildir('Önce konteyner planlayın.', true); return; }
+  /* KN1: numara yazdırmak yerine SEÇTİRİYORUZ. prompt() ile
+     "2" yazmak, listedeki sırayı sayarak bulmayı gerektiriyordu
+     ve yanlış konteynere atama riski taşıyordu. */
+  ATA_IDLER = idler;
+  const kok = document.getElementById('ataSecenek');
+  kok.innerHTML = KONTEYNERLER.map(k => `
+    <label class="stok-satir" style="cursor:pointer">
+      <input type="radio" name="ataKont" value="${kacar(k.id)}">
+      <div><div>${kacar(k.etiket_tr || k.id)}</div>
+        <div style="color:var(--soluk);font-size:.73rem">${kacar(k.tip || '')}${
+          k.kalem_sayisi ? ' · ' + k.kalem_sayisi + ' kalem' : ''}</div></div>
+    </label>`).join('')
+    + `<label class="stok-satir" style="cursor:pointer;margin-top:4px">
+         <input type="radio" name="ataKont" value="">
+         <div style="color:var(--kirmizi)">Atamayı kaldır</div></label>`;
+  document.getElementById('ataBaslik').textContent =
+    `${idler.length} kalem hangi konteynere?`;
+  document.getElementById('ataModal').classList.add('acik');
+}
+
+let ATA_IDLER = [];
+function ataKapat() { document.getElementById('ataModal').classList.remove('acik'); }
+
+async function ataUygula() {
+  const sec = document.querySelector('input[name="ataKont"]:checked');
+  if (!sec) { bildir('Bir konteyner seçin.', true); return; }
+  const kid = sec.value || null;
+  const idler = ATA_IDLER;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(AKTIF_PROFORMA)}/kalem_konteyner`, {
       method: 'POST', body: JSON.stringify({ kalem_idler: idler, konteyner_id: kid })});
     bildir(d.mesaj || `${idler.length} kalem atandı`);
+    /* Pencere KAPANIR: iş bitti, açık kalması kullanıcıyı
+       "bir şey daha mı yapmalıyım" sorusunda bırakıyordu. */
+    ataKapat();
     await detayAc(AKTIF_PROFORMA);
-  } catch (e) { /* */ }
+  } catch (e) { /* api() bildiriyor */ }
 }
 
 async function detayAc(id) {
@@ -719,7 +931,14 @@ async function detayAc(id) {
   const eylem = [];
   // Belge çıktıları — PI ve PL her durumda alınabilir; CI yalnızca onaylanmış proformada
   eylem.push(`<button class="blok-btn birincil" onclick="window.open('/api/proforma/${encodeURIComponent(id)}/html?mod=pi','_blank')">Proforma (PI)</button>`);
-  eylem.push(`<button class="blok-btn" onclick="window.open('/api/proforma/${encodeURIComponent(id)}/html?mod=pl','_blank')">Packing List</button>`);
+  /* PL1: plaka no sütunu isteğe bağlı. Bazı müşteriler plaka
+     numarası istemiyor; tercih KULLANICIDA kalsın. Seçim
+     tarayıcıda saklanır ki her seferinde işaretlenmesin. */
+  eylem.push(`<button class="blok-btn" onclick="packingAc('${kacar(id)}')">Packing List</button>`);
+  eylem.push(`<label class="blok-btn" style="display:flex;align-items:center;gap:7px;
+      cursor:pointer;font-weight:500" title="Çeki listesinde plaka numaraları görünsün mü?">
+      <input type="checkbox" id="plPlakaGoster" checked style="width:auto;margin:0">
+      Plaka no</label>`);
   const onayli = (p.durum === 'Onaylandi' || p.durum === 'Gonderildi' || p.durum === 'Faturalandi');
   if (onayli)
     eylem.push(`<button class="blok-btn" onclick="window.open('/api/proforma/${encodeURIComponent(id)}/html?mod=ci','_blank')">Commercial Inv.</button>`);
@@ -1959,6 +2178,22 @@ document.getElementById('ara').addEventListener('input', e => {
 (async function () {
   await yukle();
   const prm = new URLSearchParams(location.search);
+
+  /* ── BELİRLİ PROFORMAYI AÇ (PF3) ──
+     `/proforma?ac=PI-XXXX` ile gelindiğinde o kaydın çekmecesi
+     açılır. Sipariş çekmecesinden ve bildirim bağlantısından
+     buraya yönlendiriliyoruz; parametre OKUNMUYORDU ve kullanıcı
+     tüm listeye düşüp aradığı proformayı elle buluyordu. */
+  const acId = prm.get('ac');
+  if (acId) {
+    if (TUM.find(x => x.id === acId)) {
+      await detayAc(acId);
+    } else {
+      bildir(`Proforma ${acId} listede bulunamadı.`, true);
+    }
+    return;
+  }
+
   const sid = prm.get('siparis_id');
   if (!sid) return;
   await yeniAc();

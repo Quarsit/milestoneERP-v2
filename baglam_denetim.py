@@ -120,7 +120,13 @@ for ad, metin in sablonlar.items():
     # İlk sürüm yalnızca location.href arıyordu ve dashboard'daki
     # `<a href="/cari?cari=X">` bağlam kaybını KAÇIRDI (parametre
     # adı `ac` olmalıydı; kullanıcı tüm listeyi görüyordu).
-    adaylar = re.findall(r"location\.href\s*=\s*[`'\"]([^`'\"]+)[`'\"]", metin)
+    # Sablon dizesi ICINDE kurulan yollar da taranir:
+    #   `${x ? '/proforma?ac=' + id : '#'}`
+    # Ilk surum yalnizca duz dizeleri goruyordu ve dashboard'daki
+    # bildirim baglantisinin kirik oldugunu KACIRDI.
+    adaylar = re.findall(r"['\"](/[a-z-]+\?[a-z_]+=)['\"]\s*\+", metin)
+    adaylar = [a + 'X' for a in adaylar]
+    adaylar += re.findall(r"location\.href\s*=\s*[`'\"]([^`'\"]+)[`'\"]", metin)
     adaylar += re.findall(r"""href=[`'\"](/[^`'\"]*[?][^`'\"]*)[`'\"]""", metin)
     for hedef in adaylar:
         if '?' not in hedef:

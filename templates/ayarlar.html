@@ -158,10 +158,26 @@
 
 <!-- E-POSTA (SMTP) -->
 <section class="bolum" id="b-eposta">
-  <div class="izgara-2">
+  <!-- ── AKTİF GÖNDERİCİ (EP1) ──
+       İki SMTP paneli yan yana duruyordu ve ikisi de aynı
+       görünüyordu; kullanıcı hangisinin geçerli olduğunu
+       anlayamıyordu. Şimdi en üstte TEK CÜMLEYLE yazıyor. -->
+  <div id="epAktifKutu" style="margin-bottom:16px;padding:12px 14px;
+       border-radius:10px;background:var(--verde-acik);
+       border:1px solid var(--verde);font-size:.88rem">
+    <span id="epAktifMetin">Gönderici hesap kontrol ediliyor…</span>
+  </div>
+
+  <!-- ŞİRKET ORTAK HESABI — yalnızca yöneticiye görünür.
+       Personelin bunu görmesi gereksiz; kendi hesabını tanımlaması
+       yeterli ve karışıklığın asıl kaynağı buydu. -->
+  <div class="izgara-2" id="epOrtakAlan" style="display:none">
     <div class="panel">
-      <h4>SMTP Sunucu Ayarları</h4>
-      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Proforma belgelerini müşteriye e-posta ile göndermek için kurumsal mail sunucu bilgileri. Şifre güvenli saklanır, ekranda gösterilmez.</p>
+      <h4>Şirket Ortak Hesabı <span style="font-size:.74rem;font-weight:500;
+          color:var(--soluk)">— yönetici</span></h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+        Kendi hesabını tanımlamamış kullanıcılar bu adresten gönderir.
+        Şifre güvenli saklanır, ekranda gösterilmez.</p>
       <div class="form-alan" style="margin-bottom:12px">
         <label>SMTP Sunucu</label>
         <input id="sSunucu" data-buyuk-harf="hayir" placeholder="mail.milestonemermer.com">
@@ -219,109 +235,12 @@
     </div>
   </div>
 
-  <!-- KİŞİSEL E-POSTA HESABI — her kullanıcı kendi adresinden gönderir -->
-  <div class="panel" style="margin-top:16px;border:1px solid var(--verde)">
-    <h4>E-posta Hesabım <span id="kepDurum" style="font-size:.76rem;font-weight:500;color:var(--soluk)"></span></h4>
-    <p style="color:var(--soluk);font-size:.83rem;margin-bottom:6px">
-      Kendi posta kutunuzu tanımlarsanız, gönderdiğiniz proforma ve belgeler
-      <b>sizin adresinizden</b> çıkar; müşteri doğrudan size yanıt verir.
-      Tanımlamazsanız şirketin ortak hesabı kullanılır.
-    </p>
-    <p style="color:var(--soluk);font-size:.79rem;margin-bottom:14px">
-      Bu ayar yalnızca sizi ilgilendirir — diğer kullanıcılar görmez ve etkilenmez.
-    </p>
-
-    <div class="form-satir f2">
-      <div class="form-alan"><label>SMTP Sunucu</label>
-        <input id="kepSunucu" data-buyuk-harf="hayir" placeholder="mail.milestonemermer.com"></div>
-      <div class="form-alan"><label>Port</label>
-        <input id="kepPort" type="number" data-buyuk-harf="hayir" placeholder="587"></div>
-    </div>
-    <div class="form-satir f2">
-      <div class="form-alan"><label>Kullanıcı Adı (e-posta)</label>
-        <input id="kepKullanici" data-buyuk-harf="hayir" placeholder="ahmet@milestonemermer.com"></div>
-      <div class="form-alan"><label>Güvenlik</label>
-        <select id="kepGuvenlik">
-          <option value="tls">STARTTLS (587)</option>
-          <option value="ssl">SSL/TLS (465)</option>
-          <option value="yok">Yok (25)</option>
-        </select>
-      </div>
-    </div>
-    <div class="form-alan" style="margin-bottom:12px">
-      <label>Şifre <span id="kepSifreNot" style="color:var(--soluk);font-size:.78rem"></span></label>
-      <div style="position:relative">
-        <input id="kepSifre" type="password" data-buyuk-harf="hayir" autocomplete="new-password"
-               placeholder="••••••••" style="padding-right:38px">
-        <button type="button" onclick="sifreGorunurlukDegistir('kepSifre',this)" title="Şifreyi göster / gizle"
-          style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:0;padding:5px;margin:0;cursor:pointer;color:var(--soluk);line-height:0;min-height:0;min-width:0">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="form-satir f2">
-      <div class="form-alan"><label>Görünen Ad</label>
-        <input id="kepGonderenAd" placeholder="Ahmet Yılmaz — Milestone Mermer"></div>
-      <div class="form-alan"><label>Gönderen Adres</label>
-        <input id="kepGonderenEmail" data-buyuk-harf="hayir" placeholder="ahmet@milestonemermer.com"></div>
-    </div>
-
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-      <button class="btn-yeni" onclick="kepKaydet()">Kaydet</button>
-      <button class="blok-btn" onclick="kepTest()">Deneme e-postası gönder</button>
-      <button class="blok-btn" id="kepSilBtn" onclick="kepSil()"
-              style="margin-left:auto;color:var(--kirmizi);border-color:var(--kirmizi);display:none">
-        Kişisel ayarı kaldır</button>
-    </div>
-    <div id="kepDiyalog" style="display:none;margin-top:12px;padding:11px 13px;background:var(--kagit);border:1px solid var(--cizgi);border-radius:8px"></div>
-  </div>
-
-</section>
-
-<!-- LİSTELER -->
-<section class="bolum" id="b-listeler">
-  <div class="izgara-2" id="lookupIzgara">
-    <div class="panel"><div class="yukleniyor">Yükleniyor…</div></div>
-  </div>
-</section>
-
-<!-- BANKALAR -->
-<section class="bolum" id="b-banka">
-  <div class="tablo-kutu">
-    <table>
-      <thead><tr><th>Banka</th><th>Şube</th><th>Hesap No</th><th>IBAN</th><th>SWIFT</th><th>Döviz</th><th class="sag" style="width:140px"></th></tr></thead>
-      <tbody id="bankaGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
-    </table>
-  </div>
-  <div style="margin-top:14px">
-    <button class="btn-yeni" onclick="bankaAc()">+ Yeni Banka Hesabı</button>
-  </div>
-</section>
-
-<!-- YEDEKLEME -->
-<section class="bolum" id="b-yedek">
-  <div class="izgara-2">
-    <div class="panel">
-      <h4>Yedek Al</h4>
-      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
-        Veritabanının tam kopyasını alır. Sistem her gün otomatik yedek de alıyor.
-      </p>
-      <div id="taniKutu" style="background:var(--notr-bg);border-radius:7px;padding:10px 12px;font-size:.8rem;color:var(--soluk);margin-bottom:14px">
-        Durum kontrol ediliyor…
-      </div>
-      <button class="btn-yeni" id="yAlBtn" onclick="yedekAl()">Şimdi Yedek Al</button>
-    </div>
-    <div class="panel">
-      <h4>Yedekten Geri Yükle</h4>
-      <div class="not" style="background:var(--kirmizi-bg);color:var(--kirmizi);border-radius:7px;padding:10px 12px;font-size:.8rem;margin-bottom:14px">
-        <strong>Dikkat:</strong> Geri yükleme mevcut tüm verinin üzerine yazar.
-        İşlemden önce sistem otomatik olarak güvenlik yedeği alır.
-      </div>
-      <p style="color:var(--soluk);font-size:.83rem">
-        Aşağıdaki listeden bir yedek seç ve <strong>Geri Yükle</strong>'ye bas.
-      </p>
-    </div>
-  </div>
+  <!-- KİŞİSEL PANEL KALDIRILDI (EP5).
+       Admin olmayan kullanıcı bu sayfaya HİÇ giremiyordu; panel
+       yalnızca yöneticiye görünüyor ve yöneticinin kendi hesabını
+       tanımlamasına yarıyordu. Artık yönetici HERKESİN hesabını
+       (kendisi dahil) Kullanıcılar sekmesindeki formdan tanımlıyor
+       ve oradan test ediyor. İki ayrı yol = iki ayrı gerçek. -->
 
   <div class="panel" style="margin-top:14px">
     <h4>Yedekler <span id="yedekAdet" style="color:var(--soluk);font-weight:400"></span></h4>
@@ -417,6 +336,64 @@
           işlemlerini yapabilir.
         </div>
       </div>
+      <!-- ── KULLANICININ E-POSTA HESABI (EP3) ──
+           Admin olmayan kullanıcı Ayarlar sayfasına HİÇ giremiyor,
+           dolayısıyla kendi hesabını tanımlaması imkânsızdı.
+           Tanımı yönetici burada yapar. -->
+      <div class="form-alan" id="uEpostaAlan" style="margin-top:6px">
+        <label style="display:flex;align-items:center;gap:8px">
+          E-posta Hesabı
+          <span style="font-size:.72rem;font-weight:500;color:var(--soluk)">
+            — boş bırakılırsa şirketin ortak hesabı kullanılır</span>
+        </label>
+        <div class="form-satir f2" style="margin-top:5px">
+          <div class="form-alan"><label>SMTP Sunucu</label>
+            <input id="uEpSunucu" data-buyuk-harf="hayir" placeholder="mail.milestonemermer.com"></div>
+          <div class="form-alan"><label>Port</label>
+            <input id="uEpPort" type="number" data-buyuk-harf="hayir" placeholder="587"></div>
+        </div>
+        <div class="form-satir f2">
+          <div class="form-alan"><label>Kullanıcı adı (e-posta)</label>
+            <input id="uEpKullanici" data-buyuk-harf="hayir" placeholder="kubra@milestonemermer.com"></div>
+          <div class="form-alan"><label id="uEpSifreLabel">Şifre</label>
+            <input id="uEpSifre" type="password" data-buyuk-harf="hayir" placeholder="uygulama şifresi"></div>
+        </div>
+        <!-- EP6: Gönderilmiş klasörüne kopya için IMAP.
+             SMTP yalnızca gönderir; klasöre kopya bırakmaz.
+             Boş bırakılırsa kopya atlanır, gönderim etkilenmez. -->
+        <div class="form-satir f2">
+          <div class="form-alan"><label>IMAP Sunucu <span style="font-weight:400;
+              color:var(--soluk)">— Gönderilmiş kopyası için</span></label>
+            <input id="uEpImap" data-buyuk-harf="hayir" placeholder="srv226.medyabim.com"></div>
+          <div class="form-alan"><label>IMAP Port</label>
+            <input id="uEpImapPort" type="number" data-buyuk-harf="hayir" placeholder="993"></div>
+        </div>
+        <div class="form-satir f2">
+          <div class="form-alan"><label>Güvenlik</label>
+            <select id="uEpGuvenlik">
+              <option value="tls">TLS (587)</option>
+              <option value="ssl">SSL (465)</option>
+              <option value="yok">Yok</option>
+            </select></div>
+          <div class="form-alan"><label>Gönderen Adı</label>
+            <input id="uEpGonderenAd" data-buyuk-harf="hayir" placeholder="Kübra — Milestone Mermer"></div>
+        </div>
+        <div style="font-size:.76rem;color:var(--soluk);margin-top:4px;line-height:1.5">
+          Gönderen adres, SMTP kullanıcı adıyla <b>aynı</b> olmalı. Farklı olursa
+          SPF/DMARC uyuşmazlığı çıkar ve posta spam'e düşer.
+        </div>
+        <!-- EP4: yönetici tanımladığı hesabı BURADAN sınar. Ayarlar
+             sayfasındaki test kendi hesabını deniyor; bu, o
+             kullanıcının hesabını dener. -->
+        <div style="display:flex;gap:7px;align-items:center;margin-top:8px;flex-wrap:wrap">
+          <input id="uEpTestAlici" data-buyuk-harf="hayir"
+                 placeholder="test alıcı adresi" style="flex:1;min-width:170px">
+          <button type="button" class="mini-btn" onclick="uEpostaTest()">Bu hesabı test et</button>
+        </div>
+        <div id="uEpTestSonuc" style="display:none;margin-top:6px;font-size:.8rem;
+             padding:8px 10px;border-radius:7px;line-height:1.5"></div>
+      </div>
+
       <div class="not" id="adminNot" style="display:none">Admin rolü tüm modüllere tam erişir; ayrı yetki seçimi gerekmez.</div>
       <div id="yetkiKutu">
         <div style="display:flex;align-items:center;margin-bottom:8px">
@@ -444,89 +421,97 @@
 
 {% block scripts %}
 <script>
-/* ═══ KİŞİSEL E-POSTA HESABI ═══════════════════════════════════════
-   Her kullanıcı kendi SMTP hesabını tanımlar; e-postalar o adresten
-   çıkar. Tanımlanmazsa şirketin ortak hesabı kullanılır (eski davranış).
-
-   NEDEN KENDİ HESABI: Ortak hesapla bağlanıp başka bir adres adına
-   göndermek SPF/DMARC uyuşmazlığı yaratır — posta reddedilir veya
-   spam'e düşer. Kullanıcı kendi kutusuyla kimlik doğrulayınca sorun
-   çıkmaz.
-
-   ŞİFRE: Sunucuya kaydedilir ama tarayıcıya asla geri dönmez. Alan boş
-   bırakılırsa kayıtlı şifre korunur. */
-
-async function kepYukle() {
-  try {
-    const d = await api('/api/v2/eposta/ayar');
-    document.getElementById('kepSunucu').value = d.sunucu || '';
-    document.getElementById('kepPort').value = d.port || 587;
-    document.getElementById('kepKullanici').value = d.kullanici || '';
-    document.getElementById('kepGuvenlik').value = d.guvenlik || 'tls';
-    document.getElementById('kepGonderenAd').value = d.gonderen_ad || '';
-    document.getElementById('kepGonderenEmail').value = d.gonderen_email || '';
-    document.getElementById('kepSifre').value = '';
-    document.getElementById('kepSifreNot').textContent =
-      d.sifre_kayitli ? '(kayıtlı — değiştirmek istemiyorsanız boş bırakın)' : '';
-    document.getElementById('kepDurum').textContent =
-      d.tanimli ? '· kendi adresinizden gönderiliyor' : '· şirket hesabı kullanılıyor';
-    document.getElementById('kepSilBtn').style.display = d.tanimli ? '' : 'none';
-  } catch (e) { /* api() hatayı gösterir */ }
-}
-
-function _kepDiyalog(mesaj, hata) {
-  const k = document.getElementById('kepDiyalog');
-  k.style.display = '';
-  k.style.borderColor = hata ? 'var(--kirmizi)' : 'var(--verde)';
-  k.textContent = mesaj;
-}
-
-async function kepKaydet() {
-  const govde = {
-    sunucu: document.getElementById('kepSunucu').value.trim(),
-    port: parseInt(document.getElementById('kepPort').value, 10) || 587,
-    kullanici: document.getElementById('kepKullanici').value.trim(),
-    sifre: document.getElementById('kepSifre').value,   // boşsa sunucu eskisini korur
-    guvenlik: document.getElementById('kepGuvenlik').value,
-    gonderen_ad: document.getElementById('kepGonderenAd').value.trim(),
-    gonderen_email: document.getElementById('kepGonderenEmail').value.trim(),
-  };
-  if (!govde.sunucu || !govde.kullanici) {
-    _kepDiyalog('SMTP sunucu ve kullanıcı adı zorunlu.', true);
+/* ══ KULLANICININ E-POSTA HESABI (EP3/EP4) ══
+   Admin olmayan kullanıcı Ayarlar'a giremediği için kendi hesabını
+   tanımlayamıyordu; yönetici Kullanıcılar formundan tanımlar ve
+   oradan test eder. */
+async function uEpostaYukle() {
+  const alan = document.getElementById('uEpostaAlan');
+  if (!alan) return;
+  ['uEpSunucu','uEpPort','uEpKullanici','uEpSifre','uEpGonderenAd','uEpTestAlici',
+    'uEpImap','uEpImapPort']
+    .forEach(i => { const e = document.getElementById(i); if (e) e.value = ''; });
+  document.getElementById('uEpGuvenlik').value = 'tls';
+  document.getElementById('uEpSifreLabel').textContent = 'Şifre';
+  const sonuc = document.getElementById('uEpTestSonuc');
+  if (sonuc) sonuc.style.display = 'none';
+  if (!DUZENLENEN) {
+    /* Yeni kullanıcının kimliği henüz yok; ayar yazılamaz. */
+    alan.style.display = 'none';
     return;
   }
+  alan.style.display = '';
   try {
-    const d = await api('/api/v2/eposta/ayar', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(govde)
-    });
-    _kepDiyalog(d.mesaj || 'Kaydedildi.', false);
-    bildir('E-posta ayarlarınız kaydedildi');
-    await kepYukle();
-  } catch (e) { /* api() hatayı gösterir */ }
+    const d = await api(`/api/ayarlar/kullanici/${DUZENLENEN.id}/eposta`);
+    document.getElementById('uEpSunucu').value = d.sunucu || '';
+    document.getElementById('uEpPort').value = d.port || '';
+    document.getElementById('uEpKullanici').value = d.kullanici || '';
+    document.getElementById('uEpGuvenlik').value = d.guvenlik || 'tls';
+    document.getElementById('uEpGonderenAd').value = d.gonderen_ad || '';
+    document.getElementById('uEpImap').value = d.imap_sunucu || '';
+    document.getElementById('uEpImapPort').value = d.imap_port || '';
+    document.getElementById('uEpSifreLabel').textContent =
+      d.sifre_kayitli ? 'Şifre (kayıtlı — değiştirmiyorsanız boş bırakın)' : 'Şifre';
+  } catch (e) { /* ayar yoksa boş kalır */ }
 }
 
-async function kepTest() {
-  _kepDiyalog('Deneme e-postası gönderiliyor…', false);
+async function uEpostaKaydet(kullaniciId) {
+  if (!kullaniciId) return;
+  const sunucu = (document.getElementById('uEpSunucu').value || '').trim();
+  const kul = (document.getElementById('uEpKullanici').value || '').trim();
+  const sifre = (document.getElementById('uEpSifre').value || '').trim();
+  /* Hiçbiri girilmemişse DOKUNMA — boş gövde mevcut ayarı silerdi. */
+  if (!sunucu && !kul && !sifre) return;
   try {
-    const d = await api('/api/v2/eposta/test', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+    await api(`/api/ayarlar/kullanici/${kullaniciId}/eposta`, {
+      method: 'POST',
+      body: JSON.stringify({
+        sunucu, kullanici: kul, sifre,
+        port: parseInt(document.getElementById('uEpPort').value) || 587,
+        guvenlik: document.getElementById('uEpGuvenlik').value,
+        gonderen_ad: document.getElementById('uEpGonderenAd').value,
+        /* Gönderen adres = SMTP kullanıcı adı. Farklı olursa
+           SPF/DMARC uyuşmazlığı çıkar ve posta spam'e düşer. */
+        gonderen_email: kul,
+        imap_sunucu: (document.getElementById('uEpImap').value || '').trim(),
+        imap_port: parseInt(document.getElementById('uEpImapPort').value) || 993,
+      })
     });
-    _kepDiyalog(d.mesaj || 'Gönderildi.', !d.ok);
+  } catch (e) { /* api() bildirdi */ }
+}
+
+async function uEpostaTest() {
+  const kutu = document.getElementById('uEpTestSonuc');
+  const alici = (document.getElementById('uEpTestAlici').value || '').trim();
+  const yaz = (m, hata) => {
+    kutu.style.display = 'block';
+    kutu.style.background = hata ? 'var(--kirmizi-bg)' : 'var(--verde-acik)';
+    kutu.style.color = hata ? 'var(--kirmizi)' : 'var(--verde)';
+    kutu.textContent = m;
+  };
+  if (!DUZENLENEN) { yaz('Önce kullanıcıyı kaydedin.', true); return; }
+  if (!alici) { yaz('Test alıcı adresi girin.', true); return; }
+  /* Ekrandaki ayarlar ÖNCE kaydedilir — aksi halde test eski
+     ayarları sınar ve kullanıcı neyin denendiğini bilemez. */
+  await uEpostaKaydet(DUZENLENEN.id);
+  yaz('Gönderiliyor…', false);
+  try {
+    const d = await api(`/api/ayarlar/kullanici/${DUZENLENEN.id}/eposta/test`, {
+      method: 'POST', body: JSON.stringify({ alici })
+    });
+    yaz(d.mesaj || 'Test gönderildi.', false);
   } catch (e) {
-    _kepDiyalog('Gönderilemedi. Sunucu, port ve şifreyi kontrol edin.', true);
+    yaz((e && e.mesaj) || 'Test başarısız — ayarları kontrol edin.', true);
   }
 }
 
-async function kepSil() {
-  if (!confirm('Kişisel e-posta ayarınız kaldırılacak.\n\nBundan sonra gönderdiğiniz belgeler şirketin ortak hesabından çıkacak. Devam edilsin mi?')) return;
-  try {
-    const d = await api('/api/v2/eposta/ayar', { method: 'DELETE' });
-    _kepDiyalog(d.mesaj || 'Kaldırıldı.', false);
-    await kepYukle();
-  } catch (e) { /* api() hatayı gösterir */ }
-}
+/* KİŞİSEL E-POSTA JS'İ KALDIRILDI (EP5).
+   Panel kaldırıldı; fonksiyonları bırakmak ölü kod olurdu ve
+   ileride "bu neden çalışmıyor" sorusu doğururdu.
+   Kullanıcı bazlı ayar artık Kullanıcılar formundan yönetiliyor
+   (uEpostaYukle / uEpostaKaydet / uEpostaTest).
+   Sunucudaki /api/v2/eposta/ayar ucu DURUYOR — kullanıcının kendi
+   ayarını okuyan kod yolu ona bağlı. */
 
 /* ═══ ŞİFRE GÖSTER / GİZLE ═══
    Şifre alanlarındaki göz ikonu. Alan varsayılan olarak gizli kalır;
@@ -672,6 +657,10 @@ function kullaniciAc(id) {
      muhasebecinin görünürlüğünü kapatır — sessiz yetki kaybı. */
   document.getElementById('uKapsam').value =
     DUZENLENEN ? (DUZENLENEN.cari_kapsam || 'atanan') : 'atanan';
+  /* EP3: kullanıcının e-posta hesabını yükle. YENİ kullanıcıda
+     alanlar boş; kullanıcı henüz kaydedilmediği için ayar da
+     kaydedilemez — bu yüzden alan gizlenir. */
+  uEpostaYukle();
   YETKILER = {};
   PROFORMA_ONAY_YETKI = DUZENLENEN ? !!DUZENLENEN.proforma_onay : false;
   if (DUZENLENEN) {
@@ -785,9 +774,15 @@ async function kullaniciKaydet() {
   try {
     if (DUZENLENEN) {
       await api(`/api/ayarlar/kullanici/${DUZENLENEN.id}`, { method: 'PUT', body: JSON.stringify(govde) });
+      /* EP3: e-posta ayrı bir kayıtta saklanıyor, ayrı uca gider. */
+      await uEpostaKaydet(DUZENLENEN.id);
       bildir('Kullanıcı güncellendi · ' + ad);
     } else {
-      await api('/api/ayarlar/kullanici', { method: 'POST', body: JSON.stringify(govde) });
+      const _y = await api('/api/ayarlar/kullanici', { method: 'POST', body: JSON.stringify(govde) });
+      /* Yeni kullanıcıda e-posta alanları gizli olduğu için burada
+         çağrı yapılmıyor; kullanıcı kaydedildikten sonra düzenlenerek
+         tanımlanır. Yine de id dönerse güvenli tarafta kalalım. */
+      if (_y && _y.id) await uEpostaKaydet(_y.id);
       bildir('Kullanıcı oluşturuldu · ' + ad);
     }
     modalKapat(); await kullaniciYukle();
@@ -885,6 +880,12 @@ async function avansKaydet() {
     const d = await api('/api/ayarlar/uretim_avans', { method: 'POST', body: JSON.stringify({ yuzde }) });
     bildir(d.mesaj || ('Üretim avans eşiği %' + yuzde));
   } catch (e) { /* */ }
+}
+
+/* Şirket ortak hesabı paneli yalnızca yöneticiye görünür (EP1). */
+function epOrtakGoster() {
+  const a = document.getElementById('epOrtakAlan');
+  if (a) a.style.display = window.ADMIN ? '' : 'none';
 }
 
 async function smtpYukle() {
@@ -1249,7 +1250,9 @@ const yuklendi = { kullanici: false, firma: false, listeler: false, banka: false
 const yukleyici = { kullanici: kullaniciYukle, firma: firmaYukle, listeler: lookupYukle,
                     banka: bankaYukle, yedek: yedekYukle,
                     // E-posta sekmesi: hem şirket ayarı hem kişisel hesap yüklenir
-                    eposta: () => { smtpYukle(); kepYukle(); } };
+                    /* EP5: kepYukle kaldırıldı (kişisel panel yok).
+                       Ortak hesap paneli yöneticiye görünür. */
+                    eposta: () => { smtpYukle(); epOrtakGoster(); } };
 document.querySelectorAll('.sekme').forEach(s => s.onclick = () => {
   const ad = s.dataset.b;
   document.querySelectorAll('.bolum').forEach(b => b.classList.remove('aktif'));

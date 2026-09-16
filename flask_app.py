@@ -44,6 +44,7 @@ from models import db, Kullanici, BlokStok, PlakaStok, EbatliStok, StokCikis, Pr
 from models import Siparis, SiparisKalem, Rezervasyon, Cari, CariHareket, Maliyet, Sevkiyat, DovizKur, Veriler, SatisKaydi, Fatura, Banka, Kasa, KasaHareket, Kesim, KesimDetay
 from models import Cek, CekHareket
 from models import CariErisim, CariKisi   # CRM-B: erisim ve kisiler
+from models import Bildirim              # BL1: sistem ici bildirimler
 from models import CariAktivite              # CRM-E: temas kaydi
 from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
@@ -99,7 +100,10 @@ def create_app():
         'belge.country_origin': ('Country of Origin', 'Menşe Ülke'),
         'belge.cont_no': ('Cont.', 'Sıra'),
         'belge.no': ('No', 'No'),
-        'belge.description_of_goods': ('Description of Goods', 'Mal Açıklaması'),
+        # BD4: "Mal Açıklaması" resmi ama sert duruyordu; belgelerde
+        # "Ürün Açıklaması" daha akıcı. İngilizce karşılık standart
+        # gümrük terimi olduğu için DEĞİŞMEDİ.
+        'belge.description_of_goods': ('Description of Goods', 'Ürün Açıklaması'),
         'belge.block_no': ('Block No', 'Blok No'),
         'belge.slab_no': ('Slab No', 'Plaka No'),
         'belge.crate_no': ('Crate No', 'Kasa No'),
@@ -108,7 +112,9 @@ def create_app():
         'belge.special': ('Special', 'Özel'),
         'belge.surface': ('Surface', 'Yüzey'),
         'belge.length': ('Length', 'Boy'),
-        'belge.height': ('Height', 'Yükseklik'),
+        # BD4: ölçü sütunları dar; "Yükseklik" başlığı satırı
+        # taşırıyordu. Kısaltma tabloda okunaklılığı artırıyor.
+        'belge.height': ('Height', 'Yük.'),
         'belge.thk': ('Thk', 'Kal.'),
         'belge.width': ('Width', 'En'),
         'belge.ton': ('TON', 'TON'),
@@ -203,6 +209,36 @@ def create_app():
 
     app.jinja_env.globals['_ceviri'] = _ceviri
     app.jinja_env.globals['dil'] = 'en'  # şablonlar dil değişkeni beklerse varsayılan
+
+    def _belge_ulkesi(p):
+        """Belgenin ulkesi  ·  BD3
+
+        Once belgenin KENDI alani, bos ise CARININ ulkesi.
+
+        Neden: `musteri_ulke` elle doldurulan bir alan ve cogu
+        proformada BOS kaliyor. Bos ulke 'en'e dustugu icin
+        Turkiye'deki firmaya INGILIZCE belge cikiyordu. Carinin
+        ulkesi asil kaynak; belge alani yalnizca istisna icin.
+        """
+        _u = (getattr(p, 'musteri_ulke', None) or '').strip()
+        if _u:
+            return _u
+        try:
+            _cid = getattr(p, 'cari_id', None)
+            if _cid:
+                _c = db.session.get(Cari, _cid)
+                if _c and (_c.ulke or '').strip():
+                    return _c.ulke
+            # cari_id yoksa unvandan bul — eski kayitlarda
+            # baglanti kurulmamis olabilir.
+            _un = (getattr(p, 'musteri', None) or '').strip()
+            if _un:
+                _c = Cari.query.filter(Cari.unvan == _un).first()
+                if _c:
+                    return _c.ulke
+        except Exception as _e:
+            app.logger.warning(f'[BD3] belge ulkesi okunamadi: {_e}')
+        return ''
 
     def _belge_dili(ulke):
         """Belge dili CARİNİN ÜLKESİNDEN belirlenir  ·  BD1
@@ -460,6 +496,68 @@ def create_app():
             return jsonify({'ok': False, 'error': 'yetki_yok',
                 'mesaj': f'Bu işlem için yetkiniz yok ({modul}/{seviye}). Yöneticinizle görüşün.'}), 403
         return None
+
+    def _para_yaz(t, d):
+        try:
+            return f"{float(t or 0):,.2f} {d or ''}".replace(',', '#').replace('.', ',').replace('#', '.')
+        except Exception:
+            return str(t or '')
+
+    def _bildirim_ac(tip, konu_tip, konu_id, baslik, mesaj, hedef_yetki):
+        """Olay basina TEK bildirim  ·  BL1
+
+        Ayni konu icin ACIK bildirim varsa YENISI ACILMAZ — proforma
+        onaya gonder/geri al/tekrar gonder dongusunde bildirim
+        yigilmasin.
+        """
+        _var = Bildirim.query.filter_by(
+            tip=tip, konu_tip=konu_tip, konu_id=str(konu_id),
+            kapandi=False).first()
+        if _var:
+            return _var
+        b = Bildirim(tip=tip, konu_tip=konu_tip, konu_id=str(konu_id),
+                     baslik=baslik, mesaj=mesaj, hedef_yetki=hedef_yetki,
+                     olusturan=session.get('kullanici'))
+        db.session.add(b)
+        return b
+
+    def _bildirim_kapat(konu_tip, konu_id, tip=None):
+        """Is yapildi — bildirim herkes icin kapanir."""
+        q = Bildirim.query.filter_by(konu_tip=konu_tip,
+                                     konu_id=str(konu_id), kapandi=False)
+        if tip:
+            q = q.filter_by(tip=tip)
+        for b in q.all():
+            b.kapandi = True
+            b.kapatan = session.get('kullanici')
+            b.kapanma = datetime.now()
+
+    @app.route('/api/bildirim', methods=['GET'])
+    def api_bildirim_liste():
+        """Gecerli kullaniciya GORUNEN acik bildirimler.
+
+        Gorunurluk hedef yetkiye bagli: `proforma_onay` bildirimini
+        yalnizca onay yetkisi olanlar gorur. Yetkisi olmayana
+        gostermek, yapamayacagi bir is icin uyarmak olurdu.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        try:
+            q = Bildirim.query.filter_by(kapandi=False)
+            sonuc = []
+            for b in q.order_by(Bildirim.olusturma.desc()).limit(50).all():
+                if b.hedef_yetki == 'proforma_onay' and not _proforma_onay_yetkisi_var_mi():
+                    continue
+                sonuc.append({
+                    'id': b.id, 'tip': b.tip, 'baslik': b.baslik,
+                    'mesaj': b.mesaj, 'konu_tip': b.konu_tip,
+                    'konu_id': b.konu_id,
+                    'olusturma': b.olusturma.isoformat() if b.olusturma else None,
+                })
+            return jsonify({'ok': True, 'data': sonuc, 'adet': len(sonuc)})
+        except Exception as e:
+            app.logger.warning(f'[BL1] bildirim listelenemedi: {e}')
+            return jsonify({'ok': True, 'data': [], 'adet': 0})
 
     def _proforma_onay_yetkisi_var_mi():
         """
@@ -3954,7 +4052,13 @@ def create_app():
         if _auth_required(): return _auth_required()
         if not _yetki_var_mi('proforma', 'okuma'):
             return redirect(url_for('dashboard'))
-        return render_template('proforma.html')
+        # KN1: konteyner tipleri SUNUCUDAN gelir. Ekranda sabit
+        # liste yazmak ya da elle yazdirmak, sunucunun kabul
+        # ettiginden farkli bir deger uretme riski dogururdu —
+        # zaten `prompt()` ile elle yaziliyordu ve yazim hatasi
+        # 400 donduruyordu.
+        return render_template('proforma.html',
+                               konteyner_tipleri=list(KONTEYNER_TIPLERI))
 
     @app.route('/fatura')
     def fatura_sayfa():
@@ -9561,6 +9665,18 @@ def create_app():
             'ok': True,
             'siparis': {
                 'id': sip.id,
+                # PF2: siparisin proformasi var mi. Bu bilgi
+                # YALNIZCA dashboard ucunda hesaplaniyordu; siparis
+                # cekmecesi bu ucu kullandigi icin "Proforma olustur"
+                # dugmesi ikinci kez tiklanabiliyordu.
+                'proforma_var': Proforma.query.filter_by(
+                    siparis_id=sip.id).count() > 0,
+                # PF3: kimligi de dondur ki cekmeceden DOGRUDAN
+                # acilabilsin. Eskiden yalnizca "var" deniyordu,
+                # kullanici proforma sayfasina gidip elle ariyordu.
+                'proforma_id': (lambda _p: _p.id if _p else None)(
+                    Proforma.query.filter_by(siparis_id=sip.id)
+                    .order_by(Proforma.olusturma.desc()).first()),
                 'siparis_tarihi': sip.siparis_tarihi.isoformat() if sip.siparis_tarihi else None,
                 'musteri': sip.musteri,
                 'doviz': sip.doviz,
@@ -10182,6 +10298,7 @@ def create_app():
                     sunucu.ehlo()
                 sunucu.login(ayar['kullanici'], ayar['sifre'])
                 red = sunucu.send_message(msg)
+                _kopya_not = _gonderilmis_kopyala(ayar, msg)   # EP6
                 sunucu.quit()
             finally:
                 _sys.stderr = _eski_stderr
@@ -10192,8 +10309,13 @@ def create_app():
                     'mesaj': f'Sunucu alicilari reddetti: {red}',
                     'diyalog': diyalog}), 200
             return jsonify({'ok': True,
-                'mesaj': f'Test e-postasi kabul edildi. Sunucu diyalogu asagida. '
-                         f'Alici kutusuna dusmezse, sunucunun teslim (relay/SPF) ayarlarini kontrol edin.',
+                # EP6: kopya sonucu MESAJA eklenir. Sessiz gecerse
+                # kullanici "kopya neden yok" sorusuna cevap
+                # bulamiyordu.
+                'mesaj': ('Test e-postasi kabul edildi. '
+                          + (_kopya_not + ' ' if _kopya_not else '')
+                          + 'Sunucu diyalogu asagida. Alici kutusuna dusmezse, '
+                            'sunucunun teslim (relay/SPF) ayarlarini kontrol edin.'),
                 'diyalog': diyalog})
         except Exception as e:
             try: _sys.stderr = _eski_stderr
@@ -14753,6 +14875,26 @@ def create_app():
         # Durum değişikliğinin stok/siparis tarafına etkisi
         ekstra_mesaj = ''
 
+        # ── BİLDİRİM (BL1) ──
+        # Onaya gonderilince ac, onaylanınca/geri cekilince KAPAT.
+        # Kapali bildirim kimseye gorunmez: yetkililerden biri isi
+        # yapmissa digerlerine bosuna bildirim gitmemeli.
+        try:
+            if yeni_durum == 'Ic Onay':
+                _bildirim_ac(
+                    tip='proforma_onay', konu_tip='proforma', konu_id=p.id,
+                    baslik=f'Onay bekleyen proforma: {p.id}',
+                    mesaj=(f'{p.musteri or "—"} · '
+                           f'{_para_yaz(p.toplam, p.doviz)} · '
+                           f'{session.get("kullanici") or "—"} onaya gonderdi'),
+                    hedef_yetki='proforma_onay')
+            elif mevcut == 'Ic Onay':
+                # Onaylandi / Taslak / Iptal — hangisi olursa olsun
+                # onay beklentisi BITTI.
+                _bildirim_kapat('proforma', p.id, tip='proforma_onay')
+        except Exception as _e:
+            app.logger.warning(f'[BL1] bildirim islenemedi: {_e}')
+
         # İç onay geçişleri için bilgilendirme mesajı
         if yeni_durum == 'Ic Onay':
             ekstra_mesaj = ' Ikinci bir yetkilinin onayi bekleniyor.'
@@ -15998,7 +16140,12 @@ def create_app():
             sablon = 'proforma_print.html'
             cikti_kalemler = kalemler
         return render_template(sablon, p=p, kalemler=cikti_kalemler,
-                               dil=_belge_dili(getattr(p, 'musteri_ulke', None)),
+                               dil=_belge_dili(_belge_ulkesi(p)),
+                               # PL1: plaka no sutunu ISTEGE BAGLI.
+                               # Varsayilan GOSTER — eski davranis
+                               # korunur; kapatmak acik bir tercih.
+                               plaka_goster=(request.args.get('plaka', '1')
+                                             not in ('0', 'false', 'hayir')),
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
@@ -16016,6 +16163,397 @@ def create_app():
         except Exception as e:
             app.logger.error(f"PDF uretim hatasi: {e}")
             return None
+
+    def _smtp_kullanici_oku(ad):
+        """Bir kullanicinin kayitli SMTP ayari (sifresiz)."""
+        k = Veriler.query.filter_by(kategori='smtp_kullanici', deger=ad).first()
+        if not k or not k.uzun_deger:
+            return {}
+        try:
+            d = json.loads(k.uzun_deger) or {}
+        except Exception:
+            return {}
+        return {
+            'sunucu': d.get('sunucu') or '',
+            'port': int(d.get('port') or 587),
+            'kullanici': d.get('kullanici') or '',
+            'guvenlik': d.get('guvenlik') or 'tls',
+            'gonderen_ad': d.get('gonderen_ad') or '',
+            'gonderen_email': d.get('gonderen_email') or '',
+            'imap_sunucu': d.get('imap_sunucu') or '',
+            'imap_port': int(d.get('imap_port') or 993),
+            'sifre_kayitli': bool(d.get('sifre')),
+        }
+
+    def _smtp_kullanici_yaz(ad, d):
+        """Bir kullanicinin SMTP ayarini yazar/siler. Ortak mantik."""
+        k = Veriler.query.filter_by(kategori='smtp_kullanici', deger=ad).first()
+        mevcut = {}
+        if k and k.uzun_deger:
+            try:
+                mevcut = json.loads(k.uzun_deger) or {}
+            except Exception:
+                mevcut = {}
+        sunucu = (d.get('sunucu') or '').strip()
+        kullanici = (d.get('kullanici') or '').strip()
+        # Bos gonderim = kaydi SIL, ortak hesaba don.
+        if not sunucu and not kullanici:
+            if k:
+                db.session.delete(k)
+                db.session.commit()
+            return True, 'Kendi hesabi kaldirildi; ortak hesap kullanilacak.'
+        if not sunucu or not kullanici:
+            return False, 'SMTP sunucu ve kullanici adi zorunlu.'
+        # Sifre bos ise MEVCUT korunur — ekranda gosterilmedigi icin
+        # her duzenlemede yeniden yazmak zorunda kalinmamali.
+        sifre = (d.get('sifre') or '').strip() or mevcut.get('sifre') or ''
+        if not sifre:
+            return False, 'Sifre zorunlu (ilk kayitta).'
+        yeni = {
+            'sunucu': sunucu, 'port': int(d.get('port') or 587),
+            'kullanici': kullanici, 'sifre': sifre,
+            'guvenlik': (d.get('guvenlik') or 'tls').strip().lower(),
+            'gonderen_ad': (d.get('gonderen_ad') or '').strip(),
+            'gonderen_email': (d.get('gonderen_email') or '').strip() or kullanici,
+            # EP6: Gonderilmis klasorune kopya icin. Bos ise kopya
+            # atlanir; gonderim etkilenmez.
+            'imap_sunucu': (d.get('imap_sunucu') or '').strip(),
+            'imap_port': int(d.get('imap_port') or 993),
+        }
+        if not k:
+            k = Veriler(kategori='smtp_kullanici', deger=ad)
+            db.session.add(k)
+        k.uzun_deger = json.dumps(yeni, ensure_ascii=False)
+        db.session.commit()
+        return True, 'E-posta hesabi kaydedildi.'
+
+    @app.route('/api/ayarlar/kullanici/<int:id>/eposta/test', methods=['POST'])
+    def api_kullanici_eposta_test(id):
+        """O KULLANICININ hesabiyla test gonderir  ·  EP4
+
+        Neden gerekli: yonetici bir kullanicinin hesabini tanimliyor
+        ama sinayamiyordu. Ayarlar sayfasindaki test KENDI hesabini
+        deniyor; yonetici admin oldugu icin sirketin ortak hesabini
+        deniyor ve "kubra'nin hesabini tanimladim ama info@'dan
+        cikti" sasirmasi doguyordu.
+
+        Burada hangi kullanici icin tanimlandiysa ONUN ayarlariyla
+        baglanilir.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
+        k = db.session.get(Kullanici, id)
+        if not k:
+            return jsonify({'ok': False, 'mesaj': 'Kullanici bulunamadi'}), 404
+        alici = ((request.get_json(silent=True) or {}).get('alici') or '').strip()
+        if not alici:
+            return jsonify({'ok': False, 'mesaj': 'Test alici adresi gerekli.'}), 400
+
+        kayit = Veriler.query.filter_by(
+            kategori='smtp_kullanici', deger=k.ad).first()
+        if not kayit or not kayit.uzun_deger:
+            return jsonify({'ok': False,
+                            'mesaj': f'{k.ad} icin e-posta hesabi tanimli degil. '
+                                     f'Once kaydedin, sonra test edin.'}), 400
+        try:
+            a = json.loads(kayit.uzun_deger)
+        except Exception:
+            return jsonify({'ok': False, 'mesaj': 'Ayar okunamadi.'}), 400
+
+        # MIMEText/formataddr bu dosyada YEREL ice aktariliyor
+        # (10258'de oldugu gibi); burada da gerekiyor. Testler
+        # bagliligi yakaladi — yoksa gercek gonderimde NameError.
+        from email.mime.text import MIMEText
+        from email.utils import formataddr
+        import ssl as _ssl_yerel
+        import smtplib
+        try:
+            msg = MIMEText(f'Bu bir test e-postasidir. {k.ad} kullanicisinin '
+                           f'SMTP ayarlari calisiyor.', 'plain', 'utf-8')
+            msg['From'] = formataddr((a.get('gonderen_ad') or '',
+                                      a.get('gonderen_email') or a.get('kullanici')))
+            msg['To'] = alici
+            msg['Subject'] = 'Milestone ERP - SMTP Test'
+            port = int(a.get('port') or 587)
+            if (a.get('guvenlik') or 'tls') == 'ssl':
+                sv = smtplib.SMTP_SSL(a['sunucu'], port,
+                                      context=_ssl_yerel.create_default_context(), timeout=30)
+            else:
+                sv = smtplib.SMTP(a['sunucu'], port, timeout=30)
+                if (a.get('guvenlik') or 'tls') == 'tls':
+                    sv.starttls(context=_ssl_yerel.create_default_context())
+            sv.login(a['kullanici'], a['sifre'])
+            sv.sendmail(a.get('gonderen_email') or a['kullanici'], [alici],
+                        msg.as_string())
+            sv.quit()
+            # EP6: Gonderilmis klasorune kopya. Basarisiz olursa
+            # gonderim YINE DE basarili — posta gitmisken
+            # "basarisiz" demek yaniltici olur.
+            _not = _gonderilmis_kopyala(a, msg)
+            return jsonify({'ok': True,
+                            'mesaj': f"Test gonderildi — {a.get('gonderen_email') or a['kullanici']} "
+                                     f"adresinden {alici} adresine."
+                                     + (f' ({_not})' if _not else '')})
+        except Exception as e:
+            try:
+                sv.quit()
+            except Exception:
+                pass
+            return jsonify({'ok': False,
+                            'mesaj': f'{type(e).__name__}: {e}'}), 400
+
+    @app.route('/api/ayarlar/kullanici/<int:id>/eposta', methods=['GET', 'POST'])
+    def api_kullanici_eposta(id):
+        """Yonetici, BIR KULLANICININ e-posta hesabini tanimlar  ·  EP3
+
+        NEDEN GEREKLI: admin olmayan kullanici /ayarlar sayfasina
+        HIC GIREMIYOR. Kendi hesabini tanimlamasi imkansizdi; ayar
+        ekranindaki kisisel panel yalnizca yoneticiye goruniyordu.
+        Bu yuzden tanimi kullanici yonetim panelinden yonetici yapar.
+
+        Yalnizca ADMIN. Baskasinin posta hesabini yazmak hassas bir
+        yetki; siradan kullanici yalnizca kendi ayarina
+        (/api/v2/eposta/ayar) dokunabilir.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
+        k = db.session.get(Kullanici, id)
+        if not k:
+            return jsonify({'ok': False, 'mesaj': 'Kullanici bulunamadi'}), 404
+        if request.method == 'GET':
+            return jsonify(_smtp_kullanici_oku(k.ad))
+        ok, mesaj = _smtp_kullanici_yaz(k.ad, request.get_json(silent=True) or {})
+        return (jsonify({'ok': True, 'mesaj': mesaj}) if ok
+                else (jsonify({'ok': False, 'mesaj': mesaj}), 400))
+
+    @app.route('/api/v2/eposta/ayar', methods=['GET'])
+    def api_eposta_ayar_oku():
+        """Kullanicinin KENDI SMTP ayari  ·  EP2
+
+        Bu uc HIC YAZILMAMISTI: `_smtp_ayarlari_oku` kullanici bazli
+        ayari okuyordu ve ayarlar ekraninda paneli vardi, ama ayari
+        KAYDEDECEK/OKUYACAK uc yoktu. Panel bosa calisiyordu ve
+        kullanici "kendi hesabimi tanimladim ama degismiyor"
+        durumunda kaliyordu.
+
+        SIFRE ASLA DONMEZ — yalnizca kayitli olup olmadigi bilgisi.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        _ad = session.get('kullanici')
+        if not _ad:
+            return jsonify({})
+        try:
+            k = Veriler.query.filter_by(
+                kategori='smtp_kullanici', deger=_ad).first()
+            if not k or not k.uzun_deger:
+                return jsonify({})
+            d = json.loads(k.uzun_deger)
+            return jsonify({
+                'sunucu': d.get('sunucu') or '',
+                'port': int(d.get('port') or 587),
+                'kullanici': d.get('kullanici') or '',
+                'guvenlik': d.get('guvenlik') or 'tls',
+                'gonderen_ad': d.get('gonderen_ad') or '',
+                'gonderen_email': d.get('gonderen_email') or '',
+                'imap_sunucu': d.get('imap_sunucu') or '',
+                'imap_port': int(d.get('imap_port') or 993),
+                # Sifrenin KENDISI degil, VARLIGI bildirilir.
+                'sifre_kayitli': bool(d.get('sifre')),
+            })
+        except Exception as e:
+            app.logger.warning(f'[EP2] eposta ayari okunamadi: {e}')
+            return jsonify({})
+
+    @app.route('/api/v2/eposta/ayar', methods=['POST'])
+    def api_eposta_ayar_kaydet():
+        """Kullanicinin KENDI SMTP ayarini kaydeder  ·  EP2
+
+        Herkes YALNIZCA kendi ayarini yazar; baskasininkine
+        dokunamaz. Kullanici adi oturumdan alinir, govdeden DEGIL —
+        govdeden alsaydik biri baskasinin hesabini degistirebilirdi.
+
+        SIFRE BOS GONDERILIRSE mevcut sifre KORUNUR. Ekranda
+        gosterilmedigi icin kullanici her kayitta yeniden yazmak
+        zorunda kalmamali.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        _ad = session.get('kullanici')
+        if not _ad:
+            return jsonify({'ok': False, 'mesaj': 'Oturum yok'}), 401
+        d = request.get_json(silent=True) or {}
+        sunucu = (d.get('sunucu') or '').strip()
+        kullanici = (d.get('kullanici') or '').strip()
+
+        k = Veriler.query.filter_by(
+            kategori='smtp_kullanici', deger=_ad).first()
+        mevcut = {}
+        if k and k.uzun_deger:
+            try:
+                mevcut = json.loads(k.uzun_deger) or {}
+            except Exception:
+                mevcut = {}
+
+        # TEMIZLEME: sunucu bos ise kayit SILINIR — kullanici ortak
+        # hesaba donmek isteyebilir ve bunun bir yolu olmali.
+        if not sunucu and not kullanici:
+            if k:
+                db.session.delete(k)
+                db.session.commit()
+            return jsonify({'ok': True, 'mesaj': 'Kendi hesabiniz kaldirildi; '
+                                                 'ortak hesap kullanilacak.'})
+
+        if not sunucu or not kullanici:
+            return jsonify({'ok': False,
+                            'mesaj': 'SMTP sunucu ve kullanici adi zorunlu.'}), 400
+
+        _sifre = (d.get('sifre') or '').strip() or mevcut.get('sifre') or ''
+        if not _sifre:
+            return jsonify({'ok': False,
+                            'mesaj': 'Sifre zorunlu (ilk kayitta).'}), 400
+
+        yeni = {
+            'sunucu': sunucu,
+            'port': int(d.get('port') or 587),
+            'kullanici': kullanici,
+            'sifre': _sifre,
+            'guvenlik': (d.get('guvenlik') or 'tls').strip().lower(),
+            'gonderen_ad': (d.get('gonderen_ad') or '').strip(),
+            # Gonderen adres bos ise KULLANICI ADI kullanilir; SPF/DMARC
+            # icin gonderen ile kimlik dogrulanan hesap ayni olmali.
+            'gonderen_email': (d.get('gonderen_email') or '').strip() or kullanici,
+        }
+        if not k:
+            k = Veriler(kategori='smtp_kullanici', deger=_ad)
+            db.session.add(k)
+        k.uzun_deger = json.dumps(yeni, ensure_ascii=False)
+        db.session.commit()
+        return jsonify({'ok': True, 'mesaj': 'E-posta hesabiniz kaydedildi.',
+                        'gonderen_email': yeni['gonderen_email']})
+
+    def _gonderilmis_kopyala(ayar, msg):
+        """Gonderilen postanin kopyasini IMAP 'Gonderilmis' klasorune koyar.
+
+        ── NEDEN GEREKLI (EP6) ──
+        SMTP YALNIZCA GONDERIR; klasore kopya birakmaz. Thunderbird
+        gibi istemciler postayi SMTP ile yollayip AYRICA IMAP ile
+        Gonderilmis'e yukler — iki ayri is. ERP birincisini yapiyordu,
+        bu yuzden proformalar musteriye gidiyor ama kullanicinin
+        Gonderilmis klasorunde gorunmuyordu. Musteri yazismasinin
+        izlenebilir olmasi isletme acisindan onemli.
+
+        ── BASARISIZLIK GONDERIMI BOZMAZ ──
+        Posta zaten gitmisken "basarisiz" demek yaniltici olurdu.
+        Hata dondurmez; sorunu METIN olarak dondurur, cagiran
+        isterse kullaniciya not olarak gosterir.
+
+        ── KLASOR ADI TAHMIN EDILMEZ ──
+        Sunucular farkli ad kullaniyor (Sent, INBOX.Sent,
+        'Gonderilmis Ogeler'). Once IMAP'in `\\Sent` OZEL ISARETI
+        aranir; bulunmazsa yaygin adlar denenir. Yanlis klasore
+        yazmak, kopyayi kaybetmekten kotudur.
+        """
+        _imap = (ayar or {}).get('imap_sunucu')
+        if not _imap:
+            # SESSIZ GECMEK YANLISTI: kullanici "kopya neden yok"
+            # sorusuna cevap bulamiyordu — IMAP tanimsiz mi, yoksa
+            # yukleme mi basarisiz, ayirt edilemiyordu.
+            return 'IMAP sunucu tanımlı değil — Gönderilmiş kopyası atlandı.'
+        import imaplib
+        import ssl as _s
+        import time as _t
+        def _kutu_adi(satir):
+            """IMAP LIST satirindan KUTU ADINI ayiklar.
+
+            Bicim:  (bayraklar) "ayrac" kutu
+            Ornek:  (\\HasNoChildren \\Sent) "." Sent
+                    (\\HasNoChildren) "/" "INBOX.Sent Items"
+
+            Ilk surumde `split(' "')[-1]` kullaniyordum; kutu adi
+            TIRNAKSIZ oldugunda AYRACI da iceri aliyordu ve
+            `." Sent` gibi bozuk bir ad cikiyordu. Uretimde
+            gorulen hata buydu.
+            """
+            _t = satir.decode('utf-8', 'replace') if isinstance(satir, bytes) else str(satir)
+            _m = _re_alt.match(r'^\s*\(([^)]*)\)\s+("(?:[^"]*)"|NIL)\s+(.*)$', _t)
+            if not _m:
+                return '', ''
+            _ad = _m.group(3).strip()
+            if _ad.startswith('"') and _ad.endswith('"') and len(_ad) >= 2:
+                _ad = _ad[1:-1]
+            return _m.group(1), _ad
+
+        M = None
+        try:
+            _port = int(ayar.get('imap_port') or 993)
+            M = imaplib.IMAP4_SSL(_imap, _port,
+                                  ssl_context=_s.create_default_context())
+            M.login(ayar['kullanici'], ayar['sifre'])
+
+            hedef = None
+            try:
+                _tip, _liste = M.list()
+                for _sat in (_liste or []):
+                    _bayrak, _ad = _kutu_adi(_sat)
+                    # IMAP OZEL ISARETI — en guvenilir yol.
+                    # Bayragi ADDAN AYRI ariyoruz; ilk surumde tum
+                    # satirda arayip adi yanlis ayikliyorduk.
+                    if '\\Sent' in _bayrak and _ad:
+                        hedef = _ad
+                        break
+            except Exception:
+                pass
+            if not hedef:
+                for _ad in ('Sent', 'INBOX.Sent', 'Sent Items', 'INBOX.Sent Items',
+                            'Gonderilmis', 'Gönderilmiş', 'INBOX.Gonderilmis'):
+                    try:
+                        _t2, _d = M.select(f'"{_ad}"', readonly=True)
+                        if _t2 == 'OK':
+                            hedef = _ad
+                            break
+                    except Exception:
+                        continue
+            if not hedef:
+                # Mevcut klasorleri de bildir: dogru adi eklemek
+                # icin tahmin yurutmek yerine LISTEYI gorelim.
+                _adlar = []
+                try:
+                    _t3, _l3 = M.list()
+                    for _x in (_l3 or [])[:25]:
+                        _sx = _x.decode('utf-8', 'replace') if isinstance(_x, bytes) else str(_x)
+                        if '"' in _sx:
+                            _adlar.append(_sx.split('"')[-2] if _sx.count('"') >= 2
+                                          else _sx.split(' ')[-1])
+                except Exception:
+                    pass
+                return ('Gönderilmiş klasörü bulunamadı. Sunucudaki klasörler: '
+                        + (', '.join(_adlar[:15]) or 'okunamadı'))
+
+            # HEDEFI DOGRULA: bozuk bir ad sunucuda YENI KLASOR
+            # yaratabilir ve kopya gorunmez yere gider. Uretimde
+            # tam bunu yasadik: ad `." Sent` olarak ayiklanmisti,
+            # sunucu kabul etti ama Thunderbird'de gorunmedi.
+            _st, _ = M.select(f'"{hedef}"', readonly=True)
+            if _st != 'OK':
+                return f'"{hedef}" klasörü açılamadı; kopya yüklenmedi.'
+            M.append(f'"{hedef}"', '\\Seen',
+                     imaplib.Time2Internaldate(_t.time()),
+                     msg.as_bytes() if hasattr(msg, 'as_bytes') else bytes(msg))
+            return f'Kopya "{hedef}" klasörüne yüklendi.'
+        except Exception as e:
+            app.logger.warning(f'[EP6] gonderilmis kopyasi: {e}')
+            return f'Kopya Gönderilmiş klasörüne yüklenemedi: {type(e).__name__}'
+        finally:
+            try:
+                if M:
+                    M.logout()
+            except Exception:
+                pass
 
     def _smtp_ayarlari_oku():
         """Gönderim için kullanılacak SMTP ayarlarını döner (dict) veya None.
@@ -16054,6 +16592,9 @@ def create_app():
                             'gonderen_email': (_d.get('gonderen_email')
                                                or _d.get('kullanici')),
                             'guvenlik': (_d.get('guvenlik') or 'tls').lower(),
+                            # EP6: gonderim sonrasi Gonderilmis kopyasi
+                            'imap_sunucu': _d.get('imap_sunucu') or '',
+                            'imap_port': int(_d.get('imap_port') or 993),
                         }
         except Exception:
             pass   # kişisel ayar okunamazsa ortak hesaba düş
@@ -16109,12 +16650,14 @@ def create_app():
                 with smtplib.SMTP_SSL(ayar['sunucu'], ayar['port'], context=ctx, timeout=30) as sunucu:
                     sunucu.login(ayar['kullanici'], ayar['sifre'])
                     reddedilenler = sunucu.send_message(msg)
+                    _kopya_not = _gonderilmis_kopyala(ayar, msg)   # EP6
             else:
                 with smtplib.SMTP(ayar['sunucu'], ayar['port'], timeout=30) as sunucu:
                     if ayar['guvenlik'] == 'tls':
                         sunucu.starttls(context=_ssl.create_default_context())
                     sunucu.login(ayar['kullanici'], ayar['sifre'])
                     reddedilenler = sunucu.send_message(msg)
+                    _kopya_not = _gonderilmis_kopyala(ayar, msg)   # EP6
             # send_message, teslim edilemeyen alıcıları dict olarak döner ({adres: (kod, mesaj)})
             if reddedilenler:
                 detay = '; '.join(f"{a}: {r}" for a, r in reddedilenler.items())
@@ -16303,6 +16846,17 @@ def create_app():
             cikti_kalemler = kalemler
 
         return render_template(sablon, p=p, kalemler=cikti_kalemler,
+                               # BD3: bu render noktasi ATLANMISTI.
+                               # Ayni sablonlari basan IKI render var;
+                               # yalnizca birine `dil` gecirilmis, bu
+                               # yuzden /html ucu Turk musteriye
+                               # INGILIZCE belge veriyordu.
+                               dil=_belge_dili(_belge_ulkesi(p)),
+                               # PL1: plaka no sutunu ISTEGE BAGLI.
+                               # Varsayilan GOSTER — eski davranis
+                               # korunur; kapatmak acik bir tercih.
+                               plaka_goster=(request.args.get('plaka', '1')
+                                             not in ('0', 'false', 'hayir')),
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
@@ -16836,7 +17390,10 @@ def create_app():
         yeniler = []
         for i in range(adet):
             k = Konteyner(sira=mevcut + i + 1, proforma_id=proforma_id,
-                          tip=tip or None)
+                          tip=tip or None,
+                          # KN1: ekran bir NOT alani gonderiyor; okunmazsa
+                          # kullaniciya yapilmayan bir soz verilmis olur.
+                          aciklama=((data.get('not') or '').strip() or None))
             db.session.add(k)
             yeniler.append(k)
         db.session.flush()

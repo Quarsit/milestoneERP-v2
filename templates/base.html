@@ -475,6 +475,27 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
           Hızlı Satış
         </button>
         {% endif %}
+
+        <!-- ── BİLDİRİM ÇANI (BL1) ──
+             Sayfa açılışında yüklenir: onay yetkilisi o an sistemde
+             olmasa bile bir sonraki girişinde görür. Yetkililerden
+             biri onaylamışsa bildirim kapanır ve diğerlerine hiç
+             görünmez. -->
+        <div style="position:relative">
+          <button class="hizli-btn" id="bildirimBtn" onclick="bildirimAc()"
+                  title="Bildirimler" style="display:none;padding:7px 10px">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2">
+              <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            <span id="bildirimSayi" style="background:var(--kirmizi);color:#fff;
+                  border-radius:9px;padding:1px 6px;font-size:.72rem;font-weight:700"></span>
+          </button>
+          <div id="bildirimKutu" style="display:none;position:absolute;right:0;top:38px;
+               width:340px;max-height:420px;overflow:auto;background:var(--yuzey);
+               border:1px solid var(--cizgi);border-radius:11px;
+               box-shadow:0 16px 44px rgba(25,28,26,.22);z-index:60;padding:6px"></div>
+        </div>
         {% block header_right %}{% endblock %}
         <button class="avatar" title="{{ session.get('kullanici','') }}">{{ (session.get('kullanici','?')|first)|upper }}</button>
         <a href="/cikis" class="cikis-btn">Çıkış</a>
@@ -713,6 +734,50 @@ window.PROFORMA_ONAY = {{ (menu_proforma_onay|default(false))|tojson }};
 window.AKTIF_KULLANICI = {{ (session.get('kullanici','')|default(''))|tojson }};
 window.ADMIN = {{ (menu_admin|default(false))|tojson }};
 function yazabilir(modul){ return window.ADMIN || window.YETKI[modul] === 'yazma'; }
+
+/* ══ BİLDİRİMLER (BL1) ══
+   Sayfa açılışında bir kez çekilir. Sunucu yalnızca KAPANMAMIŞ ve
+   kullanıcının yetkisine UYAN bildirimleri döndürür; ekranda ayrıca
+   süzmeye gerek yok. */
+let BILDIRIMLER = [];
+
+async function bildirimYukle() {
+  try {
+    const d = await api('/api/bildirim');
+    BILDIRIMLER = (d && d.data) || [];
+  } catch (e) { BILDIRIMLER = []; }
+  const btn = document.getElementById('bildirimBtn');
+  const say = document.getElementById('bildirimSayi');
+  if (!btn) return;
+  if (!BILDIRIMLER.length) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  if (say) say.textContent = BILDIRIMLER.length;
+}
+
+function bildirimAc() {
+  const k = document.getElementById('bildirimKutu');
+  if (!k) return;
+  if (k.style.display !== 'none') { k.style.display = 'none'; return; }
+  k.innerHTML = BILDIRIMLER.length ? BILDIRIMLER.map(b => `
+    <a href="${b.konu_tip === 'proforma' ? '/proforma?ac=' + encodeURIComponent(b.konu_id) : '#'}"
+       style="display:block;padding:9px 10px;border-radius:8px;text-decoration:none;
+              color:var(--murekkep);border-bottom:1px solid var(--cizgi)">
+      <div style="font-weight:600;font-size:.85rem">${kacar(b.baslik || '')}</div>
+      <div style="font-size:.78rem;color:var(--soluk);margin-top:2px">${kacar(b.mesaj || '')}</div>
+    </a>`).join('')
+    : '<div style="padding:12px;color:var(--soluk);font-size:.83rem">Bildirim yok.</div>';
+  k.style.display = 'block';
+}
+
+document.addEventListener('click', e => {
+  const k = document.getElementById('bildirimKutu');
+  const b = document.getElementById('bildirimBtn');
+  if (k && k.style.display === 'block' && !k.contains(e.target) && b && !b.contains(e.target)) {
+    k.style.display = 'none';
+  }
+});
+
+window.addEventListener('DOMContentLoaded', bildirimYukle);
 
 /** Tek noktadan fetch: 401 → girişe, 403 → net mesaj, ağ hatası → bildirim. */
 /* S1 — CSRF token'ı her yazma isteğine ekle.

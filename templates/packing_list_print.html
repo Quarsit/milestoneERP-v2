@@ -151,7 +151,8 @@ tbody td.c{text-align:center}
         <th>{{ _ceviri('belge.pcs', dil) }}</th>
         <th class="r">{{ miktar_bas }}</th>
         <th class="r">{{ _ceviri('belge.weight', dil) }}<br>Kgs</th>
-        {% if tip != 'EBATLI' %}<th class="r">{{ _ceviri('belge.slab_no', dil) }}</th>{% endif %}
+        {# PL1: plaka no ISTEGE BAGLI — bazi musteriler istemiyor #}
+        {% if tip != 'EBATLI' and plaka_goster %}<th class="r">{{ _ceviri('belge.slab_no', dil) }}</th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -164,7 +165,23 @@ tbody td.c{text-align:center}
       {% set ns = namespace(sira=0, toplam_m=0, toplam_kg=0, toplam_adet=0,
                             son_kont='__BASLANGIC__',
                             g_adet=0, g_m=0, g_kg=0) %}
-      {% set _sut = 9 if blok_belge else 11 %}
+      {# ── SÜTUN SAYISI KOŞULLARDAN TÜRETİLİR (PL1) ──
+         Sabit sayı yazılmıştı (9/11) ama gerçek sütun sayısı
+         12 (plaka) ve 10 (blok) idi. Konteyner başlığı satırın
+         tamamını kaplamıyor, PLAKA NO sütunu boşta kalıyordu.
+
+         Aşağıdaki koşullar BAŞLIKTAKİLERLE birebir aynı; biri
+         değişirse diğeri de değişmeli. #}
+      {% set _sut = 9
+           + (1 if (tip != 'EBATLI' and not blok_belge) else 0)
+           + (1 if (not blok_belge) else 0)
+           + (1 if (tip != 'EBATLI' and plaka_goster) else 0) %}
+      {# Toplam satirlarinin SONUNDAKI hucre sayisi: adet, m², kg
+         (+ plaka sutunu icin bos hucre). colspan bundan turetilir;
+         elle 3 yazilmisti ve plaka hucresi sayilmadigi icin satir
+         bir sutun TASIYORDU — tablo 13 sutuna cikip basliklarla
+         hizasi kayiyordu. #}
+      {% set _kuyruk = 3 + (1 if (tip != 'EBATLI' and plaka_goster) else 0) %}
       {% for k in kalemler %}
       {% set _kk = k._kont if k._kont is defined else None %}
       {% set _kkey = (_kk.id if _kk else 'YOK') %}
@@ -175,7 +192,7 @@ tbody td.c{text-align:center}
         {# Onceki grubun ara toplami #}
         {% if ns.son_kont != '__BASLANGIC__' %}
         <tr style="background:#F2F2EE;font-weight:600">
-          <td colspan="{{ _sut - 3 }}" style="text-align:right;font-size:8pt">
+          <td colspan="{{ _sut - _kuyruk }}" style="text-align:right;font-size:8pt">
             {{ _ceviri('belge.subtotal', dil) if _ceviri('belge.subtotal', dil) != 'belge.subtotal' else 'Ara Toplam' }}
           </td>
           <td class="r">{{ ns.g_adet }}</td>
@@ -187,7 +204,12 @@ tbody td.c{text-align:center}
         {% set ns.g_adet = 0 %}{% set ns.g_m = 0 %}{% set ns.g_kg = 0 %}
         {# Yeni grubun basligi #}
         <tr>
-          <td colspan="{{ _sut }}" style="background:{{ '#EAF0EA' if _kk else '#FDF3E3' }};
+          {# PL2: colspan SAYIYA BAGLI DEGIL. Tarayicilar colspan'i
+             tablonun gercek sutun sayisina KIRPAR; 99 vermek satirin
+             tamamini kaplamayi garanti eder. `_sut` dogru olsa bile
+             ileride bir sutun eklenip sayac guncellenmezse band yine
+             eksik kalirdi — bu hatayi iki kez yasadik. #}
+          <td colspan="99" style="background:{{ '#EAF0EA' if _kk else '#FDF3E3' }};
               border-left:3px solid {{ '#4A5D4E' if _kk else '#C9A227' }};
               padding:5px 8px;font-weight:700;font-size:8.5pt">
             {% if _kk %}
@@ -222,7 +244,7 @@ tbody td.c{text-align:center}
         <td class="r">{{ (k.adet or 1) * (k.kasa_ici_adet or 1) }}</td>
         <td class="r">{{ '%.3f'|format(k.miktar or 0) }}{% if nsb.karma_birim %} {{ (k.birim or '')|lower }}{% endif %}</td>
         <td class="r">{{ '{:,.0f}'.format(k_agirlik) if k_agirlik else '' }}</td>
-        {% if k.urun_tip != 'EBATLI' %}<td class="r">{{ k.slab_no or '' }}</td>{% endif %}
+        {% if k.urun_tip != 'EBATLI' and plaka_goster %}<td class="r">{{ k.slab_no or '' }}</td>{% endif %}
       </tr>
       {% set ns.g_adet = ns.g_adet + (k.adet or 0) %}
       {% set ns.g_m = ns.g_m + (k.miktar or 0) %}
@@ -231,20 +253,23 @@ tbody td.c{text-align:center}
       {# Son grubun ara toplami #}
       {% if ns.son_kont != '__BASLANGIC__' and konteynerler %}
       <tr style="background:#F2F2EE;font-weight:600">
-        <td colspan="{{ _sut - 3 }}" style="text-align:right;font-size:8pt">{{ _ceviri('ara_toplam', dil) }}</td>
+        <td colspan="{{ _sut - _kuyruk }}" style="text-align:right;font-size:8pt">{{ _ceviri('ara_toplam', dil) }}</td>
         <td class="r">{{ ns.g_adet }}</td>
         <td class="r">{{ '%.3f'|format(ns.g_m) }}</td>
         <td class="r">{{ '{:,.0f}'.format(ns.g_kg) if ns.g_kg else '' }}</td>
-        {% if tip != 'EBATLI' %}<td></td>{% endif %}
+        {% if tip != 'EBATLI' and plaka_goster %}<td></td>{% endif %}
       </tr>
       {% endif %}
       <!-- TOPLAM SATIRI -->
       <tr class="toplam-satir">
-        <td colspan="{{ 6 if blok_belge else 8 }}" style="text-align:right;color:#C25934">{{ _ceviri('belge.totally', dil) }}</td>
+        {# PL1: sabit 6/8 yazilmisti — plaka no sutunu istege bagli
+           olunca yanlis kaliyor. _sut'tan turetiliyor. #}
+        <td colspan="{{ _sut - _kuyruk }}" style="text-align:right;color:#C25934">{{ _ceviri('belge.totally', dil) }}</td>
         <td class="r">{{ ns.toplam_adet }}</td>
         <td class="r">{{ '%.3f'|format(ns.toplam_m) }}</td>
         <td class="r">{{ '{:,.0f}'.format(ns.toplam_kg) if ns.toplam_kg else '' }}</td>
-        <td></td>
+        {# Bos hucre KOSULSUZDU: plaka kapaliyken de ekleniyordu. #}
+        {% if tip != 'EBATLI' and plaka_goster %}<td></td>{% endif %}
       </tr>
     </tbody>
   </table>

@@ -282,6 +282,22 @@
         </div>
         <label style="display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px">
           Rezerve edilecek stoklar (opsiyonel)</label>
+        <!-- ── KASKAD SÜZGEÇ + TOPLU SEÇİM (SP1) ──
+             70 plakalık siparişte tek tek işaretlemek çok zaman
+             alıyordu. Süzgeçler birbirine bağlı: üretici seçince
+             cins listesi yalnızca o üreticinin cinslerini gösterir. -->
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+          <input id="spAra" placeholder="Ara — cins, blok no, stok no…"
+                 oninput="stokSuz()" style="flex:1;min-width:140px">
+          <select id="spUretici" onchange="stokSuz()" style="max-width:160px"></select>
+          <select id="spCins" onchange="stokSuz()" style="max-width:140px"></select>
+          <select id="spBlok" onchange="stokSuz()" style="max-width:120px"></select>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+          <button type="button" class="mini-btn" onclick="stokHepsi(true)">Tümünü seç</button>
+          <button type="button" class="mini-btn" onclick="stokHepsi(false)">Seçimi temizle</button>
+          <span id="spSecimBilgi" style="font-size:.78rem;color:var(--soluk)"></span>
+        </div>
         <div class="stok-liste" id="stokListe"><div class="yukleniyor" style="padding:8px">—</div></div>
         <button class="ekle-btn" onclick="kalemEkle()">+ Kalemi ekle</button>
       </div>
@@ -559,8 +575,28 @@ async function detayAc(id) {
   }
   if (sip.durum === 'Hazir' && yazabilir('sevkiyat'))
     eylem.push(`<button class="blok-btn" onclick="location.href='/sevkiyat'">Sevkiyat oluştur</button>`);
-  if (yazabilir('proforma'))
-    eylem.push(`<button class="blok-btn" onclick="location.href='/proforma?siparis_id=${encodeURIComponent(id)}&musteri=${encodeURIComponent(s.musteri || '')}'">Proforma oluştur</button>`);
+  /* PROFORMA ZATEN VARSA DÜĞME PASİF (PF2).
+     Aynı siparişe ikinci proforma açmak operasyonel karışıklık
+     üretiyor: hangi teklif geçerli, hangisi müşteriye gitti
+     belirsizleşiyor. Sunucu `proforma_var` bilgisini zaten
+     döndürüyordu, ekran kullanmıyordu. */
+  if (yazabilir('proforma')) {
+    /* `sip` uç noktadan gelen TAZE kayıt; `s` liste önbelleğinden
+       gelir ve proforma_var alanını taşımaz. Yanlış değişkeni
+       kullanmak koşulu her zaman false yapıyordu. */
+    if (sip.proforma_var) {
+      /* PF3: pasif düğme AKIŞI KESİYORDU — kullanıcı proformanın
+         var olduğunu görüyor ama oraya gitmenin yolu yoktu;
+         Proforma sayfasına gidip elle aramak gerekiyordu.
+         Artık doğrudan açılıyor. */
+      eylem.push(`<button class="blok-btn birincil"
+        onclick="location.href='/proforma?ac=${encodeURIComponent(sip.proforma_id || '')}'"
+        title="Bu siparişin proformasını aç">Proformayı aç${
+          sip.proforma_id ? ' · ' + kacar(sip.proforma_id) : ''}</button>`);
+    } else {
+      eylem.push(`<button class="blok-btn" onclick="location.href='/proforma?siparis_id=${encodeURIComponent(id)}&musteri=${encodeURIComponent(s.musteri || '')}'">Proforma oluştur</button>`);
+    }
+  }
   if (yazabilir('cari'))
     eylem.push(`<button class="blok-btn" onclick="avansAc('${kacar(id)}','${kacar(sip.musteri || '')}')">Avans devret</button>`);
   if (izinli.includes('Iptal Edildi') && yazabilir('siparis'))
@@ -671,25 +707,108 @@ async function stokYukle() {
   // Birim varsayılanı
   document.getElementById('kBirim').value = tip === 'BLOK' ? 'ton' : 'm2';
   try {
-    const d = await api(`/api/stok?tip=${tip}&durum=Serbest&per_page=100`);
+    /* per_page yükseltildi: 100'de kalırken büyük depoda aranan
+       stok listeye HİÇ GELMİYORDU; süzgeç de bulamazdı. */
+    const d = await api(`/api/stok?tip=${tip}&durum=Serbest&per_page=2000`);
     SERBEST_STOK = d.data || [];
   } catch (e) { SERBEST_STOK = []; }
-  kok.innerHTML = SERBEST_STOK.length ? SERBEST_STOK.map(s => `
+  stokSecenekDoldur();
+  stokCiz();
+}
+
+/* Süzgeç seçenekleri STOKTAN üretilir — sabit liste yazsaydım
+   yeni bir cins eklendiğinde süzgeçte görünmezdi. */
+function stokSecenekDoldur() {
+  const fU = (document.getElementById('spUretici') || {}).value || '';
+  const fC = (document.getElementById('spCins') || {}).value || '';
+  const fB = (document.getElementById('spBlok') || {}).value || '';
+  /* Kendi süzgecini kendisi daraltmaz; yoksa bir değer seçilince
+     listede yalnız o kalır ve başkasına geçilemez. */
+  const gecer = (x, haric) =>
+    (haric === 'uretici' || !fU || (x.uretici || '') === fU) &&
+    (haric === 'cins'    || !fC || (x.cins || '') === fC) &&
+    (haric === 'blok_no' || !fB || (x.blok_no || '') === fB);
+  const dold = (id, alan, etiket) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const onceki = sel.value;
+    const degerler = [...new Set(SERBEST_STOK.filter(x => gecer(x, alan))
+      .map(x => x[alan]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr'));
+    if (onceki && !degerler.includes(onceki)) degerler.unshift(onceki);
+    sel.innerHTML = `<option value="">— ${etiket} —</option>` +
+      degerler.map(v => `<option value="${kacar(v)}">${kacar(v)}</option>`).join('');
+    sel.value = onceki;
+  };
+  dold('spUretici', 'uretici', 'üretici');
+  dold('spCins', 'cins', 'cins');
+  dold('spBlok', 'blok_no', 'blok no');
+}
+
+function stokSuz() { stokSecenekDoldur(); stokCiz(); }
+
+function stokSuzulmus() {
+  const ara = ((document.getElementById('spAra') || {}).value || '').toLocaleLowerCase('tr');
+  const fU = (document.getElementById('spUretici') || {}).value || '';
+  const fC = (document.getElementById('spCins') || {}).value || '';
+  const fB = (document.getElementById('spBlok') || {}).value || '';
+  return SERBEST_STOK.filter(s =>
+    (!fU || (s.uretici || '') === fU) &&
+    (!fC || (s.cins || '') === fC) &&
+    (!fB || (s.blok_no || '') === fB) &&
+    (!ara || [s.cins, s.blok_no, s.id, s.ozellik].filter(Boolean)
+      .join(' ').toLocaleLowerCase('tr').includes(ara)));
+}
+
+/* "Tümünü seç" = SÜZGEÇTEN GEÇEN tüm stoklar. Süzgeç yoksa
+   gerçekten hepsi; varsa yalnızca listelenenler. */
+function stokHepsi(sec) {
+  const liste = stokSuzulmus();
+  for (const s of liste) {
+    if (sec) { if (!SECILI_STOK.includes(s.id)) SECILI_STOK.push(s.id); }
+    else SECILI_STOK = SECILI_STOK.filter(x => x !== s.id);
+  }
+  stokCiz();
+  stokOzetGuncelle();
+}
+
+function stokOzetGuncelle() {
+  const b = document.getElementById('spSecimBilgi');
+  if (!b) return;
+  const n = SECILI_STOK.length;
+  const gor = stokSuzulmus().length;
+  if (!n) { b.textContent = `${gor} stok listeleniyor`; return; }
+  const sec = SERBEST_STOK.filter(s => SECILI_STOK.includes(s.id));
+  const m2 = sec.reduce((a, s) => a + (Number(s.m2) || 0), 0);
+  b.innerHTML = `<b>${n}</b> seçili` + (m2 > 0
+    ? ` · ${m2.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2})} m²` : '')
+    + ` · ${gor} listeleniyor`;
+}
+
+function stokCiz() {
+  const kok = document.getElementById('stokListe');
+  const liste = stokSuzulmus();
+  kok.innerHTML = liste.length ? liste.map(s => `
     <label class="stok-satir">
-      <input type="checkbox" value="${kacar(s.id)}" onchange="stokSecildi(this)">
+      <input type="checkbox" value="${kacar(s.id)}" onchange="stokSecildi(this)"
+             ${SECILI_STOK.includes(s.id) ? 'checked' : ''}>
       <div>
         <div>${kacar(s.cins || '—')}${s.blok_no ? ' · ' + kacar(s.blok_no) : ''}</div>
         <div style="color:var(--soluk);font-size:.73rem">${kacar(s.id)}${s.ozellik ? ' · ' + kacar(s.ozellik) : ''}</div>
       </div>
       <span class="m">${s.m2 ? s.m2.toLocaleString('tr-TR') + ' m²' : (s.tonaj ? s.tonaj + ' ton' : '')}</span>
     </label>`).join('')
-    : '<div class="bos" style="padding:10px;font-size:.83rem">Serbest ' + tip.toLowerCase() + ' yok.</div>';
+    : '<div class="bos" style="padding:10px;font-size:.83rem">Süzgece uyan serbest stok yok.</div>';
+  /* `tip` bu fonksiyonda tanımlı değil (stokYukle'nin yereliydi);
+     mesajı sadeleştirdik — js_denetim sözdizimini görür ama
+     kapsam hatasını görmez, testte yakalandı. */
+  stokOzetGuncelle();
   kalemHesapla();
 }
 
 function stokSecildi(el) {
   if (el.checked) SECILI_STOK.push(el.value);
   else SECILI_STOK = SECILI_STOK.filter(x => x !== el.value);
+  stokOzetGuncelle();
   el.closest('.stok-satir').classList.toggle('secili', el.checked);
   // Seçilen stoklardan miktar + cins otomatik doldur
   const secilenler = SERBEST_STOK.filter(s => SECILI_STOK.includes(s.id));

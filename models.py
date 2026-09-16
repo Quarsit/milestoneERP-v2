@@ -82,6 +82,39 @@ class Kullanici(db.Model):
     cari_kapsam = db.Column(db.String(10), default='atanan')
     olusturma = db.Column(db.DateTime, default=datetime.now)
 
+class Bildirim(db.Model):
+    """Sistem içi bildirim  ·  BL1
+
+    ── TASARIM: OLAY BAŞINA TEK KAYIT ──
+    Kullanıcı başına satır AÇMIYORUZ. Bir proforma onaya
+    gönderildiğinde tek bir bildirim doğar ve onay yetkisi olan
+    HERKESE görünür.
+
+    Yetkililerden biri onaylayınca bildirim KAPANIR (`kapandi`).
+    Diğerleri sonradan giriş yapsa bile artık görmez — iş bitmiştir,
+    boşuna bildirim gitmemeli.
+
+    Kullanıcı başına satır açsaydık: onaylayanın satırını kapatmak
+    diğerlerininkini kapatmaz, herkesin ayrı ayrı temizlemesi
+    gerekirdi ve "iş bitti mi" sorusunun tek cevabı olmazdı.
+    """
+    __tablename__ = 'bildirimler'
+    id          = db.Column(db.Integer, primary_key=True)
+    # 'proforma_onay' — ileride başka türler eklenebilir
+    tip         = db.Column(db.String(30), nullable=False, index=True)
+    konu_tip    = db.Column(db.String(20))          # 'proforma'
+    konu_id     = db.Column(db.String(40), index=True)
+    baslik      = db.Column(db.String(160))
+    mesaj       = db.Column(db.Text)
+    hedef_yetki = db.Column(db.String(40))          # 'proforma_onay'
+    olusturan   = db.Column(db.String(50))
+    olusturma   = db.Column(db.DateTime, default=datetime.now, index=True)
+    # KAPANDI: iş yapıldı, kimseye gösterilmez
+    kapandi     = db.Column(db.Boolean, default=False, index=True)
+    kapatan     = db.Column(db.String(50))
+    kapanma     = db.Column(db.DateTime)
+
+
 # ── STOK ─────────────────────────────────────────────────────────────
 # UZ1: cari ünvanı taşıyan alanlar Cari.unvan (200) ile hizalandı.
 # Üretimde 102 karakterlik bir ünvan varchar(100)'e sığmayıp toplu
