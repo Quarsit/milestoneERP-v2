@@ -2195,11 +2195,17 @@ document.getElementById('ara').addEventListener('input', e => {
   }
 
   const sid = prm.get('siparis_id');
-  if (!sid) return;
+  /* C360: cari çekmecesinden "+ Proforma" ile gelindi
+     (?yeni_musteri=...) — sipariş yok, yalnızca müşteri seçili açılır.
+     `?yeni=1` KULLANILMADI: base.html o parametreyle yeniAc()'ı
+     ayrıca çağırıyor ve bizim doldurduğumuz formu sıfırlıyordu
+     (tarayıcı testinde yakalandı). */
+  const yeniMusteri = prm.get('yeni_musteri') || '';
+  if (!sid && !yeniMusteri) return;
   await yeniAc();
   tipiSec('satis');
-  let musteri = prm.get('musteri') || '';
-  if (!musteri) {
+  let musteri = prm.get('musteri') || yeniMusteri;
+  if (!musteri && sid) {
     try { const k = await api(`/api/siparis/${encodeURIComponent(sid)}/kalemler`); musteri = k.musteri || ''; } catch (e) { /* */ }
   }
   if (musteri) {
@@ -2219,8 +2225,10 @@ document.getElementById('ara').addEventListener('input', e => {
       }
     }
     await musteriDegisti();
-    document.getElementById('fSiparis').value = sid;
-    await siparisSecildi();  // seçim otomatik aktarımı tetikler
+    if (sid) {
+      document.getElementById('fSiparis').value = sid;
+      await siparisSecildi();  // seçim otomatik aktarımı tetikler
+    }
   }
   history.replaceState({}, '', location.pathname);
 })();

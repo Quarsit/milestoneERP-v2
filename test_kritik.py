@@ -159,3 +159,53 @@ def test_th1_th2_kismi_tahsilat_ve_iptal():
     assert d[0] == 'Kesildi' and d[1] == 0 and d[3] == 0
     with fa.app.app_context():
         assert KasaHareket.query.filter_by(kasa_id=kid).count() == 0
+
+
+# ── TT1: tek ödemeyle birden çok fatura ──
+def _fatura_ekle(fid, tutar, vade):
+    with fa.app.app_context():
+        db.session.add(Fatura(id=fid, fatura_no=fid, musteri='ACIK CARI', cari_id='C1',
+                              toplam=tutar, doviz='USD', durum='Kesildi', yon='satis',
+                              vade_tarihi=vade))
+        db.session.commit()
+
+
+def test_tt1_toplu_tahsilat_vade_sirasiyla_dagitir():
+    _fatura_ekle('FA', 1000, date(2026, 3, 1))
+    _fatura_ekle('FB', 500, date(2026, 1, 1))     # vadesi daha eski
+    adm = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        kid = Kasa.query.filter_by(ad='USD Banka').first().id
+    acik = adm.get('/api/cari/C1/acik_faturalar').get_json()['faturalar']
+    assert {'FA', 'FB'} <= {x['id'] for x in acik}
+
+    # kalanı aşan tutar reddedilir, hiçbir şey yazılmaz
+    r = adm.post('/api/cari/C1/toplu_tahsilat', json={
+        'fatura_idler': ['FA', 'FB'], 'tutar': 2000, 'doviz': 'USD', 'kasa_id': kid}, headers=H)
+    assert r.status_code == 400
+    # kasa zorunlu
+    r = adm.post('/api/cari/C1/toplu_tahsilat', json={
+        'fatura_idler': ['FA', 'FB'], 'tutar': 700, 'doviz': 'USD'}, headers=H)
+    assert r.status_code == 400
+
+    r = adm.post('/api/cari/C1/toplu_tahsilat', json={
+        'fatura_idler': ['FA', 'FB'], 'tutar': 700, 'doviz': 'USD', 'kasa_id': kid,
+        'evrak_no': 'HAVALE-1'}, headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        assert Fatura.query.get('FB').durum == 'Tahsil Edildi'     # 500 önce
+        assert Fatura.query.get('FA').durum == 'Kismi Tahsil'      # kalan 200
+        assert float(Kasa.query.get(kid).bakiye) == 700
+
+
+def test_tt1_zaman_cizelgesi():
+    d = istemci('admin', 'ADMIN').get('/api/cari/C1/zaman').get_json()
+    assert d['ok'] and any(o['tip'] == 'tahsilat' for o in d['data'])
+    tarihler = [o['tarih'] for o in d['data']]
+    assert tarihler == sorted(tarihler, reverse=True)
+
+
+def test_tt1_gizli_cariye_toplu_tahsilat_yok():
+    r = istemci('satis').post('/api/cari/C2/toplu_tahsilat', json={
+        'fatura_idler': ['X'], 'tutar': 1, 'doviz': 'USD', 'kasa_id': 1}, headers=H)
+    assert r.status_code in (403, 404)

@@ -477,6 +477,8 @@ def create_app():
     ALT_YOL_DESENLERI = [
         (_re_alt.compile(r'^/api/fatura/[^/]+/tahsilat'), 'fatura.tahsilat'),
         (_re_alt.compile(r'^/api/tahsilat'), 'fatura.tahsilat'),
+        # TT1: toplu tahsilat tekli tahsilatla AYNI yetkiyi ister
+        (_re_alt.compile(r'^/api/cari/[^/]+/toplu_tahsilat'), 'fatura.tahsilat'),
         (_re_alt.compile(r'^/api/fatura/[^/]+/?$'), 'fatura.kayit'),
         (_re_alt.compile(r'^/api/cari/hareket'), 'cari.hareket'),
         (_re_alt.compile(r'^/api/cari/[^/]+/(bakiye|hareketler|ekstre)'), 'cari.hareket'),
@@ -6131,7 +6133,17 @@ def create_app():
         # ERISIM SUZGECI (CRM-C) — admin'de sorgu degismez.
         query = _cari_suz(Cari.query, Cari.id).order_by(Cari.unvan)
         paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+        # CL1: son hareket tarihi — uzun suredir islem olmayan cari
+        # listede gorunsun. Sayfadaki cariler icin TEK sorgu.
+        _sayfa_idler = [c.id for c in paginated.items]
+        _son = {}
+        if _sayfa_idler:
+            _son = dict(db.session.query(CariHareket.cari_id,
+                                         func.max(CariHareket.hareket_tarihi))
+                        .filter(CariHareket.cari_id.in_(_sayfa_idler))
+                        .group_by(CariHareket.cari_id).all())
         return jsonify({'data': [{'id': c.id, 'unvan': c.unvan, 'cari_tip': c.cari_tip, 'telefon': c.telefon,
+                                  'son_hareket': (_son[c.id].isoformat() if _son.get(c.id) else None),
                                   'risk_limiti': c.risk_limiti, 'urun_tedarikcisi': c.urun_tedarikcisi,
                                   'uretici_kisaltma': c.uretici_kisaltma, 'email': c.email, 'adres': c.adres,
                                   # ulke: ISO3 kodu (USA, TUR...). Serializer'da YOKTU -> arayuzde hic gorunmuyordu.
@@ -6470,6 +6482,198 @@ def create_app():
                 'hareket_sayisi': len(hareketler)
             }
         })
+
+    # ══════════════════════════════════════════════════════════
+    #  CARİ ÇEKMECESİ: AÇIK FATURALAR · TOPLU TAHSİLAT · ZAMAN (C360)
+    # ══════════════════════════════════════════════════════════
+    def _cari_satis_faturalari(cari, acik=True):
+        """Carinin satis faturalari. Eski kayitlarda cari_id bos
+        olabilir; unvanla da eslestirilir."""
+        q = Fatura.query.filter(
+            db.or_(Fatura.cari_id == cari.id, Fatura.musteri == cari.unvan),
+            db.or_(Fatura.yon == 'satis', Fatura.yon.is_(None)))
+        if acik:
+            q = q.filter(Fatura.durum.in_(('Kesildi', 'Kismi Tahsil')))
+        return q.all()
+
+    def _acik_fatura_dict(f, bugun):
+        odenen = _fatura_odenen_esdeger(f)
+        kalan = q3((f.toplam or 0) - odenen)
+        gecikme = ((bugun - f.vade_tarihi).days
+                   if f.vade_tarihi and f.vade_tarihi < bugun else 0)
+        return {'id': f.id, 'fatura_no': f.fatura_no or f.id,
+                'fatura_tarihi': f.fatura_tarihi.isoformat() if f.fatura_tarihi else None,
+                'vade_tarihi': f.vade_tarihi.isoformat() if f.vade_tarihi else None,
+                'toplam': q3(f.toplam or 0), 'odenen': odenen, 'kalan': kalan,
+                'doviz': (f.doviz or 'USD').upper(), 'durum': f.durum,
+                'gecikme_gun': gecikme}
+
+    def _vade_sirasi(x):
+        return (x.get('vade_tarihi') or '9999-12-31', x.get('fatura_tarihi') or '')
+
+    @app.route('/api/cari/<cari_id>/toplu_tahsilat', methods=['POST'])
+    def api_cari_toplu_tahsilat(cari_id):
+        """TT1 — TEK ÖDEMEYLE BİRDEN ÇOK FATURA.
+
+        Musteri tek havaleyle birkac faturayi odediginde her faturaya
+        ayri tahsilat girmek gerekiyordu. Tutar, secilen faturalara
+        VADESI EN ESKIDEN baslayarak dagitilir; her fatura icin tekli
+        tahsilatla AYNI yol (_fatura_tahsilat_uygula) calisir.
+
+        HEPSI YA DA HICBIRI: bir fatura reddedilirse (kur yok, kasa
+        hatasi...) oncekiler de geri alinir. Yarim kalmis toplu
+        tahsilat, hic yapilmamisindan zor duzeltilir.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        cari = Cari.query.get(cari_id)
+        if not cari:
+            return jsonify({'ok': False, 'mesaj': 'Cari bulunamadı'}), 404
+        d = request.json or {}
+        idler = [str(x) for x in (d.get('fatura_idler') or []) if x]
+        if not idler:
+            return jsonify({'ok': False, 'mesaj': 'Fatura seçilmedi'}), 400
+        try:
+            tutar = q3(float(d.get('tutar') or 0))
+        except (TypeError, ValueError):
+            tutar = 0
+        if tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Geçerli bir tutar girin'}), 400
+        if not d.get('kasa_id'):
+            # CH1 ile ayni kural: para bir kasaya girmeli.
+            return jsonify({'ok': False, 'mesaj': 'Kasa / banka seçimi zorunlu'}), 400
+        odeme_doviz = (d.get('doviz') or '').upper().strip()
+        if odeme_doviz not in ('TRY', 'USD', 'EUR'):
+            return jsonify({'ok': False, 'mesaj': 'Ödeme dövizi seçin'}), 400
+        try:
+            manuel_kur = float(d.get('kur') or 0)
+        except (TypeError, ValueError):
+            manuel_kur = 0
+
+        acik = {f.id: f for f in _cari_satis_faturalari(cari)}
+        eksik = [i for i in idler if i not in acik]
+        if eksik:
+            return jsonify({'ok': False, 'mesaj':
+                'Seçilen faturalardan bazıları bu cariye ait değil ya da açık değil: '
+                + ', '.join(eksik)}), 400
+
+        def _kur(dv):
+            if dv == 'TRY':
+                return 1.0
+            if dv == odeme_doviz and manuel_kur > 0:
+                return manuel_kur
+            return _kur_getir(dv) or 0
+
+        o_kur = _kur(odeme_doviz)
+        if o_kur <= 0:
+            return jsonify({'ok': False, 'mesaj': f'{odeme_doviz} kuru bulunamadı'}), 400
+
+        # Dagitim plani: kalan, ODEME dovizine cevrilir.
+        bugun = date.today()
+        plan = []
+        for fid in idler:
+            x = _acik_fatura_dict(acik[fid], bugun)
+            if x['kalan'] <= 0.005:
+                continue
+            if x['doviz'] == odeme_doviz:
+                kalan_o = x['kalan']
+            else:
+                f_kur = _kur(x['doviz'])
+                if f_kur <= 0:
+                    return jsonify({'ok': False, 'mesaj': f"{x['doviz']} kuru bulunamadı"}), 400
+                kalan_o = q3(x['kalan'] * f_kur / o_kur)
+            plan.append((x, kalan_o))
+        plan.sort(key=lambda p: _vade_sirasi(p[0]))
+        toplam_kalan = q3(sum(k for _, k in plan))
+        if tutar > toplam_kalan + 0.01:
+            return jsonify({'ok': False, 'mesaj':
+                f'Tutar seçilen faturaların kalanını aşıyor. Kalan toplam: '
+                f'{toplam_kalan:,.2f} {odeme_doviz}, fazla: {tutar - toplam_kalan:,.2f}. '
+                f'Fazlayı avans olarak cari hareketinden girin.'}), 400
+
+        kalan_tutar = tutar
+        referans = (d.get('evrak_no') or '').strip()
+        sonuc = []
+        for x, kalan_o in plan:
+            if kalan_tutar <= 0.005:
+                break
+            pay = q3(min(kalan_tutar, kalan_o))
+            govde = {'tutar': pay, 'doviz': odeme_doviz, 'kasa_id': d.get('kasa_id'),
+                     'kur': manuel_kur or None, 'evrak_no': referans or None,
+                     'kur_farki_islet': d.get('kur_farki_islet'),
+                     'aciklama': (d.get('aciklama') or '').strip() or (
+                         f"Toplu tahsilat{(' ' + referans) if referans else ''}"
+                         f" — Fatura {x['fatura_no']}")}
+            yanit = _fatura_tahsilat_uygula(acik[x['id']], x['id'], govde, commit=False)
+            yr, kod = (yanit if isinstance(yanit, tuple) else (yanit, 200))
+            icerik = yr.get_json(silent=True) or {}
+            if kod >= 400 or not icerik.get('ok'):
+                db.session.rollback()
+                return jsonify({'ok': False, 'mesaj':
+                    f"Fatura {x['fatura_no']}: {icerik.get('mesaj') or 'işlenemedi'} "
+                    f"— hiçbir tahsilat kaydedilmedi."}), 400
+            sonuc.append({'fatura_no': x['fatura_no'], 'tutar': pay,
+                          'tam_kapandi': pay + 0.01 >= kalan_o})
+            kalan_tutar = q3(kalan_tutar - pay)
+
+        ok, hata = _safe_commit(f'Toplu tahsilat: {cari_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Kayıt hatası: {hata}'}), 500
+        kapanan = sum(1 for r in sonuc if r['tam_kapandi'])
+        return jsonify({'ok': True, 'dagitim': sonuc,
+            'mesaj': f'{tutar:,.2f} {odeme_doviz} {len(sonuc)} faturaya dağıtıldı'
+                     f' ({kapanan} tanesi tamamen kapandı).'})
+
+    @app.route('/api/cari/<cari_id>/zaman', methods=['GET'])
+    def api_cari_zaman(cari_id):
+        """Carinin belge zaman cizelgesi: proforma, siparis, sevkiyat,
+        fatura, tahsilat, cek — en yeni ustte."""
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        cari = Cari.query.get(cari_id)
+        if not cari:
+            return jsonify({'ok': False, 'mesaj': 'Cari bulunamadı'}), 404
+        limit = min(request.args.get('limit', type=int, default=40), 200)
+        esle = lambda M: db.or_(M.cari_id == cari.id, M.musteri == cari.unvan)
+        olaylar = []
+
+        def ekle(tip, tarih, baslik, detay='', bag=None):
+            if not tarih:
+                return
+            t = tarih.date() if hasattr(tarih, 'date') and callable(tarih.date) else tarih
+            olaylar.append({'tip': tip, 'tarih': t.isoformat(), 'baslik': baslik,
+                            'detay': detay, 'bag': bag})
+
+        def para(v, dv):
+            try:
+                return f'{float(v or 0):,.2f} {dv or ""}'.strip()
+            except (TypeError, ValueError):
+                return ''
+
+        for p in Proforma.query.filter(esle(Proforma)).all():
+            ekle('proforma', p.olusturma, f'Proforma {p.id}',
+                 f'{p.durum or ""} · {para(p.toplam, p.doviz)}',
+                 f'/proforma?ac={p.id}')
+        for s in Siparis.query.filter(esle(Siparis)).all():
+            ekle('siparis', s.siparis_tarihi, f'Sipariş {s.id}',
+                 f'{s.durum or ""} · {para(s.toplam_tutar, s.doviz)}',
+                 f'/siparis?ara={s.id}')
+        for v in Sevkiyat.query.filter(esle(Sevkiyat)).all():
+            ekle('sevkiyat', v.cikis_tarihi or v.sevk_tarihi, f'Sevkiyat {v.id}',
+                 v.durum or '', None)
+        for f in _cari_satis_faturalari(cari, acik=False):
+            ekle('fatura', f.fatura_tarihi, f'Fatura {f.fatura_no or f.id}',
+                 f'{f.durum or ""} · {para(f.toplam, f.doviz)}', None)
+        for h in CariHareket.query.filter(
+                CariHareket.cari_id == cari.id,
+                CariHareket.kaynak == 'tahsilat').all():
+            ekle('tahsilat', h.hareket_tarihi, 'Tahsilat',
+                 f'{para(h.alacak, h.doviz)}' + (f' · {h.evrak_no}' if h.evrak_no else ''), None)
+        for c in Cek.query.filter(Cek.cari_id == cari.id, Cek.aktif == True).all():  # noqa: E712
+            ekle('cek', c.keside_tarihi or c.vade_tarihi,
+                 ('Alınan çek' if c.yon == 'alinan' else 'Verilen çek') + (f' {c.cek_no}' if c.cek_no else ''),
+                 f'{para(c.tutar, c.doviz)} · vade {c.vade_tarihi.strftime("%d.%m.%Y") if c.vade_tarihi else "—"} · {c.durum or ""}',
+                 None)
+        olaylar.sort(key=lambda o: o['tarih'], reverse=True)
+        return jsonify({'ok': True, 'data': olaylar[:limit], 'toplam': len(olaylar)})
 
     @app.route('/api/cari/<cari_id>/bakiye', methods=['GET'])
     def api_cari_bakiye(cari_id):
@@ -13180,11 +13384,15 @@ def create_app():
             Fatura.durum.in_(['Kesildi', 'Kismi Tahsil'])
         ).order_by(Fatura.fatura_tarihi).all()
         sonuc = []
+        _bugun = date.today()
         for f in faturalar:
             # Bu faturaya yapılmış tahsilat/ödeme toplamı
             if yon == 'satis':
-                odenen = db.session.query(db.func.sum(CariHareket.alacak)).filter_by(
-                    baglanti_tip='fatura', baglanti_id=f.id).scalar() or 0
+                # TT1: tahsilat ekraniyla AYNI hesap — cek ve farkli
+                # dovizde odemeler de sayilir. Eskiden yalnizca ham
+                # alacak toplaniyordu: 30.000 TRY'lik odeme 30.000 USD
+                # gibi dusuluyor, cekle odenen fatura acik gorunuyordu.
+                odenen = _fatura_odenen_esdeger(f)
             else:
                 odenen = db.session.query(db.func.sum(CariHareket.borc)).filter_by(
                     baglanti_tip='fatura', baglanti_id=f.id).scalar() or 0
@@ -13198,6 +13406,10 @@ def create_app():
                 'doviz': f.doviz or 'USD',
                 'tarih': f.fatura_tarihi.strftime('%d.%m.%Y') if f.fatura_tarihi else '',
                 'durum': f.durum,
+                'fatura_tarihi': f.fatura_tarihi.isoformat() if f.fatura_tarihi else None,
+                'vade_tarihi': f.vade_tarihi.isoformat() if f.vade_tarihi else None,
+                'gecikme_gun': ((_bugun - f.vade_tarihi).days
+                                if f.vade_tarihi and f.vade_tarihi < _bugun else 0),
             })
         # Stok alis borclari EN ONE: genelde daha eski ve
         # kullanicinin aradigi kayit bu.
@@ -19376,13 +19588,20 @@ def create_app():
         f = Fatura.query.get(fatura_id)
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
+        return _fatura_tahsilat_uygula(f, fatura_id, request.json or {}, commit=True)
+
+    def _fatura_tahsilat_uygula(f, fatura_id, data, commit=True):
+        """TT1: tek faturaya tahsilat — tek ve toplu tahsilatin ORTAK
+        yolu. Toplu tahsilat bunu commit=False ile her fatura icin
+        cagirir; biri basarisiz olursa hepsi geri alinir. Iki ayri
+        kopya olsaydi kur farki / kasa / durum mantigi zamanla
+        ayrisirdi."""
         if f.durum == 'Iptal':
             return jsonify({'ok': False, 'mesaj': 'Iptal fatura tahsil edilemez'}), 400
         if f.durum == 'Taslak':
             return jsonify({'ok': False,
                 'mesaj': 'Once faturayi "Kesildi" durumuna alin'}), 400
 
-        data = request.json or {}
         try:
             tutar = float(data.get('tutar') or 0)
         except (ValueError, TypeError):
@@ -19470,7 +19689,8 @@ def create_app():
                 vade_tarihi=cek_vade, evrak_no=cek.cek_no or cek.id)
             _fatura_tahsilat_durumu(fatura_id)
             _log_audit('EKLE', 'tahsilat_cek', fatura_id, yeni={'tutar': tutar, 'cek': cek.id})
-            ok, hata = _safe_commit(f'Çek tahsilatı: {fatura_id} / {cek.id}')
+            ok, hata = (_safe_commit(f'Çek tahsilatı: {fatura_id} / {cek.id}')
+                        if commit else (True, None))
             if not ok:
                 return jsonify({'ok': False, 'mesaj': f'Kayıt hatası: {hata}'}), 500
             return jsonify({'ok': True, 'cek_id': cek.id,
@@ -19500,7 +19720,7 @@ def create_app():
         # ÇOK DÖVİZLİ: otomatik kur farkı eşleştirmesi (çapraz döviz dahil —
         # hareket faturaya bağlı olduğundan faturanın açılış borcunu hedefler)
         kur_farki = _kur_farki_hesapla_ve_olustur(
-                hareket, islet=bool((request.json or {}).get('kur_farki_islet')))
+                hareket, islet=bool(data.get('kur_farki_islet')))
         # Fatura durumunu güncelle (kismi/tam — eşdeğer toplam üzerinden)
         _fatura_tahsilat_durumu(fatura_id)
         _log_audit('EKLE', 'tahsilat', fatura_id,
@@ -19543,8 +19763,15 @@ def create_app():
             except Exception as e:
                 app.logger.warning(f'Kasa entegrasyonu hatası: {e}')
                 kasa_mesaj = f' ⚠️ Kasa kaydı yapılamadı: {e}'
+                if not commit:
+                    # Toplu tahsilatta kasa kaydi basarisizsa HICBIRI
+                    # yazilmamali — para cariye dusup kasaya girmezdi.
+                    return jsonify({'ok': False, 'mesaj': f'Kasa kaydı yapılamadı: {e}'}), 400
 
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
 
         yeni_kalan = q3(kalan - esdeger)
         msj = f'{tutar:,.2f} {odeme_doviz} tahsil edildi'

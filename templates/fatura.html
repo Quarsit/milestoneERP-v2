@@ -887,5 +887,27 @@ document.getElementById('ara').addEventListener('input', e => {
 });
 
 yukle();
+
+/* C360: cari çekmecesinden "+ Fatura" ile gelindi (?yeni_musteri=...).
+   `?yeni=1` kullanılmadı: base.html o parametreyi yeniAc() için ayırıyor.
+   Yeni fatura penceresi açılır, müşteri seçili gelir. Seçenekte yoksa
+   (ör. yetki süzgeci) seçilmez ve kullanıcı uyarılır — sessizce
+   başka müşteri seçili kalmasın. */
+(async function () {
+  const prm = new URLSearchParams(location.search);
+  const musteri = prm.get('yeni_musteri') || '';
+  if (!musteri) return;
+  history.replaceState({}, '', location.pathname);
+  await yeniFaturaAc();
+  const sec = document.getElementById('yfMusteri');
+  sec.value = musteri;
+  if (sec.value !== musteri) {
+    const es = [...sec.options].find(o =>
+      o.value.toLocaleUpperCase('tr') === musteri.toLocaleUpperCase('tr'));
+    if (es) sec.value = es.value;
+    else { sec.value = ''; bildir(`Müşteri listede bulunamadı: ${musteri}`, true); return; }
+  }
+  sec.dispatchEvent(new Event('change'));
+})();
 </script>
 {% endblock %}

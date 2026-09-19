@@ -61,6 +61,25 @@
   .crm-mini{background:none;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
     padding:3px 9px;font-family:var(--govde);font-size:.72rem;cursor:pointer;color:var(--murekkep)}
   .crm-mini:hover{border-color:var(--verde);color:var(--verde-koyu)}
+  /* ── Açık faturalar (TT1) ── */
+  .af-satir{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:center;
+    padding:8px 12px;border-bottom:1px solid var(--cizgi);font-size:.85rem}
+  .af-satir:last-child{border-bottom:none}
+  .af-satir input{width:15px;height:15px;cursor:pointer;margin:0}
+  .af-satir .alt{color:var(--soluk);font-size:.75rem;margin-top:2px}
+  .af-satir .gec{color:var(--kirmizi);font-weight:600}
+  .af-satir .tut{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .af-alt{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:9px 12px;background:var(--notr-bg);font-size:.8rem}
+  /* ── Zaman çizelgesi ── */
+  .zc{position:relative;padding:4px 0 4px 18px}
+  .zc::before{content:'';position:absolute;left:5px;top:10px;bottom:10px;width:1px;background:var(--cizgi-koyu)}
+  .zc-o{position:relative;padding:6px 0 6px 6px;font-size:.84rem}
+  .zc-o::before{content:'';position:absolute;left:-17px;top:12px;width:9px;height:9px;border-radius:50%;
+    background:var(--yuzey);border:2px solid var(--zc-renk,var(--soluk))}
+  .zc-o .alt{color:var(--soluk);font-size:.75rem;margin-top:1px}
+  .zc-o .t{font-variant-numeric:tabular-nums;color:var(--soluk);font-size:.75rem;margin-right:6px}
+  .zc-o a{color:inherit;text-decoration:underline;text-decoration-color:var(--cizgi-koyu);text-underline-offset:2px}
   .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
   .modal-ortu.acik{display:grid}
   .modal{width:640px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.3);overflow:hidden;max-height:92vh;display:flex;flex-direction:column}
@@ -88,10 +107,13 @@
   <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
 </svg>
 
-<div class="kpiler" style="grid-template-columns:repeat(3,1fr)">
+<div class="kpiler" style="grid-template-columns:repeat(4,1fr)">
   <div class="kpi"><label>Müşteri</label><div class="deger" id="kMusteri">—</div><div class="ek" id="kMusteriEk">kayıtlı</div></div>
   <div class="kpi"><label>Tedarikçi / Üretici</label><div class="deger" id="kTedarikci">—</div><div class="ek" id="kTedarikciEk">kayıtlı</div></div>
   <div class="kpi"><label>Net Alacak</label><div class="deger" id="kAlacak">—</div><div class="ek" id="kAlacakEk">—</div></div>
+  <!-- C360: portföydeki çekler. Çek alınınca cari borcu düşer ama
+       para henüz gelmemiştir; bu kutu olmadan risk görünmüyordu. -->
+  <div class="kpi"><label>Tahsil Edilmemiş Çek</label><div class="deger" id="kCek">—</div><div class="ek" id="kCekEk">—</div></div>
 </div>
 
 <div class="arac-cubugu">
@@ -106,7 +128,7 @@
 
 <div class="tablo-kutu">
   <table>
-    <thead><tr><th>Ünvan</th><th>Tip</th><th>Ülke</th><th>İletişim</th><th class="sag">Net Bakiye</th></tr></thead>
+    <thead><tr><th>Ünvan</th><th>Tip</th><th>Ülke</th><th>İletişim</th><th>Son Hareket</th><th class="sag">Net Bakiye</th></tr></thead>
     <tbody id="govde"><tr><td colspan="6" class="yukleniyor">Yükleniyor…</td></tr></tbody>
   </table>
 </div>
@@ -209,6 +231,36 @@
     <div class="modal-alt">
       <button class="iptal-btn" onclick="tahsilatKapat()">Vazgeç</button>
       <button class="btn-yeni" id="tKaydet" onclick="tahsilatKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toplu tahsilat (TT1) -->
+<div class="modal-ortu" id="ttModal" onclick="if(event.target===this)ttKapat()">
+  <div class="modal" style="width:560px" role="dialog" aria-label="Tek ödemeyle kapat">
+    <div class="modal-bas">
+      <h3>Tek ödemeyle kapat</h3>
+      <p id="ttAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Gelen tutar</label><input id="ttTutar" type="number" step="0.01" oninput="ttOnizle()"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="ttDoviz" onchange="ttOnizle()"><option>USD</option><option>EUR</option><option>TRY</option></select></div>
+        <div class="form-alan" id="ttKurAlan"><label>Kur (opsiyonel)</label><input id="ttKur" type="number" step="0.0001" placeholder="TCMB"></div>
+      </div>
+      <div class="form-alan" style="margin-bottom:12px"><label>Kasa / Banka <span style="color:var(--kirmizi)">*</span></label>
+        <select id="ttKasa"></select></div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Evrak / Havale No</label><input id="ttEvrak" placeholder="opsiyonel"></div>
+        <div class="form-alan"><label>Açıklama</label><input id="ttAciklama" placeholder="opsiyonel"></div>
+      </div>
+      <label style="display:block;font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin:6px 0 4px">Dağıtım — vadesi en eski önce</label>
+      <div id="ttOnizleme"></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="ttKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="ttKaydet" onclick="ttKaydet()">Tahsilatı Kaydet</button>
     </div>
   </div>
 </div>
@@ -740,6 +792,31 @@ async function yukle() {
     });
   } catch (e) { BAKIYE = {}; }
   kpiCiz(); ciz();
+  cekKpiYukle();
+}
+
+/* C360 — son hareket: tarih + kaç gün önce. 180 günü aşan cari
+   soluk kehribar: uzun süredir işlem yok, takip gerekebilir. */
+function sonHareketHucre(t) {
+  if (!t) return '<span style="color:var(--soluk)">—</span>';
+  const gun = Math.floor((Date.now() - new Date(t + 'T00:00:00').getTime()) / 86400000);
+  const eski = gun > 180;
+  return `<span class="mono">${kacar(t.split('-').reverse().join('.'))}</span>`
+    + `<div style="font-size:.72rem;color:${eski ? 'var(--kehribar)' : 'var(--soluk)'}">${
+        gun <= 0 ? 'bugün' : gun + ' gün önce'}</div>`;
+}
+
+async function cekKpiYukle() {
+  const d = document.getElementById('kCek'), e = document.getElementById('kCekEk');
+  try {
+    const o = await api('/api/cek/ozet');
+    const t = Object.entries(o.alinan_toplam || {}).filter(([, v]) => v > 0);
+    d.innerHTML = t.length
+      ? t.map(([dv, v]) => para(v, dv).replace(/ (\S+)$/, '<small>$1</small>')).join('<span style="color:var(--cizgi-koyu)"> · </span>')
+      : '0';
+    const yak = (o.yaklasan_alinan || []).length;
+    e.textContent = `${o.alinan_adet || 0} çek portföyde` + (yak ? ` · ${yak} tanesinin vadesi 30 gün içinde` : '');
+  } catch (x) { d.textContent = '—'; e.textContent = 'görüntüleme yetkisi yok'; }
 }
 
 function kpiCiz() {
@@ -798,11 +875,12 @@ function ciz() {
       <td style="font-size:.82rem;color:var(--soluk)">
         ${kacar(c.telefon || '')}${c.telefon && c.email ? '<br>' : ''}${kacar(c.email || '')}
         ${!c.telefon && !c.email ? '—' : ''}</td>
+      <td style="font-size:.82rem">${sonHareketHucre(c.son_hareket)}</td>
       <td class="sag mono" style="font-weight:600;color:${bakRenk}">
         ${bakMetin}
         ${gec ? '<div style="font-size:.72rem">⚠ ' + para(b.gecen) + ' geçmiş</div>' : ''}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="5" class="bos">Cari yok.</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="bos">Cari yok.</td></tr>';
 }
 
 /* ── Çekmece: bakiye + ekstre ── */
@@ -1297,6 +1375,11 @@ async function detayAc(id) {
       : '<div class="bos" style="padding:12px">Hareket yok.</div>'}
     </div>
 
+    <!-- C360: açık faturalar (tek ödemeyle kapatma) ve belge zaman
+         çizelgesi. Çekmece açıldıktan SONRA yüklenir. -->
+    <div id="acikFatBolum"></div>
+    <div id="zamanBolum"></div>
+
     <!-- CRM: temas geçmişi, kişiler ve erişim. İçerik çekmece
          açıldıktan SONRA yükleniyor; hareketleri beklemesin. -->
     <div id="crmBolum" style="margin-top:14px">
@@ -1328,6 +1411,190 @@ async function detayAc(id) {
      yükleniyor…" sonsuza dek kalıyordu. */
   if (_crmVar) crmYukle(id, c.unvan);
   else { const kx = document.getElementById('crmBolum'); if (kx) kx.remove(); }
+  acikFaturaYukle(id);
+  zamanYukle(id, c);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   C360 · AÇIK FATURALAR + TEK ÖDEMEYLE KAPATMA (TT1)
+   Müşteri tek havaleyle birkaç faturayı ödediğinde her faturaya
+   ayrı tahsilat girmek gerekiyordu. Seçilen faturalara tutar,
+   VADESİ EN ESKİDEN başlayarak dağıtılır (sunucu yapar).
+   ══════════════════════════════════════════════════════════════ */
+let AF_CARI = null, AF_LISTE = [];
+
+async function acikFaturaYukle(id) {
+  const kutu = document.getElementById('acikFatBolum');
+  if (!kutu) return;
+  AF_CARI = id; AF_LISTE = [];
+  try {
+    const d = await api(`/api/cari/${encodeURIComponent(id)}/acik_faturalar?yon=satis`);
+    AF_LISTE = (d.faturalar || []).filter(f => f.kaynak === 'fatura')
+      .sort((a, b) => (a.vade_tarihi || '9999').localeCompare(b.vade_tarihi || '9999'));
+  } catch (e) { kutu.innerHTML = ''; return; }
+  if (!AF_LISTE.length) { kutu.innerHTML = ''; return; }
+  const yz = yazabilir('fatura');
+  const tr = t => t ? t.split('-').reverse().join('.') : '—';
+  kutu.innerHTML = `
+    <h4 class="crm-bas">Açık faturalar · ${AF_LISTE.length}</h4>
+    <div class="crm-liste">
+      ${AF_LISTE.map(f => `
+        <label class="af-satir" style="${yz ? 'cursor:pointer' : ''}">
+          ${yz ? `<input type="checkbox" class="af-sec" value="${kacar(f.id)}" onchange="afSecimDegisti()">` : '<span></span>'}
+          <div><div>${kacar(f.fatura_no)} <span style="color:var(--soluk);font-size:.78rem">· ${kacar(f.tarih || '')}</span></div>
+            <div class="alt">${f.vade_tarihi
+              ? (f.gecikme_gun > 0 ? `<span class="gec">vade ${tr(f.vade_tarihi)} · ${f.gecikme_gun} gün geçti</span>`
+                                   : `vade ${tr(f.vade_tarihi)}`)
+              : 'vade yok'}${f.odenen > 0 ? ` · ödenen ${para2(f.odenen, f.doviz)}` : ''}</div></div>
+          <div class="tut">${para2(f.kalan, f.doviz)}
+            ${f.kalan < f.toplam ? `<div class="alt">/ ${para2(f.toplam, f.doviz)}</div>` : ''}</div>
+        </label>`).join('')}
+      ${yz ? `<div class="af-alt"><span id="afOzet" style="color:var(--soluk)">Faturaları seçin</span>
+        <button class="crm-mini" id="afBtn" onclick="ttAc()" disabled>Seçilenleri tek ödemeyle kapat</button></div>` : ''}
+    </div>`;
+}
+
+function afSecilenler() {
+  const idler = [...document.querySelectorAll('.af-sec:checked')].map(x => x.value);
+  return AF_LISTE.filter(f => idler.includes(f.id));
+}
+
+function afToplam(liste) {
+  const t = {};
+  liste.forEach(f => { t[f.doviz] = (t[f.doviz] || 0) + (Number(f.kalan) || 0); });
+  return t;
+}
+
+function afSecimDegisti() {
+  const s = afSecilenler();
+  const oz = document.getElementById('afOzet'), btn = document.getElementById('afBtn');
+  if (!oz || !btn) return;
+  btn.disabled = s.length < 1;
+  oz.textContent = s.length
+    ? `${s.length} fatura · kalan ` + Object.entries(afToplam(s)).map(([d, v]) => para2(v, d)).join(' + ')
+    : 'Faturaları seçin';
+}
+
+let TT_KASALAR = null;
+async function ttAc() {
+  const s = afSecilenler();
+  if (!s.length) return;
+  if (!TT_KASALAR) {
+    try { TT_KASALAR = (await api('/api/kasa')).filter(k => !k.ana_kasa && k.aktif !== false); }
+    catch (e) { TT_KASALAR = []; }
+  }
+  const dvler = [...new Set(s.map(f => f.doviz))];
+  const dv = dvler.length === 1 ? dvler[0] : 'USD';
+  document.getElementById('ttDoviz').value = dv;
+  const top = afToplam(s);
+  document.getElementById('ttTutar').value = dvler.length === 1 ? (Math.round(top[dv] * 100) / 100) : '';
+  document.getElementById('ttKur').value = '';
+  document.getElementById('ttEvrak').value = '';
+  document.getElementById('ttAciklama').value = '';
+  const kasaSec = document.getElementById('ttKasa');
+  kasaSec.innerHTML = '<option value="">— kasa / banka seçin (zorunlu) —</option>'
+    + TT_KASALAR.map(k => `<option value="${k.id}" data-dv="${kacar(k.doviz || '')}">${kacar(kasaEtiket(k))} · ${kacar(k.doviz || '')}</option>`).join('');
+  const uygun = TT_KASALAR.filter(k => k.doviz === dv);
+  if (uygun.length === 1) kasaSec.value = String(uygun[0].id);
+  document.getElementById('ttAlt').textContent =
+    s.map(f => f.fatura_no).join(', ') + ' · kalan ' + Object.entries(top).map(([d, v]) => para2(v, d)).join(' + ');
+  ttOnizle();
+  document.getElementById('ttModal').classList.add('acik');
+}
+function ttKapat() { document.getElementById('ttModal').classList.remove('acik'); }
+
+/* Dağıtım önizlemesi — yalnızca aynı dövizde kesin; farklı dövizde
+   sunucu günün kuruyla hesaplar, burada yaklaşık gösterilmez. */
+function ttOnizle() {
+  const s = afSecilenler().slice().sort((a, b) => (a.vade_tarihi || '9999').localeCompare(b.vade_tarihi || '9999'));
+  const dv = document.getElementById('ttDoviz').value;
+  const tutar = parseFloat(document.getElementById('ttTutar').value) || 0;
+  const ayni = s.every(f => f.doviz === dv);
+  document.getElementById('ttKurAlan').style.display = (ayni && dv !== 'TRY') || dv === 'TRY' ? 'none' : '';
+  const kutu = document.getElementById('ttOnizleme');
+  if (!ayni) {
+    kutu.innerHTML = `<div class="not" style="background:var(--kehribar-bg);color:var(--kehribar)">
+      Ödeme dövizi faturalardan farklı: tutar, kayıt anındaki kurla fatura dövizine çevrilip
+      vadesi en eski faturadan başlanarak dağıtılır.</div>`;
+    return;
+  }
+  let kalan = tutar;
+  const satirlar = s.map(f => { const pay = Math.max(0, Math.min(kalan, f.kalan)); kalan -= pay; return { f, pay }; });
+  const toplamKalan = s.reduce((a, f) => a + f.kalan, 0);
+  const fazla = tutar - toplamKalan;
+  kutu.innerHTML = `
+    <div class="crm-liste" style="margin-top:4px">
+      ${satirlar.map(({ f, pay }) => `
+        <div class="af-satir" style="grid-template-columns:1fr auto auto">
+          <div>${kacar(f.fatura_no)}<div class="alt">kalan ${para2(f.kalan, f.doviz)}</div></div>
+          <div class="tut">${pay > 0 ? para2(pay, dv) : '—'}</div>
+          <div class="alt" style="min-width:70px;text-align:right">${
+            pay <= 0 ? 'ödeme yok' : (pay + 0.01 >= f.kalan ? '✓ kapanır' : 'kısmi')}</div>
+        </div>`).join('')}
+    </div>
+    ${fazla > 0.01 ? `<div class="not" style="margin-top:8px;background:var(--kirmizi-bg);color:var(--kirmizi)">
+      Tutar seçilen faturaların kalanını ${para2(fazla, dv)} aşıyor. Fazlayı avans olarak
+      cari hareketinden girin ya da tutarı düşürün.</div>` : ''}`;
+}
+
+async function ttKaydet() {
+  const s = afSecilenler();
+  const tutar = parseFloat(document.getElementById('ttTutar').value) || 0;
+  const kasa = document.getElementById('ttKasa').value;
+  if (!(tutar > 0)) { bildir('Geçerli bir tutar girin.', true); return; }
+  if (!kasa) { bildir('Kasa / banka seçimi zorunlu.', true); document.getElementById('ttKasa').focus(); return; }
+  const btn = document.getElementById('ttKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api(`/api/cari/${encodeURIComponent(AF_CARI)}/toplu_tahsilat`, {
+      method: 'POST', body: JSON.stringify({
+        fatura_idler: s.map(f => f.id), tutar,
+        doviz: document.getElementById('ttDoviz').value,
+        kasa_id: parseInt(kasa, 10),
+        kur: parseFloat(document.getElementById('ttKur').value) || null,
+        evrak_no: document.getElementById('ttEvrak').value.trim() || null,
+        aciklama: document.getElementById('ttAciklama').value.trim() || null,
+      }) });
+    bildir(d.mesaj || 'Tahsilat kaydedildi.');
+    ttKapat();
+    await yukle();
+    detayAc(AF_CARI);
+  } catch (e) { /* api() mesajı gösterdi */ }
+  finally { btn.disabled = false; btn.textContent = 'Tahsilatı Kaydet'; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   C360 · ZAMAN ÇİZELGESİ + YENİ BELGE
+   ══════════════════════════════════════════════════════════════ */
+const ZC = {
+  proforma: ['Proforma', 'var(--mavi)'], siparis: ['Sipariş', 'var(--verde)'],
+  sevkiyat: ['Sevkiyat', 'var(--kehribar)'], fatura: ['Fatura', 'var(--murekkep)'],
+  tahsilat: ['Tahsilat', 'var(--verde)'], cek: ['Çek', 'var(--kehribar)'],
+};
+let ZC_TUMU = false;
+
+async function zamanYukle(id, c) {
+  const kutu = document.getElementById('zamanBolum');
+  if (!kutu) return;
+  let d = { data: [], toplam: 0 };
+  try { d = await api(`/api/cari/${encodeURIComponent(id)}/zaman?limit=${ZC_TUMU ? 200 : 12}`); }
+  catch (e) { kutu.innerHTML = ''; return; }
+  const mus = encodeURIComponent((c && c.unvan) || '');
+  const yeniP = yazabilir('proforma') ? `<button class="crm-mini" onclick="location.href='/proforma?yeni_musteri=${mus}'">+ Proforma</button>` : '';
+  const yeniF = yazabilir('fatura') ? `<button class="crm-mini" onclick="location.href='/fatura?yeni_musteri=${mus}'">+ Fatura</button>` : '';
+  const tr = t => t ? t.split('-').reverse().join('.') : '';
+  const o = d.data || [];
+  kutu.innerHTML = `
+    <h4 class="crm-bas">Belgeler ${d.toplam ? '· ' + d.toplam : ''} ${yeniP} ${yeniF}</h4>
+    ${o.length ? `<div class="zc">${o.map(x => {
+      const [ad, renk] = ZC[x.tip] || [x.tip, 'var(--soluk)'];
+      const bas = x.bag ? `<a href="${kacar(x.bag)}">${kacar(x.baslik)}</a>` : kacar(x.baslik);
+      return `<div class="zc-o" style="--zc-renk:${renk}">
+        <div><span class="t">${tr(x.tarih)}</span>${bas}</div>
+        ${x.detay ? `<div class="alt">${kacar(x.detay)}</div>` : ''}</div>`;
+    }).join('')}</div>
+    ${d.toplam > o.length ? `<button class="crm-mini" style="margin-top:4px" onclick="ZC_TUMU=true;zamanYukle('${kacar(id)}', TUM.find(x => x.id === '${kacar(id)}'))">Tümünü göster (${d.toplam})</button>` : ''}`
+    : '<div class="bos" style="padding:12px;border:1px solid var(--cizgi);border-radius:var(--r-kucuk)">Henüz belge yok.</div>'}`;
 }
 
 /* ══════════════════════════════════════════════════════════════
