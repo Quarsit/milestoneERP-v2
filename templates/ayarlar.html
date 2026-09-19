@@ -165,7 +165,7 @@
   <div id="epAktifKutu" style="margin-bottom:16px;padding:12px 14px;
        border-radius:10px;background:var(--verde-acik);
        border:1px solid var(--verde);font-size:.88rem">
-    <span id="epAktifMetin">Gönderici hesap kontrol ediliyor…</span>
+    <span id="epAktifMetin"></span>
   </div>
 
   <!-- ŞİRKET ORTAK HESABI — yalnızca yöneticiye görünür.
@@ -241,6 +241,61 @@
        tanımlamasına yarıyordu. Artık yönetici HERKESİN hesabını
        (kendisi dahil) Kullanıcılar sekmesindeki formdan tanımlıyor
        ve oradan test ediyor. İki ayrı yol = iki ayrı gerçek. -->
+
+  <div class="panel" style="margin-top:14px">
+    <h4>Yedekler <span id="yedekAdet" style="color:var(--soluk);font-weight:400"></span></h4>
+    <div class="tablo-kutu" style="border:0">
+      <table>
+        <thead><tr><th>Dosya</th><th>Tip</th><th>Tarih</th><th class="sag">Boyut</th><th class="sag" style="width:230px"></th></tr></thead>
+        <tbody id="yedekGovde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="bolum" id="b-listeler">
+  <div class="izgara-2" id="lookupIzgara">
+    <div class="panel"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+</section>
+
+<!-- BANKALAR -->
+<section class="bolum" id="b-banka">
+  <div class="tablo-kutu">
+    <table>
+      <thead><tr><th>Banka</th><th>Şube</th><th>Hesap No</th><th>IBAN</th><th>SWIFT</th><th>Döviz</th><th class="sag" style="width:140px"></th></tr></thead>
+      <tbody id="bankaGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+    </table>
+  </div>
+  <div style="margin-top:14px">
+    <button class="btn-yeni" onclick="bankaAc()">+ Yeni Banka Hesabı</button>
+  </div>
+</section>
+
+<!-- YEDEKLEME -->
+<section class="bolum" id="b-yedek">
+  <div class="izgara-2">
+    <div class="panel">
+      <h4>Yedek Al</h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+        Veritabanının tam kopyasını alır. Sistem her gün otomatik yedek de alıyor.
+      </p>
+      <div id="taniKutu" style="background:var(--notr-bg);border-radius:7px;padding:10px 12px;font-size:.8rem;color:var(--soluk);margin-bottom:14px">
+        Durum kontrol ediliyor…
+      </div>
+      <button class="btn-yeni" id="yAlBtn" onclick="yedekAl()">Şimdi Yedek Al</button>
+    </div>
+    <div class="panel">
+      <h4>Yedekten Geri Yükle</h4>
+      <div class="not" style="background:var(--kirmizi-bg);color:var(--kirmizi);border-radius:7px;padding:10px 12px;font-size:.8rem;margin-bottom:14px">
+        <strong>Dikkat:</strong> Geri yükleme mevcut tüm verinin üzerine yazar.
+        İşlemden önce sistem otomatik olarak güvenlik yedeği alır.
+      </div>
+      <p style="color:var(--soluk);font-size:.83rem">
+        Aşağıdaki listeden bir yedek seç ve <strong>Geri Yükle</strong>'ye bas.
+      </p>
+    </div>
+  </div>
 
   <div class="panel" style="margin-top:14px">
     <h4>Yedekler <span id="yedekAdet" style="color:var(--soluk);font-weight:400"></span></h4>
@@ -886,6 +941,15 @@ async function avansKaydet() {
 function epOrtakGoster() {
   const a = document.getElementById('epOrtakAlan');
   if (a) a.style.display = window.ADMIN ? '' : 'none';
+  /* EP5: kişisel panel kaldırıldı; kutu artık NEREDEN yönetildiğini
+     anlatıyor. Eskiden "kontrol ediliyor…" yazıp öylece kalıyordu
+     çünkü onu dolduran fonksiyon panelle birlikte silinmişti. */
+  const m = document.getElementById('epAktifMetin');
+  if (!m) return;
+  m.innerHTML = window.ADMIN
+    ? 'Her kullanıcının kendi e-posta hesabı <b>Kullanıcılar</b> sekmesinden '
+      + 'tanımlanır; kendi hesabı olmayanlar aşağıdaki ortak hesaptan gönderir.'
+    : 'E-posta hesabınız yönetici tarafından tanımlanır.';
 }
 
 async function smtpYukle() {
