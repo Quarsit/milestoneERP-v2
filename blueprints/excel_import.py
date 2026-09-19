@@ -90,8 +90,34 @@ def analiz():
     try:
         for ws in wb.worksheets:
             basliklar, satirlar, kesildi = [], [], False
+            tum = ws.iter_rows(values_only=True)
 
-            for i, satir in enumerate(ws.iter_rows(values_only=True)):
+            # BS1 — BAŞLIK SATIRI İLK SATIR OLMAYABİLİR.
+            # Sistemin kendi dışa aktardığı Excel'de üstte logo, firma
+            # adı ve liste başlığı var; başlıklar 3.–5. satırda. Eskiden
+            # 1. satır başlık sayılıyordu: sütunlar "Sütun 1, Sütun 2…"
+            # geliyor, hiçbir alan otomatik eşleşmiyordu ve başlık
+            # satırının kendisi VERİ gibi okunuyordu.
+            # Kural: ilk 20 satırda en az 2 dolu hücresi olan ve dolu
+            # hücre sayısı en kalabalık satırın %60'ına ulaşan İLK
+            # satır başlıktır. Tek hücreli (birleştirilmiş) unvan
+            # satırları böylece atlanır.
+            on = []
+            for satir in tum:
+                on.append(satir)
+                if len(on) >= 20:
+                    break
+            dolu = [sum(1 for h in r if str(_hucre(h)).strip()) for r in on]
+            enc = max(dolu) if dolu else 0
+            bas_i = 0
+            for j, n in enumerate(dolu):
+                if n >= 2 and n >= enc * 0.6:
+                    bas_i = j
+                    break
+            import itertools
+            kaynak = itertools.chain(on[bas_i:], tum)
+
+            for i, satir in enumerate(kaynak):
                 if i == 0:
                     basliklar = [_hucre(h) for h in satir]
                     continue

@@ -42,6 +42,22 @@ fi
 cizgi() { printf '%.0s─' {1..70}; echo; }
 baslik() { echo; cizgi; echo " $1"; cizgi; }
 
+# ── DOSYA YERLEŞİMİ (YR1) ──
+# 19.09: excel_import.py blueprints/ yerine ana dizine kopyalandı ve
+# push edildi. Sistem ESKİ sürümü kullanmaya devam etti, hiçbir
+# denetim fark etmedi. Yanlış yerdeki dosya varsa push yapılmaz.
+if [ -x ./yerlestir.sh ] && ! ./yerlestir.sh --kontrol; then
+    echo
+    echo " ✗ Ana dizinde yanlış yere kopyalanmış dosya var — push İPTAL."
+    echo
+    ./yerlestir.sh | sed '/Uygulamak için/d'
+    echo
+    echo "   Düzeltmek için:  ./yerlestir.sh --uygula"
+    echo "   sonra:           sudo systemctl restart milestone-erp"
+    echo "   ve tekrar:       ./gonder.sh \"$MESAJ\""
+    exit 1
+fi
+
 baslik "1/5 · YEDEK"
 if [ -x /usr/local/bin/milestone-yedek.sh ]; then
     sudo /usr/local/bin/milestone-yedek.sh || {
