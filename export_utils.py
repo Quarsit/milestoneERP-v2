@@ -155,9 +155,22 @@ def liste_xlsx(baslik, headers, rows, dosya_adi='liste', sayisal_sutunlar=None):
         for ci, val in enumerate(row, start=1):
             # Güvenli değer: None → boş, diğer her şey string (openpyxl uyumsuz tipleri önle)
             guvenli = '' if val is None else (val if isinstance(val, (int, float, str)) else str(val))
+            # BS3: sayısal sütun Excel'e METİN olarak gidiyordu
+            # ("1,234.56"). Excel'de toplanamıyor, geri içe aktarınca
+            # binlik virgülü ondalık sanılıp 1.234 okunuyordu. Artık
+            # gerçek sayı + biçim yazılır.
+            _sayi = False
+            if (ci - 1) in sayisal_sutunlar and isinstance(guvenli, str) and guvenli.strip():
+                try:
+                    guvenli = float(guvenli.replace(',', ''))
+                    _sayi = True
+                except ValueError:
+                    pass
             cell = ws.cell(row=r, column=ci, value=guvenli)
             cell.border = border
             cell.font = Font(size=10)
+            if _sayi or isinstance(guvenli, (int, float)) and (ci - 1) in sayisal_sutunlar:
+                cell.number_format = '#,##0.00'
             if (ci - 1) in sayisal_sutunlar:
                 cell.alignment = Alignment(horizontal='right')
             else:

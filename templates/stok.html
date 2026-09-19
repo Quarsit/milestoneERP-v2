@@ -1702,6 +1702,18 @@ function topluSayfaDegisti() {
 }
 
 function topluTipDegisti() {
+  /* BS4: fiyat birimi ürün tipine uysun. Blok m²/sqft ile
+     fiyatlanmaz; plaka/ebatlı ton/m³ ile. Eskiden BLOK seçiliyken
+     m² kalıyordu: önizleme m³ hesaplayıp "m²" yazıyordu. */
+  const _t = document.getElementById('tTip').value;
+  const _fb = document.getElementById('tFiyatBirim');
+  if (_fb) {
+    const blok = _t === 'BLOK';
+    [..._fb.options].forEach(o => {
+      o.hidden = blok ? ['m2', 'sqft'].includes(o.value) : ['ton', 'm3'].includes(o.value);
+    });
+    if (_fb.selectedOptions[0] && _fb.selectedOptions[0].hidden) _fb.value = blok ? 'ton' : 'm2';
+  }
   /* Başlangıç plaka no yalnızca PLAKA için anlamlı */
   const alan = document.getElementById('tBaslangicAlan');
   if (alan) alan.style.visibility =
@@ -1780,7 +1792,18 @@ function topluOnizle() {
   const eksikZorunlu = alanlar.filter(([k, , z]) => z && !(k in harita)).map(([, e]) => e);
   const sayi = v => {
     if (v === '' || v === null || v === undefined) return 0;
-    const t = String(v).replace(/\s/g, '').replace(',', '.').replace(/[^\d.\-]/g, '');
+    if (typeof v === 'number') return isFinite(v) ? v : 0;
+    /* BS3: hem "1.234,56" (TR) hem "1,234.56" (EN) doğru okunur.
+       Eskiden yalnızca İLK virgül noktaya çevriliyordu:
+       "1,234.56" → "1.234.56" → 1.234 (bin kat küçük). İkisi
+       birden varsa SONUNCUSU ondalık ayırıcıdır. */
+    let t = String(v).replace(/\s/g, '').replace(/[^\d.,\-]/g, '');
+    const sv = t.lastIndexOf(','), sn = t.lastIndexOf('.');
+    if (sv >= 0 && sn >= 0) {
+      t = sv > sn ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+    } else if (sv >= 0) {
+      t = t.replace(',', '.');
+    }
     const n = parseFloat(t);
     return isFinite(n) ? n : 0;
   };
@@ -1867,13 +1890,6 @@ function topluOnizle() {
   });
   const kdvTutar = oran > 0 ? toplamMatrah * oran / 100 : 0;
 
-  const kok = document.getElementById('tOnizleme');
-  if (eksikZorunlu.length) {
-    kok.innerHTML = `
-    ${uyarilar.map(u => `<div class="tp-not tp-uyari" style="margin-bottom:8px">⚠ ${u}</div>`).join('')}<div class="tp-not tp-uyari">Zorunlu alan eşleştirilmedi: <b>${kacar(eksikZorunlu.join(', '))}</b></div>`;
-    document.getElementById('tKaydet').disabled = true;
-    return;
-  }
 
   /* ── TİP UYUŞMAZLIĞI UYARISI (TP1) ──
      Üretimde yaşandı: 7 plaka BLOK tipiyle aktarılmak istendi.
@@ -1919,6 +1935,18 @@ function topluOnizle() {
   if (baskin && baskin[0] !== _uTip) {
     uyarilar.push(`Eşleştirdiğiniz sütunlar <b>${kacar(baskin[0])}</b> tipine işaret ediyor`
       + ` ama <b>${kacar(_uTip)}</b> seçili. Ürün tipini kontrol edin.`);
+  }
+
+  /* UY1: bu kontrol eskiden `uyarilar` TANIMLANMADAN önceydi.
+     Zorunlu alan eksikken `const uyarilar`'a erişim "Cannot access
+     'uyarilar' before initialization" hatası veriyor, dosya yükleme
+     yarıda kalıyordu. Uyarılar hesaplandıktan SONRA bakılır. */
+  const kok = document.getElementById('tOnizleme');
+  if (eksikZorunlu.length) {
+    kok.innerHTML = `
+    ${uyarilar.map(u => `<div class="tp-not tp-uyari" style="margin-bottom:8px">⚠ ${u}</div>`).join('')}<div class="tp-not tp-uyari">Zorunlu alan eşleştirilmedi: <b>${kacar(eksikZorunlu.join(', '))}</b></div>`;
+    document.getElementById('tKaydet').disabled = true;
+    return;
   }
 
   const ilk = TP_SATIRLAR.slice(0, 8);

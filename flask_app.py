@@ -20506,19 +20506,26 @@ def create_app():
             if tip == 'BLOK':
                 # NOT: BlokStok modelinde 'ozellik' alanı yok — bloklar
                 # yüzey işlemi görmediği için Özellik sütunu eklenmedi.
-                headers = ['Blok No', 'Cins', 'Üretici', 'Hacim m³', 'Tonaj', 'Durum', 'Konum']
-                sayisal = [3, 4]
+                # BS2: olculer de yazilir. Eskiden Boy/Yukseklik/En yoktu;
+                # disa aktarilan liste geri ICE AKTARILAMIYORDU (zorunlu
+                # alanlar dosyada yoktu).
+                headers = ['Blok No', 'Cins', 'Üretici', 'Boy (cm)', 'Yükseklik (cm)', 'En (cm)',
+                           'Hacim m³', 'Tonaj', 'Durum', 'Konum']
+                sayisal = [3, 4, 5, 6, 7]
                 for s in BlokStok.query.order_by(BlokStok.blok_no.asc(), BlokStok.id.asc()).all():
                     rows.append([s.blok_no or '', s.cins or '', s.uretici or '',
+                                 _f(s.boy, True), _f(s.yukseklik, True), _f(s.en, True),
                                  _f(s.hacim_m3, True), _f(s.tonaj, True), s.durum or '', s.konum or ''])
             elif tip == 'PLAKA':
-                headers = ['Blok-Slab', 'Cins', 'Özellik', 'Üretici', 'm²', 'Kalınlık', 'Durum', 'Konum']
-                sayisal = [4, 5]
+                headers = ['Blok-Slab', 'Cins', 'Özellik', 'Üretici', 'Boy (cm)', 'Yükseklik (cm)',
+                           'm²', 'Kalınlık', 'Durum', 'Konum']
+                sayisal = [4, 5, 6, 7]
                 for s in PlakaStok.query.order_by(PlakaStok.blok_no.asc(),
                                                   PlakaStok.slab_no.asc(),
                                                   PlakaStok.id.asc()).all():
                     blok_slab = f"{s.blok_no or ''}#{s.slab_no or ''}" if s.blok_no else (s.slab_no or '')
                     rows.append([blok_slab, s.cins or '', s.ozellik or '', s.uretici or '',
+                                 _f(s.boy, True), _f(s.yukseklik, True),
                                  _f(s.metraj_m2, True), _f(s.kalinlik, True), s.durum or '', s.konum or ''])
             else:  # EBATLI
                 headers = ['Kasa No', 'Cins', 'Özellik', 'Üretici', 'm²', 'Durum', 'Konum']
