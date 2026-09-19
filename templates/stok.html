@@ -923,7 +923,21 @@ async function listeyiCiz() {
           x.fatura_durumu === 'faturasiz' ? '<span class="fatura-isaret" title="Tedarikçi faturası bekleniyor">⏳</span>'
           : (x.fatura_durumu === 'mal_bekliyor' ? '<span class="fatura-isaret" title="Mal bekleniyor">📦</span>' : '')
         }</td>
-        <td class="sag mono">${(() => { const a = alimBirim(x); return a ? para2(a) + '/' + (x.birim_ad || '') : '—'; })()}</td>
+        <td class="sag mono">${(() => {
+          const a = alimBirim(x);
+          if (!a) return '—';
+          /* SD2: USD dışında girilen alış fiyatı KENDİ dövizinde
+             görünsün. 200 €/ton girilip 229,57 $/ton görmek
+             "yanlış kaydedilmiş" izlenimi veriyordu. USD karşılığı
+             altta küçük yazılır; toplamlar USD kalır. */
+          const dv = (x.doviz || 'USD').toUpperCase();
+          if (dv !== 'USD' && x.alis_fiyati > 0) {
+            const fb = { m2: 'm²', m3: 'm³', ton: 'ton', sqft: 'sqft' }[x.fiyat_birim] || x.fiyat_birim || '';
+            return para2(x.alis_fiyati, dv) + '/' + fb
+              + '<div class="ikincil">≈ ' + para2(a) + '/' + (x.birim_ad || '') + '</div>';
+          }
+          return para2(a) + '/' + (x.birim_ad || '');
+        })()}</td>
         <td class="sag mono">${x.birim_maliyet_usd
           ? para2(x.birim_maliyet_usd) + '/' + (x.birim_ad || '') +
             ((x.ek_maliyet_toplam || 0) > 0 ? '<span class="ek-isaret" title="Ek maliyet giydirilmiş">▲</span>' : '')

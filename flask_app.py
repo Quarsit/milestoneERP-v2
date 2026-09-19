@@ -4380,10 +4380,17 @@ def create_app():
                 _ozet['deger_usd'] += _tum_maliyet.get(_r.id, 0.0)
                 _af = float(getattr(_r, 'alis_fiyati', 0) or 0)
                 if _af:
-                    _ob = (float(getattr(_r, 'hacim_m3', 0) or 0) if tip == 'BLOK'
-                           else float(getattr(_r, 'metraj_m2', 0) or 0))
+                    # SD1: fiyat HANGI BIRIMDE girildiyse o olcuyle
+                    # carpilir — satirdaki "Toplam" ile AYNI hesap.
+                    # Eskiden blokta hep m3 kullaniliyordu; ton ile
+                    # fiyatlanan blokta (229,57 $/ton x 18,43 m3)
+                    # 11.364 $ yerine 4.230 $ yaziyordu. Olcu yoksa
+                    # "1 birim" varsaymak da yanlisti — 0 sayilir.
+                    _fb = (getattr(_r, 'alis_fiyat_birim', None)
+                           or ('ton' if tip == 'BLOK' else 'm2'))
+                    _ob = float(_stok_olcu(_r, _fb) or 0)
                     _ozet['deger_usd'] += _alim_usd(
-                        _af * (_ob or 1), getattr(_r, 'doviz', 'USD') or 'USD')
+                        _af * _ob, getattr(_r, 'doviz', 'USD') or 'USD')
             for _k in ('m2', 'm3', 'deger_usd'):
                 _ozet[_k] = q3(_ozet[_k])
         except Exception as _e:
