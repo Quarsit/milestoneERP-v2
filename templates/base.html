@@ -345,6 +345,14 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   if (!hb || (Date.now() - hb) > BAYAT) { localStorage.removeItem(HB); location.replace('/cikis'); return; }
   localStorage.setItem(HB, String(Date.now()));
   setInterval(function(){ localStorage.setItem(HB, String(Date.now())); }, 5000);
+  /* HB1: arka plandaki sekmede tarayıcı zamanlayıcıyı dakikada bire
+     kadar yavaşlatır. Kullanıcı sekmeye dönüp bir bağlantıya
+     tıkladığında damga 15 sn'den eski olabiliyor ve oturum
+     kapanıyordu. Sayfadan ayrılırken ve sekme görünür olunca da
+     damga tazelenir; tarayıcı kapatılınca yine çıkış yapılır. */
+  function hbYaz(){ try { localStorage.setItem(HB, String(Date.now())); } catch(e){} }
+  window.addEventListener('pagehide', hbYaz);
+  document.addEventListener('visibilitychange', hbYaz);
 })();
 </script>
 </head>
@@ -470,7 +478,8 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         {% set satis_sayfasi = yol.startswith('/siparis') or yol.startswith('/proforma')
               or yol.startswith('/fatura') or yol.startswith('/satislar')
               or yol.startswith('/sevkiyat') or yol in ['/dashboard', '/'] %}
-        {% if satis_sayfasi and (menu_admin or menu_yetki.get('fatura') == 'yazma') %}
+        {# YK2: düğme, sunucunun istediği yetkilerin HEPSİ varsa görünür (fatura + sipariş + cari). #}
+        {% if satis_sayfasi and (menu_admin or (menu_yetki.get('fatura') == 'yazma' and menu_yetki.get('siparis') == 'yazma' and menu_yetki.get('cari') == 'yazma')) %}
         <button class="hizli-btn" onclick="hizliSatisAc()" title="Siparişsiz doğrudan satış — fatura ve tahsilat tek adımda">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4.5 12.5h6L11 22l8.5-10.5h-6z"/></svg>
           Hızlı Satış

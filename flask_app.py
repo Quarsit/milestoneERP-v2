@@ -649,6 +649,33 @@ def create_app():
         ('/api/denetim', 'denetim'),
     ]
 
+    # YK1 (19.09) — YALNIZCA YAZMA icin ek harita.
+    # Bu uclar URL_MODUL_MAP'te YOKTU ve yazma guard'i "tanimlanmamis
+    # API - sessizce gec" diyordu. Olculdu: yalnizca OKUMA yetkili
+    # kullanici POST /api/cek ile cek kaydedebiliyordu (cariye alacak
+    # hareketi de olusuyordu).
+    # URL_MODUL_MAP'e eklenmedi: okuma guard'i da o haritayi kullanir
+    # ve Bugun ekranindaki /api/cek/ozet gibi capraz okumalar kasa
+    # yetkisi olmayan satiscida kirilirdi.
+    # Deger bir DEMET ise herhangi birinde yazma yetkisi yeterli
+    # (konteyner hem proforma hem sevkiyat ekranindan yonetiliyor).
+    YAZMA_EK_MAP = [
+        ('/api/cek', 'kasa'),
+        ('/api/nakit_plan', 'kasa'),
+        ('/api/sabit_gider', 'kasa'),
+        ('/api/avans', 'cari'),
+        ('/api/konteyner', ('proforma', 'sevkiyat')),
+        ('/api/sicak_satis', 'fatura'),
+    ]
+
+    # YK2: tek istekte birden cok module yazan uclar. Hizli satis
+    # siparis + fatura + cari hareketi (+ tahsilatta kasa) uretir;
+    # yalnizca fatura yetkisine bakmak, siparis yetkisi olmayan
+    # birinin siparis acmasina izin veriyordu.
+    EK_YAZMA_YETKI = {
+        '/api/sicak_satis': ('siparis', 'cari'),
+    }
+
     # Yazma kontrolünden MUAF endpoint'ler (genel veya kişisel)
     YAZMA_MUAF_PATHS = [
         '/api/yetkilerim',
@@ -719,11 +746,23 @@ def create_app():
                 modul = m
                 break
         if not modul:
+            for prefix, m in YAZMA_EK_MAP:
+                if request.path.startswith(prefix):
+                    if isinstance(m, tuple):
+                        # herhangi birinde yazma varsa gec; yoksa ilkini raporla
+                        modul = next((x for x in m if _yetki_seviye(x) == 'yazma'), m[0])
+                    else:
+                        modul = m
+                    break
+        if not modul:
             # Tanimlanmamis API - sessizce gec
             return None
         # Yazma yetkisi var mi?
         try:
             mevcut = _yetki_seviye(modul)
+            for _ek in EK_YAZMA_YETKI.get(request.path, ()):
+                if mevcut == 'yazma' and _yetki_seviye(_ek) != 'yazma':
+                    modul, mevcut = _ek, _yetki_seviye(_ek)
             if mevcut != 'yazma':
                 return jsonify({
                     'ok': False,
@@ -859,6 +898,29 @@ def create_app():
     # ════════════════════════════════════════════════════════
     # STOK-REZERVASYON YARDIMCI FONKSİYONLARI
     # ════════════════════════════════════════════════════════
+    def _stok_serbestten_al(stok, yeni_durum='Rezerve'):
+        """RZ1 — STOK KİLİDİ (yarış durumu).
+
+        Eskiden: `if stok.durum != 'Serbest': continue` ... sonra
+        `stok.durum = 'Rezerve'`. Kontrol ile yazma arasinda iki
+        kullanici ayni stogu gorup ikisi de rezerve edebiliyordu
+        (iki Rezervasyon satiri, tek blok).
+
+        Simdi tek atomik UPDATE: `... WHERE id=:id AND durum='Serbest'`.
+        PostgreSQL'de ikinci islem birincinin bitmesini bekler, sonra
+        kosulu yeniden degerlendirir ve 0 satir gunceller. True ancak
+        stok GERCEKTEN bu islemde Serbest'ten alindiysa doner.
+        """
+        from sqlalchemy.orm.attributes import set_committed_value
+        M = type(stok)
+        n = (db.session.query(M)
+             .filter(M.id == stok.id, M.durum == 'Serbest')
+             .update({M.durum: yeni_durum}, synchronize_session=False))
+        if n == 1:
+            set_committed_value(stok, 'durum', yeni_durum)
+            return True
+        return False
+
     def _stok_getir(stok_id, stok_tip):
         """Tip ve ID'ye göre doğru tablo'dan stok kaydını döner."""
         if stok_tip == 'BLOK':   return BlokStok.query.get(stok_id)
@@ -1905,6 +1967,8 @@ def create_app():
             ).first()
             if mevcut:
                 continue  # zaten rezerve
+            if not _stok_serbestten_al(stok, 'Rezerve'):
+                continue  # RZ1: bu arada baskasi aldi
 
             rez = Rezervasyon(
                 id=_yeni_id('REZ'),
@@ -1920,10 +1984,8 @@ def create_app():
                 kullanici=session.get('kullanici')
             )
             db.session.add(rez)
-            eski_d = stok.durum
-            stok.durum = 'Rezerve'
             _log_audit('DURUM', 'stok', sid,
-                       eski={'durum': eski_d}, yeni={'durum': 'Rezerve'},
+                       eski={'durum': 'Serbest'}, yeni={'durum': 'Rezerve'},
                        aciklama=f'Proforma {proforma.id} icin rezerve edildi')
             rezerve_sayisi += 1
         return rezerve_sayisi
@@ -5627,6 +5689,58 @@ def create_app():
 
     import models as _models_modulu
     _models_modulu._erisim_kontrol_kancasi = _erisim_kontrol_kancasi
+
+    # ── YAZMA İSTEĞİNDEKİ CARİ KİMLİKLERİ  (CRM-F) ──
+    # before_insert dinleyicisi yalnizca Proforma/Fatura/Siparis/
+    # Sevkiyat/Rezervasyon/SatisKaydi'yi kapsiyor. Olculdu (19.09):
+    # 'atanan' kapsamli bir kullanici, GORMEDIGI bir cariye
+    # POST /api/cek ile cek girebiliyordu — cek ve cariye alacak
+    # hareketi olusuyordu. Cek, CariHareket, KasaHareket dinleyicide
+    # yok.
+    #
+    # Uc uc duzeltmek yerine TEK KAPI: /api/ altindaki her yazma
+    # isteginde govdede/adreste gecen cari kimlikleri denetlenir.
+    # Ileride eklenecek uclar da kendiliginden kapsanir.
+    # Admin ve 'tumu' kapsamli kullanicilar etkilenmez.
+    _CARI_ANAHTARLARI = ('cari_id', 'hedef_cari_id', 'ciro_cari_id',
+                         'acente_cari_id', 'kaynak_cari_id')
+
+    @app.before_request
+    def _yazma_cari_kapisi():
+        if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            return None
+        if not request.path.startswith('/api/'):
+            return None
+        if not session.get('kullanici') or _erisim_admin_mi():
+            return None
+        adaylar = set()
+        try:
+            govde = request.get_json(silent=True)
+        except Exception:
+            govde = None
+        kaynaklar = [request.args]
+        if isinstance(govde, dict):
+            kaynaklar.append(govde)
+        if request.form:
+            kaynaklar.append(request.form)
+        for kaynak in kaynaklar:
+            for anahtar in _CARI_ANAHTARLARI:
+                v = kaynak.get(anahtar)
+                if isinstance(v, str) and v.strip():
+                    adaylar.add(v.strip())
+        if not adaylar:
+            return None
+        izin = _gorulebilir_cari_idler()
+        if izin is None:
+            return None
+        yasak = [c for c in adaylar if c not in izin]
+        if yasak:
+            app.logger.warning(f'[CRM-F] {session.get("kullanici")} gorunmeyen cariye '
+                               f'yazma denedi: {request.method} {request.path} {yasak}')
+            return jsonify({'ok': False, 'mesaj':
+                'Bu müşteri adına işlem yapma yetkiniz yok. Müşteri size '
+                'kapalı; sorumlusundan erişim isteyin.'}), 403
+        return None
 
     @app.errorhandler(_models_modulu.ErisimHatasi)
     def _erisim_hatasi_isle(hata):
@@ -10613,6 +10727,8 @@ def create_app():
             ).first()
             if mevcut:
                 continue  # Zaten rezerve, atla
+            if not _stok_serbestten_al(stok, 'Rezerve'):
+                continue  # RZ1: kontrolden sonra baska biri rezerve etti
 
             # SİPARİŞ KALEMİ BAĞLANTISI (FAZ 16 zorunluluğu):
             # Teslimde SatisKaydi olusturulabilmesi icin rezervasyon bir sipariş
@@ -10657,8 +10773,7 @@ def create_app():
                 kullanici=session['kullanici']
             )
             db.session.add(rez)
-            eski_durum = stok.durum
-            stok.durum = 'Rezerve'
+            eski_durum = 'Serbest'   # RZ1: yukarida atomik olarak alindi
             # AUDIT: stok durum degisimi - hangi siparis icin
             _log_audit('DURUM', 'stok', sid,
                        eski={'durum': eski_durum},
@@ -19414,7 +19529,11 @@ def create_app():
                     kh = KasaHareket(
                         kasa_id=kasa.id, tip='giris', tutar=k_tutar,
                         aciklama=f'Tahsilat: {f.musteri} - Fatura {f.fatura_no or fatura_id}{cevrim}',
-                        baglanti_tip='tahsilat', baglanti_id=fatura_id,
+                        # TH2: kasa hareketi TAHSILATIN KENDISINE baglanir
+                        # (eskiden faturaya). Ayni faturanin iki tahsilati
+                        # ayirt edilemiyordu ve tahsilat silinince kasa
+                        # hareketi geride kaliyordu.
+                        baglanti_tip='tahsilat', baglanti_id=hareket.id,
                         cari_id=hareket.cari_id,
                         kullanici=session.get('kullanici')
                     )
@@ -19434,12 +19553,23 @@ def create_app():
             _kur_doviz = f_doviz if odeme_doviz == 'TRY' else odeme_doviz
             msj += f' (≈ {esdeger:,.2f} {f_doviz}, {_kur_doviz} kuru {_kur_goster:,.4f})'
         msj += f'. Kalan: {yeni_kalan:,.2f} {f_doviz}.'
-        if kur_farki:
+        # TH1: _kur_farki_hesapla_ve_olustur onaysiz durumda SOZLUK,
+        # onayli durumda CariHareket NESNESI doner (EK2). Burada
+        # yalnizca nesne varsayiliyordu: kur farki cikan her dovizli
+        # tahsilatta commit'ten SONRA AttributeError -> 500. Tahsilat
+        # kaydediliyor ama kullanici hata goruyor ve tekrar giriyordu
+        # (cift tahsilat riski). Cari hareket ucu iki durumu da
+        # zaten ayiriyordu; burasi atlanmisti. Test ederken bulundu.
+        _kf_id = None
+        if isinstance(kur_farki, dict):
+            msj += f" {kur_farki.get('mesaj', '')}"
+        elif kur_farki:
+            _kf_id = kur_farki.id
             msj += f' Otomatik kur farkı: {kur_farki.islem_tip} {q3((kur_farki.borc or 0) + (kur_farki.alacak or 0)):,.2f} TRY.'
         msj += kasa_mesaj
         return jsonify({'ok': True, 'mesaj': msj, 'durum': f.durum,
                         'kalan': yeni_kalan, 'esdeger': esdeger,
-                        'kur_farki_id': kur_farki.id if kur_farki else None})
+                        'kur_farki_id': _kf_id})
 
     @app.route('/api/fatura/<fatura_id>/tahsilatlar', methods=['GET'])
     def api_fatura_tahsilatlar(fatura_id):
@@ -19506,6 +19636,39 @@ def create_app():
         fatura_id = h.baglanti_id
         # KUR FARKI SİMETRİSİ: kapattığı hareketleri aç, kur farkı kayıtlarını sil
         kf_acilan, kf_silinen = _kur_farki_geri_al(hareket_id)
+
+        # ── TH2: BAĞLI KASA GİRİŞİ DE GERİ ALINIR ──
+        # Olculdu (19.09): 30.000 + 30.000 USD tahsilat, ikisi de
+        # silindi -> fatura yeniden "Kesildi", ama banka kasasi hala
+        # 60.000 USD. Kasa ekrani da bu hareketi "once tahsilati
+        # silin" diyerek silmeye izin vermiyordu: para kasada KALICI
+        # olarak takili kaliyordu.
+        bagli = KasaHareket.query.filter_by(
+            baglanti_tip='tahsilat', baglanti_id=hareket_id).all()
+        if not bagli and fatura_id:
+            # Eski kayitlar faturaya bagliydi. Ayni faturanin birden
+            # cok tahsilati olabilir: tahsilatla ayni istekte (+-120 sn)
+            # olusan ve zamanca EN YAKIN olan kayit alinir. Esitlik
+            # varsa ya da aday yoksa dokunulmaz — yanlis kasa kaydini
+            # silmek, hic silmemekten kotu.
+            adaylar = KasaHareket.query.filter_by(
+                baglanti_tip='tahsilat', baglanti_id=fatura_id).all()
+            ref = getattr(h, 'guncelleme', None)
+            if ref and adaylar:
+                yakin = sorted(
+                    ((abs((a.olusturma - ref).total_seconds()), a) for a in adaylar
+                     if a.olusturma and abs((a.olusturma - ref).total_seconds()) <= 120),
+                    key=lambda x: x[0])
+                if yakin and (len(yakin) == 1 or yakin[0][0] < yakin[1][0]):
+                    bagli = [yakin[0][1]]
+        kasa_geri = []
+        for bkh in bagli:
+            bk = Kasa.query.get(bkh.kasa_id)
+            if bk:
+                t = q3(bkh.tutar or 0)
+                bk.bakiye = q3((bk.bakiye or 0) + (-t if bkh.tip == 'giris' else t))
+                kasa_geri.append(f'{bk.ad} {"-" if bkh.tip == "giris" else "+"}{t:,.2f} {bk.doviz}')
+            db.session.delete(bkh)
         db.session.delete(h)
         db.session.flush()
         if fatura_id:
@@ -19513,6 +19676,7 @@ def create_app():
         _log_audit('SIL', 'tahsilat', hareket_id, eski={'tutar': h.alacak})
         db.session.commit()
         msg = 'Tahsilat silindi'
+        if kasa_geri: msg += ', kasa girişi geri alındı (' + ', '.join(kasa_geri) + ')'
         if kf_silinen: msg += f', {kf_silinen} otomatik kur farkı kaydı geri alındı'
         if kf_acilan:  msg += f', kapatılmış fatura borcu yeniden açıldı'
         return jsonify({'ok': True, 'mesaj': msg})
