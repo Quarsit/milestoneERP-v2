@@ -731,6 +731,11 @@ async function yukle() {
            eskiden hep $ basılıyordu ve TRY bakiye dolar gibi
            görünüyordu. */
         doviz: (c.net_bakiye != null ? (c.net_bakiye_doviz || 'TRY') : 'USD'),
+        /* DV1: her dövizin neti ayrı. Para birimi USD olan cariye EUR
+           hareket girilince liste "0 $" gösteriyordu. */
+        netler: c.net_bakiyeler || null,
+        /* KPI toplamı farklı dövizleri TOPLAYAMAZ; TL karşılığı / kur. */
+        usd: (c.net_bakiye_try || 0) / KUR,
         gecen: gecen / KUR };
     });
   } catch (e) { BAKIYE = {}; }
@@ -740,7 +745,7 @@ async function yukle() {
 function kpiCiz() {
   const m = TUM.filter(cariMusteriMi);
   const t = TUM.filter(cariTedarikciMi);
-  const netAlacak = Object.values(BAKIYE).reduce((a, b) => a + Math.max(0, b.net), 0);
+  const netAlacak = Object.values(BAKIYE).reduce((a, b) => a + Math.max(0, b.usd != null ? b.usd : b.net), 0);
   const gecikmis = Object.values(BAKIYE).reduce((a, b) => a + b.gecen, 0);
   document.getElementById('kMusteri').textContent = m.length;
   document.getElementById('kMusteriEk').textContent =
@@ -771,6 +776,10 @@ function ciz() {
     const gec = b.gecen > 1;
     const ray = gec ? '--kirmizi' : (cariMusteriMi(c) ? '--verde' : '--cizgi-koyu');
     const bakRenk = gec ? 'var(--kirmizi)' : (b.net < 0 ? 'var(--soluk)' : 'var(--verde)');
+    const _nl = b.netler ? Object.entries(b.netler).sort() : null;
+    const bakMetin = (_nl && _nl.length)
+      ? _nl.map(([dv, v]) => `<div style="color:${gec ? 'var(--kirmizi)' : (v < 0 ? 'var(--soluk)' : 'var(--verde)')}">${v < 0 ? '−' : ''}${para(Math.abs(v), dv)}</div>`).join('')
+      : `${b.net < 0 ? '−' : ''}${para(Math.abs(b.net), b.doviz)}`;
     return `
     <tr style="border-left-color:var(${ray})" onclick="detayAc('${kacar(c.id)}')">
       <td><strong>${kacar(c.unvan)}</strong>
@@ -790,7 +799,7 @@ function ciz() {
         ${kacar(c.telefon || '')}${c.telefon && c.email ? '<br>' : ''}${kacar(c.email || '')}
         ${!c.telefon && !c.email ? '—' : ''}</td>
       <td class="sag mono" style="font-weight:600;color:${bakRenk}">
-        ${b.net < 0 ? '−' : ''}${para(Math.abs(b.net), b.doviz)}
+        ${bakMetin}
         ${gec ? '<div style="font-size:.72rem">⚠ ' + para(b.gecen) + ' geçmiş</div>' : ''}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="5" class="bos">Cari yok.</td></tr>';
@@ -1119,6 +1128,16 @@ document.addEventListener('DOMContentLoaded', cariUrlIleAc);
    Artık her döviz KENDİ birimiyle, TRY karşılığı ayrıca
    gösteriliyor. Tek sayıya indirgemek kur riskini gizler —
    nakit akışında da aynı sebeple dövizleri ayrı tutuyoruz. */
+/* DV2: kayıt değerleri ASCII ("Acilis Bakiyesi (Alacak)"); ekranda
+   Türkçe karakterle gösterilir. Kayıt değişmez — filtreler ona bakar. */
+const ISLEM_TR = {'Odeme':'Ödeme','Avans Tahsilati':'Avans Tahsilatı','Avans Odemesi':'Avans Ödemesi',
+  'Fatura (Satis)':'Fatura (Satış)','Fatura (Alis)':'Fatura (Alış)','Iade (Satis)':'İade (Satış)',
+  'Iade (Alis)':'İade (Alış)','Vade Farki (Borc)':'Vade Farkı (Borç)','Vade Farki (Alacak)':'Vade Farkı (Alacak)',
+  'Kur Farki (Borc)':'Kur Farkı (Borç)','Kur Farki (Alacak)':'Kur Farkı (Alacak)','Çek (Borc)':'Çek (Borç)',
+  'Acilis Bakiyesi':'Açılış Bakiyesi','Acilis Bakiyesi (Borc)':'Açılış Bakiyesi (Borç)',
+  'Acilis Bakiyesi (Alacak)':'Açılış Bakiyesi (Alacak)'};
+function islemEtiket(t) { return ISLEM_TR[t] || t || ''; }
+
 function bakiyeParaBirim(v, dv) {
   const n = Number(v) || 0;
   const s = n.toLocaleString('tr-TR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -1210,7 +1229,7 @@ function bakiyeKutulari(bakiye, c) {
 async function detayAc(id) {
   const c = TUM.find(x => x.id === id);
   if (!c) return;
-  cekmeceAc(kacar(c.unvan), kacar(c.cari_tip || '') + (c.ulke ? ' · ' + kacar(c.ulke) : ''), '<div class="yukleniyor">Yükleniyor…</div>', '');
+  cekmeceAc(kacar(c.unvan), kacar(String(c.cari_tip || '').split(',').map(x => x.trim()).filter(Boolean).join(', ')) + (c.ulke ? ' · ' + kacar(c.ulke) : ''), '<div class="yukleniyor">Yükleniyor…</div>', '');
 
   let hareketler = [], bakiye = {};
   try {
@@ -1229,8 +1248,15 @@ async function detayAc(id) {
       ${bakiyeKutulari(bakiye, c)}
       ${alan('Vadesi Geçen', bk.gecen > 1
         ? `<span style="color:var(--kirmizi);font-weight:600">${para(bk.gecen)}</span>` : '—')}
-      ${alan('Ülke', c.ulke ? kacar(ulkeAdi(c.ulke)) + ' <span class="mono" style="color:var(--soluk)">(' + kacar(c.ulke) + ')</span>' : '—')}
-      ${alan('Para Birimi', kacar(c.para_birimi || 'USD'))}
+      ${alan('Ülke', c.ulke ? kacar(ulkeAdi(c.ulke)) + (String(ulkeAdi(c.ulke)).toLocaleUpperCase('tr') !== String(c.ulke).toLocaleUpperCase('tr')
+          ? ' <span class="mono" style="color:var(--soluk)">(' + kacar(c.ulke) + ')</span>' : '') : '—')}
+      ${alan('Para Birimi', kacar(c.para_birimi || 'USD') + (() => {
+        /* DV1: hareketler başka dövizdeyse söyle — yoksa "Para birimi
+           USD" yazarken bakiye EUR görünür ve çelişki gibi durur. */
+        const pb = (c.para_birimi || 'USD').toUpperCase();
+        const diger = Object.keys(bakiye.dovizler || {}).filter(d => d.toUpperCase() !== pb);
+        return diger.length ? `<div style="font-size:.74rem;color:var(--kehribar);margin-top:2px">hareketlerde ${kacar(diger.join(', '))} de var</div>` : '';
+      })())}
       ${alan('Telefon', kacar(c.telefon || '—'), true)}
       ${alan('E-posta', kacar(c.email || '—'))}
       ${c.adres ? alan('Adres', kacar(c.adres)) : ''}
@@ -1251,8 +1277,8 @@ async function detayAc(id) {
         <div class="ekstre-satir">
           <span class="t">${kacar((h.hareket_tarihi || '').slice(5))}</span>
           <div>
-            <div>${kacar(h.islem_tip || '')}</div>
-            ${h.aciklama ? '<div style="color:var(--soluk);font-size:.75rem">' + kacar(h.aciklama.slice(0, 42)) + '</div>' : ''}
+            <div>${kacar(islemEtiket(h.islem_tip))}</div>
+            ${h.aciklama && h.aciklama !== h.islem_tip ? '<div style="color:var(--soluk);font-size:.75rem">' + kacar(h.aciklama.slice(0, 42)) + '</div>' : ''}
             ${/* KU1: KUR AÇIKÇA GÖRÜNSÜN.
                   1.000 USD'lik hareketin hangi kurla çevrildiği
                   görünmüyordu; mutabakatta karşı taraf rakamı
@@ -1283,8 +1309,6 @@ async function detayAc(id) {
      kullanılıyor (yazabilir() de aynı kaynaktan besleniyor). */
   const _crmVar = window.ADMIN || (window.YETKI && window.YETKI['crm'] &&
                                    window.YETKI['crm'] !== 'gizli');
-  if (_crmVar) crmYukle(id, c.unvan);
-  else { const kx = document.getElementById('crmBolum'); if (kx) kx.remove(); }
 
   const eylem = [];
   if (yazabilir('crm'))
@@ -1297,7 +1321,13 @@ async function detayAc(id) {
   eylem.push(`<button class="blok-btn" onclick="sipEkstreAc('${kacar(id)}','${kacar(c.unvan)}')">Sipariş ekstresi</button>`);
   if (yazabilir('cari'))
     eylem.push(`<button class="blok-btn" onclick="duzenleAc('${kacar(id)}')">Bilgi Düzenle</button>`);
-  cekmeceAc(kacar(c.unvan), kacar(c.cari_tip || '') + (c.ulke ? ' · ' + kacar(c.ulke) : ''), govde, eylem.join(''));
+  cekmeceAc(kacar(c.unvan), kacar(String(c.cari_tip || '').split(',').map(x => x.trim()).filter(Boolean).join(', ')) + (c.ulke ? ' · ' + kacar(c.ulke) : ''), govde, eylem.join(''));
+  /* DV5: CRM, çekmece gövdesi YERLEŞTİKTEN SONRA yüklenir.
+     Eskiden cekmeceAc'tan önce çağrılıyordu; o anda #crmBolum henüz
+     yoktu, crmYukle sessizce çıkıyordu ve "CRM bilgileri
+     yükleniyor…" sonsuza dek kalıyordu. */
+  if (_crmVar) crmYukle(id, c.unvan);
+  else { const kx = document.getElementById('crmBolum'); if (kx) kx.remove(); }
 }
 
 /* ══════════════════════════════════════════════════════════════

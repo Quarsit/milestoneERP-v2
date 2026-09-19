@@ -291,6 +291,35 @@ def create_app():
                  'Acilis Bakiyesi (Borc)': 'Opening Balance (Debit)',
                  'Acilis Bakiyesi (Alacak)': 'Opening Balance (Credit)'}
 
+    # DV2: Turkce belgede kayit degeri ASCII haliyle basiliyordu
+    # ("Acilis Bakiyesi (Alacak)", "Fatura (Satis)"). Kayitlar
+    # degismez (filtreler bu degerlere bakiyor); yalnizca GORUNUM
+    # duzeltilir.
+    _ISLEM_TR = {'Odeme': 'Ödeme', 'Avans Tahsilati': 'Avans Tahsilatı',
+                 'Avans Odemesi': 'Avans Ödemesi',
+                 'Fatura (Satis)': 'Fatura (Satış)', 'Fatura (Alis)': 'Fatura (Alış)',
+                 'Iade (Satis)': 'İade (Satış)', 'Iade (Alis)': 'İade (Alış)',
+                 'Vade Farki (Borc)': 'Vade Farkı (Borç)', 'Vade Farki (Alacak)': 'Vade Farkı (Alacak)',
+                 'Kur Farki (Borc)': 'Kur Farkı (Borç)', 'Kur Farki (Alacak)': 'Kur Farkı (Alacak)',
+                 'Çek (Borc)': 'Çek (Borç)',
+                 'Acilis Bakiyesi': 'Açılış Bakiyesi',
+                 'Acilis Bakiyesi (Borc)': 'Açılış Bakiyesi (Borç)',
+                 'Acilis Bakiyesi (Alacak)': 'Açılış Bakiyesi (Alacak)'}
+
+    def _tutar_bicim(x, dil='en', basamak=2):
+        """DV3: belgede tutar dile gore bicimlenir.
+        tr -> 14.000,00   en -> 14,000.00   (eskiden hep 14000.00)"""
+        try:
+            v = float(x or 0)
+        except (TypeError, ValueError):
+            return str(x)
+        m = f'{v:,.{basamak}f}'
+        if (str(dil or '')).lower().startswith('tr'):
+            m = m.replace(',', '§').replace('.', ',').replace('§', '.')
+        return m
+
+    app.jinja_env.globals['_tutar'] = _tutar_bicim
+
     def _deger_cevir(kategori, deger, dil='en'):
         if deger is None:
             return ''
@@ -300,6 +329,8 @@ def create_app():
         except Exception:
             d = 'en'
         if d.startswith('tr'):
+            if kategori == 'islem':
+                return _ISLEM_TR.get(deger, deger)
             return deger
         if kategori == 'yuzey':
             return _YUZEY_EN.get(deger, deger)
@@ -8116,28 +8147,43 @@ def create_app():
         # de gorsun. Eskiden yalnizca net_bakiye_try donuyordu ve on yuz
         # onu bugunku kurla boluyordu; cekmece ise ham dovizi topluyordu
         # — ayni cari icin iki farkli sayi cikiyordu.
+        # DV1 — LİSTE BAKİYESİ HAREKETİN KENDİ DÖVİZİNDE.
+        # Eskiden yalnizca CARININ para birimindeki hareketler
+        # toplaniyordu. Para birimi USD olan bir cariye 14.000 EUR
+        # acilis bakiyesi girilince liste "0 $" gosteriyordu; cekmece
+        # ise dogru olarak -14.000 EUR diyordu. Artik her dovizin
+        # neti ayri hesaplanir; liste sifir OLMAYANLARIN hepsini
+        # gosterir. Hareketler TEK sorguda cekilir (eskiden cari
+        # basina bir sorgu vardi).
+        _idler = [c.get('cari_id') for c in sonuc_cariler]
+        _dv_net = {}
+        if _idler:
+            for _cid, _dv, _b, _a in db.session.query(
+                    CariHareket.cari_id, CariHareket.doviz,
+                    func.coalesce(func.sum(CariHareket.borc), 0),
+                    func.coalesce(func.sum(CariHareket.alacak), 0)
+                    ).filter(CariHareket.cari_id.in_(_idler)
+                    ).group_by(CariHareket.cari_id, CariHareket.doviz).all():
+                _k = (_dv or 'TRY').upper()
+                _d = _dv_net.setdefault(_cid, {})
+                _d[_k] = _d.get(_k, 0.0) + float(_b or 0) - float(_a or 0)
+        _pb_harita = dict(db.session.query(Cari.id, Cari.para_birimi)
+                          .filter(Cari.id.in_(_idler)).all()) if _idler else {}
         for _c in sonuc_cariler:
-            try:
-                _cr = Cari.query.get(_c.get('cari_id'))
-                _pb = (getattr(_cr, 'para_birimi', None) or 'TRY').upper()
-                # NB1: bakiyenin HANGI DOVIZDE oldugu da doner.
-                # Eskiden yalnizca sayi donuyordu ve liste onu her
-                # zaman $ ile basiyordu: TRY bakiye dolar gibi
-                # gorunuyordu (uretimde -1.460.324 TRY, "-1.460.324 $"
-                # yazildi). Ayni hata sinifini cari ozetinde de
-                # duzeltmistik.
+            _cid = _c.get('cari_id')
+            _pb = (_pb_harita.get(_cid) or 'TRY').upper()
+            _netler = {k: q3(v) for k, v in (_dv_net.get(_cid) or {}).items()
+                       if abs(v) >= 0.005}
+            _c['net_bakiyeler'] = _netler
+            # Tek sayi bekleyen eski kodlar icin: carinin kendi dovizi
+            # varsa o, yoksa sifir olmayan ILK doviz.
+            if _pb in _netler or not _netler:
                 _c['net_bakiye_doviz'] = _pb
-                if _pb == 'TRY':
-                    _c['net_bakiye'] = _c.get('net_bakiye_try') or 0
-                else:
-                    # Hareketlerin ham dovizindeki net bakiye
-                    _hs = CariHareket.query.filter_by(cari_id=_c.get('cari_id')).all()
-                    _c['net_bakiye'] = q3(sum((h.borc or 0) - (h.alacak or 0)
-                                              for h in _hs
-                                              if (h.doviz or 'TRY').upper() == _pb))
-            except Exception:
-                _c['net_bakiye'] = None
-                _c['net_bakiye_doviz'] = None
+                _c['net_bakiye'] = _netler.get(_pb, 0)
+            else:
+                _ilk = sorted(_netler)[0]
+                _c['net_bakiye_doviz'] = _ilk
+                _c['net_bakiye'] = _netler[_ilk]
 
         # Cari'leri net bakiyeye göre sırala (en yüksek borçlu üstte)
         sonuc_cariler.sort(key=lambda x: -x['net_bakiye_try'])
