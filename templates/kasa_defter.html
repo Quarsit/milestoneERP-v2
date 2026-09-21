@@ -27,6 +27,11 @@
     border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);
     font-size:.8rem;cursor:pointer;color:var(--soluk)}
   .kd-hizli button:hover{border-color:var(--verde);color:var(--verde-koyu)}
+  .kd-hizli{display:flex;gap:6px}
+  .kd-ust .kd-sec,.kd-ust .kd-tar,.kd-hizli button,.kd-ust .blok-btn{height:36px;padding-top:0;padding-bottom:0}
+  .kd-ust .kd-sag{margin-left:auto}
+  .kd-kart .ek{font-size:.76rem;color:var(--soluk);margin-top:3px}
+  td .kd-alt{margin-top:0}
 
   .kd-kartlar{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
     gap:12px;margin-bottom:16px}
@@ -85,10 +90,10 @@
     <button onclick="kdAralik('gecenay')">Geçen ay</button>
     <button onclick="kdAralik('yil')">Bu yıl</button>
   </span>
-  <button class="blok-btn" onclick="kdKasayaGit()">Kasa hareketlerine git →</button>
+  <span id="kdDurum" style="font-size:.8rem;color:var(--soluk)"></span>
+  <button class="blok-btn kd-sag" onclick="kdKasayaGit()">Kasa hareketlerine git →</button>
   <button class="blok-btn" onclick="kdHareketGir()">+ Hareket gir</button>
   <button class="blok-btn" onclick="location.href='/nakit'">Nakit akışı →</button>
-  <span id="kdDurum" style="font-size:.8rem;color:var(--soluk)"></span>
 </div>
 
 <div id="kdMutabakat"></div>
@@ -208,13 +213,13 @@ function kdCiz() {
   const o = d.ozet;
   document.getElementById('kdKartlar').innerHTML =
       '<div class="kd-kart"><label>Devir</label><div class="deger">'
-    + kdPara(d.devir, dv) + '</div></div>'
+    + kdPara(d.devir, dv) + '</div><div class="ek">' + kdTarih(d.baslangic) + ' itibarıyla</div></div>'
     + '<div class="kd-kart"><label>Dönem girişi</label><div class="deger kd-arti">'
-    + kdPara(o.giris, dv) + '</div></div>'
+    + kdPara(o.giris, dv) + '</div><div class="ek">' + d.hareketler.filter(x => x.giris).length + ' hareket</div></div>'
     + '<div class="kd-kart"><label>Dönem çıkışı</label><div class="deger kd-eksi">'
-    + kdPara(o.cikis, dv) + '</div></div>'
+    + kdPara(o.cikis, dv) + '</div><div class="ek">' + d.hareketler.filter(x => x.cikis).length + ' hareket</div></div>'
     + '<div class="kd-kart"><label>Kapanış</label><div class="deger">'
-    + kdPara(o.kapanis, dv) + '</div></div>';
+    + kdPara(o.kapanis, dv) + '</div><div class="ek">' + kdTarih(d.bitis) + ' itibarıyla</div></div>';
 
   if (!d.hareketler.length) {
     document.getElementById('kdTablo').innerHTML =
@@ -257,7 +262,7 @@ function kdCiz() {
        + (x.kasa_adi && d.kasa.ana_kasa
             ? '<span class="kd-alt">' + kdKacinc(x.kasa_adi) + '</span>' : '')
        + '</td>'
-       + '<td class="kd-alt" style="margin:0">' + (belge || '—') + '</td>'
+       + '<td><span class="kd-alt">' + (belge || '—') + '</span></td>'
        + '<td class="sag kd-sayi kd-arti">' + (x.giris ? kdPara(x.giris, dv) : '') + '</td>'
        + '<td class="sag kd-sayi kd-eksi">' + (x.cikis ? kdPara(x.cikis, dv) : '') + '</td>'
        + '<td class="sag kd-bakiye' + (x.bakiye < 0 ? ' neg' : '') + '">'

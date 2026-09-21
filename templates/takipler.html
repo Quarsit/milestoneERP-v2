@@ -21,6 +21,7 @@
   .tk-kart .deger{font-family:var(--baslik);font-size:1.5rem;font-weight:700;
     letter-spacing:-.02em}
   .tk-kart.acil{border-color:var(--kirmizi)}
+  .tk-kart .ek{font-size:.76rem;color:var(--soluk);margin-top:3px}
   .tk-kart.acil .deger{color:var(--kirmizi)}
 
   .tk-tablo{width:100%;border-collapse:collapse;font-size:.88rem}
@@ -116,9 +117,9 @@ function tkCiz() {
 
   document.getElementById('tkKartlar').innerHTML =
       '<div class="tk-kart' + (gec ? ' acil' : '') + '"><label>Gecikmiş</label>'
-    + '<div class="deger">' + gec + '</div></div>'
-    + '<div class="tk-kart"><label>Bugün</label><div class="deger">' + bugun + '</div></div>'
-    + '<div class="tk-kart"><label>Toplam</label><div class="deger">' + d.length + '</div></div>';
+    + '<div class="deger">' + gec + '</div><div class="ek">' + (gec ? 'tarihi geçmiş takip' : 'geciken yok') + '</div></div>'
+    + '<div class="tk-kart"><label>Bugün</label><div class="deger">' + bugun + '</div><div class="ek">bugün yapılacak</div></div>'
+    + '<div class="tk-kart"><label>Toplam</label><div class="deger">' + d.length + '</div><div class="ek">seçili aralıkta</div></div>';
 
   if (!d.length) {
     document.getElementById('tkTablo').innerHTML =

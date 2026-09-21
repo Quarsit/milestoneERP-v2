@@ -271,7 +271,7 @@ function detayAc(id) {
       ${alan('Kaynak Maliyeti', k.kaynak_toplam_maliyet ? para(k.kaynak_toplam_maliyet, k.kaynak_doviz) : '—', true)}
       ${alan('Üretilen', (k.detay_sayisi || 0) + ' adet · ' + cikan.toLocaleString('tr-TR') + ' m²', true)}
       ${alan('Devredilen Maliyet', (detaylar[0] || {}).birim_maliyet ? para2(detaylar[0].birim_maliyet) + ' /m²' : '—', true)}
-      ${alan('Fire', fire ? `<span style="${fireY > 15 ? 'color:var(--kehribar)' : ''}">${fire.toLocaleString('tr-TR')} (%${fireY.toFixed(1)})</span>` : '—')}
+      ${alan('Fire', fire ? `<span style="${fireY > 15 ? 'color:var(--kehribar)' : ''}">${fire.toLocaleString('tr-TR')} (%${fireY.toFixed(1).replace('.', ',')})</span>` : '—')}
       ${k.uretim_blok_no ? alan('Üretim Blok No', kacar(k.uretim_blok_no)) : ''}
       ${k.aciklama ? alan('Açıklama', kacar(k.aciklama)) : ''}
     </div>

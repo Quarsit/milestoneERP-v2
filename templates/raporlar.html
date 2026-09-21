@@ -227,8 +227,8 @@ async function genelYukle() {
   const kEk = document.getElementById('kKarEk');
   kEk.textContent = fark === null ? 'geçen ay veri yok' : (fark >= 0 ? '▲ %' : '▼ %') + Math.abs(fark) + ' geçen aya göre';
   kEk.className = 'ek ' + (fark === null ? '' : fark >= 0 ? 'iyi' : 'kotu');
-  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1);
-  document.getElementById('kMarjEk').textContent = 'genel: %' + (genel.marj || 0).toFixed(1);
+  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1).replace('.', ',');
+  document.getElementById('kMarjEk').textContent = 'genel: %' + (genel.marj || 0).toFixed(1).replace('.', ',');
 
   // Sütun grafiği
   const kok = document.getElementById('grafik');
@@ -283,7 +283,7 @@ function ozetListe(satirlar, ad) {
       </div>
       <div style="text-align:right">
         <div class="mono" style="font-weight:600;color:var(--verde)">${para(x.kar_usd)}</div>
-        <div style="font-size:.74rem;color:var(--soluk)">%${(x.marj || 0).toFixed(1)} marj · ${para(x.satis_usd)}</div>
+        <div style="font-size:.74rem;color:var(--soluk)">%${(x.marj || 0).toFixed(1).replace('.', ',')} marj · ${para(x.satis_usd)}</div>
       </div>
     </div>`).join('');
 }
@@ -315,7 +315,7 @@ async function karlilikYukle() {
         <td class="sag mono">${para(satis)}</td>
         <td class="sag mono" style="color:var(--soluk)">${para(s.maliyet_usd)}</td>
         <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(s.kar_usd)}</td>
-        <td class="sag mono" style="font-weight:600">%${marj.toFixed(1)}</td>
+        <td class="sag mono" style="font-weight:600">%${marj.toFixed(1).replace('.', ',')}</td>
       </tr>`;
     }).join('') : '<tr><td colspan="7" class="bos">Satış kaydı yok.</td></tr>';
   } catch (e) { /* api() bildirdi */ }
@@ -454,7 +454,7 @@ function pfListe(kok, satirlar, adAlan) {
       </div>
       <div style="text-align:right">
         <div class="mono" style="font-weight:600">${para(x.satis_usd)}</div>
-        <div style="font-size:.74rem;color:var(--soluk)">%${m.toFixed(1)} marj · ${x.adet || 0} satış</div>
+        <div style="font-size:.74rem;color:var(--soluk)">%${m.toFixed(1).replace('.', ',')} marj · ${x.adet || 0} satış</div>
       </div>
     </div>`;
   }).join('');
@@ -481,7 +481,7 @@ async function performansYukle() {
         <td class="sag mono" style="font-weight:600">${para(c.satis_usd)}</td>
         <td class="sag mono" style="color:var(--soluk)">${para(c.maliyet_usd)}</td>
         <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(c.kar_usd)}</td>
-        <td class="sag mono" style="font-weight:600">%${m.toFixed(1)}</td>
+        <td class="sag mono" style="font-weight:600">%${m.toFixed(1).replace('.', ',')}</td>
       </tr>`;
     }).join('') : '<tr><td colspan="7" class="bos">Satış yok.</td></tr>';
   } catch (e) { /* */ }
@@ -499,7 +499,7 @@ async function maliyetAnalizYukle() {
     document.getElementById('maAdet').textContent = g.siparis_adedi || 0;
     document.getElementById('maSatis').innerHTML = para(g.toplam_satis_usd || 0).replace(' $', '<small>$</small>');
     document.getElementById('maMaliyet').innerHTML = para(g.toplam_maliyet_usd || 0).replace(' $', '<small>$</small>');
-    document.getElementById('maMarj').innerHTML = '%' + (g.ort_marj || 0).toFixed(1);
+    document.getElementById('maMarj').innerHTML = '%' + (g.ort_marj || 0).toFixed(1).replace('.', ',');
     document.getElementById('maMarjEk').textContent = 'kâr ' + para(g.toplam_kar_usd || 0);
 
     const sl = (d.siparisler || []).slice().sort((a, b) => (a.marj || 0) - (b.marj || 0));
@@ -518,7 +518,7 @@ async function maliyetAnalizYukle() {
         <td class="sag mono" style="font-weight:600">${para(s.satis_usd)}</td>
         <td class="sag mono" style="color:var(--soluk)">${para(s.maliyet_usd)}</td>
         <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(s.kar_usd)}</td>
-        <td class="sag mono" style="font-weight:600">%${m.toFixed(1)}</td>
+        <td class="sag mono" style="font-weight:600">%${m.toFixed(1).replace('.', ',')}</td>
       </tr>`;
     }).join('') : '<tr><td colspan="7" class="bos">Maliyetlendirilmiş sipariş yok.</td></tr>';
   } catch (e) { /* */ }

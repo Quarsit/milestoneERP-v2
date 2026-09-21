@@ -101,7 +101,7 @@ function kpiCiz() {
   document.getElementById('kCiroEk').textContent = TUM.length + ' satış';
   document.getElementById('kKar').innerHTML = para(kar).replace(' $', '<small>$</small>');
   document.getElementById('kKarEk').textContent = 'maliyet ' + para(ciro - kar);
-  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1);
+  document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1).replace('.', ',');
   document.getElementById('kFatursuz').textContent = fatursuz.length;
   const ek = document.getElementById('kFatursuzEk');
   ek.textContent = fatursuz.length
@@ -140,7 +140,7 @@ function ciz() {
       <td class="sag mono" style="color:var(--soluk)">${para(x.maliyet_usd)}</td>
       <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(x.kar_usd)}</td>
       <td class="sag">
-        <div class="mono" style="font-weight:600">%${m.toFixed(1)}</div>
+        <div class="mono" style="font-weight:600">%${m.toFixed(1).replace('.', ',')}</div>
         <div class="marj-cubuk"><i style="width:${Math.max(0, Math.min(100, m))}%;background:var(${renk})"></i></div>
       </td>
     </tr>`;
@@ -159,7 +159,7 @@ function detayAc(id) {
       ${alan('Tutar', para2(x.tutar_usd), true)}
       ${alan('Maliyet', para2(x.maliyet_usd), true)}
       ${alan('Kâr', `<span style="color:var(--verde);font-weight:700">${para2(x.kar_usd)}</span>`)}
-      ${alan('Marj', `<span style="font-weight:700;color:var(${m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi'})">%${m.toFixed(1)}</span>`)}
+      ${alan('Marj', `<span style="font-weight:700;color:var(${m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi'})">%${m.toFixed(1).replace('.', ',')}</span>`)}
       ${alan('Ürün', kacar(x.cins || '—') + (x.ozellik ? ' · ' + kacar(x.ozellik) : ''))}
       ${alan('Miktar', (x.miktar || 0).toLocaleString('tr-TR') + ' ' + kacar(x.birim || ''), true)}
       ${olcu ? alan('Ölçü', kacar(olcu), true) : ''}

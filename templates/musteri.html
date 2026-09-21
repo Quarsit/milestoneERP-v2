@@ -20,6 +20,7 @@
   .ms-kart{background:var(--yuzey);border:1px solid var(--cizgi);
     border-radius:var(--r);padding:14px 16px;cursor:pointer}
   .ms-kart:hover{border-color:var(--verde)}
+  .ms-kart .ek{font-size:.76rem;color:var(--soluk);margin-top:3px}
   .ms-kart label{display:block;font-size:.7rem;font-weight:700;letter-spacing:.05em;
     text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
   .ms-kart .deger{font-family:var(--baslik);font-size:1.5rem;font-weight:700}
@@ -222,11 +223,11 @@ function msCiz() {
   const ses = hepsi.filter(x => x.sessiz).length;
   document.getElementById('msKartlar').innerHTML =
       '<div class="ms-kart" onclick="msFiltre(\'\')"><label>Müşteri</label>'
-    + '<div class="deger">' + hepsi.length + '</div></div>'
+    + '<div class="deger">' + hepsi.length + '</div><div class="ek">listelenen</div></div>'
     + '<div class="ms-kart' + (gec ? ' acil' : '') + '" onclick="msFiltre(\'geciken\')">'
-    + '<label>Takibi geciken</label><div class="deger">' + gec + '</div></div>'
+    + '<label>Takibi geciken</label><div class="deger">' + gec + '</div><div class="ek">sonraki adımı geçmiş</div></div>'
     + '<div class="ms-kart" onclick="msFiltre(\'sessiz\')"><label>'
-    + MS_VERI.sessiz_gun + '+ gün temassız</label><div class="deger">' + ses + '</div></div>';
+    + MS_VERI.sessiz_gun + '+ gün temassız</label><div class="deger">' + ses + '</div><div class="ek">son temas ' + MS_VERI.sessiz_gun + ' günden eski</div></div>';
 
   if (!d.length) {
     document.getElementById('msTablo').innerHTML =

@@ -407,10 +407,13 @@
         </div>
       </div>
 
-      <div class="form-satir f3">
+      <div class="form-satir f2">
         <div class="form-alan"><label>Döviz</label>
           <select id="hDoviz" onchange="kurAlaniGoster()"><option>USD</option><option>EUR</option><option>TRY</option></select>
         </div>
+        <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
+      </div>
+      <div class="form-satir f2">
         <!-- BT1 — BELGE TARİHİ
              Faturanın KESİLDİĞİ gün. Kur bu tarihten alınır (VUK/GİB:
              dövizli işlemin TL karşılığı fatura tarihindeki TCMB döviz
@@ -421,7 +424,6 @@
         <div class="form-alan"><label>Vade Tarihi
           <span style="font-weight:400;color:var(--soluk)">· ödeme/tahsilat</span></label>
           <input id="hVade" type="date"></div>
-        <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
       </div>
       <div class="form-alan" id="hKasaAlan" style="margin-bottom:12px"><label>Kasa / Banka Hesabı</label>
         <select id="hKasa"><option value="">— kasa seçin (zorunlu) —</option></select>
@@ -1275,22 +1277,24 @@ function bakiyeKutulari(bakiye, c) {
     return `<div class="alan"><label>Bakiye</label>
       <div class="mono" style="color:var(--soluk)">hareket yok</div></div>`;
   }
+  /* GR4: döviz başına HİZALI bakiye tablosu. Eskiden borç ve alacak
+     aynı satırda "/" ile, net altında, açıklaması onun da altında
+     taşıyordu; dar sütunda satırlar birbirine giriyordu. Artık
+     etiket solda, tutar sağda; net ayrı bir çizginin altında. */
   let h = kodlar.map(dv => {
     const k = dovizler[dv];
     const net = Number(k.net) || 0;
+    const yorum = net > 0.005 ? 'müşteri borçlu' : net < -0.005 ? 'biz borçluyuz' : 'kapalı';
+    const renk = net > 0.005 ? 'var(--verde-koyu)' : net < -0.005 ? 'var(--kirmizi)' : 'var(--soluk)';
     return `
-    <div class="alan"><label>${dv} — Borç / Alacak</label>
-      <div class="mono" style="font-size:.86rem">
-        <span style="color:var(--kirmizi)">${bakiyeParaBirim(k.borc, dv)}</span>
-        &nbsp;/&nbsp;
-        <span style="color:var(--verde)">${bakiyeParaBirim(k.alacak, dv)}</span>
+    <div class="alan bakiye-alan">
+      <label>${dv} bakiye</label>
+      <div class="bk-tablo">
+        <span>Borç</span><span class="mono bk-borc">${bakiyeParaBirim(k.borc, dv)}</span>
+        <span>Alacak</span><span class="mono bk-alacak">${bakiyeParaBirim(k.alacak, dv)}</span>
+        <i class="bk-cizgi"></i><span class="bk-net-e">Net</span><span class="mono bk-net" style="color:${renk}">${bakiyeParaBirim(net, dv)}</span>
       </div>
-      <div class="mono" style="font-weight:700;margin-top:3px;
-           color:${net < 0 ? 'var(--kirmizi)' : 'var(--murekkep)'}">
-        net ${bakiyeParaBirim(net, dv)}
-        <span style="font-weight:400;color:var(--soluk);font-size:.76rem">
-          ${net > 0 ? '(bizden alacaklı değil — o borçlu)' : net < 0 ? '(biz borçluyuz)' : ''}</span>
-      </div>
+      <span class="bk-yorum" style="color:${renk}">${yorum}</span>
     </div>`;
   }).join('');
   /* TRY karşılığı yalnızca BİRDEN FAZLA döviz varsa anlamlı;

@@ -2,7 +2,6 @@
 {% block title %}Faturalar{% endblock %}
 
 {% block header_right %}
-<button class="btn-yeni" onclick="yeniFaturaAc()" style="margin-right:10px">+ Yeni Fatura</button>
 <div class="disa">
   <button class="disa-btn" onclick="disaAc(event, 'fatura')" title="Dışa aktar">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -14,6 +13,10 @@
     <button onclick="disaAktar('fatura','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
   </div>
 </div>
+<button class="btn-yeni" onclick="yeniFaturaAc()">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+  Yeni Fatura
+</button>
 {% endblock %}
 
 {% block head %}
@@ -39,6 +42,9 @@
   .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
   .modal-gov{padding:18px 22px}
   .form-satir{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+  .form-satir.f3{grid-template-columns:repeat(3,1fr)} .form-satir.f4{grid-template-columns:repeat(4,1fr)}
+  @media (max-width:760px){.form-satir.f3,.form-satir.f4{grid-template-columns:1fr 1fr}}
+  .bolum-baslik{font-size:.75rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--soluk);margin:16px 0 10px;padding-top:14px;border-top:1px solid var(--cizgi)}
   .form-alan label{display:block;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
   .form-alan input,.form-alan select,.form-alan textarea{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
   .form-alan textarea{resize:vertical;min-height:52px}

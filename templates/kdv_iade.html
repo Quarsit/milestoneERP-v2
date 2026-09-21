@@ -26,7 +26,7 @@
   .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk);cursor:pointer}
   .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
   .suz{margin-left:auto}
-  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:210px}
+  .suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:280px}
   .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
   tbody tr{cursor:pointer}
   .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:45;place-items:center;padding:20px}
@@ -54,11 +54,18 @@
 {% endblock %}
 
 {% block content %}
-<div class="kpiler" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
-  <div class="kpi"><div class="g-baslik">Açık Dosya</div><div class="deger" id="kAcik">—</div><div class="g-alt" id="kAcikEk">—</div></div>
-  <div class="kpi"><div class="g-baslik">Talep Edilen</div><div class="deger" id="kTalep">—</div><div class="g-alt">toplam · TL</div></div>
-  <div class="kpi"><div class="g-baslik">Tahsil Edilen</div><div class="deger" id="kAlinan">—</div><div class="g-alt" id="kAlinanEk">—</div></div>
-  <div class="kpi"><div class="g-baslik">Devlette Bekleyen</div><div class="deger" id="kBekleyen">—</div><div class="g-alt">talep − tahsil</div></div>
+<h1 class="g-baslik">KDV İade</h1>
+<p class="g-alt">İhracat KDV iade dosyaları — dönem bazında talep, beyan ve tahsilat takibi.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler">
+  <div class="kpi"><label>Açık Dosya</label><div class="deger" id="kAcik">—</div><div class="ek" id="kAcikEk">—</div></div>
+  <div class="kpi"><label>Talep Edilen</label><div class="deger" id="kTalep">—</div><div class="ek">toplam · TL</div></div>
+  <div class="kpi"><label>Tahsil Edilen</label><div class="deger" id="kAlinan">—</div><div class="ek" id="kAlinanEk">—</div></div>
+  <div class="kpi"><label>Devlette Bekleyen</label><div class="deger" id="kBekleyen">—</div><div class="ek">talep − tahsil</div></div>
 </div>
 
 <div class="arac-cubugu">
@@ -204,7 +211,7 @@ function ozet() {
   document.getElementById('kAcikEk').textContent = TUM.length + ' dosyanın ' + acik.length + '\u2019i sürüyor';
   document.getElementById('kTalep').textContent = tl(talep);
   document.getElementById('kAlinan').textContent = tl(alinan);
-  document.getElementById('kAlinanEk').textContent = talep > 0 ? '%' + (alinan / talep * 100).toFixed(1) : '—';
+  document.getElementById('kAlinanEk').textContent = talep > 0 ? '%' + (alinan / talep * 100).toFixed(1).replace('.', ',') : '—';
   document.getElementById('kBekleyen').textContent = tl(Math.max(0, talep - alinan));
 }
 

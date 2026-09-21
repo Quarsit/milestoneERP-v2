@@ -170,7 +170,7 @@ async function cekYukle() {
       return `
       <div class="d-satir ${gecmis ? 'ray-kirmizi' : 'ray-kehribar'}">
         <div>
-          <div class="kim">${kacar(c.cek_no || '—')} · ${kacar(c.banka_adi || '')}</div>
+          <div class="kim">${kacar(c.cek_no || '—')}${c.banka_adi ? ' · ' + kacar(c.banka_adi) : ''}</div>
           <div class="detay">${gecmis ? Math.abs(c.kalan_gun) + ' gün geçti' : c.kalan_gun + ' gün kaldı'} · ${kacar(c.cari_unvan || '')}</div>
         </div>
         <span class="tutar">${para(c.tutar, c.doviz)}</span>

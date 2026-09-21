@@ -128,9 +128,6 @@
   <span style="width:1px;height:20px;background:var(--cizgi-koyu);margin:0 4px;align-self:center"></span>
   <button class="cip cip-fatura" data-fatura="faturasiz" title="Mal geldi, tedarikçi faturası bekleniyor">⏳ Faturasız</button>
   <button class="cip cip-fatura" data-fatura="mal_bekliyor" title="Fatura kesildi, mal henüz gelmedi">📦 Mal bekleniyor</button>
-  <div class="suz">
-    <input id="ara" placeholder="Cins, blok no, üretici ara…" autocomplete="off">
-  </div>
 </div>
 
 <div id="secCubuk" style="display:none;align-items:center;gap:10px;margin-bottom:10px;
@@ -139,7 +136,7 @@
   <button class="blok-btn" id="secSilBtn" onclick="secilenleriSil()"
           style="color:var(--kirmizi)">Seçilenleri Sil</button>
 </div>
-<div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+<div class="suzgec-satir">
   <button class="disa-btn" id="secKipBtn" onclick="secKipiDegistir()"
           title="Toplu işlem için satır seçimini aç">Seç</button>
   <!-- F1: Seçenekler SABİT DEĞİL — o anda listelenen stoklardan
@@ -154,11 +151,18 @@
   <button class="blok-btn" id="suzgecSifirla" onclick="suzgecleriSifirla()"
           style="display:none;padding:4px 10px;font-size:.78rem">Süzgeçleri temizle</button>
   <span id="suzgecBilgi" style="font-size:.78rem;color:var(--soluk)"></span>
+  <div class="suz">
+    <input id="ara" placeholder="Cins, blok no, üretici ara…" autocomplete="off">
+  </div>
 </div>
 <style>
 /* F1 — süzgeç açılır kutuları */
-.suzgec-sec{border:1px solid var(--cizgi-koyu);border-radius:7px;padding:5px 9px;
-  font-size:.82rem;background:var(--kagit);color:var(--murekkep);cursor:pointer;
+.suzgec-satir{margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.suzgec-satir > *{height:36px}
+.suzgec-satir #suzgecBilgi{height:auto}
+.suzgec-satir .suz input{height:36px}
+.suzgec-sec{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:0 9px;
+  font-size:.84rem;background:var(--kagit);color:var(--murekkep);cursor:pointer;
   max-width:190px}
 .suzgec-sec:focus{outline:2px solid var(--verde);outline-offset:1px}
 .suzgec-sec.dolu{border-color:var(--verde);background:var(--verde-acik);font-weight:600}

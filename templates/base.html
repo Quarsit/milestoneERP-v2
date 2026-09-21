@@ -46,7 +46,7 @@ button{font-family:inherit;font-size:inherit;cursor:pointer}
 a{color:inherit;text-decoration:none}
 :focus-visible{outline:2px solid var(--verde);outline-offset:2px}
 
-.kabuk{display:grid;grid-template-columns:76px 1fr;min-height:100vh}
+.kabuk{display:grid;grid-template-columns:76px minmax(0,1fr);min-height:100vh}
 
 /* ─── Sol ray: 5 çalışma alanı ─── */
 /* z-index:39 ZORUNLU — kaldırmayın.
@@ -105,6 +105,15 @@ a{color:inherit;text-decoration:none}
 .arama:hover{border-color:var(--verde)}
 .arama kbd{margin-left:auto;font-family:var(--mono);font-size:.7rem;background:var(--notr-bg);border:1px solid var(--cizgi-koyu);border-radius:5px;padding:2px 7px;color:var(--soluk)}
 .ust-sag{margin-left:auto;display:flex;align-items:center;gap:12px}
+/* GR1: üst şerit her sayfada AYNI yükseklikte. Sağda düğme sayısı
+   artınca arama kutusunun metni iki satıra kırılıyor, "Ctrl K" alt
+   alta düşüyor ve şerit 64'ten 78 piksele çıkıyordu — sekme çubuğu
+   sayfadan sayfaya zıplıyordu. Metin tek satır, taşarsa "…". */
+.ust{min-height:65px}
+.arama{min-width:0}
+.arama-metin{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arama kbd,.ust-sag > *{white-space:nowrap;flex:none}
+@media (max-width:1320px){.ust .tarih-cip{display:none}}
 .btn-yeni{display:flex;align-items:center;gap:7px;background:var(--verde);color:#fff;border:0;border-radius:var(--r-kucuk);padding:9px 16px;font-weight:600;font-size:.9rem;transition:background .15s}
 .btn-yeni:hover{background:var(--verde-koyu)}
 .tarih-cip{font-size:.82rem;color:var(--soluk)}
@@ -192,7 +201,7 @@ a{color:inherit;text-decoration:none}
 
 /* ─── Çalışma alanı alt sekmeleri ─── */
 .alt-sekmeler{display:flex;gap:2px;padding:0 30px;background:var(--taban);border-bottom:1px solid var(--cizgi);
-  position:sticky;top:63px;z-index:29;overflow-x:auto}
+  position:sticky;top:65px;z-index:29;overflow-x:auto}
 .alt-sekme{padding:11px 16px;font-size:.87rem;font-weight:500;color:var(--soluk);white-space:nowrap;
   border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s}
 .alt-sekme:hover{color:var(--murekkep)}
@@ -324,11 +333,67 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   .cek-sutun{column-count:2;column-gap:32px;column-fill:balance}
   .cek-bolum{break-inside:avoid;display:block;margin-bottom:20px}
   .cek-bolum.cek-tam{column-span:all}
-  .cek-bolum.cek-ozet .alan-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+  /* GR5: özet sütun sayısı alan sayısına göre (_ozetSutun). Sabit
+     "sığdığı kadar" dizilimde 6 alanın 5'i üstte, "Teslim" tek başına
+     altta kalıyordu. */
+  .cek-bolum.cek-ozet .alan-grid{grid-template-columns:repeat(var(--ozet-sutun, 4), minmax(0, 1fr))}
+  .cek-ozet .alan.bakiye-alan{grid-column:span 2}
 }
 /* Tablet: tek sütun ama dar çekmeceden geniş */
 @media (min-width:761px) and (max-width:1100px){ .cekmece{width:min(720px, 92vw)} }
+
+/* ── PANEL GÖRÜNÜMÜ (GP2, 21.09) ──
+   Geniş panel ilk hâlinde düz beyaz bir sayfaydı: bölümler başlık
+   ve içerikten ibaretti, gri küçük başlıklar zemine karışıyordu.
+   Artık her bölüm ZEMİN üzerinde beyaz bir KART; başlıklar yeşil,
+   özet kartının ilk değeri (tutar, bakiye…) büyük. Sayfalardaki
+   başlıkların bir kısmı satır içi stil taşıdığı için !important. */
+@media (min-width:761px){
+  .cekmece{background:var(--taban)}
+  .cek-bas,.cek-eylemler{background:var(--yuzey)}
+  .cek-bas h3{font-size:1.4rem;letter-spacing:-.01em}
+  .cek-bas .alt-bilgi{font-size:.82rem;margin-top:4px}
+  .cek-gov{background:var(--taban)}
+  .cek-sutun{column-gap:20px}
+  .cek-bolum{background:var(--yuzey);border:1px solid var(--cizgi);border-radius:12px;
+    padding:18px 20px;box-shadow:var(--golge);margin-bottom:20px}
+  .cek-bolum h4,.cek-bolum .crm-bas{font-family:var(--baslik)!important;font-size:1rem!important;
+    font-weight:700!important;letter-spacing:0!important;text-transform:none!important;
+    color:var(--verde)!important;margin:22px 0 12px!important;padding-top:18px;border-top:1px solid var(--cizgi)}
+  .cek-bolum > h4:first-child,.cek-bolum > div:first-child > h4:first-child,
+  .cek-bolum > div:first-child > .crm-bas:first-child{margin-top:0!important;padding-top:0;border-top:0}
+  .cek-bolum .bos{background:var(--taban);border-color:transparent!important;border-radius:8px}
+  .cek-ozet .alan-grid{gap:18px 24px;margin-bottom:0}
+  .cek-ozet .alan label{font-size:.68rem}
+  .cek-ozet .alan > div{font-size:1rem}
+  .cek-ozet .alan:first-child:not(.bakiye-alan) > div{font-family:var(--baslik);font-size:1.45rem;font-weight:700;color:var(--verde-koyu)}
+  /* Eylem düğmeleri: yeşil çerçeve, birincil dolu, silme/iptal kırmızı */
+  .cek-eylemler .blok-btn{border-color:var(--verde);color:var(--verde);border-radius:9px;background:var(--yuzey)}
+  .cek-eylemler .blok-btn:hover{background:var(--verde-acik)}
+  .cek-eylemler .blok-btn.birincil{color:#fff;background:var(--verde)}
+  .cek-eylemler .blok-btn.birincil:hover{background:var(--verde-koyu)}
+  .cek-eylemler .blok-btn[style*="kirmizi"]{border-color:var(--kirmizi)}
+  .cek-eylemler .blok-btn[style*="kirmizi"]:hover{background:var(--kirmizi-bg)}
+  .cek-eylemler .blok-btn:disabled{border-color:var(--cizgi);color:var(--cizgi-koyu);background:var(--yuzey)}
+}
 .cek-bolum > h4:first-child{margin-top:0}
+/* GR4: cari bakiye tablosu */
+.bakiye-alan .bk-tablo{display:grid;grid-template-columns:auto 1fr;gap:4px 0;align-items:baseline;
+  margin-top:6px;max-width:340px;font-size:.88rem;font-weight:500}
+.bakiye-alan .bk-tablo > span:not(.mono){color:var(--soluk);padding-right:18px}
+.bakiye-alan .bk-tablo .mono{text-align:right}
+.bakiye-alan .bk-borc{color:var(--kirmizi)}
+.bakiye-alan .bk-alacak{color:var(--verde)}
+.bakiye-alan .bk-cizgi{grid-column:1 / -1;border-top:1px solid var(--cizgi);margin:3px 0 1px}
+.bakiye-alan .bk-net-e{color:var(--murekkep)!important;font-weight:700}
+.bakiye-alan .bk-net{font-family:var(--baslik);font-size:1.25rem;font-weight:700;white-space:nowrap}
+.bakiye-alan .bk-tablo .mono{white-space:nowrap}
+@media (max-width:760px){.alan-grid > .bakiye-alan{grid-column:1 / -1}}
+.bakiye-alan .bk-yorum{display:inline-block;margin-top:6px;font-size:.72rem;font-weight:600;letter-spacing:.02em}
+/* Form denetimi: aynı satırdaki select (38px) ve input (36px) iki piksel
+   kayıyordu — tüm modallarda tek yükseklik. */
+.modal .form-alan input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]),
+.modal .form-alan select:not([multiple]):not([size]){height:38px;box-sizing:border-box;padding-top:0;padding-bottom:0}
 .cek-bolum:has(> div:empty:only-child){display:none}
 .alan-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;margin-bottom:18px}
 .alan label{font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)}
@@ -337,6 +402,11 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 .blok-btn:hover{border-color:var(--verde);color:var(--verde)}
 .blok-btn.birincil{background:var(--verde);border-color:var(--verde);color:#fff}
 .blok-btn.birincil:hover{background:var(--verde-koyu)}
+/* GR3: sayfa içi araç çubuklarında düğme İÇERİĞİ kadar. flex:1
+   çekmece için yazılmıştı; sayfada tek düğme ("Takipler →",
+   "Nakit akışına dön") bütün satırı kaplıyor, uzun olanın oku
+   ikinci satıra düşüyordu. */
+.icerik .blok-btn{flex:0 0 auto;min-width:0;white-space:nowrap;padding:8px 14px}
 
 /* ─── Komut paleti ─── */
 .palet-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;z-index:50;padding:12vh 20px 0;justify-content:center;align-items:flex-start}
@@ -364,11 +434,14 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 @keyframes kayma{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
 @media (max-width:960px){
-  .kabuk{grid-template-columns:1fr}
+  .kabuk{grid-template-columns:minmax(0,1fr)}
+  .alt-sekmeler{overflow-x:auto;scrollbar-width:none}
+  .alt-sekme{flex:none;white-space:nowrap}
   .ray{flex-direction:row;height:auto;position:fixed;bottom:0;top:auto;left:0;right:0;z-index:35;padding:6px 8px;justify-content:space-around}
   .marka,.ray-bosluk{display:none}
   .icerik{padding:18px 16px 90px}
-  .kpiler{grid-template-columns:1fr 1fr}
+  .kpiler{grid-template-columns:1fr 1fr!important}
+  .kpiler > .kpi:last-child:nth-child(odd){grid-column:1 / -1}
   .kpi-bes{grid-template-columns:1fr 1fr}
   .dikkat-izgara{grid-template-columns:1fr}
   .cekmece{width:100%;max-width:100%}
@@ -434,7 +507,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <div class="ray-ucan-bas">Satış</div>
         {% for hedef, ad, modul in [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'), ('/sevkiyat','Sevkiyat','sevkiyat'), ('/satislar','Satışlar','satislar'), ('/musteri','Müşteriler','crm'), ('/takipler','Takipler','crm')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
-          <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
+          <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
         {% endfor %}
       </div></div>
@@ -450,7 +523,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <div class="ray-ucan-bas">Depo</div>
         {% for hedef, ad, modul in [('/stok','Stok','stok'), ('/rezervasyon','Rezervasyonlar','rezervasyon'), ('/kesim','Kesim','kesim'), ('/maliyet','Maliyetler','maliyet')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
-          <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
+          <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
         {% endfor %}
       </div></div>
@@ -458,7 +531,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       {% endif %}
       {% if alan_var(a_kasa)|trim %}
       <div class="ray-oge">
-      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') or yol.startswith('/takipler') %}aktif{% endif %}">
+      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') or yol.startswith('/fatura') or yol.startswith('/kdv-iade') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 11h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/></svg>
         <span>Finans</span>
       </a>
@@ -466,7 +539,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <div class="ray-ucan-bas">Finans</div>
         {% for hedef, ad, modul in [('/kasa','Banka ve Kasa','kasa'), ('/cari','Cari Hesaplar','cari'), ('/fatura','Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/cek','Çek / Senet','kasa'), ('/kasa-defteri','Kasa Defteri','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
-          <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
+          <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
         {% endfor %}
       </div></div>
@@ -482,7 +555,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <div class="ray-ucan-bas">Analiz</div>
         {% for hedef, ad, modul in [('/raporlar','Raporlar','raporlar'), ('/karlilik','Karlılık','karlilik')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
-          <a href="{{ hedef }}" class="{% if yol.startswith(hedef) %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
+          <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
         {% endfor %}
       </div></div>
@@ -517,7 +590,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
     <header class="ust">
       <button class="arama" onclick="paletAc()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        Ara — blok no, kasa no, müşteri, fatura no, sipariş…
+        <span class="arama-metin">Ara — blok no, kasa no, müşteri, fatura no, sipariş…</span>
         <kbd>Ctrl K</kbd>
       </button>
       <div class="ust-sag">
@@ -566,9 +639,12 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
        çıkarıldı, aşağıdaki finans dalına düşüyorlar. #}
     {% if yol.startswith('/musteri') or yol.startswith('/takipler') or yol.startswith('/siparis') or yol.startswith('/proforma')
           or yol.startswith('/satislar') or yol.startswith('/sevkiyat') %}
+      {# GR2: Müşteriler ve Takipler de Satış alanında (uçan menüdeki
+         gibi); eksikken o sayfalarda hiçbir sekme seçili görünmüyordu. #}
       {% set alan_sekmeleri = [('/siparis','Satış Hattı','siparis'), ('/proforma','Proforma','proforma'),
                                ('/sevkiyat','Sevkiyat','sevkiyat'),
-                               ('/satislar','Satışlar','satislar')] %}
+                               ('/satislar','Satışlar','satislar'),
+                               ('/musteri','Müşteriler','crm'), ('/takipler','Takipler','crm')] %}
     {% elif yol.startswith('/stok') or yol.startswith('/rezervasyon') or yol.startswith('/kesim')
             or yol.startswith('/maliyet') %}
       {% set alan_sekmeleri = [('/stok','Stok','stok'), ('/rezervasyon','Rezervasyonlar','rezervasyon'),
@@ -595,7 +671,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
     <nav class="alt-sekmeler" aria-label="Modüller">
       {% for hedef, ad, modul in alan_sekmeleri %}
         {% if admin or y.get(modul, 'gizli') != 'gizli' %}
-        <a href="{{ hedef }}" class="alt-sekme {% if yol.startswith(hedef) %}aktif{% endif %}">{{ ad }}</a>
+        <a href="{{ hedef }}" class="alt-sekme {% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}">{{ ad }}</a>
         {% endif %}
       {% endfor %}
     </nav>
@@ -1043,7 +1119,12 @@ function _cekBolumle(gov) {
     if (n.nodeType === 1 && n.classList.contains('cek-bolum')) { mevcut = null; ilk = false; return; }
     const baslikMi = n.nodeType === 1 && n.tagName === 'H4';
     const kutuMu = n.nodeType === 1 && n.tagName === 'DIV' && n.id && !n.classList.contains('alan-grid');
-    if (baslikMi || kutuMu || !mevcut) {
+    /* Başlık + hemen ardındaki kimlikli kutu (ör. stok "Geçmiş" +
+       zaman çizelgesi) AYNI bölümdür — ayrılırsa başlık bir sütunda,
+       içerik öteki sütunda kalıyordu. */
+    const basligaBagli = kutuMu && mevcut && mevcut.childElementCount === 1 &&
+                         mevcut.firstElementChild.tagName === 'H4';
+    if (!basligaBagli && (baslikMi || kutuMu || !mevcut)) {
       mevcut = yeni(ilk && !baslikMi && !kutuMu ? 'cek-ozet cek-tam' : '');
       ilk = false;
       gov.insertBefore(mevcut, n);
@@ -1053,6 +1134,26 @@ function _cekBolumle(gov) {
   });
   gov.querySelectorAll(':scope > .cek-bolum:not(.cek-tam)').forEach(b => {
     if (b.querySelector('table, .tablo-kutu')) b.classList.add('cek-tam');
+  });
+  _ozetSutun(gov);
+  /* Özetten sonra TEK bölüm varsa (stok "Geçmiş" gibi) yarım sütunda
+     kalıp sağı boş bırakmasın — tam genişlik. */
+  const _digerleri = gov.querySelectorAll(':scope > .cek-bolum:not(.cek-ozet)');
+  if (_digerleri.length === 1) _digerleri[0].classList.add('cek-tam');
+}
+/* GR5: özetteki alan sayısına göre SİMETRİK sütun sayısı: son satırda
+   en az boşluk kalan seçenek (eşitlikte daha çok sütun). "Geniş"
+   (bakiye) alanı iki hücre sayılır. */
+function _ozetSutun(kap) {
+  kap.querySelectorAll(':scope > .cek-ozet .alan-grid').forEach(g => {
+    const n = [...g.children].reduce((t, c) => t + (c.classList.contains('bakiye-alan') ? 2 : 1), 0);
+    let en = 4, enBos = 99;
+    if (n <= 5) en = Math.max(n, 2);
+    else [6, 5, 4, 3].forEach(c => {
+      const bos = Math.ceil(n / c) * c - n;
+      if (bos < enBos) { enBos = bos; en = c; }
+    });
+    g.style.setProperty('--ozet-sutun', en);
   });
 }
 let _cekGozlem = null;
