@@ -209,3 +209,21 @@ def test_tt1_gizli_cariye_toplu_tahsilat_yok():
     r = istemci('satis').post('/api/cari/C2/toplu_tahsilat', json={
         'fatura_idler': ['X'], 'tutar': 1, 'doviz': 'USD', 'kasa_id': 1}, headers=H)
     assert r.status_code in (403, 404)
+
+
+# ── FK1: fatura kesiminde FATURA TARİHİNİN kuru ──
+def test_fk1_kesim_fatura_tarihi_kuru():
+    with fa.app.app_context():
+        db.session.add(DovizKur(doviz='USD', tarih=date(2026, 2, 2), alis=36.5, satis=36.7, efektif=36.5))
+        db.session.add(Fatura(id='FK', fatura_no='FK-1', musteri='ACIK CARI', cari_id='C1',
+                              toplam=1000, doviz='USD', durum='Taslak', yon='satis',
+                              fatura_tipi='teklif', fatura_tarihi=date(2026, 2, 3)))  # 03.02: kur yok → 02.02
+        db.session.commit()
+    r = istemci('admin', 'ADMIN').post('/api/fatura/FK/durum', json={'durum': 'Kesildi'}, headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(baglanti_tip='fatura', baglanti_id='FK', kaynak='fatura').first()
+        assert h is not None
+        assert h.hareket_tarihi == date(2026, 2, 3)
+        assert abs(float(h.kur_uygulanan) - 36.5) < 1e-6
+        assert abs(float(h.borc_try) - 36500) < 0.01

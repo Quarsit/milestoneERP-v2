@@ -2746,12 +2746,13 @@ def create_app():
     def _cari_hareket_ekle(cari_unvan, islem_tip, borc=0, alacak=0, doviz='USD',
                             aciklama=None, kaynak='manuel', baglanti_tip=None,
                             baglanti_id=None, vade_tarihi=None, evrak_no=None,
-                            kur=None):
+                            kur=None, hareket_tarihi=None):
         """
         Cari hareket kaydı oluşturur (commit ETMEZ - çağıran commit eder).
         Müşteri unvanından cari_id bulur. Otomatik borç/alacak için kullanılır.
         Cari bulunamazsa ValueError firlatir (sessizce kaybetmemek icin).
         kur: verilirse (manuel/çapraz döviz senaryosu) TCMB yerine bu kur kullanılır.
+        hareket_tarihi: verilmezse bugün (FK1: fatura kesiminde fatura tarihi).
         """
         cari = _cari_bul(cari_unvan)
         if not cari:
@@ -2765,7 +2766,7 @@ def create_app():
 
         hareket = CariHareket(
             id=_yeni_id('HR'),
-            hareket_tarihi=date.today(),
+            hareket_tarihi=hareket_tarihi or date.today(),
             cari_id=cari.id,
             cari_unvan=cari.unvan,
             islem_tip=islem_tip,
@@ -19328,6 +19329,24 @@ def create_app():
                 baglanti_tip='fatura', baglanti_id=fatura_id).filter(
                 CariHareket.borc > 0).first()
             if not mevcut_borc:
+                # ── FK1: FATURA TARİHİ KURU (kullanıcı kararı, 21.09) ──
+                # Eskiden kesim GÜNÜNÜN kuru kullanılıyor ve hareket
+                # bugüne yazılıyordu. Dövizli belgenin TL karşılığı
+                # BELGE TARİHİNDEKİ TCMB döviz alış kuruyla bulunur
+                # (VUK) — çek girişinde (CK1) zaten böyleydi. Geçmiş
+                # tarihli taslak sonradan kesilince iki kur farklı
+                # TL tutarı veriyordu.
+                # O tarihte kur yoksa (hafta sonu/tatil) _kur_getir bir
+                # önceki iş gününü verir. Hiç yoksa kesim DURUR —
+                # sessizce bugünün kuruna düşmek yanlış tutar yazardı.
+                _ft = f.fatura_tarihi or date.today()
+                _fdv = (f.doviz or 'USD').upper()
+                _fkur = 1.0 if _fdv == 'TRY' else float(_kur_getir(_fdv, _ft) or 0)
+                if _fkur <= 0:
+                    db.session.rollback()
+                    return jsonify({'ok': False, 'mesaj':
+                        f'{_ft.strftime("%d.%m.%Y")} tarihli {_fdv} kuru bulunamadı. '
+                        f'Kur arşivini güncelleyin ya da fatura tarihini kontrol edin.'}), 400
                 try:
                     _cari_hareket_ekle(
                         cari_unvan=f.musteri,
@@ -19339,7 +19358,9 @@ def create_app():
                         baglanti_tip='fatura',
                         baglanti_id=fatura_id,
                         vade_tarihi=f.vade_tarihi,
-                        evrak_no=f.fatura_no
+                        evrak_no=f.fatura_no,
+                        kur=_fkur,
+                        hareket_tarihi=_ft
                     )
                     ekstra = f' Cariye {f.toplam:,.2f} {f.doviz} borc islendi.'
                 except ValueError as e:

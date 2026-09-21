@@ -643,9 +643,9 @@ function kesAc(id) {
   kesTlGoster(SECILI);
 }
 
-/* Sunucu fatura kesilirken GÜNCEL TCMB döviz alış kurunu kullanır
-   (_cari_hareket_ekle → _kur_getir). Burada AYNI kur gösterilir;
-   fatura tarihi bugünden farklıysa o günün kuru da yazılır. */
+/* FK1: sunucu fatura kesilirken FATURA TARİHİNİN TCMB döviz alış
+   kurunu kullanır (o gün kur yoksa bir önceki iş günü). Burada AYNI
+   kur gösterilir — pencere ile kayıt birbirini tutsun. */
 async function kesTlGoster(f) {
   const kutu = document.getElementById('kTl');
   if (!kutu) return;
@@ -654,30 +654,19 @@ async function kesTlGoster(f) {
   kutu.innerHTML = '<span style="color:var(--soluk)">Kur alınıyor…</span>';
   const trT = t => t ? t.split('-').reverse().join('.') : '';
   const k4 = v => Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-  const bugun = new Date().toISOString().slice(0, 10);
+  const ft = f.fatura_tarihi || new Date().toISOString().slice(0, 10);
   try {
-    const [g, ft] = await Promise.all([
-      api(`/api/doviz_kur?doviz=${dv}`),
-      f.fatura_tarihi && f.fatura_tarihi !== bugun
-        ? api(`/api/doviz_kur?doviz=${dv}&tarih=${encodeURIComponent(f.fatura_tarihi)}`) : Promise.resolve(null),
-    ]);
+    const g = await api(`/api/doviz_kur?doviz=${dv}&tarih=${encodeURIComponent(ft)}`);
     const kur = Number(g && g.alis) || 0;
     if (!kur) {
-      kutu.innerHTML = `<div class="not" style="background:var(--kirmizi-bg);color:var(--kirmizi)">${dv} kuru bulunamadı — kurları güncelleyin.</div>`;
+      kutu.innerHTML = `<div class="not" style="background:var(--kirmizi-bg);color:var(--kirmizi)">${trT(ft)} tarihli ${dv} kuru bulunamadı — fatura kesilemez. Kur arşivini güncelleyin.</div>`;
       return;
     }
     const tl = (Number(f.toplam) || 0) * kur;
-    let h = `<div style="background:var(--notr-bg);border-radius:var(--r-kucuk);padding:9px 12px">
+    kutu.innerHTML = `<div style="background:var(--notr-bg);border-radius:var(--r-kucuk);padding:9px 12px">
       Cariye işlenecek TL karşılığı: <b class="mono">${tl.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</b><br>
-      <span style="color:var(--soluk)">1 ${dv} = ${k4(kur)} ₺ · TCMB döviz alış · ${trT(g.tarih)}</span></div>`;
-    const fk = ft && Number(ft.alis);
-    if (fk && Math.abs(fk - kur) > 0.00005) {
-      h += `<div style="margin-top:6px;padding:8px 12px;border-radius:var(--r-kucuk);background:var(--kehribar-bg);color:var(--kehribar)">
-        Fatura tarihi ${trT(f.fatura_tarihi)}; o günün kuru ${k4(fk)} ₺
-        (TL karşılığı ${((Number(f.toplam) || 0) * fk).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺).
-        Sistem kesim gününün kurunu uygular.</div>`;
-    }
-    kutu.innerHTML = h;
+      <span style="color:var(--soluk)">1 ${dv} = ${k4(kur)} ₺ · TCMB döviz alış · fatura tarihi ${trT(ft)}${
+        g.tarih && g.tarih !== ft ? ` (kur ${trT(g.tarih)} tarihli — o gün yayımlanmamış)` : ''}</span></div>`;
   } catch (e) { kutu.innerHTML = ''; }
 }
 function kesKapat() { document.getElementById('kesModal').classList.remove('acik'); }

@@ -1307,6 +1307,9 @@ function bakiyeKutulari(bakiye, c) {
 async function detayAc(id) {
   const c = TUM.find(x => x.id === id);
   if (!c) return;
+  /* GP1: adres çubuğu açık cariyi göstersin — bağlantı paylaşılabilir,
+     sayfa yenilenince aynı cari açılır (cariUrlIleAc). */
+  try { history.replaceState({}, '', location.pathname + '?ac=' + encodeURIComponent(id)); } catch (e) { /* */ }
   cekmeceAc(kacar(c.unvan), kacar(String(c.cari_tip || '').split(',').map(x => x.trim()).filter(Boolean).join(', ')) + (c.ulke ? ' · ' + kacar(c.ulke) : ''), '<div class="yukleniyor">Yükleniyor…</div>', '');
 
   let hareketler = [], bakiye = {};
@@ -1433,6 +1436,11 @@ async function acikFaturaYukle(id) {
       .sort((a, b) => (a.vade_tarihi || '9999').localeCompare(b.vade_tarihi || '9999'));
   } catch (e) { kutu.innerHTML = ''; return; }
   if (!AF_LISTE.length) { kutu.innerHTML = ''; return; }
+  /* GP1: vadesi geçen fatura sayısı başlıkta — kaydırmadan görünsün. */
+  const _gec = AF_LISTE.filter(f => f.gecikme_gun > 0).length;
+  const _alt = document.getElementById('cekAlt');
+  if (_gec && _alt && AF_CARI === id && !_alt.textContent.includes('vadesi geçen'))
+    _alt.textContent += ` · ⚠ vadesi geçen ${_gec} fatura`;
   const yz = yazabilir('fatura');
   const tr = t => t ? t.split('-').reverse().join('.') : '—';
   kutu.innerHTML = `

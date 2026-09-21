@@ -303,6 +303,33 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 .cek-gov{padding:18px 22px;overflow-y:auto;flex:1}
 .cek-eylemler{padding:14px 22px 18px;border-top:1px solid var(--cizgi);display:flex;gap:9px;flex-wrap:wrap}
 .cek-eylemler:empty{display:none}
+/* ── GENİŞ PANEL (GP1, 21.09) ──
+   Sağdan açılan dar çekmece (430px) bütün sayfalarda geniş panele
+   dönüştü. Cari'de bakiye, açık faturalar, belgeler ve CRM tek
+   sütunda üst üste biniyor, aşağı kaydırmadan görünmüyordu.
+   İçerik sayfalarda DEĞİŞMEDİ; cekmeceAc() gövdeyi bölümlere ayırır
+   (_cekBolumle) ve bölümler iki sütuna yerleşir. Liste arkada
+   durur; Esc ya da boşluğa tıklama kapatır. */
+@media (min-width:1101px){
+  .cekmece{width:min(1180px, calc(100vw - 110px));max-width:none;border-radius:14px 0 0 14px}
+  .cek-bas{padding:22px 28px 14px}
+  .cek-bas h3{font-size:1.3rem}
+  /* Eylemler üstte — kaydırmadan ulaşılsın */
+  .cek-eylemler{order:1;border-top:0;border-bottom:1px solid var(--cizgi);padding:12px 28px}
+  .cek-eylemler .blok-btn{flex:0 1 auto;min-width:0;padding:8px 14px}
+  .cek-gov{order:2;padding:22px 28px}
+  /* Sütunlar İÇ sarmalayıcıda: yüksekliği sabit kaydırma kutusuna
+     sütun verilirse tarayıcı taşan içeriği YANA yeni sütun olarak
+     döker (yatay kaydırma). */
+  .cek-sutun{column-count:2;column-gap:32px;column-fill:balance}
+  .cek-bolum{break-inside:avoid;display:block;margin-bottom:20px}
+  .cek-bolum.cek-tam{column-span:all}
+  .cek-bolum.cek-ozet .alan-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+}
+/* Tablet: tek sütun ama dar çekmeceden geniş */
+@media (min-width:761px) and (max-width:1100px){ .cekmece{width:min(720px, 92vw)} }
+.cek-bolum > h4:first-child{margin-top:0}
+.cek-bolum:has(> div:empty:only-child){display:none}
 .alan-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;margin-bottom:18px}
 .alan label{font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk)}
 .alan div{font-size:.92rem;margin-top:3px;font-weight:500}
@@ -986,11 +1013,60 @@ function kasaEtiket(k) {
   return s;
 }
 
-/** Sağ çekmece */
+/** Sağ panel (GP1: geniş, iki sütunlu) */
+/* Gövdeyi bölümlere ayırır: <h4> başlığı ve ardından gelenler bir
+   bölüm; kimlikli <div> (sonradan dolan kutular: crmBolum,
+   acikFatBolum…) kendi başına bir bölüm; ilk başlıktan önceki kısım
+   "özet" ve tam genişlik. Tablo içeren bölüm de tam genişlik —
+   yarım sütunda sıkışmasın. Zaten sarılmış düğümlere dokunmaz;
+   sonradan eklenenler (maliyet.html, musteri.html) gözlemciyle
+   yakalanır. */
+function _cekBolumle(gov) {
+  /* İç sarmalayıcı: gövdeye doğrudan eklenen her şey buraya taşınır. */
+  let kap = gov.querySelector(':scope > .cek-sutun');
+  if (!kap) { kap = document.createElement('div'); kap.className = 'cek-sutun'; }
+  const disari = [...gov.childNodes].filter(n => n !== kap);
+  if (disari.length || kap.parentNode !== gov) {
+    disari.forEach(n => kap.appendChild(n));
+    if (kap.parentNode !== gov) gov.appendChild(kap);
+  }
+  gov = kap;
+  let mevcut = null, ilk = !gov.querySelector(':scope > .cek-bolum');
+  const yeni = (tur) => {
+    const d = document.createElement('div');
+    d.className = 'cek-bolum' + (tur ? ' ' + tur : '');
+    return d;
+  };
+  [...gov.childNodes].forEach(n => {
+    if (n.nodeType === 3) { if (!n.textContent.trim()) return; }
+    else if (n.nodeType !== 1) return;
+    if (n.nodeType === 1 && n.classList.contains('cek-bolum')) { mevcut = null; ilk = false; return; }
+    const baslikMi = n.nodeType === 1 && n.tagName === 'H4';
+    const kutuMu = n.nodeType === 1 && n.tagName === 'DIV' && n.id && !n.classList.contains('alan-grid');
+    if (baslikMi || kutuMu || !mevcut) {
+      mevcut = yeni(ilk && !baslikMi && !kutuMu ? 'cek-ozet cek-tam' : '');
+      ilk = false;
+      gov.insertBefore(mevcut, n);
+    }
+    mevcut.appendChild(n);
+    if (kutuMu) mevcut = null;
+  });
+  gov.querySelectorAll(':scope > .cek-bolum:not(.cek-tam)').forEach(b => {
+    if (b.querySelector('table, .tablo-kutu')) b.classList.add('cek-tam');
+  });
+}
+let _cekGozlem = null;
 function cekmeceAc(baslik, alt, govdeHTML, eylemHTML = '') {
   document.getElementById('cekBaslik').textContent = baslik;
   document.getElementById('cekAlt').textContent = alt || '';
-  document.getElementById('cekGov').innerHTML = govdeHTML;
+  const _gov = document.getElementById('cekGov');
+  _gov.innerHTML = govdeHTML;
+  _cekBolumle(_gov);
+  if (!_cekGozlem) {
+    _cekGozlem = new MutationObserver(() => _cekBolumle(_gov));
+    _cekGozlem.observe(_gov, { childList: true });
+  }
+  _gov.scrollTop = 0;
   document.getElementById('cekEylem').innerHTML = eylemHTML;
   document.getElementById('ortu').classList.add('acik');
   document.getElementById('cekmece').classList.add('acik');
@@ -998,6 +1074,12 @@ function cekmeceAc(baslik, alt, govdeHTML, eylemHTML = '') {
 function cekmeceKapat() {
   document.getElementById('ortu').classList.remove('acik');
   document.getElementById('cekmece').classList.remove('acik');
+  /* GP1: panel kapanınca adresteki ?ac= de düşsün — sayfa yenilenince
+     kapattığınız kayıt yeniden açılmasın. */
+  try {
+    const u = new URL(location.href);
+    if (u.searchParams.has('ac')) { u.searchParams.delete('ac'); history.replaceState({}, '', u.pathname + u.search); }
+  } catch (e) { /* */ }
 }
 
 /** Bildirim */
