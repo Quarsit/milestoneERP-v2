@@ -169,7 +169,7 @@ function detayAc(id) {
 }
 
 async function iptalEt(id) {
-  if (!confirm('Rezervasyon iptal edilsin mi? Bağlı stok "Serbest" durumuna döner.')) return;
+  if (!await onayla('Rezervasyon iptal edilsin mi? Bağlı stok "Serbest" durumuna döner.', { tehlike: true })) return;
   try {
     const d = await api(`/api/rezervasyon/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Rezervasyon iptal edildi');

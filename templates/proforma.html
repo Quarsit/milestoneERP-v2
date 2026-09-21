@@ -387,8 +387,8 @@
 
 
 <!-- ══ KONTEYNER PLANLAMA (KN1) ══
-     Eskiden üç ayrı prompt() ile soruluyordu: adet, tip, sonra
-     düzenlemede numara/mühür/ağırlık. prompt() PWA ve mobil
+     Eskiden üç ayrı await soruSor() ile soruluyordu: adet, tip, sonra
+     düzenlemede numara/mühür/ağırlık. await soruSor() PWA ve mobil
      kipte engellenebiliyor, tip ELLE yazıldığı için yazım hatası
      sunucudan 400 döndürüyordu. Artık tek, geniş bir pencere. -->
 <div class="modal-ortu" id="kontModal" onclick="if(event.target===this)kontKapat()">
@@ -796,7 +796,7 @@ async function kontDuzKaydet() {
 
 async function konteynerSil(kid) {
   const k = KONTEYNERLER.find(x => x.id === kid);
-  if (!confirm(`${k ? k.etiket_tr : 'Konteyner'} silinsin mi?\n\n` +
+  if (!await onayla(`${k ? k.etiket_tr : 'Konteyner'} silinsin mi?\n\n` +
     `Atanmış kalemler SİLİNMEZ, "atanmamış" durumuna döner.`)) return;
   try {
     const d = await api(`/api/konteyner/${kid}`, { method: 'DELETE' });
@@ -1083,7 +1083,7 @@ async function kayipKaydet() {
 }
 
 async function kaybiGeriAl(id) {
-  if (!confirm('Bu teklifin kayıp kaydı geri alınacak.\n\nDevam edilsin mi?')) return;
+  if (!await onayla('Bu teklifin kayıp kaydı geri alınacak.\n\nDevam edilsin mi?', { tehlike: true })) return;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(id)}/kaybi_geri_al`,
       { method: 'POST', body: JSON.stringify({}) });
@@ -1129,7 +1129,7 @@ async function proformaOnayla(id) {
     }
   } catch (e) { /* risk kontrolü başarısızsa normal onay akışı sürer */ }
 
-  if (!confirm(onayMetni)) return;
+  if (!await onayla(onayMetni)) return;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(id)}/durum`, {
       method: 'POST', body: JSON.stringify({ durum: 'Onaylandi' })
@@ -1141,7 +1141,7 @@ async function proformaOnayla(id) {
 
 /* İç onay: reddet (İç Onay → Taslak) — gerekçe zorunlu değil ama önerilir */
 async function proformaOnayReddet(id) {
-  const not = prompt('Red gerekçesi (hazırlayan görecek):');
+  const not = await soruSor('Red gerekçesi (hazırlayan görecek):');
   if (not === null) return;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(id)}/durum`, {
@@ -1161,7 +1161,7 @@ async function proformaOnayReddet(id) {
 async function siparisedonustur(id) {
   const p = TUM.find(x => x.id === id) || {};
   const ek = p.kalem_sayisi ? `\n\n${p.kalem_sayisi} kalem siparişe kopyalanacak.` : '';
-  if (!confirm(`${id} proformasından SİPARİŞ oluşturulacak.${ek}\n\n` +
+  if (!await onayla(`${id} proformasından SİPARİŞ oluşturulacak.${ek}\n\n` +
                `Rezerve edilmiş stoklar yeni siparişe taşınır (mükerrer rezervasyon oluşmaz).\n` +
                `Proforma bu siparişe bağlanır ve faturalandırılabilir hâle gelir.\n\nDevam edilsin mi?`)) return;
   try {
@@ -1169,13 +1169,13 @@ async function siparisedonustur(id) {
     bildir(d.mesaj || `Sipariş oluşturuldu: ${d.siparis_id}`);
     cekmeceKapat();
     await yukle();
-    if (d.siparis_id && confirm(`Sipariş ${d.siparis_id} oluşturuldu.\n\nSipariş sayfasına gidilsin mi?`))
+    if (d.siparis_id && await onayla(`Sipariş ${d.siparis_id} oluşturuldu.\n\nSipariş sayfasına gidilsin mi?`))
       location.href = '/siparis?ara=' + encodeURIComponent(d.siparis_id);
   } catch (e) { /* api() zaten bildiriyor */ }
 }
 
 async function revizeEt(id) {
-  const not = prompt(
+  const not = await soruSor(
     `${id} revize edilecek.\n\nBu sürüm arşivlenecek, tam kopyası yeni bir sürüm olarak açılacak `
     + `(örn. ${id}_Rev.1). Ardından yeni sürümü düzenleyebilirsiniz.\n\n`
     + `Bu revizyonda ne değişiyor? (opsiyonel not):`);
@@ -1226,7 +1226,7 @@ async function surumleriGoster(id) {
 
 /* DELETE /api/proforma/<id> */
 async function proformaSil(id) {
-  if (!confirm(`${id} silinsin mi? Bağlı rezervasyonlar serbest bırakılır.`)) return;
+  if (!await onayla(`${id} silinsin mi? Bağlı rezervasyonlar serbest bırakılır.`, { tehlike: true })) return;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Proforma silindi');
@@ -1303,14 +1303,14 @@ async function epostaGonder() {
 
 
 async function faturayaDonustur(id) {
-  if (!confirm('Proforma faturaya dönüştürülsün mü? Fatura taslak olarak oluşur, fatura no girip kesmen gerekir.')) return;
+  if (!await onayla('Proforma faturaya dönüştürülsün mü? Fatura taslak olarak oluşur, fatura no girip kesmen gerekir.')) return;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(id)}/faturaya_donustur`, {
       method: 'POST', body: JSON.stringify({})
     });
     bildir('Fatura oluşturuldu · ' + (d.id || ''));
     cekmeceKapat(); await yukle();
-    setTimeout(() => { if (confirm('Fatura ekranına gidilsin mi?')) location.href = '/fatura'; }, 600);
+    setTimeout(async () => { if (await onayla('Fatura ekranına gidilsin mi?')) location.href = '/fatura'; }, 600);
   } catch (e) { /* */ }
 }
 
@@ -1662,7 +1662,7 @@ async function stokSecEkle() {
       bildir('Rezervasyon için önce müşteri seçmelisiniz.', true);
       return;
     }
-    if (!confirm(`${secilenler.length} stok, proforma KAYDEDİLDİĞİNDE "${musteri}" adına rezerve edilecek ve başka tekliflere kapanacak.\n\nDevam edilsin mi?`)) return;
+    if (!await onayla(`${secilenler.length} stok, proforma KAYDEDİLDİĞİNDE "${musteri}" adına rezerve edilecek ve başka tekliflere kapanacak.\n\nDevam edilsin mi?`)) return;
   }
 
   // ── Stok kayıtlarını proforma kalemine dönüştür ──
@@ -1715,7 +1715,7 @@ async function siparisKalemAktar() {
   // Onay yalnızca ELLE girilmiş kalem varsa sorulur; kalemlerin tamamı
   // siparişten otomatik geldiyse (sipariş değişikliği) sormadan yenilenir.
   const elleKalem = KALEMLER.some(k => !k._siparisten);
-  if (KALEMLER.length && elleKalem && !confirm(`Mevcut ${KALEMLER.length} kalem silinip siparişin ürünleri yazılacak. Devam?`)) return;
+  if (KALEMLER.length && elleKalem && !await onayla(`Mevcut ${KALEMLER.length} kalem silinip siparişin ürünleri yazılacak. Devam?`)) return;
 
   let res = {};
   try { res = await api(`/api/siparis/${encodeURIComponent(sid)}/kalemler`); } catch (e) { return; }
@@ -2031,13 +2031,13 @@ function kalemListeCiz() {
    Stoktan içe aktarılan kalemler fiyatsız gelir; her birini tek tek
    düzenlemek 20+ kalemde pratik değildir. Farklı fiyat gerekiyorsa
    satıra tıklayıp tek tek düzenleme yine çalışır. */
-function tumKalemlereFiyat() {
+async function tumKalemlereFiyat() {
   const f = parseFloat(document.getElementById('tfFiyat').value);
   if (!f || f <= 0) { bildir('Geçerli bir birim fiyat girin', true); return; }
   if (!KALEMLER.length) { bildir('Önce kalem ekleyin', true); return; }
   const bosOlanlar = KALEMLER.filter(k => !parseFloat(k.birim_fiyat)).length;
   const hepsi = bosOlanlar === 0
-    ? confirm(`Tüm kalemlerin fiyatı dolu.\n\n${KALEMLER.length} kalemin hepsi ` +
+    ? await onayla(`Tüm kalemlerin fiyatı dolu.\n\n${KALEMLER.length} kalemin hepsi ` +
               `${f} olarak DEĞİŞTİRİLSİN mi?`)
     : true;
   if (!hepsi) return;
@@ -2097,7 +2097,7 @@ async function proformaKaydet() {
   const tipi = tipiOku();
   const sid = document.getElementById('fSiparis').value || null;
   if (tipi === 'satis' && !sid) {
-    if (!confirm('SATIŞ proforması siparişe bağlı olmalı. Siparişsiz (teklif gibi) kaydedilsin mi?')) return;
+    if (!await onayla('SATIŞ proforması siparişe bağlı olmalı. Siparişsiz (teklif gibi) kaydedilsin mi?')) return;
   }
   const t = toplamlar();
   const btn = document.getElementById('fKaydet');

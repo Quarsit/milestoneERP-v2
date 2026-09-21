@@ -182,7 +182,7 @@ function detayAc(id) {
 }
 
 async function faturaOlustur(id) {
-  if (!confirm('Bu satış için fatura oluşturulsun mu? Fatura taslak olarak açılır, no girip kesmen gerekir.')) return;
+  if (!await onayla('Bu satış için fatura oluşturulsun mu? Fatura taslak olarak açılır, no girip kesmen gerekir.')) return;
   try {
     const d = await api(`/api/satislar/${encodeURIComponent(id)}/fatura`, {
       method: 'POST', body: JSON.stringify({})
@@ -196,7 +196,7 @@ async function faturaOlustur(id) {
     }
     bildir(d.mesaj || ('Fatura taslağı oluşturuldu · ' + d.id));
     cekmeceKapat(); await yukle();
-    setTimeout(() => { if (confirm('Fatura ekranına gidilsin mi?')) location.href = '/fatura'; }, 600);
+    setTimeout(async () => { if (await onayla('Fatura ekranına gidilsin mi?')) location.href = '/fatura'; }, 600);
   } catch (e) { /* */ }
 }
 

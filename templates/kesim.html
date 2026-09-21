@@ -495,12 +495,14 @@ async function kesimKaydet(rezerveOnay, uretilenRez) {
     if (yanit && yanit.error === 'rezerve_onay_gerekli') {
       btn.disabled = false; btn.textContent = 'Kesimi Kaydet';
       // İki aşamalı sor: (1) müşteri için kesim onayı (2) üretilenler rezerve mi?
-      const onay = confirm(`${yanit.mesaj}\n\nBu stok bir müşteriye ayrılmış (${yanit.stok_durum}). Müşteri için kesim yapıyorsanız "Tamam"a basın.`);
+      const onay = await onayla(`${yanit.mesaj}\n\nBu stok bir müşteriye ayrılmış (${yanit.stok_durum}). Müşteri için kesim yapıyorsanız devam edin.`,
+        { tamam: 'Müşteri için kes' });
       if (!onay) return;
-      const uretilenRez = confirm(
+      const uretilenRez = await onayla(
         `Üretilen plaka/ebatlı ürünler de bu müşteriye REZERVE edilsin mi?\n\n` +
-        `• "Tamam" → üretilen ürünler müşteriye rezerve olur (sipariş/rezervasyon iptalinde otomatik serbest döner).\n` +
-        `• "İptal" → üretilen ürünler SERBEST stoğa girer.`);
+        `• Rezerve et → üretilen ürünler müşteriye rezerve olur (sipariş/rezervasyon iptalinde otomatik serbest döner).\n` +
+        `• Serbest stoğa al → üretilen ürünler SERBEST stoğa girer.`,
+        { tamam: 'Rezerve et', iptal: 'Serbest stoğa al' });
       return kesimKaydet(true, uretilenRez);
     }
     /* diğer hatalar api() içinde gösterilir */
@@ -510,7 +512,7 @@ async function kesimKaydet(rezerveOnay, uretilenRez) {
 
 /* DELETE /api/kesim/<id> — üretilen stoklar silinir, kaynak geri döner */
 async function kesimSil(id) {
-  if (!confirm('Kesim geri alınsın mı?\n\nÜretilen stoklar SİLİNİR, kaynak blok/plaka eski durumuna döner.')) return;
+  if (!await onayla('Kesim geri alınsın mı?\n\nÜretilen stoklar SİLİNİR, kaynak blok/plaka eski durumuna döner.', { tehlike: true })) return;
   try {
     const d = await api(`/api/kesim/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Kesim geri alındı');

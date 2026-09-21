@@ -558,7 +558,7 @@ async function hareketKaydet() {
 }
 
 async function hareketSil(id) {
-  if (!confirm('Kasa hareketi silinsin mi? Bakiye geri düzeltilir.')) return;
+  if (!await onayla('Kasa hareketi silinsin mi? Bakiye geri düzeltilir.', { tehlike: true })) return;
   try {
     const d = await api(`/api/kasa/hareket/${id}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Hareket silindi');
@@ -613,7 +613,7 @@ async function kasaKaydet() {
 }
 
 async function kasaSil(id, ad) {
-  if (!confirm(`"${ad}" kasası silinsin mi? Hareketleri olan kasa silinemez.`)) return;
+  if (!await onayla(`"${ad}" kasası silinsin mi? Hareketleri olan kasa silinemez.`, { tehlike: true })) return;
   try {
     const d = await api(`/api/kasa/${id}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Kasa silindi');

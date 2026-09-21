@@ -154,7 +154,7 @@
 </div>
 
 <!-- YAMA E3 — EKSTRE SEÇENEKLERİ
-     Eskiden prompt()/confirm() kullanılıyordu; PWA/masaüstü kipinde
+     Eskiden await soruSor()/await onayla() kullanılıyordu; PWA/masaüstü kipinde
      bu çağrılar engellenip null döndüğü için ekstre HİÇ AÇILMIYORDU.
      Sistemin geri kalanıyla aynı kip desenine geçildi. -->
 <div class="modal-ortu" id="ekstreModal" onclick="if(event.target===this)ekstreKapat()">
@@ -1149,10 +1149,10 @@ function ekstreAc() {
    Eskiden ekstre yalnızca carinin kendi para biriminde ve çelişkili
    çıkıyordu: bakiye sütunu işlem günü kurunu, toplam satırı bugünkü
    kuru kullanıyordu (-6.843,73 vs 5.483,15 — aynı belgede). */
-function _eski_ekstreSecenek_KULLANILMIYOR(id) {
+async function _eski_ekstreSecenek_KULLANILMIYOR(id) {
   const c = TUM.find(x => x.id === id) || {};
   const varsayilan = c.para_birimi || 'TRY';
-  const d = (null) && prompt(
+  const d = (null) && await soruSor(
     'EKSTRE PARA BİRİMİ\n\n' +
     'TRY · USD · EUR\n\n' +
     `(boş bırakırsanız carinin para birimi: ${varsayilan})`, varsayilan);
@@ -1161,7 +1161,7 @@ function _eski_ekstreSecenek_KULLANILMIYOR(id) {
 
   let modu = 'islem';
   if (doviz !== 'TRY') {
-    modu = confirm(
+    modu = await onayla(
       'KUR ESASI\n\n' +
       'TAMAM  → İşlem günü kuru\n' +
       '   Her hareket kendi günündeki kurla çevrilir.\n' +
@@ -1733,7 +1733,7 @@ async function aktiviteTamamla(aid) {
   } catch (e) {}
 }
 async function aktiviteSil(aid) {
-  if (!confirm('Bu temas kaydı silinecek.\n\nDevam edilsin mi?')) return;
+  if (!await onayla('Bu temas kaydı silinecek.\n\nDevam edilsin mi?', { tehlike: true })) return;
   try { await api(`/api/aktivite/${aid}`, { method: 'DELETE' });
     bildir('Silindi'); crmYenile(); } catch (e) {}
 }
@@ -1760,15 +1760,27 @@ async function kisiKaydet() {
   } catch (e) {}
 }
 async function kisiSil(kid) {
-  if (!confirm('Bu kişi silinecek.\n\nDevam edilsin mi?')) return;
+  if (!await onayla('Bu kişi silinecek.\n\nDevam edilsin mi?', { tehlike: true })) return;
   try { await api(`/api/kisi/${kid}`, { method: 'DELETE' });
     bildir('Silindi'); crmYenile(); } catch (e) {}
 }
 
 /* ── Erişim istisnası ── */
 async function erisimAc() {
-  const kim = prompt('Bu müşteriyi hangi kullanıcı görebilsin?\n\n'
-    + 'Kullanıcı adını yazın:');
+  /* OP1: yönetici için kullanıcı LİSTEDEN seçilir (yazım hatası
+     "kullanıcı bulunamadı" döndürüyordu); liste admin'e açık, diğerleri
+     adı yazar. */
+  let secenekler = null;
+  if (window.ADMIN) {
+    if (CARI_KULLANICILAR === null) {
+      try { const d = await api('/api/ayarlar/kullanici');
+        CARI_KULLANICILAR = (Array.isArray(d) ? d : (d.data || [])).map(k => k.ad).filter(Boolean);
+      } catch (e) { CARI_KULLANICILAR = []; }
+    }
+    if (CARI_KULLANICILAR.length) secenekler = [['', '— kullanıcı seçin —'], ...CARI_KULLANICILAR];
+  }
+  const kim = await soruSor('Bu müşteriyi hangi kullanıcı görebilsin?', '',
+    { baslik: 'Kişiye aç', etiket: 'Kullanıcı', secenekler });
   if (!kim) return;
   try {
     const d = await api(`/api/cari/${encodeURIComponent(CRM_CARI)}/erisim`, {
@@ -1777,7 +1789,7 @@ async function erisimAc() {
   } catch (e) {}
 }
 async function erisimSil(eid) {
-  if (!confirm('Bu kullanıcının erişimi kaldırılacak.\n\nDevam edilsin mi?')) return;
+  if (!await onayla('Bu kullanıcının erişimi kaldırılacak.\n\nDevam edilsin mi?')) return;
   try { const d = await api(`/api/erisim/${eid}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Kaldırıldı'); crmYenile(); } catch (e) {}
 }
@@ -2408,7 +2420,7 @@ function sipEkstreYazdir() {
 }
 
 async function hareketSil(hareketId, cariId) {
-  if (!confirm('Bu cari hareketi silinsin mi? Bakiye yeniden hesaplanır.')) return;
+  if (!await onayla('Bu cari hareketi silinsin mi? Bakiye yeniden hesaplanır.', { tehlike: true })) return;
   try {
     const d = await api(`/api/cari/hareket/${encodeURIComponent(hareketId)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Hareket silindi');

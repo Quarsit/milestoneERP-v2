@@ -609,7 +609,7 @@ async function detayAc(id) {
 }
 
 async function durumGecir(id, yeni) {
-  if (yeni === 'Iptal Edildi' && !confirm('Sipariş iptal edilsin mi? Bağlı stoklar serbest bırakılır.')) return;
+  if (yeni === 'Iptal Edildi' && !await onayla('Sipariş iptal edilsin mi? Bağlı stoklar serbest bırakılır.')) return;
   try {
     const d = await api(`/api/siparis/${encodeURIComponent(id)}`, {
       method: 'PUT', body: JSON.stringify({ durum: yeni })
@@ -950,7 +950,7 @@ let AV_KAYNAK = null;
 
 /* DELETE /api/siparis/<id> — sipariş silinir, bağlı rezervasyonlar serbest kalır */
 async function siparisSil(id) {
-  if (!confirm(`${id} silinsin mi?\n\nBağlı rezervasyonlar iptal edilir, stoklar serbest bırakılır.`)) return;
+  if (!await onayla(`${id} silinsin mi?\n\nBağlı rezervasyonlar iptal edilir, stoklar serbest bırakılır.`, { tehlike: true })) return;
   try {
     const d = await api(`/api/siparis/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Sipariş silindi');

@@ -95,6 +95,10 @@
         <div class="form-alan"><label>Fatura No <span style="color:var(--kirmizi)">*</span></label><input id="kNo" placeholder="MST-2026-001"></div>
         <div class="form-alan"><label>Vade Tarihi</label><input id="kVade" type="date"></div>
       </div>
+      <!-- TL1: cariye işlenecek TL karşılığı ve kurun kaynağı KESMEDEN
+           önce görünsün. Eskiden yalnızca ekstrede, satır altında
+           görünüyordu. -->
+      <div id="kTl" style="margin-top:12px;font-size:.82rem;line-height:1.5"></div>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="kesKapat()">Vazgeç</button>
@@ -607,7 +611,7 @@ async function detayAc(id) {
 
 /* DELETE /api/fatura/<id> — sadece taslak faturalar silinebilir */
 async function faturaSil(id) {
-  if (!confirm('Taslak fatura silinsin mi?')) return;
+  if (!await onayla('Taslak fatura silinsin mi?', { tehlike: true })) return;
   try {
     const d = await api(`/api/fatura/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Fatura silindi');
@@ -618,7 +622,7 @@ async function faturaSil(id) {
 /* Faturayı iptal et — cariye işlenen borç ve satış kaydı geri alınır.
    Tahsilatı olan fatura iptal edilemez (backend engeller). */
 async function faturaIptal(id) {
-  if (!confirm('Fatura iptal edilsin mi?\n\nCariye işlenen borç ve satış kaydı geri alınır. Bağlı sipariş/proforma durumu da geri döner. Bu işlem geri alınamaz.')) return;
+  if (!await onayla('Fatura iptal edilsin mi?\n\nCariye işlenen borç ve satış kaydı geri alınır. Bağlı sipariş/proforma durumu da geri döner. Bu işlem geri alınamaz.', { tehlike: true })) return;
   try {
     const d = await api(`/api/fatura/${encodeURIComponent(id)}/durum`, {
       method: 'POST', body: JSON.stringify({ durum: 'Iptal' })
@@ -636,6 +640,45 @@ function kesAc(id) {
   document.getElementById('kNo').value = SECILI.fatura_no || '';
   document.getElementById('kVade').value = SECILI.vade_tarihi || '';
   document.getElementById('kesModal').classList.add('acik');
+  kesTlGoster(SECILI);
+}
+
+/* Sunucu fatura kesilirken GÜNCEL TCMB döviz alış kurunu kullanır
+   (_cari_hareket_ekle → _kur_getir). Burada AYNI kur gösterilir;
+   fatura tarihi bugünden farklıysa o günün kuru da yazılır. */
+async function kesTlGoster(f) {
+  const kutu = document.getElementById('kTl');
+  if (!kutu) return;
+  const dv = (f.doviz || 'USD').toUpperCase();
+  if (dv === 'TRY') { kutu.innerHTML = ''; return; }
+  kutu.innerHTML = '<span style="color:var(--soluk)">Kur alınıyor…</span>';
+  const trT = t => t ? t.split('-').reverse().join('.') : '';
+  const k4 = v => Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+  const bugun = new Date().toISOString().slice(0, 10);
+  try {
+    const [g, ft] = await Promise.all([
+      api(`/api/doviz_kur?doviz=${dv}`),
+      f.fatura_tarihi && f.fatura_tarihi !== bugun
+        ? api(`/api/doviz_kur?doviz=${dv}&tarih=${encodeURIComponent(f.fatura_tarihi)}`) : Promise.resolve(null),
+    ]);
+    const kur = Number(g && g.alis) || 0;
+    if (!kur) {
+      kutu.innerHTML = `<div class="not" style="background:var(--kirmizi-bg);color:var(--kirmizi)">${dv} kuru bulunamadı — kurları güncelleyin.</div>`;
+      return;
+    }
+    const tl = (Number(f.toplam) || 0) * kur;
+    let h = `<div style="background:var(--notr-bg);border-radius:var(--r-kucuk);padding:9px 12px">
+      Cariye işlenecek TL karşılığı: <b class="mono">${tl.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</b><br>
+      <span style="color:var(--soluk)">1 ${dv} = ${k4(kur)} ₺ · TCMB döviz alış · ${trT(g.tarih)}</span></div>`;
+    const fk = ft && Number(ft.alis);
+    if (fk && Math.abs(fk - kur) > 0.00005) {
+      h += `<div style="margin-top:6px;padding:8px 12px;border-radius:var(--r-kucuk);background:var(--kehribar-bg);color:var(--kehribar)">
+        Fatura tarihi ${trT(f.fatura_tarihi)}; o günün kuru ${k4(fk)} ₺
+        (TL karşılığı ${((Number(f.toplam) || 0) * fk).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺).
+        Sistem kesim gününün kurunu uygular.</div>`;
+    }
+    kutu.innerHTML = h;
+  } catch (e) { kutu.innerHTML = ''; }
 }
 function kesKapat() { document.getElementById('kesModal').classList.remove('acik'); }
 

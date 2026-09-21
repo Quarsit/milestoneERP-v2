@@ -335,7 +335,7 @@ function detayAc(id) {
 async function islemYap(id, islem) {
   const etiket = { tahsile_ver: 'Tahsile verilsin mi?', ciro: 'Çek ciro edilsin mi?',
                    teminat: 'Çek teminata verilsin mi?', karsiliksiz: 'Çek KARŞILIKSIZ olarak işaretlensin mi?' }[islem];
-  if (islem === 'karsiliksiz' && !confirm(etiket)) return;
+  if (islem === 'karsiliksiz' && !await onayla(etiket)) return;
   try {
     const d = await api(`/api/cek/${encodeURIComponent(id)}/durum`, {
       method: 'POST', body: JSON.stringify({ islem })
@@ -641,7 +641,7 @@ async function faturayaBaglaKaydet() {
 }
 
 async function cekSil(id) {
-  if (!confirm('Çek silinsin mi? Bu işlem geri alınamaz.')) return;
+  if (!await onayla('Çek silinsin mi? Bu işlem geri alınamaz.', { tehlike: true })) return;
   try {
     const d = await api(`/api/cek/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Çek silindi');

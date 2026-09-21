@@ -159,6 +159,11 @@
 <div id="naUyarilar"></div>
 <div class="na-kartlar" id="naKartlar"></div>
 
+<!-- NK1b: tahsilat/ödemenin ayrı satır olmadığı açıkça yazsın;
+     "bu tutar iki kez mi sayıldı" sorusu buradan çıkıyordu. -->
+<p style="font-size:.78rem;color:var(--soluk);margin:0 0 8px">
+  Satırlar yalnızca <b>bekleyen</b> tutarı gösterir. Yapılmış tahsilat ve ödemeler ayrı satır olarak
+  eklenmez; ait oldukları borçtan düşülür. Dönem satırına tıklayınca kalemler ve kaynakları açılır.</p>
 <div class="tablo-kutu">
   <div id="naTablo"><div class="na-bos">Yükleniyor…</div></div>
 </div>
@@ -383,7 +388,15 @@ function naCiz() {
       h += '<tr class="na-detay" id="' + id + '" style="display:none"><td colspan="5">'
          + '<div class="na-detay-ic">'
          + (v.kalemler || []).map(k => '<div' + (k.gerceklesmis ? ' style="opacity:.55"' : '')
-             + '><span>' + naKacinc(k.aciklama) + (k.gerceklesmis ? ' · gerçekleşti' : '') + '</span>'
+             + '><span>' + naKaynakRozet(k.kaynak) + naKacinc(k.aciklama) + (k.gerceklesmis ? ' · gerçekleşti' : '')
+             /* NK1b: kısmi kapanmışsa asıl tutar ve kapanan kısım —
+                satırdaki rakamın NEDEN faturadan küçük olduğu görünsün. */
+             + ((k.kapanan || 0) > 0.005
+                 ? '<span style="display:block;font-size:.72rem;font-weight:400;color:var(--soluk)">toplam '
+                   + naPara(k.toplam_tutar, k.doviz) + ' · ' + naPara(k.kapanan, k.doviz)
+                   + (k.yon === 'giris' ? ' tahsil edildi' : ' ödendi') + ', kalan gösteriliyor</span>'
+                 : '')
+             + '</span>'
              + '<span class="t">' + (k.yon === 'giris' ? '+' : '−')
              + naPara(k.tutar, k.doviz) + '</span></div>').join('')
          + '</div></td></tr>';
@@ -391,6 +404,16 @@ function naCiz() {
   }
   h += '</tbody></table>';
   document.getElementById('naTablo').innerHTML = h;
+}
+
+/* NK1b: satırın NEREDEN geldiği. Tahsilat ve ödemeler ayrı satır
+   DEĞİLDİR — ait oldukları borçtan düşülür; bu yüzden rozet yalnızca
+   kaynak türünü söyler. */
+function naKaynakRozet(k) {
+  const ad = { cari: 'Cari', cek: 'Çek', sabit: 'Sabit gider', elle: 'Elle' }[k];
+  return ad ? '<span style="display:inline-block;font-size:.66rem;font-weight:700;letter-spacing:.03em;'
+    + 'text-transform:uppercase;color:var(--soluk);border:1px solid var(--cizgi-koyu);border-radius:10px;'
+    + 'padding:0 6px;margin-right:6px">' + ad + '</span>' : '';
 }
 
 /* Açıklamada HTML olabilir — kaçır. */
@@ -506,7 +529,7 @@ async function naPlanOldu(id, deger) {
 async function naPlanSil(id) {
   const p = NA_PLAN.find(x => x.id === id);
   const ad = p ? (p.aciklama || naPara(p.tutar, p.doviz)) : 'Kalem';
-  if (!confirm(ad + '\n\nBu kalem silinecek. Yalnızca nakit tahminini '
+  if (!await onayla(ad + '\n\nBu kalem silinecek. Yalnızca nakit tahminini '
       + 'etkiler; cari hesap veya kasa kaydına dokunmaz.\n\nDevam edilsin mi?')) return;
   try {
     const d = await api('/api/nakit_plan/' + id, { method: 'DELETE' });

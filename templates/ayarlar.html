@@ -634,7 +634,7 @@ const LOOKUP_ONERI = {
 async function lookupOneriEkle(kategori) {
   const oneri = LOOKUP_ONERI[kategori] || [];
   if (!oneri.length) return;
-  if (!confirm(`${oneri.length} önerilen değer listeye eklenecek.\n\nDevam edilsin mi?`)) return;
+  if (!await onayla(`${oneri.length} önerilen değer listeye eklenecek.\n\nDevam edilsin mi?`)) return;
   /* Önceden buradaki catch bloğu BOŞTU ("zaten varsa atla") ve
      sonunda koşulsuz "Öneriler eklendi" deniyordu. İstek 403 alsa
      bile başarı bildiriliyordu — sessiz başarısızlık. Artık kaç
@@ -846,7 +846,7 @@ async function kullaniciKaydet() {
 }
 
 async function kullaniciSil(id, ad) {
-  if (!confirm(`"${ad}" kullanıcısı silinsin mi?`)) return;
+  if (!await onayla(`"${ad}" kullanıcısı silinsin mi?`, { tehlike: true })) return;
   try {
     await api(`/api/ayarlar/kullanici/${id}`, { method: 'DELETE' });
     bildir('Kullanıcı silindi');
@@ -900,7 +900,7 @@ function logoSecildi(olay) {
 }
 
 async function logoSil() {
-  if (!confirm('Logo kaldırılsın mı?\n\nBelgelerde tekrar firma adı yazısı görünecek.')) return;
+  if (!await onayla('Logo kaldırılsın mı?\n\nBelgelerde tekrar firma adı yazısı görünecek.')) return;
   try {
     const d = await api('/api/ayarlar/logo', { method: 'DELETE' });
     bildir(d.mesaj || 'Logo kaldırıldı');
@@ -1089,17 +1089,16 @@ async function lookupDuzenle(id, kategori, mevcutDeger, mevcutKisaltma) {
   /* Tüm liste değerleri BÜYÜK HARF — lookupEkle ile aynı kural.
      Türkçe locale KULLANILMAZ: 'i' → 'İ' dönüşümü mevcut kayıtlarla
      tutarsızlık yaratır. */
-  const yeni = prompt(`"${mevcutDeger}" yerine yeni değer:`, mevcutDeger);
-  if (yeni === null) return;
-  const deger = yeni.trim().toUpperCase();
+  /* Kısaltması olan listelerde (ülke kodu gibi) aynı formda sorulur. */
+  const alanlar = [{ ad: 'deger', etiket: 'Değer', deger: mevcutDeger, zorunlu: true }];
+  if (mevcutKisaltma) alanlar.push({ ad: 'kisaltma', etiket: 'Kısaltma', deger: mevcutKisaltma });
+  const f = await formSor('Liste değerini düzenle', alanlar);
+  if (!f) return;
+  const deger = (f.deger || '').trim().toUpperCase();
   if (!deger) { bildir('Değer boş olamaz', true); return; }
 
   const govde = { deger };
-  /* Kısaltması olan listelerde (ülke kodu gibi) onu da sor. */
-  if (mevcutKisaltma) {
-    const k = prompt('Kısaltma:', mevcutKisaltma);
-    if (k !== null) govde.kisaltma = k.trim().toUpperCase();
-  }
+  if (mevcutKisaltma && f.kisaltma != null) govde.kisaltma = f.kisaltma.trim().toUpperCase();
 
   try {
     await api(`/api/ayarlar/lookup/${id}`, { method: 'PUT', body: JSON.stringify(govde) });
@@ -1109,7 +1108,7 @@ async function lookupDuzenle(id, kategori, mevcutDeger, mevcutKisaltma) {
 }
 
 async function lookupSil(id, kategori) {
-  if (!confirm('Kayıt silinsin mi?')) return;
+  if (!await onayla('Kayıt silinsin mi?', { tehlike: true })) return;
   try {
     await api(`/api/ayarlar/lookup/${id}`, { method: 'DELETE' });
     bildir('Silindi');
@@ -1195,7 +1194,7 @@ async function bankaKaydet() {
          birden çok hesap tanımlıyor olabilir ve hepsine kasa
          istemeyebilir. */
       const _bid = _yb && (_yb.id || (_yb.banka && _yb.banka.id));
-      if (_bid && confirm(
+      if (_bid && await onayla(
             `"${ad}" için bir kasa oluşturulsun mu?\n\n` +
             `Tahsilat ve ödemeler kasa üzerinden işlenir; ` +
             `kasası olmayan banka hesabı kullanılamaz.`)) {
@@ -1219,7 +1218,7 @@ async function bankaKaydet() {
 }
 
 async function bankaSil(id, ad) {
-  if (!confirm(`"${ad}" banka hesabı silinsin mi?`)) return;
+  if (!await onayla(`"${ad}" banka hesabı silinsin mi?`, { tehlike: true })) return;
   try {
     await api(`/api/banka/${id}`, { method: 'DELETE' });
     bildir('Banka silindi');
@@ -1288,8 +1287,8 @@ function yedekIndir(dosya) {
 }
 
 async function yedekGeriYukle(dosya) {
-  if (!confirm(`"${dosya}" yedeğinden geri yüklensin mi?\n\nMEVCUT TÜM VERİ SİLİNİR ve bu yedekteki hâliyle değiştirilir.\nİşlem öncesi güvenlik yedeği alınacak.`)) return;
-  if (!confirm('Emin misin? Bu işlem geri alınamaz.')) return;
+  if (!await onayla(`"${dosya}" yedeğinden geri yüklensin mi?\n\nMEVCUT TÜM VERİ SİLİNİR ve bu yedekteki hâliyle değiştirilir.\nİşlem öncesi güvenlik yedeği alınacak.`, { tehlike: true })) return;
+  if (!await onayla('Emin misin? Bu işlem geri alınamaz.', { tehlike: true })) return;
   bildir('Geri yükleniyor, lütfen bekle…');
   try {
     const d = await api('/api/yedek/geri_yukle', {
@@ -1301,7 +1300,7 @@ async function yedekGeriYukle(dosya) {
 }
 
 async function yedekSil(dosya) {
-  if (!confirm(`"${dosya}" silinsin mi?`)) return;
+  if (!await onayla(`"${dosya}" silinsin mi?`, { tehlike: true })) return;
   try {
     const d = await api('/api/yedek/sil', { method: 'POST', body: JSON.stringify({ dosya }) });
     bildir(d.mesaj || 'Yedek silindi');

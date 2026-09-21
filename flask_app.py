@@ -4098,7 +4098,7 @@ def create_app():
         if _auth_required(): return _auth_required()
         if not _yetki_var_mi('sevkiyat', 'okuma'):
             return redirect(url_for('dashboard'))
-        return render_template('sevkiyat.html')
+        return render_template('sevkiyat.html', konteyner_tipleri=list(KONTEYNER_TIPLERI))
 
     @app.route('/kesim')
     def kesim_sayfa():
@@ -11438,6 +11438,11 @@ def create_app():
                     'aciklama': (f"{_ad} — {_tip}{_not}".strip(' —')
                                  or 'Cari hareket'),
                     'vadesiz': _vade is None,
+                    # NK1b: satir BEKLEYEN tutari gosterir; tahsilat/
+                    # odeme zaten dusuldu. Ekran "iki kez mi sayildi"
+                    # sorusuna cevap verebilsin diye asil tutar ve
+                    # kapanan kisim da doner.
+                    'toplam_tutar': q3(_tam), 'kapanan': q3(_tam - _tutar),
                 })
 
         # ── 2) ÇEKLER ─────────────────────────────────────────

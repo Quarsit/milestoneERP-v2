@@ -392,7 +392,7 @@ async function duzKaydet() {
 }
 
 async function dosyaSil(id) {
-  if (!confirm('Dosya silinsin mi? Bağlı fatura ve KDV kalemlerinin bağı çözülür, kayıtlar silinmez.')) return;
+  if (!await onayla('Dosya silinsin mi? Bağlı fatura ve KDV kalemlerinin bağı çözülür, kayıtlar silinmez.', { tehlike: true })) return;
   try {
     const d = await api(`/api/kdv-iade/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Dosya silindi');

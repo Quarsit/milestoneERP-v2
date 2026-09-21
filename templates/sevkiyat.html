@@ -376,17 +376,19 @@ function svKonteynerCiz() {
     ${duz ? `<div style="margin-top:8px"><button class="blok-btn" onclick="svKonteynerEkle()">+ Konteyner ekle</button></div>` : ''}`;
 }
 
+/* OP1: beş ayrı prompt() yerine TEK form. Tip listeden seçilir —
+   sunucunun kabul ettiği tiplerle aynı liste (KONTEYNER_TIPLERI). */
+const SV_KONT_TIPLERI = {{ konteyner_tipleri|default([])|tojson }};
 async function svKonteynerEkle() {
-  const no = prompt('Konteyner numarası:\n\n(örn. MSCU7742190)', '');
-  if (no === null) return;
-  const tip = prompt("Konteyner tipi:\n\n20' DC · 40' DC · 40' HC · 45' HC", "40' HC");
-  if (tip === null) return;
-  const mh = prompt('Mühür (seal) numarası:', '');
-  if (mh === null) return;
-  const tara = prompt('Tara — boş konteyner ağırlığı (kg):', '');
-  if (tara === null) return;
-  const net = prompt('Net yük ağırlığı (kg):\n\n(VGM = tara + net olarak hesaplanır)', '');
-  if (net === null) return;
+  const f = await formSor('Konteyner ekle', [
+    { ad: 'no', etiket: 'Konteyner numarası', ipucu: 'örn. MSCU7742190' },
+    { ad: 'tip', etiket: 'Tip', secenekler: SV_KONT_TIPLERI.length ? SV_KONT_TIPLERI : ["20' DC", "40' DC", "40' HC", "45' HC"], deger: "20' DC" },
+    { ad: 'mh', etiket: 'Mühür (seal) numarası' },
+    { ad: 'tara', etiket: 'Tara — boş konteyner (kg)', tip: 'number' },
+    { ad: 'net', etiket: 'Net yük (kg) · VGM = tara + net', tip: 'number' },
+  ], { tamam: 'Ekle' });
+  if (!f) return;
+  const { no, tip, mh, tara, net } = f;
   try {
     const d = await api('/api/konteyner', { method: 'POST', body: JSON.stringify({
       sevkiyat_id: SV_AKTIF, konteyner_no: no.trim(), tip: (tip || '').trim(),
@@ -400,16 +402,15 @@ async function svKonteynerEkle() {
 async function svKonteynerDuzenle(kid) {
   const k = SV_KONTEYNERLER.find(x => x.id === kid);
   if (!k) return;
-  const no = prompt(`${k.etiket_tr} — konteyner numarası:`, k.konteyner_no || '');
-  if (no === null) return;
-  const mh = prompt('Mühür (seal) numarası:', k.muhur_no || '');
-  if (mh === null) return;
-  const bk = prompt('Booking numarası:', k.booking_no || '');
-  if (bk === null) return;
-  const tara = prompt('Tara (kg):', k.tara_kg || '');
-  if (tara === null) return;
-  const net = prompt('Net yük (kg):', k.net_kg || '');
-  if (net === null) return;
+  const f = await formSor(`${k.etiket_tr} — düzenle`, [
+    { ad: 'no', etiket: 'Konteyner numarası', deger: k.konteyner_no || '' },
+    { ad: 'mh', etiket: 'Mühür (seal) numarası', deger: k.muhur_no || '' },
+    { ad: 'bk', etiket: 'Booking numarası', deger: k.booking_no || '' },
+    { ad: 'tara', etiket: 'Tara (kg)', tip: 'number', deger: k.tara_kg || '' },
+    { ad: 'net', etiket: 'Net yük (kg)', tip: 'number', deger: k.net_kg || '' },
+  ]);
+  if (!f) return;
+  const { no, mh, bk, tara, net } = f;
   try {
     await api(`/api/konteyner/${kid}`, { method: 'PUT', body: JSON.stringify({
       konteyner_no: no.trim(), muhur_no: mh.trim(), booking_no: bk.trim(),
@@ -421,7 +422,7 @@ async function svKonteynerDuzenle(kid) {
 
 async function svKonteynerSil(kid) {
   const k = SV_KONTEYNERLER.find(x => x.id === kid);
-  if (!confirm(`${k ? k.etiket_tr : 'Konteyner'} silinsin mi?`)) return;
+  if (!await onayla(`${k ? k.etiket_tr : 'Konteyner'} silinsin mi?`, { tehlike: true })) return;
   try {
     const d = await api(`/api/konteyner/${kid}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Konteyner silindi');
@@ -524,7 +525,7 @@ async function detayAc(id) {
 
 /* DELETE /api/sevkiyat/<id> */
 async function sevkiyatSil(id, ad) {
-  if (!confirm(`${ad || id} sevkiyatı silinsin mi? Bu işlem geri alınamaz.`)) return;
+  if (!await onayla(`${ad || id} sevkiyatı silinsin mi? Bu işlem geri alınamaz.`, { tehlike: true })) return;
   try {
     const d = await api(`/api/sevkiyat/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Sevkiyat silindi');
@@ -533,8 +534,8 @@ async function sevkiyatSil(id, ad) {
 }
 
 async function durumGecir(id, yeni, siparisUyari) {
-  if (yeni === 'Iptal' && !confirm('Sevkiyat iptal edilsin mi?')) return;
-  if (siparisUyari && !confirm((yeni === 'Sevk Edildi'
+  if (yeni === 'Iptal' && !await onayla('Sevkiyat iptal edilsin mi?')) return;
+  if (siparisUyari && !await onayla((yeni === 'Sevk Edildi'
       ? 'Mal sevk edilecek (yüklemede teslim). Bağlı sipariş "Teslim Edildi" olacak ve satış kaydı oluşacak. Onaylıyor musun?'
       : 'Sevkiyat teslim edilecek. Bağlı sipariş de otomatik "Teslim Edildi" olacak. Onaylıyor musun?'))) return;
   try {

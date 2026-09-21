@@ -1020,7 +1020,7 @@ function secDurumGuncelle() {
 async function secilenleriSil() {
   const idler = [...SECILENLER];
   if (!idler.length) return;
-  if (!confirm(`${idler.length} stok SİLİNECEK.\n\n` +
+  if (!await onayla(`${idler.length} stok SİLİNECEK.\n\n` +
       `Rezerve, satılmış, kesime girmiş veya borcu kapatılmış stoklar ` +
       `atlanır ve sebebi bildirilir.\n\nDevam edilsin mi?`)) return;
   const btn = document.getElementById('secSilBtn');
@@ -1049,7 +1049,7 @@ async function secilenleriSil() {
     if (d.atlanan_detay && d.atlanan_detay.length) {
       /* Atlananları kullanıcıya GÖSTER — sessizce yutmak, "sildim
          sandım ama duruyor" durumuna yol açar. */
-      alert('SİLİNEMEYENLER:\n\n' + d.atlanan_detay
+      bilgiGoster('Silinemeyenler', d.atlanan_detay
         .map(x => `• ${x.stok_id}: ${x.sebep}`).join('\n'));
     }
     SECILENLER.clear();
@@ -1137,7 +1137,16 @@ async function detayAc(id) {
 }
 
 async function rezerveEt(id, tip) {
-  const musteri = prompt('Hangi müşteri için rezerve edilsin?');
+  /* OP1: müşteri LİSTEDEN seçilir — elle yazılan ad cari kaydıyla
+     eşleşmezse rezervasyon sahipsiz kalıyordu. */
+  let secenekler = null;
+  try {
+    const d = await api('/api/cari?per_page=500');
+    const m = (d.data || []).filter(c => !c.cari_tip || cariMusteriMi(c)).map(c => c.unvan);
+    if (m.length) secenekler = [['', '— müşteri seçin —'], ...m];
+  } catch (e) { /* liste gelmezse elle yazılır */ }
+  const musteri = await soruSor('Hangi müşteri için rezerve edilsin?', '',
+    { baslik: 'Rezerve et', etiket: 'Müşteri', secenekler, tamam: 'Rezerve et' });
   if (!musteri) return;
   try {
     await api('/api/rezervasyon', {
@@ -2008,7 +2017,7 @@ async function topluKaydet() {
   if (cari && faturaDurum !== 'faturasiz') uyari += `\n\n"${cari}" carisine alış borcu oluşturulacak.`;
   else if (!cari) uyari += `\n\nTedarikçi seçilmedi — cari borcu OLUŞMAYACAK.`;
   uyari += '\n\nDevam edilsin mi?';
-  if (!confirm(uyari)) return;
+  if (!await onayla(uyari)) return;
 
   const kdvli = document.getElementById('tAlisTipi').value === 'yurtici_kdvli';
   const ortak = {
@@ -2231,7 +2240,7 @@ async function faturalandirKaydet() {
 }
 
 async function malTeslimAl(id, tip) {
-  if (!confirm('Mal teslim alındı olarak işaretlensin mi? (Borç zaten oluşmuştu, sadece stok girişi yapılır.)')) return;
+  if (!await onayla('Mal teslim alındı olarak işaretlensin mi? (Borç zaten oluşmuştu, sadece stok girişi yapılır.)')) return;
   try {
     const d = await api(`/api/stok/${encodeURIComponent(tip)}/${encodeURIComponent(id)}/mal_teslim`, {
       method: 'POST',
@@ -2341,7 +2350,7 @@ async function stokSil(id, tip, no, maliIslem) {
   /* Onay yalnızca İLK çağrıda; mali seçim yapıldıktan sonra
      kullanıcıyı ikinci kez sormak gereksiz. */
   if (!maliIslem &&
-      !confirm(`${ad} silinsin mi?\n\nBu stoğa ait maliyet kayıtları temizlenir. Bu işlem geri alınamaz.`)) return;
+      !await onayla(`${ad} silinsin mi?\n\nBu stoğa ait maliyet kayıtları temizlenir. Bu işlem geri alınamaz.`)) return;
   try {
     const yol = `/api/stok/${encodeURIComponent(tip)}/${encodeURIComponent(id)}`
       + (maliIslem ? `?mali_islem=${encodeURIComponent(maliIslem)}` : '');
@@ -2405,7 +2414,7 @@ async function topluMaliSec(secim) {
     });
     bildir(d.mesaj || `${d.silinen} stok silindi`, (d.atlanan || 0) > 0);
     if (d.atlanan_detay && d.atlanan_detay.length) {
-      alert('SİLİNEMEYENLER:\n\n' + d.atlanan_detay
+      bilgiGoster('Silinemeyenler', d.atlanan_detay
         .map(x => `• ${x.stok_id}: ${x.sebep}`).join('\n'));
     }
   } catch (e) { /* api() bildiriyor */ }

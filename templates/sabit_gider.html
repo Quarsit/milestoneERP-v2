@@ -479,7 +479,7 @@ async function sgKaydet() {
 
 async function sgSil() {
   if (!SG_DUZEN) return;
-  if (!confirm(SG_DUZEN.ad + ' TAMAMEN silinecek.\n\n'
+  if (!await onayla(SG_DUZEN.ad + ' TAMAMEN silinecek.\n\n'
       + 'Bu gider geçmiş aylardan da kaybolur — sabit gider bir şablondur, '
       + 'dönem kaydı saklanmaz.\n\n'
       + 'Artık ödemiyorsanız SİLMEYİN, "Sonlandır" kullanın: geçmiş korunur.\n\n'

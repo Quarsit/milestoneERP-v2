@@ -115,6 +115,17 @@ a{color:inherit;text-decoration:none}
 .kur-cip{cursor:pointer;transition:border-color .15s}
 .kur-cip:hover{border-color:var(--verde)}
 .kur-cip.yenileniyor{opacity:.55}
+/* KC1: kur çipinin tıklanabilir olduğu belli olsun — sağda küçük
+   büyüteç. Eskiden yalnızca imleç değişiyordu. */
+.kur-cip::after{content:'';width:12px;height:12px;align-self:center;opacity:.55;flex:none;
+  background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") center/contain no-repeat}
+.kur-cip:hover::after{opacity:1;color:var(--verde)}
+/* BL3: bildirim çanı NÖTR — sarı "Hızlı Satış" düğmesiyle aynı
+   görünüyordu, işlem düğmesi sanılabilirdi. */
+.bildirim-btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--cizgi-koyu);background:var(--yuzey);
+  color:var(--murekkep);border-radius:var(--r-kucuk);padding:7px 10px;cursor:pointer;position:relative}
+.bildirim-btn:hover{border-color:var(--verde);color:var(--verde-koyu)}
 .hizli-btn{display:flex;align-items:center;gap:6px;border:1px solid var(--kehribar);background:var(--kehribar-bg);
   color:var(--kehribar);border-radius:var(--r-kucuk);padding:8px 13px;font-weight:600;font-size:.85rem}
 .hizli-btn:hover{background:var(--kehribar);color:#fff}
@@ -130,6 +141,16 @@ a{color:inherit;text-decoration:none}
 .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
 .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
 .hs-satir{display:grid;gap:12px;margin-bottom:12px}
+.onay-ortu{position:fixed;inset:0;background:rgba(25,28,26,.45);z-index:90;display:grid;place-items:center;padding:20px}
+.onay-kutu{width:440px;max-width:100%;background:var(--yuzey);border-radius:14px;box-shadow:0 24px 70px rgba(25,28,26,.35);overflow:hidden;display:flex;flex-direction:column;max-height:92vh}
+.onay-kutu .onay-gov{padding:20px 22px 6px;overflow-y:auto}
+.onay-kutu h3{font-family:var(--baslik);font-weight:700;font-size:1.05rem;margin-bottom:6px}
+.onay-kutu .onay-metin{white-space:pre-line;font-size:.9rem;line-height:1.5;color:var(--murekkep)}
+.onay-kutu .onay-alan{margin-top:12px}
+.onay-kutu .onay-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+.onay-kutu .onay-alan input,.onay-kutu .onay-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
+.onay-kutu .onay-alt{padding:14px 22px 18px;display:flex;gap:10px;justify-content:flex-end}
+.onay-kutu .onay-evet.tehlike{background:var(--kirmizi)}
 .hs-f3{grid-template-columns:1fr 1fr 1fr} .hs-f4{grid-template-columns:1fr 1fr 1fr 1fr}
 .hs-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
 .hs-alan input,.hs-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
@@ -492,8 +513,8 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
              biri onaylamışsa bildirim kapanır ve diğerlerine hiç
              görünmez. -->
         <div style="position:relative">
-          <button class="hizli-btn" id="bildirimBtn" onclick="bildirimAc()"
-                  title="Bildirimler" style="display:none;padding:7px 10px">
+          <button class="bildirim-btn" id="bildirimBtn" onclick="bildirimAc()"
+                  title="Bildirimler" aria-label="Bildirimler" style="display:none">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2">
               <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -788,6 +809,27 @@ document.addEventListener('click', e => {
 });
 
 window.addEventListener('DOMContentLoaded', bildirimYukle);
+/* BL2: çan açık sayfada da güncel kalsın. Eskiden yalnızca sayfa
+   yüklenirken bakılıyordu; gün boyu açık kalan ekranda yeni onay
+   bekleyen proforma görünmüyordu. 60 sn'de bir, SESSİZ (api()
+   değil fetch): sunucu yeniden başlarken kırmızı uyarı yağmasın.
+   Sekme arka plandayken sorulmaz, öne gelince hemen sorulur. */
+async function bildirimSessizYenile() {
+  if (document.hidden) return;
+  try {
+    const c = await fetch('/api/bildirim', { headers: { 'X-CSRF-Token': window.CSRF_TOKEN } });
+    if (!c.ok) return;
+    const d = await c.json();
+    BILDIRIMLER = (d && d.data) || [];
+    const btn = document.getElementById('bildirimBtn');
+    const say = document.getElementById('bildirimSayi');
+    if (!btn) return;
+    btn.style.display = BILDIRIMLER.length ? '' : 'none';
+    if (say) say.textContent = BILDIRIMLER.length;
+  } catch (e) { /* ağ yoksa sonraki turda */ }
+}
+setInterval(bildirimSessizYenile, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) bildirimSessizYenile(); });
 
 /** Tek noktadan fetch: 401 → girişe, 403 → net mesaj, ağ hatası → bildirim. */
 /* S1 — CSRF token'ı her yazma isteğine ekle.
@@ -842,6 +884,12 @@ async function api(yol, secenek = {}) {
     hata.status = c.status;
     throw hata;
   }
+  /* LK1: liste (lookup) değiştiyse önbelleği boşalt ve AÇIK DİĞER
+     SEKMELERE haber ver. Eskiden önbellek sekme kapanana kadar
+     yaşıyordu: Ayarlar'da eklenen ülke, başka sekmedeki cari
+     formunda görünmüyordu. */
+  if (String(yol).startsWith('/api/ayarlar/lookup') &&
+      String(secenek.method || 'GET').toUpperCase() !== 'GET') lookupDegisti();
   return d;
 }
 
@@ -1064,18 +1112,120 @@ document.addEventListener('keydown', e => {
   }
 });
 
+/* ══ ONAY / SORU PENCERELERİ (OP1) ══
+   Tarayıcının confirm()/prompt() pencereleri uygulama (PWA) ve
+   masaüstü kipinde ENGELLENEBİLİYOR: çağrı sessizce "hayır"/null
+   döner ve düğme hiçbir şey yapmamış gibi görünür (bkz. YAMA E3 —
+   ekstre hiç açılmıyordu). Bütün onaylar bu pencerelerden geçer.
+
+     if (!await onayla('Çek silinsin mi?', {tehlike: true})) return;
+     const ad = await soruSor('Yeni değer:', eski);          // null = vazgeçti
+     const f  = await formSor('Konteyner', [{ad:'no', etiket:'Numara'}, …]);
+
+   Hepsi Promise döner; çağıran fonksiyon async olmalı. */
+function _opAc({ baslik = '', metin = '', alanlar = [], tamam = 'Tamam', iptal = 'Vazgeç',
+                 tehlike = false, tekDugme = false }) {
+  return new Promise(coz => {
+    const ortu = document.createElement('div');
+    ortu.className = 'onay-ortu';
+    ortu.setAttribute('role', 'dialog');
+    ortu.setAttribute('aria-modal', 'true');
+    const kac = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    ortu.innerHTML = `<div class="onay-kutu">
+      <div class="onay-gov">
+        ${baslik ? `<h3>${kac(baslik)}</h3>` : ''}
+        ${metin ? `<div class="onay-metin">${kac(metin)}</div>` : ''}
+        ${alanlar.map((a, i) => `<div class="onay-alan"><label for="op_${i}">${kac(a.etiket || '')}${a.zorunlu ? ' <span style="color:var(--kirmizi)">*</span>' : ''}</label>${
+          a.secenekler
+            ? `<select id="op_${i}">${a.secenekler.map(o => {
+                const [v, t] = Array.isArray(o) ? o : [o, o];
+                return `<option value="${kac(v)}"${String(v) === String(a.deger ?? '') ? ' selected' : ''}>${kac(t)}</option>`;
+              }).join('')}</select>`
+            : `<input id="op_${i}" type="${a.tip || 'text'}" value="${kac(a.deger ?? '')}"${a.ipucu ? ` placeholder="${kac(a.ipucu)}"` : ''}${a.tip === 'number' ? ' step="any"' : ''}>`
+        }</div>`).join('')}
+      </div>
+      <div class="onay-alt">
+        ${tekDugme ? '' : `<button type="button" class="iptal-btn onay-hayir">${kac(iptal)}</button>`}
+        <button type="button" class="btn-yeni onay-evet${tehlike ? ' tehlike' : ''}">${kac(tamam)}</button>
+      </div></div>`;
+    document.body.appendChild(ortu);
+    const girdiler = alanlar.map((_, i) => ortu.querySelector('#op_' + i));
+    const bitir = sonuc => {
+      window.removeEventListener('keydown', tus, true);
+      ortu.remove();
+      coz(sonuc);
+    };
+    const evet = () => {
+      if (!alanlar.length) return bitir(true);
+      const d = {};
+      for (let i = 0; i < alanlar.length; i++) {
+        const v = girdiler[i].value;
+        if (alanlar[i].zorunlu && !String(v).trim()) { girdiler[i].focus(); girdiler[i].style.borderColor = 'var(--kirmizi)'; return; }
+        d[alanlar[i].ad || i] = v;
+      }
+      bitir(d);
+    };
+    const hayir = () => bitir(alanlar.length ? null : false);
+    /* Esc bu pencereyi kapatır ama ALTTAKİ modalı kapatmaz:
+       yakalama aşamasında dinlenip yayılım durdurulur. */
+    const tus = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); hayir(); }
+      else if (e.key === 'Enter' && !(e.target && e.target.tagName === 'TEXTAREA')) {
+        e.preventDefault(); e.stopImmediatePropagation(); evet();
+      }
+    };
+    window.addEventListener('keydown', tus, true);
+    ortu.querySelector('.onay-evet').onclick = evet;
+    const h = ortu.querySelector('.onay-hayir'); if (h) h.onclick = hayir;
+    ortu.addEventListener('click', e => { if (e.target === ortu) hayir(); });
+    setTimeout(() => (girdiler[0] || ortu.querySelector(tehlike ? '.onay-hayir' : '.onay-evet') || ortu.querySelector('.onay-evet')).focus(), 30);
+  });
+}
+function onayla(metin, secenek = {}) {
+  return _opAc({ metin, tamam: secenek.tamam || 'Evet', iptal: secenek.iptal || 'Vazgeç',
+                 tehlike: !!secenek.tehlike, baslik: secenek.baslik || '' });
+}
+async function soruSor(metin, varsayilan = '', secenek = {}) {
+  const d = await _opAc({ baslik: secenek.baslik || '', metin,
+    alanlar: [{ ad: 'v', etiket: secenek.etiket || '', deger: varsayilan, tip: secenek.tip,
+                secenekler: secenek.secenekler, ipucu: secenek.ipucu }],
+    tamam: secenek.tamam || 'Tamam' });
+  return d === null ? null : d.v;
+}
+function bilgiGoster(baslik, metin) {
+  return _opAc({ baslik, metin, tamam: 'Tamam', tekDugme: true });
+}
+function formSor(baslik, alanlar, secenek = {}) {
+  return _opAc({ baslik, metin: secenek.metin || '', alanlar, tamam: secenek.tamam || 'Kaydet' });
+}
+
 /** Ayarlardaki liste tanımlarını getirir (cins, ozellik, ulke, banka…).
     Önbelleğe alınır; formlar datalist ile besler. */
 window._LOOKUP = {};
+const _LOOKUP_ZAMAN = {};
+const LOOKUP_OMUR_MS = 5 * 60 * 1000;   // LK1: başka kullanıcının eklediği de en geç 5 dk'da gelir
 async function lookupGetir(kategori) {
-  if (window._LOOKUP[kategori]) return window._LOOKUP[kategori];
+  const taze = _LOOKUP_ZAMAN[kategori] && (Date.now() - _LOOKUP_ZAMAN[kategori] < LOOKUP_OMUR_MS);
+  if (window._LOOKUP[kategori] && taze) return window._LOOKUP[kategori];
   try {
     const d = await api(`/api/ayarlar/lookup?kategori=${encodeURIComponent(kategori)}`);
     const rows = Array.isArray(d) ? d : (d.data || []);
     window._LOOKUP[kategori] = rows.map(r => r.deger).filter(Boolean);
-  } catch (e) { window._LOOKUP[kategori] = []; }
+    _LOOKUP_ZAMAN[kategori] = Date.now();
+  } catch (e) { window._LOOKUP[kategori] = window._LOOKUP[kategori] || []; }
   return window._LOOKUP[kategori];
 }
+function lookupDegisti() {
+  window._LOOKUP = {};
+  for (const k in _LOOKUP_ZAMAN) delete _LOOKUP_ZAMAN[k];
+  try { localStorage.setItem('erp_lookup_surum', String(Date.now())); } catch (e) { /* */ }
+}
+window.addEventListener('storage', e => {
+  if (e.key === 'erp_lookup_surum') {
+    window._LOOKUP = {};
+    for (const k in _LOOKUP_ZAMAN) delete _LOOKUP_ZAMAN[k];
+  }
+});
 
 /** Bir input'u ayarlardaki listeye bağlar: yazarken öneri çıkar,
     liste dışı değer de girilebilir. Girilen her şey BÜYÜK HARFE çevrilir. */

@@ -278,6 +278,35 @@ if _j3:
 else:
     print("   ✓ temiz — await edilen her fonksiyon tanımlı")
 
+# ══════════════════════════════════════════════════════════════════
+#  J4 · TARAYICI PENCERESİ (confirm / prompt / alert)   [SESSİZ HAYIR]
+# ══════════════════════════════════════════════════════════════════
+# PWA / masaüstü kipinde bu pencereler ENGELLENEBİLİYOR: confirm()
+# sessizce false, prompt() null döner ve düğme hiçbir şey yapmamış
+# gibi görünür (YAMA E3: ekstre hiç açılmıyordu). 21.09'da 76 çağrı
+# base.html'deki onayla()/soruSor()/formSor()/bilgiGoster()'e
+# taşındı. Yenisi eklenirse burada yakalanır.
+print()
+print("─" * 70)
+print(" J4 · TARAYICI PENCERESİ (confirm/prompt/alert)   [SESSİZ HAYIR]")
+print("─" * 70)
+_j4 = 0
+for p4 in sorted(SABLON.glob('*.html')):
+    ham4 = p4.read_text(encoding='utf-8', errors='replace')
+    js4 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham4, re.S))
+    js4 = re.sub(r'/\*.*?\*/', ' ', js4, flags=re.S)
+    js4 = re.sub(r'(?m)//.*$', ' ', js4)
+    bul4 = re.findall(r'(?<![\w.$])(confirm|prompt|alert)\s*\(', js4)
+    if bul4:
+        _j4 += len(bul4)
+        print(f"   ✗ {p4.name}: {len(bul4)} × " + ', '.join(sorted(set(bul4))))
+if _j4:
+    print()
+    print("   → onayla() / soruSor() / formSor() / bilgiGoster() kullanın (base.html).")
+    bulgu += _j4
+else:
+    print("   ✓ temiz — tüm onaylar sistem penceresinden geçiyor")
+
 print()
 print("═" * 70)
 if bulgu:

@@ -81,6 +81,9 @@ if not VT_URL:
 SILINECEK_TABLOLAR = [
     # Denetim izi
     'audit_log',
+    # Bildirimler (BL1) — 21.09'da eklendi; eksikken kapsama denetimi
+    # betiği çalıştırmayı REDDEDİYORDU.
+    'bildirimler',
     # Çek
     'cek_hareket', 'cek',
     # Kesim

@@ -536,7 +536,7 @@ function detayAc(id) {
 }
 
 async function maliyetSil(id) {
-  if (!confirm('Maliyet kaydı silinsin mi? Bağlı stoğun birim maliyeti yeniden hesaplanır.')) return;
+  if (!await onayla('Maliyet kaydı silinsin mi? Bağlı stoğun birim maliyeti yeniden hesaplanır.', { tehlike: true })) return;
   try {
     const d = await api(`/api/maliyet/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Maliyet silindi');
