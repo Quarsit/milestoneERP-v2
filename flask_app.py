@@ -668,6 +668,9 @@ def create_app():
         ('/api/avans', 'cari'),
         ('/api/konteyner', ('proforma', 'sevkiyat')),
         ('/api/sicak_satis', 'fatura'),
+        # LH1: form icinden liste degeri (cins/ozellik) ekleme — o
+        # formu kullanabilen herkes, Ayarlar yetkisi aranmaz.
+        ('/api/liste/hizli_ekle', ('stok', 'siparis', 'proforma', 'kesim')),
     ]
 
     # YK2: tek istekte birden cok module yazan uclar. Hizli satis
@@ -14404,6 +14407,45 @@ def create_app():
         db.session.add(v)
         db.session.commit()
         return jsonify({'ok': True, 'mevcut': False, 'id': v.id})
+
+    # LH1 — FORMDAN HIZLI LISTE EKLEME
+    # Stok/siparis/proforma/kesim formunda aranan cins listede yoksa
+    # kullanici Ayarlar > Listeler'e gitmek zorunda kaliyordu (ve o uc
+    # yalnizca ADMIN'e acik). Bu uc YALNIZCA formlardan beslenen iki
+    # kategoriyi kabul eder; yetki, YAZMA_EK_MAP'te o formlardan
+    # herhangi birine yazma yetkisidir. Silme/duzenleme yine Ayarlar'da.
+    HIZLI_EKLE_KATEGORI = ('cins', 'ozellik')
+
+    @app.route('/api/liste/hizli_ekle', methods=['POST'])
+    def api_liste_hizli_ekle():
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        data = request.get_json(silent=True) or {}
+        kategori = (data.get('kategori') or '').strip()
+        # Sistem kurali: liste degerleri BUYUK HARF, Ingilizce kuralla
+        # (ayarlar.html ile ayni — PIETRA, PİETRA olmaz).
+        deger = ' '.join((data.get('deger') or '').split()).upper()
+        if kategori not in HIZLI_EKLE_KATEGORI:
+            return jsonify({'ok': False, 'mesaj': 'Bu liste buradan eklenemez'}), 400
+        if not deger:
+            return jsonify({'ok': False, 'mesaj': 'Değer boş olamaz'}), 400
+        if len(deger) > 100:
+            return jsonify({'ok': False, 'mesaj': 'Değer çok uzun (en fazla 100 karakter)'}), 400
+        # Mukerrer kontrolu Ayarlar ucuyla AYNI anahtar: strip+lower,
+        # Python tarafinda (bkz. api_ayarlar_lookup_post aciklamasi).
+        _hedef = deger.strip().lower()
+        mevcut = next((v for v in Veriler.query.filter_by(kategori=kategori).all()
+                       if (v.deger or '').strip().lower() == _hedef), None)
+        if mevcut:
+            return jsonify({'ok': True, 'mevcut': True, 'id': mevcut.id,
+                            'deger': mevcut.deger,
+                            'mesaj': f'{mevcut.deger} zaten listede'})
+        v = Veriler(kategori=kategori, deger=deger)
+        db.session.add(v)
+        db.session.flush()
+        _log_audit('EKLE', 'veriler', v.id, yeni={'kategori': kategori, 'deger': deger},
+                   aciklama='Formdan hızlı liste ekleme')
+        db.session.commit()
+        return jsonify({'ok': True, 'mevcut': False, 'id': v.id, 'deger': deger})
 
     @app.route('/api/rezervasyon/<rez_id>', methods=['DELETE'])
     def api_rezervasyon_iptal(rez_id):

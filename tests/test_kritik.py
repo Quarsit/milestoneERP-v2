@@ -227,3 +227,20 @@ def test_fk1_kesim_fatura_tarihi_kuru():
         assert h.hareket_tarihi == date(2026, 2, 3)
         assert abs(float(h.kur_uygulanan) - 36.5) < 1e-6
         assert abs(float(h.borc_try) - 36500) < 0.01
+
+
+def test_lh1_formdan_hizli_liste_ekleme():
+    """LH1: stok/sipariş yazma yetkisi olan kullanıcı formdan cins ekler;
+    mükerrer ikizlenmez; okuma yetkili ve izinsiz kategori reddedilir."""
+    from models import Veriler
+    c = istemci('satis')
+    r = c.post('/api/liste/hizli_ekle', json={'kategori': 'cins', 'deger': '  zebra   blue '}, headers=H)
+    assert r.status_code == 200 and r.get_json()['deger'] == 'ZEBRA BLUE'
+    r2 = c.post('/api/liste/hizli_ekle', json={'kategori': 'cins', 'deger': 'Zebra Blue'}, headers=H)
+    assert r2.get_json()['mevcut'] is True
+    with fa.app.app_context():
+        assert Veriler.query.filter_by(kategori='cins', deger='ZEBRA BLUE').count() == 1
+    assert c.post('/api/liste/hizli_ekle', json={'kategori': 'banka', 'deger': 'X'},
+                  headers=H).status_code == 400
+    assert istemci('izleyici').post('/api/liste/hizli_ekle', json={'kategori': 'cins', 'deger': 'Y'},
+                                    headers=H).status_code == 403

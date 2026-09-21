@@ -1411,28 +1411,111 @@ window.addEventListener('storage', e => {
 });
 
 /** Bir input'u ayarlardaki listeye bağlar: yazarken öneri çıkar,
-    liste dışı değer de girilebilir. Girilen her şey BÜYÜK HARFE çevrilir. */
+    liste dışı değer de girilebilir. Girilen her şey BÜYÜK HARFE çevrilir.
+
+    LH1 — LİSTEDEN YENİ EKLE. Cins ve özellik listelerinde aranan değer
+    yoksa Ayarlar > Listeler'e gitmek gerekiyordu. Artık öneri listesinde
+    "➕ Yeni ekle" satırı var: boşken en üstte, yazarken en altta
+    ("➕ Yeni ekle: YAZILAN"). Seçilince küçük bir pencere açılır, değer
+    listeye kaydedilir ve alana yazılır. Aynı kategoriye bağlı TÜM
+    alanların önerileri tazelenir; diğer sekmeler storage olayıyla
+    öğrenir. Her alan kendi datalist'ini taşır — "yeni ekle" satırı
+    o alana yazılana göre değiştiği için ortak liste kullanılamaz. */
+const LISTE_YENI_EKLE = { cins: 'cins', ozellik: 'özellik' };
+const _YENI_ISARET = '➕ ';
+const _listeAlanlari = {};          // kategori → [input, ...]
+
+function _listeOnerileriCiz(el, kategori) {
+  const dl = document.getElementById(el.getAttribute('list'));
+  if (!dl) return;
+  const degerler = window._LOOKUP[kategori] || [];
+  const secenek = v => `<option value="${kacar(v)}">`;
+  let html = degerler.map(secenek).join('');
+  if (LISTE_YENI_EKLE[kategori] && el.dataset.yeniEkle !== 'hayir') {
+    const yazilan = (el.value || '').trim().toUpperCase();
+    const var_mi = yazilan && degerler.some(v => v.toUpperCase() === yazilan);
+    if (!yazilan || yazilan.startsWith(_YENI_ISARET.trim()))
+      html = secenek(_YENI_ISARET + 'Yeni ' + LISTE_YENI_EKLE[kategori] + ' ekle…') + html;
+    else if (!var_mi)
+      html += secenek(_YENI_ISARET + 'Yeni ekle: ' + yazilan);
+  }
+  dl.innerHTML = html;
+}
+
+async function _listeYeniEkle(el, kategori, onerilen) {
+  const ad = LISTE_YENI_EKLE[kategori];
+  const f = await formSor('Yeni ' + ad + ' ekle', [
+    { ad: 'deger', etiket: ad.charAt(0).toUpperCase() + ad.slice(1) + ' adı',
+      deger: onerilen, zorunlu: true, ipucu: kategori === 'cins' ? 'ör. EMPERADOR DARK' : 'ör. HONED' }
+  ], { tamam: 'Listeye ekle',
+       metin: 'Listeye kaydedilir ve bundan sonra tüm formlarda önerilir. Düzeltme ve silme Ayarlar › Listeler\'de.' });
+  if (!f) { el.focus(); return; }
+  // Türkçe locale KULLANILMAZ ('i' → 'İ' olurdu) — sistem kuralı.
+  const deger = (f.deger || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!deger) return;
+  let d;
+  try {
+    d = await api('/api/liste/hizli_ekle', { method: 'POST', body: JSON.stringify({ kategori, deger }) });
+  } catch (e) { return; }          // api() yetki/doğrulama mesajını gösterir
+  const kayitli = d.deger || deger;
+  const liste = window._LOOKUP[kategori] || (window._LOOKUP[kategori] = []);
+  if (!liste.some(v => v.toUpperCase() === kayitli.toUpperCase())) {
+    liste.push(kayitli);
+    liste.sort((a, b) => a.localeCompare(b, 'tr'));
+  }
+  try { localStorage.setItem('erp_lookup_surum', String(Date.now())); } catch (e) { /* */ }
+  el.value = kayitli;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  (_listeAlanlari[kategori] || []).forEach(a => _listeOnerileriCiz(a, kategori));
+  bildir(d.mevcut ? kayitli + ' zaten listedeydi — seçildi' : kayitli + ' listeye eklendi');
+}
+
 async function listeyeBagla(inputId, kategori) {
   const el = document.getElementById(inputId);
   if (!el) return;
-  const dlId = 'dl-' + kategori;
-  let dl = document.getElementById(dlId);
-  if (!dl) {
-    dl = document.createElement('datalist');
-    dl.id = dlId;
+  if (!el.getAttribute('list')) {
+    const dl = document.createElement('datalist');
+    dl.id = 'dl-' + kategori + '-' + inputId;
     document.body.appendChild(dl);
-    const degerler = await lookupGetir(kategori);
-    dl.innerHTML = degerler.map(v => `<option value="${kacar(v)}">`).join('');
+    el.setAttribute('list', dl.id);
+    (_listeAlanlari[kategori] = _listeAlanlari[kategori] || []).push(el);
   }
-  el.setAttribute('list', dlId);
+  await lookupGetir(kategori);
+  _listeOnerileriCiz(el, kategori);
   el.style.textTransform = 'uppercase';
   if (!el.dataset.buyukHarf) {
     el.dataset.buyukHarf = '1';
     // DİKKAT: Türkçe locale 'i' harfini 'İ' yapar (PIETRA → PİETRA). Mermer
     // isimleri İngilizce olduğu için düz toUpperCase kullanılır.
-    el.addEventListener('blur', () => { el.value = (el.value || '').toUpperCase(); });
+    el.addEventListener('blur', () => {
+      if (!(el.value || '').startsWith(_YENI_ISARET)) el.value = (el.value || '').toUpperCase();
+    });
+    el.addEventListener('input', () => {
+      const v = el.value || '';
+      if (v.startsWith(_YENI_ISARET)) {
+        // Sayfanın büyük harf dönüştürücüsü değeri "➕ YENI EKLE: …"
+        // yapmış olabilir — etikete değil iki noktaya bakılır.
+        const onerilen = v.includes(':') ? v.slice(v.indexOf(':') + 1).trim() : '';
+        el.value = '';
+        _listeOnerileriCiz(el, kategori);
+        _listeYeniEkle(el, kategori, onerilen.toUpperCase());
+        return;
+      }
+      _listeOnerileriCiz(el, kategori);
+    });
+    // Form yeniden açılıp alan kod ile temizlendiğinde input olayı
+    // gelmez; eski "Yeni ekle: …" satırı kalmasın.
+    el.addEventListener('focus', () => _listeOnerileriCiz(el, kategori));
   }
 }
+window.addEventListener('storage', async e => {
+  if (e.key !== 'erp_lookup_surum') return;
+  for (const k in _listeAlanlari) {
+    await lookupGetir(k);
+    _listeAlanlari[k].forEach(a => _listeOnerileriCiz(a, k));
+  }
+});
 
 /* ═══ HIZLI SATIŞ (sıcak satış) ═══
    POST /api/sicak_satis {musteri, satis_tipi, odeme_sekli, fatura_no, vade_tarihi,
