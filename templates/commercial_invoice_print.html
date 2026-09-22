@@ -205,11 +205,17 @@ tbody td.c{text-align:center}
   {% endif %}
 
   <!-- TİCARİ FATURA BEYANI -->
+  {#- MS1: mense kalemlerden okunur (eskiden sabit TURKEY). Bos = TURKIYE. -#}
+  {%- set _menseler = [] -%}
+  {%- for _k in kalemler -%}
+    {%- set _m = (_k.mense or 'TURKIYE') -%}
+    {%- if _m not in _menseler %}{% set _ = _menseler.append(_m) %}{% endif -%}
+  {%- endfor %}
   <div class="decl">
     <b>{{ _ceviri('belge.declaration', dil) }}</b> We hereby certify that this invoice is true and correct, and that the
-    goods are of Turkish origin. The goods described above are intended for export.
+    goods are of {% if _menseler == ['TURKIYE'] %}Turkish origin{% else %}the origin stated below{% endif %}. The goods described above are intended for export.
     {% if p.hs_kodu %}<br><b>H.S. CODE:</b> {{ p.hs_kodu }}{% endif %}
-    <br><b>{{ _ceviri('belge.country_origin', dil) }}</b> TURKEY
+    <br><b>{{ _ceviri('belge.country_origin', dil) }}</b> {{ _menseler|join(' / ') }}
   </div>
 
   <div class="bottom-grid">

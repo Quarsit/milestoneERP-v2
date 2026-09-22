@@ -132,6 +132,7 @@ class BlokStok(db.Model):
     # `uretici` GORUNTU icin kaliyor, cari_id BAG icin.
     cari_id         = db.Column(db.String(20), index=True)
     cins            = db.Column(db.String(100))
+    mense           = db.Column(db.String(50), default='TURKIYE')   # MS1: malın menşei (etiket, CI)
     blok_no         = db.Column(db.String(50))
     boy             = db.Column(Olcu)
     yukseklik       = db.Column(Olcu)
@@ -174,6 +175,7 @@ class PlakaStok(db.Model):
     kalinlik        = db.Column(Olcu)
     m2_kg           = db.Column(Olcu)
     ozellik         = db.Column(db.String(50))
+    mense           = db.Column(db.String(50), default='TURKIYE')   # MS1: malın menşei (etiket, CI)
     metraj_m2       = db.Column(Olcu)
     metraj_sqft     = db.Column(Olcu)
     slab_no         = db.Column(db.Integer)
@@ -213,6 +215,7 @@ class EbatliStok(db.Model):
     kalinlik        = db.Column(Olcu)
     m2_kg           = db.Column(Olcu)
     ozellik         = db.Column(db.String(50))
+    mense           = db.Column(db.String(50), default='TURKIYE')   # MS1: malın menşei (etiket, CI)
     kasa_ici_adet   = db.Column(db.Integer)
     metraj_m2       = db.Column(Olcu)
     metraj_sqft     = db.Column(Olcu)
@@ -862,6 +865,7 @@ class ProformaKalem(db.Model):
     aciklama        = db.Column(db.String(200))
     yuzey_spec      = db.Column(db.String(50))
     ozellik         = db.Column(db.String(50))
+    mense           = db.Column(db.String(50))   # MS1: stoktan gelir; boşsa TURKIYE sayılır
     kalinlik        = db.Column(Olcu)
     en              = db.Column(Olcu)
     boy             = db.Column(Olcu)

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ (p.musteri or "")|upper }} - {{ p.id or "" }} - LABELS</title>
+{#
+  ET1 — Bundle / Crate etiketi. A5 yatay, her etiket bir sayfa
+  (A4 kağıda "sayfa başına 2" ile ikişer basılır). Siyah-beyaz:
+  her yazıcıda ve fotokopide aynı okunur, depo tozunda seçilir.
+
+  Üst şerit (müşteri bazında seçilir, Proforma > Etiket):
+    logo  — Ayarlar > Firma'daki logo (yoksa firma adı)
+    notr  — firma bilgisi yok
+    alici — alıcının adı ve/veya logosu
+#}
+<style>
+@page { size: A5 landscape; margin: 0 }
+* { margin: 0; padding: 0; box-sizing: border-box }
+body { font-family: Arial, "Liberation Sans", Helvetica, sans-serif; color: #000; background: #d9d9d9;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact }
+.arac { position: sticky; top: 0; z-index: 5; display: flex; justify-content: center; align-items: center; gap: 14px;
+  padding: 10px; background: #2b2b2b; color: #fff; font-size: 13px }
+.arac button { background: #fff; color: #000; border: 0; border-radius: 6px; padding: 8px 18px; font-weight: 700; cursor: pointer }
+.bos { max-width: 560px; margin: 60px auto; background: #fff; padding: 28px; border-radius: 10px; font-size: 14px; line-height: 1.5 }
+.etiket { width: 210mm; height: 148mm; background: #fff; padding: 7mm; margin: 8mm auto; display: flex;
+  page-break-after: always; break-after: page }
+.etiket:last-of-type { page-break-after: auto; break-after: auto }
+.cerceve { flex: 1; border: 1.2mm solid #000; display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; min-width: 0 }
+
+.serit { display: flex; justify-content: space-between; align-items: center; gap: 6mm; min-height: 12mm;
+  padding: 2mm 5mm; border-bottom: .5mm solid #000; font-size: 9pt; letter-spacing: .04em }
+.serit b { font-weight: 700 }
+.serit .sol { display: flex; align-items: center; gap: 3mm; min-width: 0 }
+.serit img { max-height: 8mm; max-width: 60mm; object-fit: contain; display: block }
+.serit .ad { font-size: 11pt; font-weight: 700; letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.serit .sag { white-space: nowrap }
+
+.kimlik { display: grid; grid-template-columns: minmax(0, 1fr) 58mm; border-bottom: .5mm solid #000 }
+.urun { padding: 4mm 5mm 3.5mm; min-width: 0 }
+.etk { font-size: 8pt; font-weight: 700; letter-spacing: .14em; text-transform: uppercase }
+.cins { font-size: 30pt; font-weight: 700; line-height: 1.02; letter-spacing: -.01em; margin-top: 1mm; word-break: break-word }
+.cins.uzun { font-size: 23pt }
+.yuzey { font-size: 15pt; font-weight: 700; margin-top: 2mm; letter-spacing: .04em }
+.yuzey span { font-weight: 400 }
+.no { background: #000; color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center;
+  text-align: center; padding: 3mm }
+.no .etk { color: #fff }
+.no .sayi { font-size: 58pt; font-weight: 700; line-height: 1; margin: 1.5mm 0 1mm; font-variant-numeric: tabular-nums;
+  max-width: 100%; overflow-wrap: anywhere }
+.no .sayi.orta { font-size: 40pt }
+.no .sayi.kucuk { font-size: 26pt }
+.no .kac { font-size: 10pt; font-weight: 700; letter-spacing: .06em }
+
+.olcu { padding: 3mm 5mm 0; min-height: 0; overflow: hidden }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums }
+th { font-size: 8pt; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; text-align: left;
+  padding: 1.2mm 2mm; border-bottom: .5mm solid #000; white-space: nowrap }
+td { font-size: 14pt; padding: 1.6mm 2mm; border-bottom: .2mm solid #999; vertical-align: middle }
+th.s, td.s { text-align: right }
+td.boyut { font-weight: 700; white-space: nowrap }
+td.boyut small { display: block; font-size: 8.5pt; font-weight: 400; letter-spacing: .03em; margin-top: .4mm; white-space: normal }
+td.ek { font-size: 10pt }
+.tek td { font-size: 17pt; padding: 2.2mm 2mm }
+.cok td { font-size: 11pt; padding: 1mm 2mm }
+
+.alt { display: grid; grid-template-columns: 1fr 1fr 1.25fr; border-top: .5mm solid #000 }
+.alt > div { padding: 3mm 5mm; border-right: .5mm solid #000; min-width: 0 }
+.alt > div:last-child { border-right: 0 }
+.alt .deger { font-size: 22pt; font-weight: 700; margin-top: .8mm; font-variant-numeric: tabular-nums }
+.alt .deger small { font-size: 12pt }
+.mense .deger { font-size: 20pt; letter-spacing: .03em; overflow-wrap: anywhere }
+.mense .deger.uzun { font-size: 13pt }
+
+@media print {
+  body { background: #fff }
+  .arac { display: none }
+  .etiket { margin: 0 }
+}
+</style>
+</head>
+<body>
+{%- set firma_logo_uri = firma_logo() if serit_mod == 'logo' else None %}
+{%- if etiketler %}
+<div class="arac">
+  <span>{{ etiketler|length }} etiket · A5 yatay — A4'e ikişer basmak için yazdırma penceresinde "Kağıt başına 2 sayfa" seçin</span>
+  <button onclick="window.print()">Yazdır</button>
+</div>
+{%- else %}
+<div class="bos"><b>Bu proformada etiketlenecek bundle ya da kasa yok.</b><br>
+Etiket plaka (bundle) ve ebatlı (crate) kalemleri için basılır; blok kalemleri etiketlenmez.</div>
+{%- endif %}
+
+{%- for e in etiketler %}
+<section class="etiket"><div class="cerceve">
+  <div class="serit">
+    <div class="sol">
+      {%- if serit_mod == 'logo' %}
+        {%- if firma_logo_uri %}<img src="{{ firma_logo_uri }}" alt="">{% else %}<span class="ad">{{ (firma_adi_ayar() or 'MILESTONE MERMER')|upper }}</span>{% endif %}
+      {%- elif serit_mod == 'alici' %}
+        {%- if alici_logo %}<img src="{{ alici_logo }}" alt="">{% endif %}
+        {%- if serit_metin %}<span class="ad">{{ serit_metin|upper }}</span>{% endif %}
+      {%- endif %}
+    </div>
+    <div class="sag">PI <b>{{ p.id }}</b>{% if e.konteyner %} · CONT. <b>{{ e.konteyner }}</b>{% endif %}</div>
+  </div>
+
+  <div class="kimlik">
+    <div class="urun">
+      <div class="etk">Product</div>
+      <div class="cins{% if e.cins|length > 18 %} uzun{% endif %}">{{ e.cins or '—' }}</div>
+      {%- if e.yuzey or e.kalinlik %}
+      <div class="yuzey">{{ e.yuzey }}{% if e.kalinlik %} <span>{% if e.yuzey %}· {% endif %}{{ e.kalinlik }} CM</span>{% endif %}</div>
+      {%- endif %}
+    </div>
+    <div class="no">
+      <div class="etk">{{ 'Bundle No' if e.tur == 'BUNDLE' else 'Crate No' }}</div>
+      <div class="sayi{% if e.no|length > 6 %} kucuk{% elif e.no|length > 3 %} orta{% endif %}">{{ e.no }}</div>
+      <div class="kac">{{ e.sira }} OF {{ e.toplam }}</div>
+    </div>
+  </div>
+
+  <div class="olcu">
+    <table>
+      <thead><tr>
+        <th>Size (cm) · {{ e.boyut_basligi }}</th>
+        {% if e.ref_var %}<th>Block / Slab No</th>{% endif %}
+        <th class="s">Pcs</th><th class="s">m²</th>
+      </tr></thead>
+      <tbody class="{% if e.satirlar|length == 1 %}tek{% elif e.satirlar|length > 6 %}cok{% endif %}">
+      {%- for x in e.satirlar %}
+        <tr>
+          <td class="boyut">{{ x.olcu or '—' }}{% if x.urun %}<small>{{ x.urun }}</small>{% endif %}</td>
+          {% if e.ref_var %}<td class="ek">{{ x.ref }}</td>{% endif %}
+          <td class="s">{{ x.adet }}</td>
+          <td class="s">{{ '%.2f'|format(x.m2 or 0) }}</td>
+        </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alt">
+    <div><div class="etk">Total Pcs</div><div class="deger">{{ e.toplam_adet }}</div></div>
+    <div><div class="etk">Total Area</div><div class="deger">{{ '%.2f'|format(e.toplam_m2) }} <small>m²</small></div></div>
+    <div class="mense"><div class="etk">Materials of Origin</div><div class="deger{% if e.mense|length > 14 %} uzun{% endif %}">{{ e.mense }}</div></div>
+  </div>
+</div></section>
+{%- endfor %}
+<script>
+/* Ölçü tablosu etikete sığmıyorsa satır SESSİZCE kesilmesin:
+   etiket kırmızı çerçevelenir ve üst çubukta uyarı çıkar. */
+(function () {
+  const tasan = [...document.querySelectorAll('.etiket')].filter(e => {
+    const o = e.querySelector('.olcu'); return o && o.scrollHeight > o.clientHeight + 2;
+  });
+  if (!tasan.length) return;
+  tasan.forEach(e => { e.querySelector('.cerceve').style.borderColor = '#c00'; });
+  const a = document.querySelector('.arac span');
+  if (a) a.insertAdjacentHTML('afterend', '<b style="color:#ff8a80">⚠ ' + tasan.length +
+    ' etikette ölçü satırları sığmıyor — o bundle/kasa için kalemleri birleştirin</b>');
+})();
+</script>
+</body>
+</html>

@@ -244,3 +244,41 @@ def test_lh1_formdan_hizli_liste_ekleme():
                   headers=H).status_code == 400
     assert istemci('izleyici').post('/api/liste/hizli_ekle', json={'kategori': 'cins', 'deger': 'Y'},
                                     headers=H).status_code == 403
+
+
+def test_et1_bundle_crate_etiketleri_ve_mense():
+    """ET1/MS1: bundle numaralari packing list ile ayni; ayni kasa no'lu
+    ebatli kalemler tek etikette; kasada kalinlik olcude; mense kalemden,
+    bossa TURKIYE; blok etiketlenmez; ticari fatura mensei kalemden."""
+    from models import Proforma, ProformaKalem
+    with fa.app.app_context():
+        db.session.add(Proforma(id='PET', musteri='ACIK CARI', cari_id='C1', toplam=1,
+                                doviz='USD', durum='Onaylandi', genel_bundle_sayisi=8))
+        K = lambda **a: ProformaKalem(proforma_id='PET', **a)
+        db.session.add_all([
+            K(urun_tip='PLAKA', cins='EMPERADOR', yuzey_spec='POLISHED', blok_no='45', boy=300, yukseklik=200,
+              kalinlik=2, adet=10, miktar=60, birim='m2', sira=1),
+            K(urun_tip='EBATLI', cins='SILVER', yuzey_spec='HONED', blok_no='7', boy=60, yukseklik=40,
+              kalinlik=1.2, adet=1, kasa_ici_adet=100, miktar=24, birim='m2', sira=2, mense='IRAN'),
+            K(urun_tip='EBATLI', cins='SILVER', yuzey_spec='HONED', blok_no='7', boy=40, yukseklik=40,
+              kalinlik=3, adet=1, kasa_ici_adet=50, miktar=8, birim='m2', sira=3, mense='IRAN'),
+            K(urun_tip='BLOK', cins='NERO', blok_no='B1', boy=300, yukseklik=200, kalinlik=150,
+              adet=1, miktar=20, birim='ton', sira=4),
+        ])
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/proforma/PET/etiket_ayar').get_json()
+    assert (d['bundle'], d['crate']) == (2, 1)          # 10 plaka / 8 = 2 bundle, 1 kasa, blok yok
+    h = c.get('/api/proforma/PET/etiket').get_data(as_text=True)
+    assert h.count('class="etiket"') == 3
+    assert 'Crate No' in h and 'Bundle No' in h and 'Materials of Origin' in h
+    assert '60 × 40 × 1.2' in h and '40 × 40 × 3' in h   # kasada kalinlik olcude
+    assert '300 × 200' in h and '2 CM' in h              # bundle'da kalinlik baslikta
+    assert 'IRAN' in h and 'TURKIYE' in h
+    assert '32.00' in h                                    # kasa toplami 24 + 8 m2
+    # ust serit tercihi kaydedilir, gecersiz secim reddedilir
+    assert c.post('/api/proforma/PET/etiket_ayar', json={'mod': 'notr'}, headers=H).status_code == 200
+    assert c.get('/api/proforma/PET/etiket_ayar').get_json()['mod'] == 'notr'
+    assert c.post('/api/proforma/PET/etiket_ayar', json={'mod': 'x'}, headers=H).status_code == 400
+    ci = c.get('/api/proforma/PET/html?mod=ci').get_data(as_text=True)
+    assert 'TURKIYE / IRAN' in ci and 'TURKEY' not in ci

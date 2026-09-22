@@ -282,9 +282,10 @@
       <p id="duzAlt">—</p>
     </div>
     <div class="modal-gov">
-      <div class="form-satir f2">
+      <div class="form-satir f3">
         <div class="form-alan"><label>Cins</label><input id="duzCins"></div>
         <div class="form-alan"><label>Yüzey / Özellik</label><input id="duzOzellik"></div>
+        <div class="form-alan"><label>Menşe</label><input id="duzMense"></div>
       </div>
       <div class="form-satir f3">
         <div class="form-alan"><label>Üretici</label>
@@ -485,9 +486,10 @@
         <div class="form-alan"><label>Üretici / Ocak</label><select id="sUretici"></select></div>
         <div class="form-alan"><label>Cins <span style="color:var(--kirmizi)">*</span></label><input id="sCins" placeholder="Emperador Dark"></div>
       </div>
-      <div class="form-satir f3">
+      <div class="form-satir f4">
         <div class="form-alan"><label id="sNoLabel">Blok No</label><input id="sBlokNo" placeholder="B-100"></div>
         <div class="form-alan"><label>Yüzey / Özellik</label><input id="sOzellik" placeholder="Ham / Cilalı"></div>
+        <div class="form-alan"><label>Menşe</label><input id="sMense" value="TURKIYE" title="Malın menşei — bundle/crate etiketinde ve ticari faturada basılır"></div>
         <div class="form-alan"><label>Giriş Tarihi</label><input id="sTarih" type="date"></div>
       </div>
 
@@ -1086,6 +1088,7 @@ async function detayAc(id) {
       ${alan('Giydirilmiş Maliyet', s.birim_maliyet_usd ? para2(s.birim_maliyet_usd) + ' / ' + (s.birim_ad || '') : '—', true)}
       ${alan('Toplam Maliyet', s.toplam_maliyet_usd ? para(s.toplam_maliyet_usd) : '—', true)}
       ${alan('Üretici', kacar(s.uretici || '—'))}
+      ${alan('Menşe', kacar(s.mense || 'TURKIYE'))}
       ${alan('Fatura No', s.fatura_durumu === 'faturasiz'
           ? '<span class="rozet rz-kehribar">Faturasız — fatura bekliyor</span>'
           : (s.fatura_durumu === 'mal_bekliyor'
@@ -1206,6 +1209,7 @@ async function yeniAc() {
   ['sCins','sBlokNo','sOzellik','sBoy','sYuk','sEn','sTonaj','sFiyat','sFaturaNo','sOlcu','sAciklama'].forEach(i => {
     const el = document.getElementById(i); if (el) el.value = '';
   });
+  document.getElementById('sMense').value = 'TURKIYE';   // MS1 varsayılan
   document.getElementById('sAdet').value = 1;
   document.getElementById('sKasaAdedi').value = 1;
   document.getElementById('sKasaIci').value = 1;
@@ -1517,6 +1521,7 @@ async function stokKaydet() {
         cins,
         blok_no: document.getElementById('sBlokNo').value,
         ozellik: document.getElementById('sOzellik').value,
+        mense: (document.getElementById('sMense').value || '').trim().toUpperCase() || 'TURKIYE',
         boy: parseFloat(document.getElementById('sBoy').value) || 0,
         yukseklik: parseFloat(document.getElementById('sYuk').value) || 0,
         en: t === 'BLOK' ? (parseFloat(document.getElementById('sEn').value) || 0) : 0,
@@ -2264,6 +2269,7 @@ function duzenleAc(id) {
   document.getElementById('duzAlt').textContent = `${s.id} · ${s.tip}`;
   document.getElementById('duzCins').value = s.cins || '';
   document.getElementById('duzOzellik').value = s.ozellik || '';
+  document.getElementById('duzMense').value = s.mense || 'TURKIYE';
   document.getElementById('duzUretici').value = s.uretici || '';
   document.getElementById('duzBlokNo').value = s.blok_no || s.kasa_no || '';
   document.getElementById('duzKonum').value = s.konum || '';
@@ -2300,6 +2306,7 @@ async function duzenleKaydet() {
         tip: DUZ_STOK.tip,
         cins: document.getElementById('duzCins').value,
         ozellik: document.getElementById('duzOzellik').value,
+        mense: (document.getElementById('duzMense').value || '').trim().toUpperCase() || 'TURKIYE',
         uretici: document.getElementById('duzUretici').value,
         blok_no: document.getElementById('duzBlokNo').value,
         kasa_no: document.getElementById('duzBlokNo').value,

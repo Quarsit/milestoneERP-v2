@@ -3148,6 +3148,12 @@ def create_app():
                 ('cari_hareket', 'kdv_tutar', 'FLOAT'),
                 ('cari_hareket', 'matrah', 'FLOAT'),
                 ('veriler', 'uzun_deger', 'TEXT'),
+                # MS1: mense (Alembic ms1mense001 ile ayni; hangisi once
+                # calisirsa digeri atlar)
+                ('blok_stok', 'mense', "VARCHAR(50) DEFAULT 'TURKIYE'"),
+                ('plaka_stok', 'mense', "VARCHAR(50) DEFAULT 'TURKIYE'"),
+                ('ebatli_stok', 'mense', "VARCHAR(50) DEFAULT 'TURKIYE'"),
+                ('proforma_kalem', 'mense', 'VARCHAR(50)'),
             ]
             for tablo, sutun, tip in eklenecek:
                 if tablo not in mufettis.get_table_names():
@@ -4399,6 +4405,7 @@ def create_app():
             item['fatura_durumu'] = getattr(s, 'fatura_durumu', None) or 'faturali'
             item['alis_tarihi'] = s.alis_tarihi.isoformat() if getattr(s, 'alis_tarihi', None) else None
             item['giris_tarihi'] = s.giris_tarihi.isoformat() if getattr(s, 'giris_tarihi', None) else None
+            item.update({'mense': getattr(s, 'mense', None) or 'TURKIYE'})   # MS1
 
             if tip == 'BLOK':
                 item.update({'boy': s.boy, 'yukseklik': s.yukseklik, 'en': s.en, 'hacim': s.hacim_m3, 'tonaj': s.tonaj, 'blok_no': s.blok_no})
@@ -4664,6 +4671,27 @@ def create_app():
         olaylar.sort(key=lambda x: (x.get('tarih') or '', x.get('tip') or ''))
         return jsonify({'ok': True, 'olaylar': olaylar, 'stok_id': stok_id})
 
+    def _mense_normal(deger):
+        """MS1: mense degeri — BUYUK HARF, bos ise TURKIYE."""
+        d = ' '.join(str(deger or '').split()).upper()[:50]
+        return d or 'TURKIYE'
+
+    def _kalem_mense(k):
+        """MS1: proforma kaleminin mensei. Istemci gonderdiyse o;
+        gondermediyse ve kalem stoktan geldiyse stogun mensei; ikisi de
+        yoksa BOS (belgede TURKIYE sayilir). Bos birakmak bilincli:
+        'bilinmiyor' ile 'Turkiye' ayrilabilsin."""
+        d = ' '.join(str(k.get('mense') or '').split()).upper()[:50]
+        if d:
+            return d
+        sid = k.get('stok_id') or k.get('_stok_id')
+        if sid:
+            for _m in (PlakaStok, EbatliStok, BlokStok):
+                _s = _m.query.get(sid)
+                if _s is not None:
+                    return getattr(_s, 'mense', None) or 'TURKIYE'
+        return None
+
     @app.route('/api/stok/ekle', methods=['POST'])
     def api_stok_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -4769,6 +4797,7 @@ def create_app():
                                 giris_tarihi=_giris_tarihi, alis_tarihi=_alis_tarihi,
                                 fatura_durumu=_fatura_durumu,
                                 aciklama=data.get('aciklama', ''), alis_tipi=alis_tipi)
+                stok.mense = _mense_normal(data.get('mense'))   # MS1
                 db.session.add(stok)
                 db.session.flush()
                 # KDV varsa otomatik 'Devreden KDV' maliyet kalemi (faturalıysa)
@@ -4832,6 +4861,7 @@ def create_app():
                                      giris_tarihi=_giris_tarihi, alis_tarihi=_alis_tarihi,
                                      fatura_durumu=_fatura_durumu,
                                      durum='Serbest', aciklama=data.get('aciklama', ''), alis_tipi=alis_tipi)
+                    stok.mense = _mense_normal(data.get('mense'))   # MS1
                     db.session.add(stok)
                     db.session.flush()
                     if kdv_tutar > 0 and _fatura_durumu != 'faturasiz':
@@ -4928,6 +4958,7 @@ def create_app():
                         fatura_durumu=_fatura_durumu,
                         kullanici=session.get('kullanici')
                     )
+                    stok.mense = _mense_normal(data.get('mense'))   # MS1
                     db.session.add(stok)
                     db.session.flush()
                     olusturulan_ids.append(stok.id)
@@ -5070,6 +5101,8 @@ def create_app():
                     except (ValueError, TypeError): pass
                 if 'fiyat_birim' in data and data['fiyat_birim']:
                     stok.alis_fiyat_birim = data['fiyat_birim']
+                if 'mense' in data and hasattr(stok, 'mense'):   # MS1
+                    stok.mense = _mense_normal(data.get('mense'))
                 if 'aciklama' in data: stok.aciklama = data['aciklama']
                 db.session.commit()
                 return jsonify({'ok': True})
@@ -14734,7 +14767,8 @@ def create_app():
                             'bundle_no': k.bundle_no, 'agirlik_kg': k.agirlik, 'm2_kg': '',
                             # K7: arayuz konteyner atamasi icin ikisine de
                             # ihtiyac duyuyor; serializer dondurmuyordu.
-                            'id': k.id, 'konteyner_id': k.konteyner_id} for k in kalemler]})
+                            'id': k.id, 'konteyner_id': k.konteyner_id,
+                            'mense': k.mense or ''} for k in kalemler]})
 
     def _proforma_toplam_hesapla(p):
         """
@@ -14855,6 +14889,7 @@ def create_app():
                                iskonto=k.get('iskonto',0), iskonto_tip=k.get('iskonto_tip','%'), slab_no=k.get('slab_no'),
                                bundle_no=k.get('bundle_no'), m2_toplam=k.get('m2'), sqft_toplam=k.get('sqft'),
                                agirlik=k.get('agirlik_kg'), sira=idx,
+                               mense=_kalem_mense(k),   # MS1
                                # YAMA B1: stok_id kolonu modelde vardi ama hic yazilmiyordu.
                                # Rezervasyon slab_no'yu stok kimligi sanip calisamiyordu.
                                stok_id=(k.get('stok_id') or None))
@@ -15018,7 +15053,8 @@ def create_app():
                     iskonto=k.get('iskonto', 0), iskonto_tip=k.get('iskonto_tip', '%'),
                     slab_no=k.get('slab_no'), bundle_no=k.get('bundle_no'),
                     m2_toplam=k.get('m2'), sqft_toplam=k.get('sqft'),
-                    agirlik=k.get('agirlik_kg'), sira=idx)
+                    agirlik=k.get('agirlik_kg'), sira=idx,
+                    mense=_kalem_mense(k))   # MS1
                 db.session.add(pk)
             db.session.flush()
 
@@ -15109,6 +15145,7 @@ def create_app():
                 proforma_id=yeni.id, urun_tip=k.urun_tip, cins=k.cins, aciklama=k.aciklama,
                 yuzey_spec=k.yuzey_spec, ozellik=k.ozellik, blok_no=k.blok_no,
                 slab_no=k.slab_no, bundle_no=k.bundle_no, boy=k.boy, yukseklik=k.yukseklik,
+                mense=k.mense,   # MS1
                 kalinlik=k.kalinlik, en=k.en, adet=k.adet, kasa_ici_adet=k.kasa_ici_adet,
                 miktar=k.miktar, birim=k.birim, birim_fiyat=k.birim_fiyat, doviz=k.doviz,
                 toplam_fiyat=k.toplam_fiyat, net_fiyat=k.net_fiyat, iskonto=k.iskonto,
@@ -16378,7 +16415,11 @@ def create_app():
                     'boy': k.boy, 'yukseklik': k.yukseklik, 'kalinlik': k.kalinlik,
                     'adet': adet, 'miktar': k.miktar or 0, 'agirlik': k.agirlik or 0,
                     'bundle_no': k.bundle_no or '', 'slab_no': k.slab_no or '',
-                    'birim': k.birim
+                    'birim': k.birim,
+                    # MS1/ET1: etiket icin — kasa ici adet, mense, konteyner
+                    'kasa_ici_adet': getattr(k, 'kasa_ici_adet', None) or 1,
+                    'mense': getattr(k, 'mense', None) or 'TURKIYE',
+                    'konteyner_id': getattr(k, 'konteyner_id', None),
                 })
                 continue
 
@@ -16430,6 +16471,7 @@ def create_app():
                     # K5: konteyner bilgisi parcalara TASINIR. Bundle
                     # bolme sonrasi gruplama yapilabilsin diye.
                     'konteyner_id': getattr(k, 'konteyner_id', None),
+                    'mense': getattr(k, 'mense', None) or 'TURKIYE',   # MS1
                 })
 
                 bundle_dolu += bu_parca
@@ -17292,6 +17334,214 @@ def create_app():
                                toplam_yazili=toplam_yazili)
 
 
+    # ══════════════════════════════════════════════════════════
+    #  ET1 — BUNDLE / CRATE ETİKETİ
+    # ══════════════════════════════════════════════════════════
+    # Her bundle (plaka) ve her kasa (ebatli) icin bir A5 etiket.
+    # Bundle numaralari PACKING LIST ile AYNI fonksiyondan gelir
+    # (_packing_list_bundle_bol) — etiket 7 ile packing list satiri 7
+    # ayni plakalari gosterir; elle numara yazilmaz.
+    #
+    # Kasa numarasi: kalemin kasa no'su (packing list'teki Crate No).
+    # Ayni kasa no'lu kalemler TEK etikette birlesir (bir kasada farkli
+    # olcu/kalinlik). Birden fazla kasalik kalem (adet > 1) kasalara
+    # bolunur; numara sayisalsa ardisik devam eder.
+    # BLOK kalemleri etiketlenmez.
+    ETIKET_MODLAR = ('logo', 'notr', 'alici')
+
+    def _etk_sayi(v):
+        """305.0 -> '305', 40.6 -> '40.6' (etikette gereksiz sifir yok)."""
+        try:
+            f = float(v or 0)
+        except (TypeError, ValueError):
+            return str(v or '')
+        return ('%.2f' % f).rstrip('0').rstrip('.') if f else ''
+
+    def _etk_m2(boy, yuk, adet, yedek=0):
+        try:
+            b, y = float(boy or 0), float(yuk or 0)
+            if b > 0 and y > 0:
+                return round(b * y / 10000.0 * int(adet or 0), 2)
+        except (TypeError, ValueError):
+            pass
+        return round(float(yedek or 0), 2)
+
+    def _etiket_listesi(p, kalemler):
+        kont_no = {k.id: (k.konteyner_no or '').strip()
+                   for k in Konteyner.query.filter_by(proforma_id=p.id).all()}
+
+        def _satir(cins, yuzey, boy, yuk, kal, adet, m2, blok='', slab='', mense=None, kid=None):
+            return {'cins': (cins or '').strip().upper(), 'yuzey': (yuzey or '').strip().upper(),
+                    'boy': boy, 'yuk': yuk, 'kal': kal, 'adet': int(adet or 0), 'm2': m2,
+                    'blok': blok or '', 'slab': slab or '', 'mense': (mense or 'TURKIYE').upper(),
+                    'kont': kont_no.get(kid, '') if kid else ''}
+
+        # ── Bundle'lar (PLAKA) ──
+        bundlelar, bsira = {}, []
+        for i, r in enumerate(_packing_list_bundle_bol(p, kalemler)):
+            if (r.get('urun_tip') or 'PLAKA') != 'PLAKA':
+                continue
+            no = str(r.get('bundle_no') or '').strip() or f'_{i}'
+            if no not in bundlelar:
+                bundlelar[no] = []
+                bsira.append(no)
+            bundlelar[no].append(_satir(
+                r.get('cins'), r.get('ozellik') or r.get('yuzey_spec'), r.get('boy'),
+                r.get('yukseklik'), r.get('kalinlik'), r.get('adet'),
+                _etk_m2(r.get('boy'), r.get('yukseklik'), r.get('adet'), r.get('miktar')),
+                r.get('blok_no'), r.get('slab_no'), r.get('mense'), r.get('konteyner_id')))
+
+        # ── Kasalar (EBATLI) ──
+        kasalar, ksira, isimsiz = {}, [], []
+        for k in kalemler:
+            if (k.urun_tip or '') != 'EBATLI':
+                continue
+            n = max(int(k.adet or 1), 1)
+            ici = int(getattr(k, 'kasa_ici_adet', 1) or 1)
+            ref = (k.blok_no or k.bundle_no or '').strip()
+            for j in range(n):
+                if not ref:
+                    anahtar = None
+                elif n == 1:
+                    anahtar = ref
+                elif ref.isdigit():
+                    anahtar = str(int(ref) + j)
+                else:
+                    anahtar = f'{ref}-{j + 1}'
+                satir = _satir(k.cins, k.yuzey_spec or k.ozellik, k.boy, k.yukseklik, k.kalinlik,
+                               ici, _etk_m2(k.boy, k.yukseklik, ici, (k.miktar or 0) / n),
+                               mense=getattr(k, 'mense', None), kid=getattr(k, 'konteyner_id', None))
+                if anahtar is None:
+                    isimsiz.append(satir)
+                    continue
+                if anahtar not in kasalar:
+                    kasalar[anahtar] = []
+                    ksira.append(anahtar)
+                kasalar[anahtar].append(satir)
+        # Numarasiz kasalar: kullanilmayan ilk sayilarla numaralanir
+        _kullanilan = set(ksira)
+        _sayac = 1
+        for satir in isimsiz:
+            while str(_sayac) in _kullanilan:
+                _sayac += 1
+            kasalar[str(_sayac)] = [satir]
+            ksira.append(str(_sayac))
+            _kullanilan.add(str(_sayac))
+
+        def _etiket(tur, no, satirlar, sira, toplam):
+            _tekil = lambda a: list(dict.fromkeys(x[a] for x in satirlar if x[a]))
+            cinsler, yuzeyler = _tekil('cins'), _tekil('yuzey')
+            kal = {_etk_sayi(x['kal']) for x in satirlar}
+            tek_kal = (tur == 'BUNDLE' and len(kal) == 1 and next(iter(kal)) != '')
+            karisik = len(cinsler) > 1 or len(yuzeyler) > 1
+            for x in satirlar:
+                parca = [_etk_sayi(x['boy']), _etk_sayi(x['yuk'])]
+                if not tek_kal and _etk_sayi(x['kal']):
+                    parca.append(_etk_sayi(x['kal']))
+                x['olcu'] = ' × '.join(v for v in parca if v)
+                x['urun'] = ' · '.join(v for v in (x['cins'], x['yuzey']) if v) if karisik else ''
+                x['ref'] = ' · '.join(v for v in (x['blok'], x['slab'].replace('-', '–')) if v)
+            no_goster = no if not no.startswith('_') else str(sira)
+            if no_goster.isdigit() and len(no_goster) < 2:
+                no_goster = no_goster.zfill(2)
+            return {
+                'tur': tur, 'no': no_goster, 'sira': sira, 'toplam': toplam,
+                'cins': cinsler[0] if len(cinsler) == 1 else ('MIXED' if cinsler else ''),
+                'yuzey': yuzeyler[0] if len(yuzeyler) == 1 else '',
+                'kalinlik': next(iter(kal)) if tek_kal else '',
+                'boyut_basligi': 'L × W' if tek_kal else 'L × W × T',
+                'ref_var': any(x['ref'] for x in satirlar),
+                'satirlar': satirlar,
+                'toplam_adet': sum(x['adet'] for x in satirlar),
+                'toplam_m2': round(sum(x['m2'] or 0 for x in satirlar), 2),
+                'mense': ' / '.join(_tekil('mense')) or 'TURKIYE',
+                'konteyner': ' / '.join(_tekil('kont')),
+            }
+
+        etiketler = [_etiket('BUNDLE', no, bundlelar[no], i + 1, len(bsira)) for i, no in enumerate(bsira)]
+        etiketler += [_etiket('CRATE', no, kasalar[no], i + 1, len(ksira)) for i, no in enumerate(ksira)]
+        return etiketler
+
+    def _etiket_anahtar(p):
+        return p.cari_id or ('M:' + (p.musteri or '').strip().upper())[:190]
+
+    def _etiket_ayar_oku(p):
+        k = Veriler.query.filter_by(kategori='etiket_marka', deger=_etiket_anahtar(p)).first()
+        mod = (k.kisaltma if k else None) or 'logo'
+        return {'mod': mod if mod in ETIKET_MODLAR else 'logo',
+                'metin': (k.ek_bilgi if k else None) or (p.musteri or '').strip().upper(),
+                'logo': (k.uzun_deger if k else None) or None}
+
+    @app.route('/api/proforma/<proforma_id>/etiket_ayar', methods=['GET'])
+    def api_proforma_etiket_ayar(proforma_id):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        p = Proforma.query.get(proforma_id)
+        if not p:
+            return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
+        a = _etiket_ayar_oku(p)
+        kalemler = ProformaKalem.query.filter_by(proforma_id=p.id).order_by(
+            ProformaKalem.sira, ProformaKalem.id).all()
+        et = _etiket_listesi(p, kalemler)
+        return jsonify({'ok': True, 'mod': a['mod'], 'metin': a['metin'],
+                        'alici_logo': a['logo'], 'musteri': p.musteri or '',
+                        'firma_logo_var': bool(_firma_logo_al()),
+                        'bundle': sum(1 for e in et if e['tur'] == 'BUNDLE'),
+                        'crate': sum(1 for e in et if e['tur'] == 'CRATE')})
+
+    @app.route('/api/proforma/<proforma_id>/etiket_ayar', methods=['POST'])
+    def api_proforma_etiket_ayar_kaydet(proforma_id):
+        """Musteri bazinda etiket ust serit tercihi. Body: {mod, metin,
+        logo}. logo: data URI = yeni logo, '' = sil, yok = dokunma."""
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        p = Proforma.query.get(proforma_id)
+        if not p:
+            return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
+        data = request.get_json(silent=True) or {}
+        mod = data.get('mod')
+        if mod not in ETIKET_MODLAR:
+            return jsonify({'ok': False, 'mesaj': 'Geçersiz seçim'}), 400
+        anahtar = _etiket_anahtar(p)
+        k = Veriler.query.filter_by(kategori='etiket_marka', deger=anahtar).first()
+        if not k:
+            k = Veriler(kategori='etiket_marka', deger=anahtar)
+            db.session.add(k)
+        k.kisaltma = mod
+        k.ek_bilgi = ' '.join(str(data.get('metin') or '').split())[:200] or None
+        if 'logo' in data:
+            logo = (data.get('logo') or '').strip()
+            if logo:
+                izinli = ('data:image/png;base64,', 'data:image/jpeg;base64,',
+                          'data:image/jpg;base64,', 'data:image/svg+xml;base64,',
+                          'data:image/webp;base64,')
+                if not logo.startswith(izinli):
+                    return jsonify({'ok': False, 'mesaj': 'Yalnızca PNG, JPG, SVG veya WEBP görseli yüklenebilir.'}), 400
+                if len(logo) * 3 / 4 / 1024 > 500:
+                    return jsonify({'ok': False, 'mesaj': 'Logo en fazla 500 KB olmalı.'}), 400
+            k.uzun_deger = logo or None
+        _log_audit('GUNCELLE', 'etiket_marka', anahtar,
+                   yeni={'mod': mod, 'metin': k.ek_bilgi, 'logo': bool(k.uzun_deger)})
+        ok, hata = _safe_commit('Etiket ayari')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True})
+
+    @app.route('/api/proforma/<proforma_id>/etiket')
+    def api_proforma_etiket(proforma_id):
+        """Bundle/crate etiketleri — A5 yatay, her etiket bir sayfa.
+        ?tur=bundle|crate yalnizca birini basar."""
+        if _auth_required(): return "Unauthorized", 401
+        p, kalemler, _ = _proforma_cikti_data(proforma_id)
+        if not p:
+            return "Proforma bulunamadi", 404
+        etiketler = _etiket_listesi(p, kalemler)
+        tur = (request.args.get('tur') or '').upper()
+        if tur in ('BUNDLE', 'CRATE'):
+            etiketler = [e for e in etiketler if e['tur'] == tur]
+        a = _etiket_ayar_oku(p)
+        mod = request.args.get('mod') if request.args.get('mod') in ETIKET_MODLAR else a['mod']
+        return render_template('etiket_print.html', p=p, etiketler=etiketler,
+                               serit_mod=mod, serit_metin=a['metin'], alici_logo=a['logo'])
+
     @app.route('/api/siparis/<siparis_id>/finansal_ozet')
     def api_siparis_finansal_ozet(siparis_id):
         """
@@ -17505,16 +17755,19 @@ def create_app():
             # EBATLI'da blok_no yok, kasa_no (referans kodu) var
             blok_no = getattr(stok, 'blok_no', None) or getattr(stok, 'kasa_no', None) or ''
             slab_no = getattr(stok, 'slab_no', '') or ''
+            mense = getattr(stok, 'mense', None) or 'TURKIYE'   # MS1
 
             if r.stok_tip == 'PLAKA':
                 # Gruplama anahtari: ayni blok/cins/yuzey/olcu -> tek kalem
-                anahtar = (blok_no, cins, ozellik, boy, yuk, kal)
+                # (MS1: farkli menseli plakalar AYRI kalem kalir)
+                anahtar = (blok_no, cins, ozellik, boy, yuk, kal, mense)
                 if anahtar not in gruplar:
                     gruplar[anahtar] = {
                         'stok_id': stok.id,        # ilk stok (referans)
                         'stok_idler': [],          # gruptaki tum stoklar
                         'urun_tip': 'PLAKA',
                         'cins': cins, 'ozellik': ozellik, 'blok_no': blok_no,
+                        'mense': mense,
                         'slab_no': slab_no,        # ilk plakanin slab no'su -> baslangic
                         'boy': boy, 'yukseklik': yuk, 'kalinlik': kal,
                         'm2': 0, 'sqft': 0, 'miktar': 0, 'adet': 0,
@@ -17548,6 +17801,7 @@ def create_app():
                     'stok_idler': [stok.id],
                     'urun_tip': r.stok_tip,
                     'cins': cins, 'ozellik': ozellik, 'blok_no': blok_no,
+                    'mense': mense,
                     'slab_no': slab_no,
                     'boy': boy, 'yukseklik': yuk, 'kalinlik': kal,
                     'm2': q3(m2), 'sqft': sqft,
