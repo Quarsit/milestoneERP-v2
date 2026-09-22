@@ -123,7 +123,7 @@ Etiket plaka (bundle) ve ebatlı (crate) kalemleri için basılır; blok kalemle
     <table>
       <thead><tr>
         <th>Size (cm) · {{ e.boyut_basligi }}</th>
-        {% if e.ref_var %}<th>Block / Slab No</th>{% endif %}
+        {% if e.ref_var %}<th>{{ 'Block / Slab No' if plaka_goster else 'Block No' }}</th>{% endif %}
         <th class="s">Pcs</th><th class="s">m²</th>
       </tr></thead>
       <tbody class="{% if e.satirlar|length == 1 %}tek{% elif e.satirlar|length > 6 %}cok{% endif %}">

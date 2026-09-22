@@ -325,7 +325,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   .cek-bas h3{font-size:1.3rem}
   /* Eylemler üstte — kaydırmadan ulaşılsın */
   .cek-eylemler{order:1;border-top:0;border-bottom:1px solid var(--cizgi);padding:12px 28px}
-  .cek-eylemler .blok-btn{flex:0 1 auto;min-width:0;padding:8px 14px}
+  .cek-eylemler .blok-btn{flex:0 0 auto;min-width:0;padding:8px 12px}
   .cek-gov{order:2;padding:22px 28px}
   /* Sütunlar İÇ sarmalayıcıda: yüksekliği sabit kaydırma kutusuna
      sütun verilirse tarayıcı taşan içeriği YANA yeni sütun olarak
@@ -1171,6 +1171,54 @@ function cekmeceAc(baslik, alt, govdeHTML, eylemHTML = '') {
   document.getElementById('cekEylem').innerHTML = eylemHTML;
   document.getElementById('ortu').classList.add('acik');
   document.getElementById('cekmece').classList.add('acik');
+  _eylemDengeKur();
+}
+
+/* PE1 — EYLEM DÜĞMELERİ DENGELİ SARAR.
+   Düğmeler tek satıra sığmayınca tarayıcı sığmayanı alta atıyordu:
+   üstte dolu bir satır, altta tek başına bir düğme ve sağda boşluk.
+   Gereken satır sayısı hesaplanır ve düğmeler bu satırlara EŞİT
+   yayılacak genişlik bulunur (sağ iç boşluk artırılarak). Sığıyorsa
+   hiçbir şey değişmez. Sayfa düğmeleri sonradan yeniden çizerse ya da
+   pencere boyu değişirse yeniden hesaplanır. */
+let _eylemGozlem = null;
+function _eylemDengele() {
+  const e = document.getElementById('cekEylem');
+  if (!e) return;
+  e.style.paddingRight = '';
+  const cs = getComputedStyle(e);
+  if (cs.display !== 'flex' || !document.getElementById('cekmece').classList.contains('acik')) return;
+  const bt = [...e.children].filter(x => x.offsetParent !== null);
+  if (bt.length < 2) return;
+  const gap = parseFloat(cs.columnGap) || 0;
+  const sagPad = parseFloat(cs.paddingRight) || 0;
+  const alan = e.clientWidth - (parseFloat(cs.paddingLeft) || 0) - sagPad;
+  const gen = bt.map(x => x.getBoundingClientRect().width);
+  const toplam = gen.reduce((t, w) => t + w, 0) + gap * (gen.length - 1);
+  if (toplam <= alan + 0.5) return;
+  const satirSay = t => {
+    let r = 1, cur = 0;
+    for (const w of gen) {
+      if (!cur) cur = w;
+      else if (cur + gap + w <= t + 0.5) cur += gap + w;
+      else { r++; cur = w; }
+    }
+    return r;
+  };
+  const hedefSatir = satirSay(alan);
+  let t = Math.max(Math.ceil(toplam / hedefSatir), Math.max(...gen));
+  while (t < alan && satirSay(t) > hedefSatir) t += 4;
+  if (t < alan) e.style.paddingRight = (sagPad + alan - t) + 'px';
+}
+function _eylemDengeKur() {
+  const e = document.getElementById('cekEylem');
+  if (!e) return;
+  if (!_eylemGozlem) {
+    _eylemGozlem = new MutationObserver(() => requestAnimationFrame(_eylemDengele));
+    _eylemGozlem.observe(e, { childList: true, subtree: true, characterData: true });
+    window.addEventListener('resize', () => requestAnimationFrame(_eylemDengele));
+  }
+  requestAnimationFrame(_eylemDengele);
 }
 function cekmeceKapat() {
   document.getElementById('ortu').classList.remove('acik');

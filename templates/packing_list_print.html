@@ -14,6 +14,8 @@ body{font-family:"IBM Plex Sans",Arial,sans-serif;font-size:10px;color:#1a1a1a;b
 .print-btn{position:fixed;top:16px;right:16px;background:#C25934;color:#fff;border:none;
   padding:10px 22px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;
   box-shadow:0 2px 8px rgba(0,0,0,.2);z-index:999}
+.plaka-btn{position:fixed;top:62px;right:16px;background:#fff;color:#1a1a1a;border:1px solid #C25934;
+  padding:9px 16px;border-radius:8px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.12);z-index:999}
 .page{max-width:850px;margin:0 auto;padding:20px}
 
 .header{display:flex;justify-content:space-between;align-items:flex-start;
@@ -72,6 +74,25 @@ tbody td.c{text-align:center}
 </head>
 <body>
 
+<!-- PL1: plaka no tercihi panelden buraya taşındı — belgeyi görürken
+     açıp kapatmak daha anlaşılır, paneldeki düğme satırını da sarmaz. -->
+<button class="plaka-btn no-print" onclick="plakaDegistir({{ 'false' if plaka_goster else 'true' }})" title="Bu müşterinin Packing List ve bundle etiketlerinde plaka no">Plaka no: <b>{{ 'Gizle' if plaka_goster else 'Göster' }}</b></button>
+<script>
+/* PL1: tercih müşteri bazında KAYDEDİLİR — etiket de aynı tercihi kullanır.
+   Kayıt yetkisi yoksa yalnızca bu görüntü değişir. */
+function plakaDegistir(goster) {
+  var git = function () {
+    location.replace(location.pathname + '?' + location.search.slice(1).split('&')
+      .filter(function (x) { return x && x.indexOf('plaka=') !== 0; })
+      .concat('plaka=' + (goster ? '1' : '0')).join('&'));
+  };
+  fetch('/api/proforma/{{ p.id|urlencode }}/etiket_ayar', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token() }}' },
+    body: JSON.stringify({ plaka: goster })
+  }).then(git, git);
+}
+</script>
 <button class="print-btn no-print" onclick="window.print()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Yazdır / PDF Kaydet</button>
 
 <div class="page">

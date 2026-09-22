@@ -464,7 +464,10 @@
           </div>
         </div>
       </div>
-      <p style="font-size:.8rem;color:var(--soluk);margin-top:14px">Seçim bu müşteri için hatırlanır. Etiketler A5 yatay basılır; A4 kağıda ikişer basmak için yazdırma penceresinde "Kağıt başına 2 sayfa" seçin.</p>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:.88rem;cursor:pointer">
+        <input type="checkbox" id="etkPlaka" style="width:auto;margin:0">
+        Plaka no göster <span style="color:var(--soluk);font-size:.8rem">— Packing List ile ortak tercih</span></label>
+      <p style="font-size:.8rem;color:var(--soluk);margin-top:10px">Seçim bu müşteri için hatırlanır. Etiketler A5 yatay basılır; A4 kağıda ikişer basmak için yazdırma penceresinde "Kağıt başına 2 sayfa" seçin.</p>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="etiketKapat()">Vazgeç</button>
@@ -710,12 +713,11 @@ function atanmamisGuncelle() {
 /* PL1: Packing List'te plaka no sütunu isteğe bağlı.
    confirm() KULLANILMADI — bu projede PWA/masaüstü kipinde
    engellendiği için daha önce ekstre hiç açılmamıştı (YAMA E3).
-   Tercih çekmecedeki onay kutusundan okunuyor. */
+   Tercih müşteri bazında kayıtlı (Packing List sayfası ve Etiket penceresi). */
 function packingAc(id) {
-  const kutu = document.getElementById('plPlakaGoster');
-  const goster = kutu ? kutu.checked : true;
-  window.open(`/api/proforma/${encodeURIComponent(id)}/html?mod=pl`
-              + (goster ? '' : '&plaka=0'), '_blank');
+  // PL1: plaka no tercihi müşteri bazında kayıtlı; sayfanın kendisinden
+  // (ve Etiket penceresinden) değiştirilir.
+  window.open(`/api/proforma/${encodeURIComponent(id)}/html?mod=pl`, '_blank');
 }
 
 function kontKapat() { document.getElementById('kontModal').classList.remove('acik'); }
@@ -738,6 +740,7 @@ async function etiketAc(id) {
   document.getElementById('etkLogoNot').textContent = d.firma_logo_var
     ? "Ayarlar › Firma'daki logo" : 'Kayıtlı logo yok — firma adı yazılır';
   document.getElementById('etkMetin').value = d.metin || '';
+  document.getElementById('etkPlaka').checked = d.plaka !== false;
   etiketLogoGoster(d.alici_logo);
   etiketModDegisti();
   document.getElementById('etkModal').classList.add('acik');
@@ -765,11 +768,12 @@ function etiketLogoSecildi(inp) {
 function etiketLogoKaldir() { ETK.logo = ''; etiketLogoGoster(''); }
 async function etiketleriAc() {
   const mod = document.querySelector('input[name=etkMod]:checked')?.value || 'logo';
-  const url = `/api/proforma/${encodeURIComponent(ETK.id)}/etiket?mod=${mod}`;
+  const plaka = document.getElementById('etkPlaka').checked;
+  const url = `/api/proforma/${encodeURIComponent(ETK.id)}/etiket?mod=${mod}&plaka=${plaka ? 1 : 0}`;
   // Pencere ÖNCE açılır: await sonrası açılan pencereyi tarayıcı engeller.
   const w = window.open('about:blank', '_blank');
   if (yazabilir('proforma')) {
-    const govde = { mod, metin: document.getElementById('etkMetin').value.trim() };
+    const govde = { mod, plaka, metin: document.getElementById('etkMetin').value.trim() };
     if (ETK.logo !== undefined) govde.logo = ETK.logo;
     try {
       await api(`/api/proforma/${encodeURIComponent(ETK.id)}/etiket_ayar`, { method: 'POST', body: JSON.stringify(govde) });
@@ -1036,14 +1040,10 @@ async function detayAc(id) {
   // Belge çıktıları — PI ve PL her durumda alınabilir; CI yalnızca onaylanmış proformada
   eylem.push(`<button class="blok-btn birincil" onclick="window.open('/api/proforma/${encodeURIComponent(id)}/html?mod=pi','_blank')">Proforma (PI)</button>`);
   /* PL1: plaka no sütunu isteğe bağlı. Bazı müşteriler plaka
-     numarası istemiyor; tercih KULLANICIDA kalsın. Seçim
-     tarayıcıda saklanır ki her seferinde işaretlenmesin. */
+     numarası istemiyor; tercih müşteri bazında kaydedilir ve Packing
+     List ile bundle etiketinde ORTAK kullanılır. */
   eylem.push(`<button class="blok-btn" onclick="packingAc('${kacar(id)}')">Packing List</button>`);
   eylem.push(`<button class="blok-btn" onclick="etiketAc('${kacar(id)}')" title="Her bundle ve kasa için A5 etiket">Etiket</button>`);
-  eylem.push(`<label class="blok-btn" style="display:flex;align-items:center;gap:7px;
-      cursor:pointer;font-weight:500" title="Çeki listesinde plaka numaraları görünsün mü?">
-      <input type="checkbox" id="plPlakaGoster" checked style="width:auto;margin:0">
-      Plaka no</label>`);
   const onayli = (p.durum === 'Onaylandi' || p.durum === 'Gonderildi' || p.durum === 'Faturalandi');
   if (onayli)
     eylem.push(`<button class="blok-btn" onclick="window.open('/api/proforma/${encodeURIComponent(id)}/html?mod=ci','_blank')">Commercial Inv.</button>`);

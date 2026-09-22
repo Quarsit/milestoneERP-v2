@@ -16614,8 +16614,7 @@ def create_app():
                                # PL1: plaka no sutunu ISTEGE BAGLI.
                                # Varsayilan GOSTER — eski davranis
                                # korunur; kapatmak acik bir tercih.
-                               plaka_goster=(request.args.get('plaka', '1')
-                                             not in ('0', 'false', 'hayir')),
+                               plaka_goster=_plaka_goster(p),
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
@@ -17325,8 +17324,7 @@ def create_app():
                                # PL1: plaka no sutunu ISTEGE BAGLI.
                                # Varsayilan GOSTER — eski davranis
                                # korunur; kapatmak acik bir tercih.
-                               plaka_goster=(request.args.get('plaka', '1')
-                                             not in ('0', 'false', 'hayir')),
+                               plaka_goster=_plaka_goster(p),
                                konteynerler=_kont_gruplar,
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
@@ -17366,7 +17364,7 @@ def create_app():
             pass
         return round(float(yedek or 0), 2)
 
-    def _etiket_listesi(p, kalemler):
+    def _etiket_listesi(p, kalemler, plaka=True):
         kont_no = {k.id: (k.konteyner_no or '').strip()
                    for k in Konteyner.query.filter_by(proforma_id=p.id).all()}
 
@@ -17440,7 +17438,8 @@ def create_app():
                     parca.append(_etk_sayi(x['kal']))
                 x['olcu'] = ' × '.join(v for v in parca if v)
                 x['urun'] = ' · '.join(v for v in (x['cins'], x['yuzey']) if v) if karisik else ''
-                x['ref'] = ' · '.join(v for v in (x['blok'], x['slab'].replace('-', '–')) if v)
+                # PL1: plaka no, Packing List ile AYNI tercihe bagli
+                x['ref'] = ' · '.join(v for v in (x['blok'], x['slab'].replace('-', '–') if plaka else '') if v)
             no_goster = no if not no.startswith('_') else str(sira)
             if no_goster.isdigit() and len(no_goster) < 2:
                 no_goster = no_goster.zfill(2)
@@ -17465,6 +17464,19 @@ def create_app():
     def _etiket_anahtar(p):
         return p.cari_id or ('M:' + (p.musteri or '').strip().upper())[:190]
 
+    def _plaka_tercih(p):
+        """PL1: plaka no gosterilsin mi — musteri bazinda kayitli tercih
+        (Packing List ve etiket AYNI tercihi kullanir). Varsayilan: evet."""
+        k = Veriler.query.filter_by(kategori='belge_plaka', deger=_etiket_anahtar(p)).first()
+        return not (k and k.kisaltma == '0')
+
+    def _plaka_goster(p):
+        """Istekte ?plaka= varsa o (tek seferlik), yoksa kayitli tercih."""
+        v = request.args.get('plaka')
+        if v is None:
+            return _plaka_tercih(p)
+        return v not in ('0', 'false', 'hayir')
+
     def _etiket_ayar_oku(p):
         k = Veriler.query.filter_by(kategori='etiket_marka', deger=_etiket_anahtar(p)).first()
         mod = (k.kisaltma if k else None) or 'logo'
@@ -17486,7 +17498,8 @@ def create_app():
                         'alici_logo': a['logo'], 'musteri': p.musteri or '',
                         'firma_logo_var': bool(_firma_logo_al()),
                         'bundle': sum(1 for e in et if e['tur'] == 'BUNDLE'),
-                        'crate': sum(1 for e in et if e['tur'] == 'CRATE')})
+                        'crate': sum(1 for e in et if e['tur'] == 'CRATE'),
+                        'plaka': _plaka_tercih(p)})
 
     @app.route('/api/proforma/<proforma_id>/etiket_ayar', methods=['POST'])
     def api_proforma_etiket_ayar_kaydet(proforma_id):
@@ -17497,10 +17510,24 @@ def create_app():
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
         data = request.get_json(silent=True) or {}
+        anahtar = _etiket_anahtar(p)
+        # PL1: plaka no tercihi — Packing List sayfasindaki dugme yalnizca
+        # bunu gonderir; etiket penceresi ikisini birlikte.
+        if 'plaka' in data:
+            kp = Veriler.query.filter_by(kategori='belge_plaka', deger=anahtar).first()
+            if not kp:
+                kp = Veriler(kategori='belge_plaka', deger=anahtar)
+                db.session.add(kp)
+            kp.kisaltma = '1' if data.get('plaka') else '0'
+            if 'mod' not in data:
+                ok, hata = _safe_commit('Plaka no tercihi')
+                if not ok:
+                    return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+                return jsonify({'ok': True})
         mod = data.get('mod')
         if mod not in ETIKET_MODLAR:
+            db.session.rollback()
             return jsonify({'ok': False, 'mesaj': 'Geçersiz seçim'}), 400
-        anahtar = _etiket_anahtar(p)
         k = Veriler.query.filter_by(kategori='etiket_marka', deger=anahtar).first()
         if not k:
             k = Veriler(kategori='etiket_marka', deger=anahtar)
@@ -17533,14 +17560,15 @@ def create_app():
         p, kalemler, _ = _proforma_cikti_data(proforma_id)
         if not p:
             return "Proforma bulunamadi", 404
-        etiketler = _etiket_listesi(p, kalemler)
+        etiketler = _etiket_listesi(p, kalemler, plaka=_plaka_goster(p))
         tur = (request.args.get('tur') or '').upper()
         if tur in ('BUNDLE', 'CRATE'):
             etiketler = [e for e in etiketler if e['tur'] == tur]
         a = _etiket_ayar_oku(p)
         mod = request.args.get('mod') if request.args.get('mod') in ETIKET_MODLAR else a['mod']
         return render_template('etiket_print.html', p=p, etiketler=etiketler,
-                               serit_mod=mod, serit_metin=a['metin'], alici_logo=a['logo'])
+                               serit_mod=mod, serit_metin=a['metin'], alici_logo=a['logo'],
+                               plaka_goster=_plaka_goster(p))
 
     @app.route('/api/siparis/<siparis_id>/finansal_ozet')
     def api_siparis_finansal_ozet(siparis_id):

@@ -282,3 +282,18 @@ def test_et1_bundle_crate_etiketleri_ve_mense():
     assert c.post('/api/proforma/PET/etiket_ayar', json={'mod': 'x'}, headers=H).status_code == 400
     ci = c.get('/api/proforma/PET/html?mod=ci').get_data(as_text=True)
     assert 'TURKIYE / IRAN' in ci and 'TURKEY' not in ci
+
+
+def test_pl1_plaka_tercihi_pl_ve_etikette_ortak():
+    """PL1: plaka no tercihi musteri bazinda saklanir; hem packing list
+    hem etiket ayni tercihe uyar; ?plaka= tek seferlik gecersiz kilar."""
+    c = istemci('admin', 'ADMIN')
+    assert c.post('/api/proforma/PET/etiket_ayar', json={'plaka': False}, headers=H).status_code == 200
+    assert c.get('/api/proforma/PET/etiket_ayar').get_json()['plaka'] is False
+    et = c.get('/api/proforma/PET/etiket').get_data(as_text=True)
+    assert '45 · 1–8' not in et and 'Block No' in et
+    pl = c.get('/api/proforma/PET/html?mod=pl').get_data(as_text=True)
+    assert 'Plaka no: <b>Göster' in pl
+    assert '45 · 1–8' in c.get('/api/proforma/PET/etiket?plaka=1').get_data(as_text=True)
+    c.post('/api/proforma/PET/etiket_ayar', json={'plaka': True}, headers=H)
+    assert '45 · 1–8' in c.get('/api/proforma/PET/etiket').get_data(as_text=True)
