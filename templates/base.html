@@ -437,7 +437,22 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   .kabuk{grid-template-columns:minmax(0,1fr)}
   .alt-sekmeler{overflow-x:auto;scrollbar-width:none}
   .alt-sekme{flex:none;white-space:nowrap}
-  .ray{flex-direction:row;height:auto;position:fixed;bottom:0;top:auto;left:0;right:0;z-index:35;padding:6px 8px;justify-content:space-around}
+  /* MB1 — ALT ÇUBUK EŞİT SÜTUNLAR.
+     Eskiden .ray bir flex satırdı ve çocukları ÜÇ kutuydu: beş
+     alanı taşıyan .ray-grup, İşlem ve Ayarlar. Üçü de flex:1
+     aldığı için beş alan soldaki üçte bire sıkışıyor, İşlem tek
+     başına ekranın üçte birini kaplıyordu. Artık ızgara: .ray-grup
+     ve .ray-oge `display:contents` ile saydamlaşır, yedi düğmenin
+     her biri eşit sütun ve tam dokunma yüksekliği alır. */
+  .ray{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;align-items:stretch;
+    height:auto;position:fixed;bottom:0;top:auto;left:0;right:0;z-index:35;gap:2px;
+    padding:6px 6px calc(6px + env(safe-area-inset-bottom, 0px))}
+  .ray-grup,.ray-oge{display:contents}
+  .ray-btn{width:100%;height:100%;min-height:50px;padding:7px 2px 6px;gap:3px;
+    border-radius:12px;justify-content:center}
+  .ray-btn svg{width:22px;height:22px}
+  .ray-btn span{font-size:.64rem;letter-spacing:0;line-height:1.1}
+  .ray-islem{background:rgba(166,107,8,.18)}
   .marka,.ray-bosluk{display:none}
   .icerik{padding:18px 16px 90px}
   .kpiler{grid-template-columns:1fr 1fr!important}

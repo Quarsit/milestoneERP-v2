@@ -35,6 +35,26 @@
 }
 .tarih-cip { display: none }
 
+/* MB1: Çıkış tek başına satıra düşüp 14 px'lik bir bağlantı olarak
+   kalıyordu — parmakla zor. Avatarla birlikte satır sonuna alınır ve
+   dokunma yüksekliği verilir. */
+.ust-sag { width: 100%; justify-content: flex-end; align-items: center }
+/* Sıra: kur, avatar ve Çıkış aynı satırda; sayfa düğmeleri altta. */
+.ust-sag .kur-cip { order: -2; margin-right: auto }
+.ust-sag .avatar, .ust-sag .cikis-btn { order: -1 }
+/* Düğmeler kendi satırında kalsın: taşarsa alt satıra inerler,
+   daraltılıp üst üste binmezler. */
+.ust-sag .disa-btn, .ust-sag .btn-yeni {
+  flex: 0 0 auto; white-space: nowrap;
+  padding: 0 14px; font-size: .84rem; min-height: 42px;
+}
+.ust-sag .disa-btn svg { display: none }
+.ust-sag .cikis-btn {
+  display: flex; align-items: center; min-height: 40px;
+  padding: 0 12px; border: 1px solid var(--cizgi-koyu);
+  border-radius: var(--r-kucuk); font-weight: 600;
+}
+
 /* Alt sekmeler artık üstte sabitlenir (.ust static olduğu için top:0) */
 .alt-sekmeler {
   top: 0;
@@ -46,33 +66,31 @@
    .ray yatay oluyordu ama içindeki .ray-grup column kalıyordu.
    ───────────────────────────────────────────────────────────── */
 .ray {
-  flex-direction: row;
+  /* MB1: eşit sütunlar — kural base.html'deki ızgarayla aynı,
+     burada yalnızca telefona özgü ölçüler. */
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
   height: auto;
-  padding: 4px 2px 6px;
-  gap: 0;
-  justify-content: space-between;
+  gap: 2px;
+  padding: 5px 5px calc(5px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid rgba(255,255,255,.12);
 }
-.ray-grup {
-  flex-direction: row;      /* ← asıl düzeltme */
-  width: auto;
-  flex: 1;
-  gap: 0;
-  justify-content: space-around;
-}
-.ray-oge {
-  width: auto;
-  flex: 1;
-}
+.ray-grup, .ray-oge { display: contents }
 .ray-btn {
   width: 100%;
+  height: 100%;
   min-width: 0;
-  padding: 6px 2px 4px;
-  gap: 2px;
+  min-height: 48px;
+  padding: 6px 1px 5px;
+  gap: 3px;
+  border-radius: 12px;
+  justify-content: center;
 }
-.ray-btn svg { width: 20px; height: 20px }
-.ray-btn span { font-size: .6rem; line-height: 1.15; letter-spacing: -.01em }
-.ray-islem { flex: 1 }
+.ray-btn svg { width: 21px; height: 21px }
+.ray-btn span { font-size: .63rem; line-height: 1.1; letter-spacing: -.01em }
+.ray-islem { background: rgba(166,107,8,.18) }
 
 /* Uçan alt menüler telefonda gizli kalır — o görevi sayfa içindeki
    "Satış Hattı / Proforma / Faturalar…" alt sekmeleri görüyor. */
@@ -143,6 +161,11 @@ img, canvas { max-width: 100% }
 
 /* Çok dar ekranlar (küçük telefonlar) */
 @media (max-width: 400px) {
+  /* MB1: KPI kartları TEK sütuna inmiyor artık — beş kart ekranı
+     boydan boya dolduruyor, listeye inmek için uzun kaydırma
+     gerekiyordu. İki sütun 360 px'de de rahat okunuyor. */
+  .ray-btn span { font-size: .58rem }
+}
+@media (max-width: 330px) {
   .kpiler { grid-template-columns: 1fr !important }
-  .ray-btn span { font-size: .55rem }
 }
