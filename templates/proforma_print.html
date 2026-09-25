@@ -173,7 +173,7 @@ tbody td.c{text-align:center}
         <td class="r">{{ k.yukseklik|int if k.yukseklik else '' }}</td>
         <td class="r">{% if k.urun_tip == 'BLOK' %}{{ (k.en or k.kalinlik)|int if (k.en or k.kalinlik) else '' }}{% else %}{{ k.kalinlik if k.kalinlik else '' }}{% endif %}</td>
         <td class="r">{{ (k.adet or 1) * (k.kasa_ici_adet or 1) }}</td>
-        <td class="r">{{ '%.3f'|format(k.miktar or 0) }}{% if nsb.karma_birim %} {{ (k.birim or '')|lower }}{% endif %}</td>
+        <td class="r">{{ '%.2f'|format(k.miktar or 0) }}{% if nsb.karma_birim %} {{ (k.birim or '')|lower }}{% endif %}</td>
         <td class="r">{{ '%.2f'|format(k.birim_fiyat or 0) }} {{ k.doviz or 'USD' }}</td>
         <td class="r" style="font-size:9px;color:#c0392b">
           {%- if k.iskonto and k.iskonto > 0 -%}
@@ -194,7 +194,7 @@ tbody td.c{text-align:center}
       <tr class="toplam-satir">
         <td colspan="{{ 6 if blok_belge else 7 }}" style="text-align:right;color:#1A1F1B">{{ _ceviri('belge.totally', dil) }}</td>
         <td class="r">{{ ns.toplam_adet }}</td>
-        <td class="r">{{ '%.3f'|format(ns.toplam_m) }}</td>
+        <td class="r">{{ '%.2f'|format(ns.toplam_m) }}</td>
         <td class="r"></td>
         <td class="r"></td>
         <td class="r">{{ '{:,.2f}'.format(ns.toplam_net or ns.toplam_usd or 0) }}</td>

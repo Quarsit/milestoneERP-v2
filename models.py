@@ -17,11 +17,17 @@ db = SQLAlchemy()
 # TypeDecorator ile depolama ve SQL tarafi toplama KESIN olur,
 # Python tarafi degismez. Yuksek fayda / sifir risk.
 class Para(db.TypeDecorator):
-    """Parasal deger. Veritabaninda NUMERIC(18,4), Python'da float."""
+    """Parasal deger. NUMERIC(18,2) — Python'da float.
+
+    ON1 — ESKIDEN 4 HANEYDI. Resmi muhasebe programi 2 haneyle
+    calisiyor; fazla haneler her satirda kurus altinda sapma birakiyor
+    ve 58 kalemlik bir belgede iki sistemin toplami tutmuyordu.
+    Doviz KURU (Kur, 6 hane) ve oranlar DEGISMEDI — onlar carpan.
+    """
     impl = db.Numeric
     cache_ok = True
 
-    def __init__(self, precision=18, scale=4, **kw):
+    def __init__(self, precision=18, scale=2, **kw):
         super().__init__(precision=precision, scale=scale, **kw)
 
     def process_result_value(self, value, dialect):
@@ -41,12 +47,12 @@ class Kur(db.TypeDecorator):
 
 
 class Olcu(db.TypeDecorator):
-    """Olcu/miktar. NUMERIC(18,3) — m2, m3, kg, adet, oran."""
+    """Olcu/miktar. NUMERIC(18,2) — m2, m3, kg, adet, oran.  (ON1: 3 → 2)"""
     impl = db.Numeric
     cache_ok = True
 
-    def __init__(self, precision=18, scale=3, **kw):
-        super().__init__(precision=precision, scale=3, **kw)
+    def __init__(self, precision=18, scale=2, **kw):
+        super().__init__(precision=precision, scale=2, **kw)
 
     def process_result_value(self, value, dialect):
         return None if value is None else float(value)

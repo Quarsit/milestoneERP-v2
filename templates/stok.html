@@ -1466,7 +1466,7 @@ function hesapla() {
   let olcu = 0, miktar = 0, miktarAd = '';
   if (t === 'BLOK') {
     olcu = (boy * yuk * en) / 1000000;                    // m³
-    document.getElementById('sOlcu').value = olcu ? olcu.toFixed(3) + ' m³' : '';
+    document.getElementById('sOlcu').value = olcu ? olcu.toFixed(2) + ' m³' : '';
     miktar = fb === 'ton' ? tonaj : olcu;
     miktarAd = fb === 'ton' ? 'ton' : 'm³';
   } else if (t === 'EBATLI') {

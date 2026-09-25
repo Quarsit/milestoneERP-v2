@@ -643,8 +643,10 @@ const RZ = { 'Taslak':'rz-gri', 'Ic Onay':'rz-kehribar', 'Gonderildi':'rz-mavi',
              'Faturalandi':'rz-kehribar', 'Iptal':'rz-kirmizi', 'Revize':'rz-gri' };
 const RENK = { 'Taslak':'--cizgi-koyu', 'Ic Onay':'--kehribar', 'Gonderildi':'--mavi', 'Onaylandi':'--verde',
                'Faturalandi':'--kehribar', 'Iptal':'--kirmizi', 'Revize':'--soluk' };
-const q3 = x => Math.round((parseFloat(x) || 0) * 1000) / 1000;
+/* ON1: 3 → 2 basamak. Resmi muhasebe programı 2 basamakla çalışıyor;
+   3. hane iki sistem arasında yuvarlama farkı üretiyordu. */
 const q2 = x => Math.round((parseFloat(x) || 0) * 100) / 100;
+const q3 = q2;   // eski ad, aynı yuvarlama
 
 let TUM = [], DURUM = '', ARA = '', KALEMLER = [], CARILER = [], BANKALAR = [], SIPARISLER = [];
 let DUZENLE_ID = null;   // dolu ise modal düzenleme modunda → PUT
@@ -1773,7 +1775,7 @@ function stokSecSuz() {
         : `${x.boy || 0}×${x.yukseklik || 0}${x.kalinlik ? ' · ' + x.kalinlik + ' cm' : ''}`;
       const miktar = tip === 'BLOK'
         ? `${(x.tonaj || 0).toFixed(2)} t`
-        : `${(x.m2 || x.metraj_m2 || 0).toFixed(3)}`;
+        : `${(x.m2 || x.metraj_m2 || 0).toFixed(2)}`;
       return `<tr style="border-bottom:1px solid var(--cizgi)">
         <td style="padding:6px 8px"><input type="checkbox" ${secili ? 'checked' : ''}
              onchange="stokSecDegis('${kacar(x.id)}', this.checked)" style="width:15px;height:15px"></td>
@@ -1933,14 +1935,14 @@ function kalemDegerleriHesapla(k) {
   } else {
     m2_raw = (parseFloat(k.boy || 0) * parseFloat(k.yukseklik || 0) / 10000) * (parseInt(k.adet) || 1);
   }
-  k.m2 = q3(m2_raw);
-  k.sqft = q3(m2_raw * 10.7639);
+  k.m2 = q2(m2_raw);
+  k.sqft = q2(m2_raw * 10.7639);
 
   if (k.urun_tip === 'BLOK') {
-    if (k._siparisten || k.tonaj) k.miktar = q3(parseFloat(k.tonaj || k.miktar || 0));
+    if (k._siparisten || k.tonaj) k.miktar = q2(parseFloat(k.tonaj || k.miktar || 0));
     else {
       const m3 = (parseFloat(k.boy || 0) * parseFloat(k.yukseklik || 0) * parseFloat(k.kalinlik || 0)) / 1000000;
-      if (m3 > 0 && !k._manuel_miktar) k.miktar = q3(m3);
+      if (m3 > 0 && !k._manuel_miktar) k.miktar = q2(m3);
     }
   } else if (!k._manuel_miktar && m2_raw > 0) {
     k.miktar = k.m2;
@@ -1948,9 +1950,9 @@ function kalemDegerleriHesapla(k) {
 
   // Ağırlık: m² × (kalınlık × 27.5 kg) — mermer yoğunluk yaklaşımı
   const birimAgirlik = (parseFloat(k.kalinlik) || 2) * 27.5;
-  k.agirlik_kg = q3(m2_raw * birimAgirlik);
+  k.agirlik_kg = q2(m2_raw * birimAgirlik);
 
-  k.toplam_fiyat = q3((parseFloat(k.miktar) || 0) * (parseFloat(k.birim_fiyat) || 0));
+  k.toplam_fiyat = q2((parseFloat(k.miktar) || 0) * (parseFloat(k.birim_fiyat) || 0));
   k.net_fiyat = k.toplam_fiyat;
 }
 
@@ -2101,7 +2103,7 @@ function kalemEkle() {
     miktar, birim: document.getElementById('kBirim').value,
     m2: h.m2 || (document.getElementById('kBirim').value === 'm2' ? miktar : null),
     sqft: h.sqft || null, agirlik_kg: h.agirlik_kg || null,
-    birim_fiyat: fiyat, toplam_fiyat: q3(miktar * fiyat), net_fiyat: q3(miktar * fiyat),
+    birim_fiyat: fiyat, toplam_fiyat: q2(miktar * fiyat), net_fiyat: q2(miktar * fiyat),
     doviz: dov
   };
 
@@ -2215,7 +2217,7 @@ async function tumKalemlereFiyat() {
   if (!hepsi) return;
   KALEMLER.forEach(k => {
     k.birim_fiyat = f;
-    k.toplam_fiyat = q3((parseFloat(k.miktar) || 0) * f);
+    k.toplam_fiyat = q2((parseFloat(k.miktar) || 0) * f);
     k.net_fiyat = k.toplam_fiyat;
   });
   kalemListeCiz();

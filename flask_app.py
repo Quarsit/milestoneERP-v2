@@ -942,12 +942,12 @@ def create_app():
     # ════════════════════════════════════════════════════════
     # MERKEZI YUVARLAMA HELPER'LARI (Karma yaklaşım — Madde 15)
     # ════════════════════════════════════════════════════════
-    # q3()     -> para ve miktar: 3 basamak, HALF_UP (banker's rounding değil)
+    # q2()     -> para ve miktar: 3 basamak, HALF_UP (banker's rounding değil)
     # q_kur()  -> kur değeri: 6 basamak (TCMB hassasiyetiyle uyumlu)
     # q_oran() -> yüzde/marj: 4 basamak (görsel olarak 2 basamak gösterilir)
     #
     # Kural: 4. basamak >=5 ise yukarı yuvarlanır (23.9768 -> 23.977).
-    # Toplam hesaplamadan ÖNCE kalemleri q3() ile yuvarla -> yuvarlama farkı birikmesin.
+    # Toplam hesaplamadan ÖNCE kalemleri q2() ile yuvarla -> yuvarlama farkı birikmesin.
 
     def _q(value, ndigits):
         if value is None or value == '':
@@ -962,9 +962,25 @@ def create_app():
             except Exception:
                 return 0.0
 
-    def q3(value):
-        """Para ve miktar için 3 basamak yuvarlama."""
-        return _q(value, 3)
+    def q2(value):
+        """Para ve miktar için 2 basamak yuvarlama.
+
+        ON1 — ESKIDEN 3 BASAMAKTI. Resmi muhasebe programi 2 basamakla
+        calisiyor; 3. hane yuzunden ayni belge iki sistemde farkli
+        toplam veriyordu (her satirda kurus altinda sapma, 58 kalemde
+        gorunur fark). Kur (q_kur, 6 hane) ve oran (q_oran, 4 hane)
+        DEGISMEDI — onlar carpan, tutar degil.
+        """
+        return _q(value, 2)
+
+    # Eski ad: 467 cagri yerinde q3 kullaniliyordu; hepsi q2'ye
+    # cevrildi. Disaridan (betikler) cagiran kalmasin diye takma ad
+    # birakildi — ayni 2 basamaga yuvarlar.
+    q3 = q2
+
+    # Testler ve yardimci betikler ayni yuvarlamayi kullansin diye
+    # uygulamaya baglanir (ikinci bir kopya = iki farkli sonuc riski).
+    app.q2 = q2
 
     def q_kur(value):
         """Döviz kuru için 6 basamak yuvarlama."""
@@ -1030,7 +1046,7 @@ def create_app():
                     CariHareket.alacak > 0).scalar() or 0
                 tahsil += float(dt)
         yuzde = (tahsil / toplam * 100) if toplam > 0 else 0
-        return {'toplam': q3(toplam), 'tahsil': q3(tahsil), 'yuzde': round(yuzde, 1),
+        return {'toplam': q2(toplam), 'tahsil': q2(tahsil), 'yuzde': round(yuzde, 1),
                 'doviz': s_doviz, 'fatura_sayisi': len(faturalar)}
 
     def _kdv_hesapla(toplam_tutar, kdv_oran, kdv_dahil_mi):
@@ -1043,14 +1059,14 @@ def create_app():
         tutar = float(toplam_tutar or 0)
         oran = float(kdv_oran or 0) / 100.0
         if oran <= 0:
-            return q3(tutar), 0.0, q3(tutar)
+            return q2(tutar), 0.0, q2(tutar)
         if kdv_dahil_mi:
             matrah = tutar / (1 + oran)
             kdv = tutar - matrah
-            return q3(matrah), q3(kdv), q3(tutar)
+            return q2(matrah), q2(kdv), q2(tutar)
         else:
             kdv = tutar * oran
-            return q3(tutar), q3(kdv), q3(tutar + kdv)
+            return q2(tutar), q2(kdv), q2(tutar + kdv)
 
     # ════════════════════════════════════════════════════════
     # ÇOK DÖVİZLİ MUHASEBE (Faz 7 - Madde 11)
@@ -1132,7 +1148,7 @@ def create_app():
         if not tutar:
             return 0.0, 1.0
         if doviz == 'TRY' or not doviz:
-            return q3(tutar), 1.0
+            return q2(tutar), 1.0
         if kur is None or kur <= 0:
             kur = _kur_getir(doviz, tarih)
         # YAMA E1a — KUR YOKSA SIFIR YAZMA.
@@ -1154,13 +1170,13 @@ def create_app():
             # korur ve fark edilebilir bir buyukluk birakir.
             #
             # NOT: None DONMUYORUZ — bu fonksiyonun 14 cagirani var
-            # ve bazilari sonucu q3() ile sariyor; q3(None) 0.0 doner,
+            # ve bazilari sonucu q2() ile sariyor; q2(None) 0.0 doner,
             # yani eski hataya geri donerdik.
             app.logger.warning(
                 f'_try_karsilik: {doviz} icin {tarih} tarihli kur YOK. '
                 f'Kur arsivini doldurun: python kur_arsivi_doldur.py')
-            return q3(tutar), 1.0
-        return q3(float(tutar) * float(kur)), q_kur(kur)
+            return q2(tutar), 1.0
+        return q2(float(tutar) * float(kur)), q_kur(kur)
 
     def _kur_farki_hesapla_ve_olustur(yeni_hareket, islet=False):
         """
@@ -1253,8 +1269,8 @@ def create_app():
             eslesen = min(karsi_tutar, yeni_tutar)
             if eslesen <= 0:
                 return None
-            eski_try = q3(eslesen * float(eski_kur))
-            yeni_try = q3(eslesen * float(yeni_kur))
+            eski_try = q2(eslesen * float(eski_kur))
+            yeni_try = q2(eslesen * float(yeni_kur))
             karsi.kapatildi = (karsi_tutar <= yeni_tutar)
             yeni_hareket.kapatildi = (yeni_tutar <= karsi_tutar)
         else:
@@ -1272,13 +1288,13 @@ def create_app():
             eslesen = min(karsi_tutar, yeni_karsi_esdeger)  # karşı döviz cinsinden
             if eslesen <= 0:
                 return None
-            eski_try = q3(eslesen * float(eski_kur))          # fatura günü kuruyla
-            yeni_try = q3(eslesen * float(guncel_karsi_kur))  # ödeme günü kuruyla
+            eski_try = q2(eslesen * float(eski_kur))          # fatura günü kuruyla
+            yeni_try = q2(eslesen * float(guncel_karsi_kur))  # ödeme günü kuruyla
             _eps = 0.01
             karsi.kapatildi = (karsi_tutar <= yeni_karsi_esdeger + _eps)
             yeni_hareket.kapatildi = (yeni_karsi_esdeger <= karsi_tutar + _eps)
 
-        fark = q3(yeni_try - eski_try)
+        fark = q2(yeni_try - eski_try)
 
         # Kapanis isaretle
         if karsi.kapatildi:
@@ -1351,9 +1367,9 @@ def create_app():
         # ad kullanilmis ve NameError uretmisti; gercek uc noktayla
         # test ederken yakalandi.
         if not islet:
-            return {'islendi': False, 'tutar': q3(abs(fark)),
+            return {'islendi': False, 'tutar': q2(abs(fark)),
                     'islem_tip': kf_islem,
-                    'mesaj': f'{q3(abs(fark))} TRY kur farkı hesaplandı '
+                    'mesaj': f'{q2(abs(fark))} TRY kur farkı hesaplandı '
                              f'(kayıt OLUŞTURULMADI — işlemek için '
                              f'"kur farkı işlet" seçeneğini kullanın)'}
 
@@ -1364,13 +1380,13 @@ def create_app():
             cari_unvan=yeni_hareket.cari_unvan,
             islem_tip=kf_islem,
             aciklama=f'Otomatik kur farki - {karsi.id} ile {yeni_hareket.id} eslesmesi{_capraz_not}',
-            borc=q3(kf_borc),
-            alacak=q3(kf_alacak),
+            borc=q2(kf_borc),
+            alacak=q2(kf_alacak),
             doviz='TRY',
             kur_uygulanan=1.0,
             kur_kaynak='TCMB',
-            borc_try=q3(kf_borc),
-            alacak_try=q3(kf_alacak),
+            borc_try=q2(kf_borc),
+            alacak_try=q2(kf_alacak),
             kaynak='otomatik_kur_farki',
             baglanti_tip='hareket',
             baglanti_id=karsi.id,
@@ -1455,9 +1471,9 @@ def create_app():
                 maliyet_tip='Devreden KDV',
                 baglanti_tip='stok',
                 baglanti_id=stok_id,
-                tutar=q3(kdv_tutar),
+                tutar=q2(kdv_tutar),
                 doviz=doviz,
-                usd_karsilik=q3(usd_k),
+                usd_karsilik=q2(usd_k),
                 fatura_no=(fatura_no or '').strip() or None,
                 aciklama=aciklama or None,
                 kullanici=session.get('kullanici') if 'kullanici' in session else 'sistem'
@@ -1655,7 +1671,7 @@ def create_app():
 
             if mevcut:
                 # Ayni faturaya ait bir sonraki kalem: tutari BIRIKTIR.
-                _yeni_toplam = q3((mevcut.alacak or 0) + toplam_tutar)
+                _yeni_toplam = q2((mevcut.alacak or 0) + toplam_tutar)
                 _try_val, _kur = _try_karsilik(_yeni_toplam, doviz, tarih=borc_tarihi)
                 mevcut.alacak = _yeni_toplam
                 mevcut.alacak_try = _try_val
@@ -1665,8 +1681,8 @@ def create_app():
                 # grubun KDV'si tum kalemlerin toplamidir.
                 _ek_kdv = kdv_tutar or 0
                 _ek_matrah = matrah if matrah is not None else 0
-                mevcut.kdv_tutar = q3((mevcut.kdv_tutar or 0) + _ek_kdv)
-                mevcut.matrah = q3((mevcut.matrah or 0) + _ek_matrah)
+                mevcut.kdv_tutar = q2((mevcut.kdv_tutar or 0) + _ek_kdv)
+                mevcut.matrah = q2((mevcut.matrah or 0) + _ek_matrah)
                 if kdv_oran and not (mevcut.kdv_oran or 0):
                     mevcut.kdv_oran = kdv_oran
                 mevcut.kalem_sayisi = (mevcut.kalem_sayisi or 0) + 1
@@ -1712,8 +1728,8 @@ def create_app():
                 # bir beyandir. Eksik veri, yanlis veriden iyidir.
                 kdv_dahil_mi=(kdv_tutar is not None),
                 kdv_oran=(kdv_oran or 0),
-                kdv_tutar=q3(kdv_tutar or 0),
-                matrah=q3(matrah if matrah is not None else 0),
+                kdv_tutar=q2(kdv_tutar or 0),
+                matrah=q2(matrah if matrah is not None else 0),
                 kaynak='stok', kullanici=session.get('kullanici', 'sistem'))
             ch.kalem_sayisi = 1
             db.session.add(ch)
@@ -2236,8 +2252,8 @@ def create_app():
 
             olusan = 0
             for _k in _kalemler:
-                _tut = q3(_k.toplam_fiyat or ((_k.miktar or 0) * (_k.birim_fiyat or 0)))
-                _tut_usd = q3(_sk_usd(_tut, _k.doviz or sip.doviz))
+                _tut = q2(_k.toplam_fiyat or ((_k.miktar or 0) * (_k.birim_fiyat or 0)))
+                _tut_usd = q2(_sk_usd(_tut, _k.doviz or sip.doviz))
                 sk = SatisKaydi(
                     id=_yeni_id('SAT'),
                     stok_id=f'STOKSUZ-{siparis_id}-{_k.id}',
@@ -2253,7 +2269,7 @@ def create_app():
                     tutar=_tut_usd,
                     kur_usd=q_kur(_ku), kur_eur=q_kur(_ke),
                     tutar_usd=_tut_usd,
-                    tutar_try=q3(_tut_usd * _ku if _ku else 0),
+                    tutar_try=q2(_tut_usd * _ku if _ku else 0),
                     maliyet_usd=0, maliyet_try=0,
                     kar_usd=_tut_usd,
                     marj_yuzde=q_oran(100 if _tut_usd else 0),
@@ -2426,18 +2442,18 @@ def create_app():
                 musteri_ulke=musteri_ulke,
                 satis_tarihi=sip.siparis_tarihi or date.today(),
                 teslim_tarihi=teslim_tarihi or date.today(),
-                birim_fiyat=q3(birim_fiyat),
-                miktar=q3(miktar),
+                birim_fiyat=q2(birim_fiyat),
+                miktar=q2(miktar),
                 birim=birim,
                 doviz=doviz,
-                tutar=q3(tutar),
+                tutar=q2(tutar),
                 kur_usd=q_kur(kur_usd),
                 kur_eur=q_kur(kur_eur),
-                tutar_usd=q3(tutar_usd),
-                tutar_try=q3(tutar_try),
-                maliyet_usd=q3(stok_maliyet_usd),
-                maliyet_try=q3(stok_maliyet_try),
-                kar_usd=q3(kar_usd),
+                tutar_usd=q2(tutar_usd),
+                tutar_try=q2(tutar_try),
+                maliyet_usd=q2(stok_maliyet_usd),
+                maliyet_try=q2(stok_maliyet_try),
+                kar_usd=q2(kar_usd),
                 marj_yuzde=q_oran(marj),
                 kullanici=session.get('kullanici')
             )
@@ -2714,8 +2730,8 @@ def create_app():
         acik_try += cek_riski_try
 
         # TRY → risk dövizi
-        acik = q3(acik_try / risk_kur) if risk_kur else q3(acik_try)
-        cek_riski = q3(cek_riski_try / risk_kur) if risk_kur else q3(cek_riski_try)
+        acik = q2(acik_try / risk_kur) if risk_kur else q2(acik_try)
+        cek_riski = q2(cek_riski_try / risk_kur) if risk_kur else q2(cek_riski_try)
 
         # Yeni proforma tutarını risk dövizine çevir
         ek_risk_doviz = 0.0
@@ -2729,21 +2745,21 @@ def create_app():
                 ek_try = ek_tutar_doviz * ek_kur if ek_kur else 0
                 ek_risk_doviz = (ek_try / risk_kur) if risk_kur else ek_try
 
-        kullanilabilir = q3(limit - acik)
-        sonrasi = q3(kullanilabilir - (ek_risk_doviz or 0))
+        kullanilabilir = q2(limit - acik)
+        sonrasi = q2(kullanilabilir - (ek_risk_doviz or 0))
         return {
             'limit_var': True, 'unvan': cari.unvan, 'risk_doviz': risk_doviz,
             'risk_doviz_gecerli': risk_doviz_gecerli,
-            'risk_limiti': q3(limit), 'acik_risk': acik,
+            'risk_limiti': q2(limit), 'acik_risk': acik,
             # CR1: acik riskin ne kadari TAHSIL EDILMEMIS CEK.
             # Kullanici "borcu yok ama 40.000 ceki var" ayrimini
             # gorebilmeli.
             'cek_riski': cek_riski,
             'kullanilabilir': kullanilabilir,
-            'ek_tutar': q3(ek_risk_doviz or 0),
+            'ek_tutar': q2(ek_risk_doviz or 0),
             'kalan_sonrasi': sonrasi,
             'asiliyor': sonrasi < 0,
-            'asim_tutari': q3(-sonrasi) if sonrasi < 0 else 0
+            'asim_tutari': q2(-sonrasi) if sonrasi < 0 else 0
         }
 
     def _cari_hareket_ekle(cari_unvan, islem_tip, borc=0, alacak=0, doviz='USD',
@@ -2780,8 +2796,8 @@ def create_app():
             doviz=doviz or 'USD',
             kur_uygulanan=q_kur(kullanilan_kur),
             kur_kaynak='TCMB',
-            borc_try=q3(borc_try),
-            alacak_try=q3(alacak_try),
+            borc_try=q2(borc_try),
+            alacak_try=q2(alacak_try),
             vade_tarihi=vade_tarihi,
             kaynak=kaynak,
             baglanti_tip=baglanti_tip,
@@ -2826,7 +2842,7 @@ def create_app():
                     toplam_m2 += (p.metraj_m2 or 0)
             if toplam_m2 <= 0:
                 continue
-            yeni_birim = q3(yeni_toplam / toplam_m2)
+            yeni_birim = q2(yeni_toplam / toplam_m2)
             for p in plakalar:
                 p.alis_fiyati = yeni_birim
                 guncellenen += 1
@@ -2883,9 +2899,9 @@ def create_app():
             yeni_kar = satis - yeni_maliyet
             yeni_marj = (yeni_kar / satis * 100) if satis else 0
 
-            sk.maliyet_usd = q3(yeni_maliyet)
-            sk.maliyet_try = q3(yeni_maliyet * (sk.kur_usd or 0))
-            sk.kar_usd = q3(yeni_kar)
+            sk.maliyet_usd = q2(yeni_maliyet)
+            sk.maliyet_try = q2(yeni_maliyet * (sk.kur_usd or 0))
+            sk.kar_usd = q2(yeni_kar)
             sk.marj_yuzde = q_oran(yeni_marj)
             guncellenen += 1
         return guncellenen
@@ -3028,17 +3044,17 @@ def create_app():
                     musteri=f.musteri,
                     musteri_ulke=f.musteri_ulke,
                     satis_tarihi=f.fatura_tarihi or date.today(),
-                    miktar=q3(stok_miktar),
+                    miktar=q2(stok_miktar),
                     birim=sat_birim,
-                    birim_fiyat=q3(satis_pay_orj / stok_miktar) if stok_miktar else 0,
+                    birim_fiyat=q2(satis_pay_orj / stok_miktar) if stok_miktar else 0,
                     doviz=fdoviz,
-                    tutar=q3(satis_pay_orj),
+                    tutar=q2(satis_pay_orj),
                     kur_usd=q_kur(kur_usd), kur_eur=q_kur(kur_eur),
-                    tutar_usd=q3(satis_pay_usd),
-                    tutar_try=q3(satis_pay_usd * kur_usd if kur_usd else 0),
-                    maliyet_usd=q3(maliyet_usd),
-                    maliyet_try=q3(maliyet_usd * kur_usd if kur_usd else 0),
-                    kar_usd=q3(kar_usd),
+                    tutar_usd=q2(satis_pay_usd),
+                    tutar_try=q2(satis_pay_usd * kur_usd if kur_usd else 0),
+                    maliyet_usd=q2(maliyet_usd),
+                    maliyet_try=q2(maliyet_usd * kur_usd if kur_usd else 0),
+                    kar_usd=q2(kar_usd),
                     marj_yuzde=q_oran(marj),
                     fatura_no=f.fatura_no,
                     fatura_tarihi=f.fatura_tarihi,
@@ -3075,13 +3091,13 @@ def create_app():
                 miktar=top_miktar,
                 birim=ilk_birim,
                 doviz=f.doviz or 'USD',
-                tutar=q3(satis_toplam_usd),
+                tutar=q2(satis_toplam_usd),
                 kur_usd=q_kur(kur_usd), kur_eur=q_kur(kur_eur),
-                tutar_usd=q3(satis_toplam_usd),
-                tutar_try=q3(satis_toplam_usd * kur_usd if kur_usd else 0),
-                maliyet_usd=q3(maliyet_usd),
-                maliyet_try=q3(maliyet_usd * kur_usd if kur_usd else 0),
-                kar_usd=q3(kar_usd),
+                tutar_usd=q2(satis_toplam_usd),
+                tutar_try=q2(satis_toplam_usd * kur_usd if kur_usd else 0),
+                maliyet_usd=q2(maliyet_usd),
+                maliyet_try=q2(maliyet_usd * kur_usd if kur_usd else 0),
+                kar_usd=q2(kar_usd),
                 marj_yuzde=q_oran(marj),
                 fatura_no=f.fatura_no,
                 fatura_tarihi=f.fatura_tarihi,
@@ -3688,7 +3704,7 @@ def create_app():
                         usd += (f * m2) / k_usd if k_usd else f * m2
                 maliyet_deger = maliyet_dict.get(r.id) or 0
                 usd += maliyet_deger
-            return q3(usd)
+            return q2(usd)
 
         blok_rows = BlokStok.query.filter_by(durum='Serbest').all()
         plaka_rows = PlakaStok.query.filter_by(durum='Serbest').all()
@@ -3716,23 +3732,23 @@ def create_app():
             ik = s.kalemler[0] if s.kalemler else None
             yaklasan_siparis.append({
                 'id': s.id, 'musteri': s.musteri, 'durum': s.durum,
-                'termin': s.termin, 'toplam_tutar': q3(s.toplam_tutar or 0),
+                'termin': s.termin, 'toplam_tutar': q2(s.toplam_tutar or 0),
                 'doviz': s.doviz or 'USD',
                 'urun_tip': ik.urun_tip if ik else '—',
                 'cins': (ik.cins if ik else None) or '—',
-                'miktar': q3(ik.miktar or 0) if (ik and ik.miktar) else '',
+                'miktar': q2(ik.miktar or 0) if (ik and ik.miktar) else '',
                 'birim': (ik.birim if ik else '') or '',
             })
 
         stats = {
-            'blok': len(blok_rows), 'blok_usd': stok_deger(blok_rows, 'BLOK'), 'blok_try': q3(stok_deger(blok_rows, 'BLOK')*k_usd),
-            'blok_ton': q3(sum(r.tonaj or 0 for r in blok_rows)), 'blok_m3': q3(sum(r.hacim_m3 or 0 for r in blok_rows)),
-            'plaka': len(plaka_rows), 'plaka_usd': stok_deger(plaka_rows, 'PLAKA'), 'plaka_try': q3(stok_deger(plaka_rows, 'PLAKA')*k_usd),
-            'plaka_m2': q3(sum(r.metraj_m2 or 0 for r in plaka_rows)), 'plaka_sqft': q3(sum(r.metraj_sqft or 0 for r in plaka_rows)),
-            'ebatli': len(ebatli_rows), 'ebatli_usd': stok_deger(ebatli_rows, 'EBATLI'), 'ebatli_try': q3(stok_deger(ebatli_rows, 'EBATLI')*k_usd),
-            'ebatli_m2': q3(sum(r.metraj_m2 or 0 for r in ebatli_rows)),
-            'ebatli_sqft': q3(sum(r.metraj_sqft or 0 for r in ebatli_rows)),
-            'siparis': len(aktif_sip), 'siparis_usd': q3(sip_usd), 'siparis_try': q3(sip_usd * k_usd),
+            'blok': len(blok_rows), 'blok_usd': stok_deger(blok_rows, 'BLOK'), 'blok_try': q2(stok_deger(blok_rows, 'BLOK')*k_usd),
+            'blok_ton': q2(sum(r.tonaj or 0 for r in blok_rows)), 'blok_m3': q2(sum(r.hacim_m3 or 0 for r in blok_rows)),
+            'plaka': len(plaka_rows), 'plaka_usd': stok_deger(plaka_rows, 'PLAKA'), 'plaka_try': q2(stok_deger(plaka_rows, 'PLAKA')*k_usd),
+            'plaka_m2': q2(sum(r.metraj_m2 or 0 for r in plaka_rows)), 'plaka_sqft': q2(sum(r.metraj_sqft or 0 for r in plaka_rows)),
+            'ebatli': len(ebatli_rows), 'ebatli_usd': stok_deger(ebatli_rows, 'EBATLI'), 'ebatli_try': q2(stok_deger(ebatli_rows, 'EBATLI')*k_usd),
+            'ebatli_m2': q2(sum(r.metraj_m2 or 0 for r in ebatli_rows)),
+            'ebatli_sqft': q2(sum(r.metraj_sqft or 0 for r in ebatli_rows)),
+            'siparis': len(aktif_sip), 'siparis_usd': q2(sip_usd), 'siparis_try': q2(sip_usd * k_usd),
             'rezervasyon': Rezervasyon.query.filter_by(iptal_nedeni=None).count(),
             'sevkiyat': Sevkiyat.query.filter(Sevkiyat.durum.notin_(['Teslim Edildi','Iptal'])).count(),
         }
@@ -3793,10 +3809,10 @@ def create_app():
                 akis_siparisler.append({
                     'id': s.id, 'musteri': s.musteri, 'durum': s.durum,
                     'termin': s.termin.strftime('%d.%m.%Y') if s.termin else '—',
-                    'toplam_tutar': q3(s.toplam_tutar or 0),
-                    'tutar': q3(s.toplam_tutar or 0),
+                    'toplam_tutar': q2(s.toplam_tutar or 0),
+                    'tutar': q2(s.toplam_tutar or 0),
                     'doviz': s.doviz or 'USD', 'urun_tip': urun_tip, 'cins': cins or '—',
-                    'miktar': q3(miktar or 0) if miktar else None, 'birim': birim,
+                    'miktar': q2(miktar or 0) if miktar else None, 'birim': birim,
                     'proforma_var': proforma_var, 'sevkiyat_var': sevkiyat_var,
                     'sevke_uygun': sevke_uygun,
                 })
@@ -3804,8 +3820,8 @@ def create_app():
             akis_siparisler = []
 
         return render_template('dashboard.html', stats=stats, yaklasan=yaklasan_siparis, kur_usd=kur_usd, kur_eur=kur_eur,
-                               today=bugun, toplam_alacak=q3(toplam_alacak), toplam_borc=q3(toplam_borc),
-                               net_bakiye=q3(net_bakiye), yaklasan_odemeler=yaklasan_odemeler, yaklasan_tahsilatlar=yaklasan_tahsilatlar,
+                               today=bugun, toplam_alacak=q2(toplam_alacak), toplam_borc=q2(toplam_borc),
+                               net_bakiye=q2(net_bakiye), yaklasan_odemeler=yaklasan_odemeler, yaklasan_tahsilatlar=yaklasan_tahsilatlar,
                                akis_siparisler=akis_siparisler,
                                ana_pb=ana_pb)
 
@@ -3956,7 +3972,7 @@ def create_app():
                 'adet': 0, 'tutar': {}, 'son_tarih': None})
             u['adet'] += 1
             dv = (s.doviz or 'USD').upper()
-            u['tutar'][dv] = q3(float(u['tutar'].get(dv, 0))
+            u['tutar'][dv] = q2(float(u['tutar'].get(dv, 0))
                                 + float(s.tutar or 0))
             if s.satis_tarihi and (u['son_tarih'] is None
                                    or s.satis_tarihi > u['son_tarih']):
@@ -3990,7 +4006,7 @@ def create_app():
             if s.satis_tarihi and (f['son_tarih'] is None
                                    or s.satis_tarihi > f['son_tarih']):
                 f['son_tarih'] = s.satis_tarihi
-                f['son_fiyat'] = q3(float(s.birim_fiyat))
+                f['son_fiyat'] = q2(float(s.birim_fiyat))
 
         fiyat_listesi = []
         for f in fiyatlar.values():
@@ -3999,8 +4015,8 @@ def create_app():
                 'cins': f['cins'], 'ozellik': f['ozellik'],
                 'doviz': f['doviz'], 'birim': f['birim'],
                 'satis_sayisi': len(fl),
-                'en_dusuk': q3(min(fl)), 'en_yuksek': q3(max(fl)),
-                'ortalama': q3(sum(fl) / len(fl)),
+                'en_dusuk': q2(min(fl)), 'en_yuksek': q2(max(fl)),
+                'ortalama': q2(sum(fl) / len(fl)),
                 'son_fiyat': f['son_fiyat'],
                 'son_tarih': f['son_tarih'].isoformat() if f['son_tarih'] else None,
             })
@@ -4393,14 +4409,14 @@ def create_app():
             toplam_maliyet_usd = alim_toplam_usd + ek_maliyet_toplam
 
             # BİRİM MALİYET = toplam maliyet / temel ölçü (ton veya m2 başına)
-            birim_maliyet_usd = q3(toplam_maliyet_usd / temel_olcu) if temel_olcu > 0 else 0
+            birim_maliyet_usd = q2(toplam_maliyet_usd / temel_olcu) if temel_olcu > 0 else 0
 
             item['birim_maliyet_usd'] = birim_maliyet_usd
-            item['toplam_maliyet_usd'] = q3(toplam_maliyet_usd)
+            item['toplam_maliyet_usd'] = q2(toplam_maliyet_usd)
             item['birim_ad'] = birim_ad
-            item['ek_maliyet_toplam'] = q3(ek_maliyet_toplam)
-            item['kdv_devreden_usd'] = q3(kdv_devreden_map.get(s.id, 0))
-            item['kdv_iade_usd'] = q3(kdv_iade_map.get(s.id, 0))
+            item['ek_maliyet_toplam'] = q2(ek_maliyet_toplam)
+            item['kdv_devreden_usd'] = q2(kdv_devreden_map.get(s.id, 0))
+            item['kdv_iade_usd'] = q2(kdv_iade_map.get(s.id, 0))
             item['alis_tipi'] = getattr(s, 'alis_tipi', None) or 'yurtici_kdvli'
             item['fatura_no'] = getattr(s, 'fatura_no', None) or ''
             item['fatura_durumu'] = getattr(s, 'fatura_durumu', None) or 'faturali'
@@ -4468,7 +4484,7 @@ def create_app():
                     _ozet['deger_usd'] += _alim_usd(
                         _af * _ob, getattr(_r, 'doviz', 'USD') or 'USD')
             for _k in ('m2', 'm3', 'deger_usd'):
-                _ozet[_k] = q3(_ozet[_k])
+                _ozet[_k] = q2(_ozet[_k])
         except Exception as _e:
             app.logger.warning(f'[KS3] özet hesaplanamadı: {_e}')
             _ozet = None
@@ -4777,15 +4793,15 @@ def create_app():
                     kdv_dahil_mi = False
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
-                    fiyat = q3(fiyat_girilen / (1 + kdv_oran/100))
+                    fiyat = q2(fiyat_girilen / (1 + kdv_oran/100))
                 else:
                     fiyat = fiyat_girilen
                 # Toplam tutarlar
-                miktar = _sayi('tonaj') if fiyat_birim == 'ton' else q3(m3)
-                matrah = q3(fiyat * miktar)
-                kdv_tutar = q3(matrah * kdv_oran / 100) if kdv_oran > 0 else 0
+                miktar = _sayi('tonaj') if fiyat_birim == 'ton' else q2(m3)
+                matrah = q2(fiyat * miktar)
+                kdv_tutar = q2(matrah * kdv_oran / 100) if kdv_oran > 0 else 0
                 stok = BlokStok(id=_yeni_id('BLK'), uretici=data.get('uretici'), cins=data.get('cins'), blok_no=data.get('blok_no'),
-                                boy=boy, yukseklik=yuk, en=en, hacim_m3=q3(m3),
+                                boy=boy, yukseklik=yuk, en=en, hacim_m3=q2(m3),
                                 tonaj=_sayi('tonaj'), alis_fiyati=fiyat,
                                 alis_fiyat_birim=fiyat_birim,
                                 # F5: yalnizca BILGI amacli isaret.
@@ -4793,7 +4809,7 @@ def create_app():
                                 nakliye_dahil=bool(data.get('nakliye_dahil')),
                                 doviz=doviz, durum='Serbest',
                                 kdv_dahil_mi=kdv_dahil_mi, kdv_oran=kdv_oran,
-                                kdv_tutar=q3(kdv_tutar), matrah=q3(matrah),
+                                kdv_tutar=q2(kdv_tutar), matrah=q2(matrah),
                                 fatura_no=(data.get('fatura_no') or '').strip() or None,
                                 giris_tarihi=_giris_tarihi, alis_tarihi=_alis_tarihi,
                                 fatura_durumu=_fatura_durumu,
@@ -4807,7 +4823,7 @@ def create_app():
                         aciklama=f'BLOK stok girisi - {stok.cins} {stok.blok_no}',
                         fatura_no=stok.fatura_no)
                 # Tedarikçi cariye alış faturası (matrah + KDV) — faturasız ise borç oluşmaz
-                _stok_cari_hareket_olustur(stok.id, stok.uretici, q3(matrah + kdv_tutar), doviz,
+                _stok_cari_hareket_olustur(stok.id, stok.uretici, q2(matrah + kdv_tutar), doviz,
                     fatura_no=stok.fatura_no or '',
                     aciklama=f'BLOK alış — {stok.cins} {stok.blok_no} — {stok.fatura_no or ""}',
                     fatura_durumu=_fatura_durumu, alis_tarihi=_alis_tarihi,
@@ -4837,27 +4853,27 @@ def create_app():
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
                     # KDV dahil girilmis: ayristir
-                    fiyat = q3(fiyat_girilen / (1 + kdv_oran/100))
+                    fiyat = q2(fiyat_girilen / (1 + kdv_oran/100))
                 else:
                     # KDV haric girilmis: fiyat zaten matrah
                     fiyat = fiyat_girilen
                 # Plaka basina KDV hariç matrah ve KDV tutarı
-                miktar_birim = m2 if fiyat_birim == 'm2' else q3(m2 * M2_TO_SQFT)
-                matrah = q3(fiyat * miktar_birim)
+                miktar_birim = m2 if fiyat_birim == 'm2' else q2(m2 * M2_TO_SQFT)
+                matrah = q2(fiyat * miktar_birim)
                 # KDV tutari: kdv_oran > 0 ise her zaman hesaplanir (KDV haric girilmise de)
-                kdv_tutar = q3(matrah * kdv_oran / 100) if kdv_oran > 0 else 0
+                kdv_tutar = q2(matrah * kdv_oran / 100) if kdv_oran > 0 else 0
                 olusan_idler = []
                 for i in range(adet):
                     slab = bas_no + i
                     stok = PlakaStok(id=_yeni_id('PLK'), uretici=data.get('uretici'), cins=data.get('cins'), blok_no=data.get('blok_no'),
                                      boy=boy, yukseklik=yuk, kalinlik=_sayi('kalinlik'), ozellik=data.get('ozellik'),
-                                     metraj_m2=q3(m2), metraj_sqft=q3(m2*10.764),
+                                     metraj_m2=q2(m2), metraj_sqft=q2(m2*10.764),
                                      slab_no=slab, alis_fiyati=fiyat,
                                      alis_fiyat_birim=fiyat_birim,
                                      nakliye_dahil=bool(data.get('nakliye_dahil')),
                                      doviz=doviz,
                                      kdv_dahil_mi=kdv_dahil_mi, kdv_oran=kdv_oran,
-                                     kdv_tutar=q3(kdv_tutar), matrah=q3(matrah),
+                                     kdv_tutar=q2(kdv_tutar), matrah=q2(matrah),
                                      fatura_no=(data.get('fatura_no') or '').strip() or None,
                                      giris_tarihi=_giris_tarihi, alis_tarihi=_alis_tarihi,
                                      fatura_durumu=_fatura_durumu,
@@ -4870,7 +4886,7 @@ def create_app():
                             aciklama=f'PLAKA stok girisi - {stok.cins} {stok.blok_no} #{slab}',
                             fatura_no=stok.fatura_no)
                     # Tedarikçi cariye alış faturası (her plaka için matrah + KDV) — faturasız ise borç oluşmaz
-                    _stok_cari_hareket_olustur(stok.id, stok.uretici, q3(matrah + kdv_tutar), doviz,
+                    _stok_cari_hareket_olustur(stok.id, stok.uretici, q2(matrah + kdv_tutar), doviz,
                         fatura_no=stok.fatura_no or '',
                         aciklama=f'PLAKA alış — {stok.cins} {stok.blok_no} #{slab} — {stok.fatura_no or ""}',
                         fatura_durumu=_fatura_durumu, alis_tarihi=_alis_tarihi,
@@ -4922,13 +4938,13 @@ def create_app():
                 doviz = data.get('doviz','USD')
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
-                    fiyat = q3(fiyat_girilen / (1 + kdv_oran/100))
+                    fiyat = q2(fiyat_girilen / (1 + kdv_oran/100))
                 else:
                     fiyat = fiyat_girilen
                 # Kasa basina KDV hariç matrah ve KDV tutarı
-                miktar_birim = m2_per_kasa if fiyat_birim == 'm2' else q3(m2_per_kasa * M2_TO_SQFT)
-                matrah_k = q3(fiyat * miktar_birim)
-                kdv_t_k = q3(matrah_k * kdv_oran / 100) if kdv_oran > 0 else 0
+                miktar_birim = m2_per_kasa if fiyat_birim == 'm2' else q2(m2_per_kasa * M2_TO_SQFT)
+                matrah_k = q2(fiyat * miktar_birim)
+                kdv_t_k = q2(matrah_k * kdv_oran / 100) if kdv_oran > 0 else 0
 
                 olusturulan_ids = []
                 for ref_kod in referans_kodlari:
@@ -4940,14 +4956,14 @@ def create_app():
                         kasa_adedi=1,
                         kasa_ici_adet=kasa_ici_adet,
                         m2_kg=_sayi('m2_kg'),
-                        metraj_m2=q3(m2_per_kasa),
-                        metraj_sqft=q3(m2_per_kasa * M2_TO_SQFT),
+                        metraj_m2=q2(m2_per_kasa),
+                        metraj_sqft=q2(m2_per_kasa * M2_TO_SQFT),
                         alis_fiyati=fiyat,
                         alis_fiyat_birim=fiyat_birim,
                         doviz=doviz,
                         kdv_dahil_mi=kdv_dahil_mi, kdv_oran=kdv_oran,
                         alis_tipi=alis_tipi,
-                        kdv_tutar=q3(kdv_t_k), matrah=q3(matrah_k),
+                        kdv_tutar=q2(kdv_t_k), matrah=q2(matrah_k),
                         # H2-M2: EBATLI dalinda eksikti — kutu formda vardi,
                         # gonderiliyordu, ama burada gecirilmedigi icin veri
                         # sessizce kayboluyordu. BLOK/PLAKA dallarinda zaten vardi.
@@ -4968,7 +4984,7 @@ def create_app():
                             aciklama=f'EBATLI stok girisi - {cins} {ref_kod}',
                             fatura_no=stok.fatura_no)
                     # Tedarikçi cariye alış faturası (her kasa için matrah + KDV) — faturasız ise borç oluşmaz
-                    _stok_cari_hareket_olustur(stok.id, uretici, q3(matrah_k + kdv_t_k), doviz,
+                    _stok_cari_hareket_olustur(stok.id, uretici, q2(matrah_k + kdv_t_k), doviz,
                         fatura_no=stok.fatura_no or '',
                         aciklama=f'EBATLI alış — {cins} {ref_kod} — {stok.fatura_no or ""}',
                         fatura_durumu=_fatura_durumu, alis_tarihi=_alis_tarihi,
@@ -5007,7 +5023,7 @@ def create_app():
         stok.alis_tarihi = alis_tarihi
         stok.fatura_durumu = 'faturali'
         # KDV maliyet kalemi (varsa şimdi oluştur)
-        toplam = q3((stok.matrah or 0) + (stok.kdv_tutar or 0))
+        toplam = q2((stok.matrah or 0) + (stok.kdv_tutar or 0))
         if (stok.kdv_tutar or 0) > 0:
             _devreden_kdv_kalemi_olustur(stok.id, stok.kdv_tutar, stok.doviz,
                 aciklama=f'{tip.upper()} faturalandırma - {stok.cins} {getattr(stok,"blok_no","") or getattr(stok,"kasa_no","")}',
@@ -5176,7 +5192,7 @@ def create_app():
         #
         # Muhasebeten dogrusu bu: 22 plakalik faturadan bir plaka
         # cikarsa tedarikciye borcunuz gercekten azalir.
-        _pay = q3((getattr(stok, 'matrah', 0) or 0) + (getattr(stok, 'kdv_tutar', 0) or 0))
+        _pay = q2((getattr(stok, 'matrah', 0) or 0) + (getattr(stok, 'kdv_tutar', 0) or 0))
         _fno = (getattr(stok, 'fatura_no', '') or '').strip()
         # ── CARİ DE EŞLEŞMELİ (SF2) ──
         # Onceden yalnizca fatura numarasi araniyordu. "Beklenen
@@ -5337,7 +5353,7 @@ def create_app():
                 db.session.delete(_grup)
                 silinen_ch += 1
             else:
-                _yeni = q3(max(0.0, (_grup.alacak or 0) - _pay))
+                _yeni = q2(max(0.0, (_grup.alacak or 0) - _pay))
                 _t, _k = _try_karsilik(_yeni, _grup.doviz or 'TRY',
                                        tarih=_grup.hareket_tarihi)
                 _grup.alacak = _yeni
@@ -5460,7 +5476,7 @@ def create_app():
                 if _k.get('stok') is not None:
                     _g['stoklar'].append(_k['stok'])
             for (_cid, _fn, _dv), _g in _gruplu.items():
-                _tut = q3(_g['tutar'])
+                _tut = q2(_g['tutar'])
                 _t, _k2 = _try_karsilik(_tut, _dv, tarih=date.today())
                 db.session.add(CariHareket(
                     id=_yeni_id('HR'), hareket_tarihi=date.today(),
@@ -5515,7 +5531,7 @@ def create_app():
             aciklama = p.get('aciklama', '') or f"Toplu import - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             plaka = PlakaStok(id=_yeni_id('PLK'), uretici=p.get('uretici', ''), cins=p.get('cins', ''), blok_no=p.get('blok_no', ''),
                               boy=boy, yukseklik=yuk, kalinlik=p.get('kalinlik'), ozellik=p.get('ozellik', ''),
-                              metraj_m2=q3(metraj_m2), metraj_sqft=q3(metraj_sqft), alis_fiyati=p.get('alis_fiyati',0),
+                              metraj_m2=q2(metraj_m2), metraj_sqft=q2(metraj_sqft), alis_fiyati=p.get('alis_fiyati',0),
                               doviz=p.get('doviz','USD'), konum=p.get('konum',''), durum='Serbest', aciklama=aciklama, kullanici=session['kullanici'])
             db.session.add(plaka)
             eklenen += 1
@@ -6351,11 +6367,11 @@ def create_app():
             'ok': True,
             'cari': cari.unvan,
             'doviz': yeni_doviz,
-            'toplam_fatura': q3(toplam_fatura),
-            'onceki_tahsilat': q3(onceki_tahsilat),
-            'acik_bakiye': q3(acik_bakiye),
-            'yeni_tahsilat': q3(yeni_tutar),
-            'fazla_tutar': q3(fazla),
+            'toplam_fatura': q2(toplam_fatura),
+            'onceki_tahsilat': q2(onceki_tahsilat),
+            'acik_bakiye': q2(acik_bakiye),
+            'yeni_tahsilat': q2(yeni_tutar),
+            'fazla_tutar': q2(fazla),
             'uyari': uyari,
             'mesaj': f'Açık fatura bakiyesi {acik_bakiye:,.2f} {yeni_doviz}. Girilen {yeni_tutar:,.2f} {yeni_doviz}. Fazla: {fazla:,.2f} {yeni_doviz} (avans olarak kaydedilecek).' if uyari else None
         })
@@ -6428,18 +6444,18 @@ def create_app():
             # Kayitli TRY karsiligi (yoksa hesapla)
             if kur_modu == 'guncel':
                 # 'kur farkı işlet' → her hareket bugünün kuruyla yeniden TRY'ye çevrilir
-                borc_try = q3((h.borc or 0) * h_kur) if (h.borc or 0) > 0 else 0
-                alacak_try = q3((h.alacak or 0) * h_kur) if (h.alacak or 0) > 0 else 0
+                borc_try = q2((h.borc or 0) * h_kur) if (h.borc or 0) > 0 else 0
+                alacak_try = q2((h.alacak or 0) * h_kur) if (h.alacak or 0) > 0 else 0
             else:
                 borc_try = h.borc_try or 0
                 alacak_try = h.alacak_try or 0
                 if not borc_try and (h.borc or 0) > 0:
                     # Eski kayit - kayitli kur yoksa o tarihten cek
                     if h_kur and h_kur > 0:
-                        borc_try = q3((h.borc or 0) * h_kur)
+                        borc_try = q2((h.borc or 0) * h_kur)
                 if not alacak_try and (h.alacak or 0) > 0:
                     if h_kur and h_kur > 0:
-                        alacak_try = q3((h.alacak or 0) * h_kur)
+                        alacak_try = q2((h.alacak or 0) * h_kur)
 
             yuruyen_try += borc_try - alacak_try
 
@@ -6449,9 +6465,9 @@ def create_app():
                 alacak_ekstre = alacak_try
                 bakiye_ekstre = yuruyen_try
             else:
-                borc_ekstre = q3(borc_try / kur_hedef)
-                alacak_ekstre = q3(alacak_try / kur_hedef)
-                bakiye_ekstre = q3(yuruyen_try / kur_hedef)
+                borc_ekstre = q2(borc_try / kur_hedef)
+                alacak_ekstre = q2(alacak_try / kur_hedef)
+                bakiye_ekstre = q2(yuruyen_try / kur_hedef)
 
             kayitlar.append({
                 'id': h.id,
@@ -6469,7 +6485,7 @@ def create_app():
                 'kur': q_kur(h_kur),
                 'kur_modu': kur_modu,
                 # TRY karsiligi (ana para birimi)
-                'borc_try': q3(borc_try), 'alacak_try': q3(alacak_try),
+                'borc_try': q2(borc_try), 'alacak_try': q2(alacak_try),
                 # Ekstre dovizinde
                 'borc_ekstre': borc_ekstre, 'alacak_ekstre': alacak_ekstre,
                 'bakiye_ekstre': bakiye_ekstre,
@@ -6479,8 +6495,8 @@ def create_app():
                 'kapatildi': bool(h.kapatildi),
                 # KDV ayrımı (fatura nitelikli hareketlerde dolu)
                 'kdv_oran': h.kdv_oran or 0,
-                'kdv_tutar': q3(h.kdv_tutar or 0),
-                'matrah': q3(h.matrah or 0),
+                'kdv_tutar': q2(h.kdv_tutar or 0),
+                'matrah': q2(h.matrah or 0),
                 'kdv_dahil_mi': bool(h.kdv_dahil_mi),
                 # Geri uyumluluk
                 'bakiye': bakiye_ekstre
@@ -6511,12 +6527,12 @@ def create_app():
             'guncel_kurlar': {'USD': q_kur(guncel_usd_try), 'EUR': q_kur(guncel_eur_try)},
             'ana_para_birimi': _ana_para_birimi(),
             'ozet': {
-                'borc': q3(toplam_borc_try / kur_hedef) if ekstre_doviz != 'TRY' else q3(toplam_borc_try),
-                'alacak': q3(toplam_alacak_try / kur_hedef) if ekstre_doviz != 'TRY' else q3(toplam_alacak_try),
-                'net': q3((toplam_borc_try - toplam_alacak_try) / kur_hedef) if ekstre_doviz != 'TRY' else q3(toplam_borc_try - toplam_alacak_try),
-                'borc_try': q3(toplam_borc_try),
-                'alacak_try': q3(toplam_alacak_try),
-                'net_try': q3(toplam_borc_try - toplam_alacak_try),
+                'borc': q2(toplam_borc_try / kur_hedef) if ekstre_doviz != 'TRY' else q2(toplam_borc_try),
+                'alacak': q2(toplam_alacak_try / kur_hedef) if ekstre_doviz != 'TRY' else q2(toplam_alacak_try),
+                'net': q2((toplam_borc_try - toplam_alacak_try) / kur_hedef) if ekstre_doviz != 'TRY' else q2(toplam_borc_try - toplam_alacak_try),
+                'borc_try': q2(toplam_borc_try),
+                'alacak_try': q2(toplam_alacak_try),
+                'net_try': q2(toplam_borc_try - toplam_alacak_try),
                 'hareket_sayisi': len(hareketler)
             }
         })
@@ -6536,13 +6552,13 @@ def create_app():
 
     def _acik_fatura_dict(f, bugun):
         odenen = _fatura_odenen_esdeger(f)
-        kalan = q3((f.toplam or 0) - odenen)
+        kalan = q2((f.toplam or 0) - odenen)
         gecikme = ((bugun - f.vade_tarihi).days
                    if f.vade_tarihi and f.vade_tarihi < bugun else 0)
         return {'id': f.id, 'fatura_no': f.fatura_no or f.id,
                 'fatura_tarihi': f.fatura_tarihi.isoformat() if f.fatura_tarihi else None,
                 'vade_tarihi': f.vade_tarihi.isoformat() if f.vade_tarihi else None,
-                'toplam': q3(f.toplam or 0), 'odenen': odenen, 'kalan': kalan,
+                'toplam': q2(f.toplam or 0), 'odenen': odenen, 'kalan': kalan,
                 'doviz': (f.doviz or 'USD').upper(), 'durum': f.durum,
                 'gecikme_gun': gecikme}
 
@@ -6571,7 +6587,7 @@ def create_app():
         if not idler:
             return jsonify({'ok': False, 'mesaj': 'Fatura seçilmedi'}), 400
         try:
-            tutar = q3(float(d.get('tutar') or 0))
+            tutar = q2(float(d.get('tutar') or 0))
         except (TypeError, ValueError):
             tutar = 0
         if tutar <= 0:
@@ -6618,10 +6634,10 @@ def create_app():
                 f_kur = _kur(x['doviz'])
                 if f_kur <= 0:
                     return jsonify({'ok': False, 'mesaj': f"{x['doviz']} kuru bulunamadı"}), 400
-                kalan_o = q3(x['kalan'] * f_kur / o_kur)
+                kalan_o = q2(x['kalan'] * f_kur / o_kur)
             plan.append((x, kalan_o))
         plan.sort(key=lambda p: _vade_sirasi(p[0]))
-        toplam_kalan = q3(sum(k for _, k in plan))
+        toplam_kalan = q2(sum(k for _, k in plan))
         if tutar > toplam_kalan + 0.01:
             return jsonify({'ok': False, 'mesaj':
                 f'Tutar seçilen faturaların kalanını aşıyor. Kalan toplam: '
@@ -6634,7 +6650,7 @@ def create_app():
         for x, kalan_o in plan:
             if kalan_tutar <= 0.005:
                 break
-            pay = q3(min(kalan_tutar, kalan_o))
+            pay = q2(min(kalan_tutar, kalan_o))
             govde = {'tutar': pay, 'doviz': odeme_doviz, 'kasa_id': d.get('kasa_id'),
                      'kur': manuel_kur or None, 'evrak_no': referans or None,
                      'kur_farki_islet': d.get('kur_farki_islet'),
@@ -6651,7 +6667,7 @@ def create_app():
                     f"— hiçbir tahsilat kaydedilmedi."}), 400
             sonuc.append({'fatura_no': x['fatura_no'], 'tutar': pay,
                           'tam_kapandi': pay + 0.01 >= kalan_o})
-            kalan_tutar = q3(kalan_tutar - pay)
+            kalan_tutar = q2(kalan_tutar - pay)
 
         ok, hata = _safe_commit(f'Toplu tahsilat: {cari_id}')
         if not ok:
@@ -6731,9 +6747,9 @@ def create_app():
             k['borc'] += float(h.borc or 0)
             k['alacak'] += float(h.alacak or 0)
         for dv, k in dovizler.items():
-            k['borc'] = q3(k['borc'])
-            k['alacak'] = q3(k['alacak'])
-            k['net'] = q3(float(k['borc']) - float(k['alacak']))
+            k['borc'] = q2(k['borc'])
+            k['alacak'] = q2(k['alacak'])
+            k['net'] = q2(float(k['borc']) - float(k['alacak']))
 
         # TRY KARSILIGI — islem gunu kuruyla, `borc_try`/`alacak_try`
         # alanlarindan. Bu alanlar zaten dolduruluyor ve
@@ -6778,10 +6794,10 @@ def create_app():
 
         return jsonify({
             # TEK ANLAMLI SAYI: TRY karsiligi.
-            'borc': q3(borc_try), 'alacak': q3(alacak_try),
-            'cek_riski': q3(_cek_riski),
+            'borc': q2(borc_try), 'alacak': q2(alacak_try),
+            'cek_riski': q2(_cek_riski),
             'cek_doviz': _cek_doviz,
-            'net': q3(borc_try - alacak_try),
+            'net': q2(borc_try - alacak_try),
             'birim': 'TRY',
             # DOVIZ AYRIMI KORUNUR: tek TRY sayisi kolay okunur ama
             # KUR RISKINI GIZLER. Nakit akisinda da ayni sebeple uc
@@ -6895,9 +6911,9 @@ def create_app():
             'ara_toplam': f.ara_toplam, 'kdv_oran': f.kdv_oran,
             'kdv_tutar': f.kdv_tutar, 'toplam': f.toplam, 'satis_tipi': f.satis_tipi
         }
-        f.ara_toplam = q3(yeni_matrah)
+        f.ara_toplam = q2(yeni_matrah)
         f.kdv_oran = yeni_kdv_oran
-        f.kdv_tutar = q3(yeni_kdv_tutar)
+        f.kdv_tutar = q2(yeni_kdv_tutar)
         if yeni_satis_tipi:
             f.satis_tipi = yeni_satis_tipi
 
@@ -6906,19 +6922,19 @@ def create_app():
         satislar = SatisKaydi.query.filter_by(fatura_id=fatura_id).all()
         matrah_pay = yeni_matrah / n
         for s in satislar:
-            s.tutar = q3(matrah_pay)
+            s.tutar = q2(matrah_pay)
             if s.miktar:
-                s.birim_fiyat = q3(matrah_pay / s.miktar)
+                s.birim_fiyat = q2(matrah_pay / s.miktar)
             if (f.doviz or 'USD') == 'TRY':
-                s.tutar_try = q3(matrah_pay)
+                s.tutar_try = q2(matrah_pay)
                 kur = s.kur_usd or 1
-                s.tutar_usd = q3(matrah_pay / kur) if kur else 0
+                s.tutar_usd = q2(matrah_pay / kur) if kur else 0
             elif (f.doviz or 'USD') == 'USD':
-                s.tutar_usd = q3(matrah_pay)
+                s.tutar_usd = q2(matrah_pay)
                 kur = s.kur_usd or 1
-                s.tutar_try = q3(matrah_pay * kur)
+                s.tutar_try = q2(matrah_pay * kur)
             if s.maliyet_usd is not None:
-                s.kar_usd = q3((s.tutar_usd or 0) - (s.maliyet_usd or 0))
+                s.kar_usd = q2((s.tutar_usd or 0) - (s.maliyet_usd or 0))
                 if s.tutar_usd:
                     s.marj_yuzde = q_oran((s.kar_usd / s.tutar_usd) * 100)
 
@@ -6972,7 +6988,7 @@ def create_app():
 
                 if stok:
                     stok_miktar = _stok_olcu(stok, sat_birim)
-                    s.miktar = q3(stok_miktar)
+                    s.miktar = q2(stok_miktar)
                     s.birim = sat_birim
                     s.metraj_m2 = getattr(stok, 'metraj_m2', None)
                     s.metraj_sqft = getattr(stok, 'metraj_sqft', None)
@@ -6988,21 +7004,21 @@ def create_app():
                     n_satis = SatisKaydi.query.filter_by(fatura_id=fat.id).count() or 1
                     matrah_toplam = fat.ara_toplam or fat.toplam or 0
                     matrah_pay = matrah_toplam / n_satis
-                    s.tutar = q3(matrah_pay)
+                    s.tutar = q2(matrah_pay)
                     if stok and s.miktar:
-                        s.birim_fiyat = q3(matrah_pay / s.miktar)
+                        s.birim_fiyat = q2(matrah_pay / s.miktar)
                     # Tutar USD ve TRY karsiliklar
                     if (fat.doviz or 'USD') == 'TRY':
-                        s.tutar_try = q3(matrah_pay)
+                        s.tutar_try = q2(matrah_pay)
                         kur = s.kur_usd or 1
-                        s.tutar_usd = q3(matrah_pay / kur) if kur else 0
+                        s.tutar_usd = q2(matrah_pay / kur) if kur else 0
                     elif (fat.doviz or 'USD') == 'USD':
-                        s.tutar_usd = q3(matrah_pay)
+                        s.tutar_usd = q2(matrah_pay)
                         kur = s.kur_usd or 1
-                        s.tutar_try = q3(matrah_pay * kur)
+                        s.tutar_try = q2(matrah_pay * kur)
                     # Kar yeniden hesapla
                     if s.maliyet_usd is not None:
-                        s.kar_usd = q3((s.tutar_usd or 0) - (s.maliyet_usd or 0))
+                        s.kar_usd = q2((s.tutar_usd or 0) - (s.maliyet_usd or 0))
                         if s.tutar_usd:
                             s.marj_yuzde = q_oran((s.kar_usd / s.tutar_usd) * 100)
 
@@ -7201,18 +7217,18 @@ def create_app():
                 'musteri': s.musteri,
                 'cins': _cins_ozet,
                 'durum': s.durum,
-                'satis_tutari': q3(satis_tutari), 'doviz': s.doviz,
+                'satis_tutari': q2(satis_tutari), 'doviz': s.doviz,
                 'komisyon_yontem': s.komisyon_yontem,
                 'komisyon_deger': s.komisyon_deger,
-                'komisyon_tutar': q3(kom_tutari),
+                'komisyon_tutar': q2(kom_tutari),
                 'komisyon_doviz': s.komisyon_doviz or s.doviz,
                 'komisyon_aciklama': s.komisyon_aciklama or ''
             })
 
         acente_listesi = []
         for a in acente_map.values():
-            a['toplam_satis_usd'] = q3(a['toplam_satis_usd'])
-            a['toplam_komisyon_usd'] = q3(a['toplam_komisyon_usd'])
+            a['toplam_satis_usd'] = q2(a['toplam_satis_usd'])
+            a['toplam_komisyon_usd'] = q2(a['toplam_komisyon_usd'])
             a['oran'] = q_oran((a['toplam_komisyon_usd'] / a['toplam_satis_usd'] * 100) if a['toplam_satis_usd'] else 0)
             acente_listesi.append(a)
         acente_listesi.sort(key=lambda x: -x['toplam_komisyon_usd'])
@@ -7220,7 +7236,7 @@ def create_app():
         return jsonify({
             'ok': True,
             'acente_listesi': acente_listesi,
-            'toplam_komisyon_usd': q3(sum(a['toplam_komisyon_usd'] for a in acente_listesi)),
+            'toplam_komisyon_usd': q2(sum(a['toplam_komisyon_usd'] for a in acente_listesi)),
             'toplam_siparis': sum(a['siparis_adedi'] for a in acente_listesi)
         })
 
@@ -7408,12 +7424,12 @@ def create_app():
             for m in sip_maliyetleri:
                 t = m.maliyet_tip or 'Sipariş Gideri'
                 maliyet_kalemleri.append({
-                    'tip': t, 'tutar_usd': q3(m.usd_karsilik or 0), 'adet': 1
+                    'tip': t, 'tutar_usd': q2(m.usd_karsilik or 0), 'adet': 1
                 })
 
             # Yuvarlama
             for mk in maliyet_kalemleri:
-                mk['tutar_usd'] = q3(mk['tutar_usd'])
+                mk['tutar_usd'] = q2(mk['tutar_usd'])
 
             marj = q_oran((toplam_kar_usd / toplam_satis_usd * 100) if toplam_satis_usd else 0)
 
@@ -7426,9 +7442,9 @@ def create_app():
                 'stok_tip': ilk_satis.stok_tip or '?',
                 'satis_tarihi': ilk_satis.satis_tarihi.isoformat() if ilk_satis.satis_tarihi else None,
                 'stok_adedi': len(satislar),
-                'satis_usd': q3(toplam_satis_usd),
-                'maliyet_usd': q3(toplam_maliyet_usd),
-                'kar_usd': q3(toplam_kar_usd),
+                'satis_usd': q2(toplam_satis_usd),
+                'maliyet_usd': q2(toplam_maliyet_usd),
+                'kar_usd': q2(toplam_kar_usd),
                 'marj': marj,
                 'maliyet_kalemleri': maliyet_kalemleri
             })
@@ -7439,9 +7455,9 @@ def create_app():
         # Genel toplam
         genel = {
             'siparis_adedi': len(sonuc),
-            'toplam_satis_usd': q3(sum(s['satis_usd'] for s in sonuc)),
-            'toplam_maliyet_usd': q3(sum(s['maliyet_usd'] for s in sonuc)),
-            'toplam_kar_usd': q3(sum(s['kar_usd'] for s in sonuc))
+            'toplam_satis_usd': q2(sum(s['satis_usd'] for s in sonuc)),
+            'toplam_maliyet_usd': q2(sum(s['maliyet_usd'] for s in sonuc)),
+            'toplam_kar_usd': q2(sum(s['kar_usd'] for s in sonuc))
         }
         genel['ort_marj'] = q_oran((genel['toplam_kar_usd'] / genel['toplam_satis_usd'] * 100) if genel['toplam_satis_usd'] else 0)
 
@@ -7528,18 +7544,18 @@ def create_app():
         def _finalize(d):
             """Marj hesapla ve yuvarla"""
             d['marj'] = q_oran((d['kar_usd'] / d['satis_usd'] * 100) if d['satis_usd'] else 0)
-            d['satis_usd'] = q3(d['satis_usd'])
-            d['maliyet_usd'] = q3(d['maliyet_usd'])
-            d['kar_usd'] = q3(d['kar_usd'])
+            d['satis_usd'] = q2(d['satis_usd'])
+            d['maliyet_usd'] = q2(d['maliyet_usd'])
+            d['kar_usd'] = q2(d['kar_usd'])
             return d
 
         musteri_listesi = sorted([_finalize(m) for m in musteri_map.values()], key=lambda x: -x['kar_usd'])
         cins_listesi = sorted([_finalize(cm) for cm in cins_map.values()], key=lambda x: -x['kar_usd'])
         ulke_listesi = sorted([_finalize(u) for u in ulke_map.values()], key=lambda x: -x['kar_usd'])
 
-        genel['satis_usd'] = q3(genel['satis_usd'])
-        genel['maliyet_usd'] = q3(genel['maliyet_usd'])
-        genel['kar_usd'] = q3(genel['kar_usd'])
+        genel['satis_usd'] = q2(genel['satis_usd'])
+        genel['maliyet_usd'] = q2(genel['maliyet_usd'])
+        genel['kar_usd'] = q2(genel['kar_usd'])
 
         return jsonify({
             'ok': True,
@@ -7676,14 +7692,14 @@ def create_app():
 
         # Yuvarlama
         for d in durum_ozet.values():
-            d['deger_usd'] = q3(d['deger_usd'])
+            d['deger_usd'] = q2(d['deger_usd'])
         for t in tip_ozet.values():
-            t['miktar'] = q3(t['miktar'])
-            t['deger_usd'] = q3(t['deger_usd'])
+            t['miktar'] = q2(t['miktar'])
+            t['deger_usd'] = q2(t['deger_usd'])
         cins_listesi = []
         for co in cins_ozet.values():
-            co['toplam_miktar'] = q3(co['toplam_miktar'])
-            co['deger_usd'] = q3(co['deger_usd'])
+            co['toplam_miktar'] = q2(co['toplam_miktar'])
+            co['deger_usd'] = q2(co['deger_usd'])
             cins_listesi.append(co)
         cins_listesi.sort(key=lambda x: -x['deger_usd'])
 
@@ -7692,7 +7708,7 @@ def create_app():
             'kur_usd': q_kur(kur_usd),
             'kur_eur': q_kur(kur_eur),
             'toplam_stok_adedi': len(kayitlar),
-            'toplam_deger_usd': q3(sum(k['deger_usd'] for k in kayitlar)),
+            'toplam_deger_usd': q2(sum(k['deger_usd'] for k in kayitlar)),
             'durum_ozet': durum_ozet,
             'tip_ozet': tip_ozet,
             'cins_listesi': cins_listesi
@@ -8255,10 +8271,10 @@ def create_app():
             return jsonify({
                 'ok': True, 'kesim_id': kesim_id,
                 'olusan_stoklar': olusan_stoklar,
-                'birim_maliyet': q3(birim_m2_maliyet),
-                'kaynak_toplam_maliyet': q3(kaynak_toplam_maliyet),
-                'hedef_toplam_m2': q3(hedef_toplam_m2),
-                'fire_m2': q3(fire_miktar_m2),
+                'birim_maliyet': q2(birim_m2_maliyet),
+                'kaynak_toplam_maliyet': q2(kaynak_toplam_maliyet),
+                'hedef_toplam_m2': q2(hedef_toplam_m2),
+                'fire_m2': q2(fire_miktar_m2),
                 'fire_orani': q_oran(fire_orani_yuzde),
                 'hedef_rez_sayisi': hedef_rez_sayisi,
                 'mesaj': f'✅ Kesim tamam: {len(olusan_stoklar)} hedef stok olustu. Birim maliyet: {birim_m2_maliyet:.2f} {kaynak_doviz}/m²'
@@ -8490,21 +8506,21 @@ def create_app():
                 'unvan': cari.unvan,
                 'cari_tip': cari.cari_tip,
                 'ulke': cari.ulke,
-                'toplam_borc_try': q3(toplam_borc),
-                'toplam_alacak_try': q3(toplam_alacak),
-                'net_bakiye_try': q3(net_bakiye),
-                'vadesiz_try': q3(grup_netler['vadesiz']),
-                'g_0_30_try': q3(grup_netler['g_0_30']),
-                'g_31_60_try': q3(grup_netler['g_31_60']),
-                'g_61_90_try': q3(grup_netler['g_61_90']),
-                'g_90_plus_try': q3(grup_netler['g_90_plus'])
+                'toplam_borc_try': q2(toplam_borc),
+                'toplam_alacak_try': q2(toplam_alacak),
+                'net_bakiye_try': q2(net_bakiye),
+                'vadesiz_try': q2(grup_netler['vadesiz']),
+                'g_0_30_try': q2(grup_netler['g_0_30']),
+                'g_31_60_try': q2(grup_netler['g_31_60']),
+                'g_61_90_try': q2(grup_netler['g_61_90']),
+                'g_90_plus_try': q2(grup_netler['g_90_plus'])
             })
 
         # Toplam net'ler
         for grup_ad in toplam_gruplar:
-            toplam_gruplar[grup_ad]['net'] = q3(toplam_gruplar[grup_ad]['borc'] - toplam_gruplar[grup_ad]['alacak'])
-            toplam_gruplar[grup_ad]['borc'] = q3(toplam_gruplar[grup_ad]['borc'])
-            toplam_gruplar[grup_ad]['alacak'] = q3(toplam_gruplar[grup_ad]['alacak'])
+            toplam_gruplar[grup_ad]['net'] = q2(toplam_gruplar[grup_ad]['borc'] - toplam_gruplar[grup_ad]['alacak'])
+            toplam_gruplar[grup_ad]['borc'] = q2(toplam_gruplar[grup_ad]['borc'])
+            toplam_gruplar[grup_ad]['alacak'] = q2(toplam_gruplar[grup_ad]['alacak'])
 
         # YAMA E3b: liste, carinin KENDI para birimindeki ham bakiyesini
         # de gorsun. Eskiden yalnizca net_bakiye_try donuyordu ve on yuz
@@ -8535,7 +8551,7 @@ def create_app():
         for _c in sonuc_cariler:
             _cid = _c.get('cari_id')
             _pb = (_pb_harita.get(_cid) or 'TRY').upper()
-            _netler = {k: q3(v) for k, v in (_dv_net.get(_cid) or {}).items()
+            _netler = {k: q2(v) for k, v in (_dv_net.get(_cid) or {}).items()
                        if abs(v) >= 0.005}
             _c['net_bakiyeler'] = _netler
             # Tek sayi bekleyen eski kodlar icin: carinin kendi dovizi
@@ -8940,9 +8956,9 @@ def create_app():
             h.kur_uygulanan = q_kur(kur)
             h.kur_kaynak = 'TCMB'
             if (h.borc or 0) > 0:
-                h.borc_try = q3(h.borc * kur)
+                h.borc_try = q2(h.borc * kur)
             if (h.alacak or 0) > 0:
-                h.alacak_try = q3(h.alacak * kur)
+                h.alacak_try = q2(h.alacak * kur)
             guncellenen += 1
 
         db.session.commit()
@@ -8969,7 +8985,7 @@ def create_app():
             # Müşteri avansı: alacak artırır (bizim borcumuz/onun kredisi)
             # Devir çıkışı: borç (krediyi azaltır)
             net += (h.alacak or 0) - (h.borc or 0)
-        return q3(net), doviz
+        return q2(net), doviz
 
     @app.route('/api/siparis/<siparis_id>/avans_bakiyesi', methods=['GET'])
     def api_siparis_avans_bakiyesi(siparis_id):
@@ -8997,7 +9013,7 @@ def create_app():
         data = request.get_json(silent=True) or {}
         kaynak_sip_id = (data.get('kaynak_siparis_id') or '').strip()
         hedef_sip_id = (data.get('hedef_siparis_id') or '').strip()
-        tutar = q3(float(data.get('tutar') or 0))
+        tutar = q2(float(data.get('tutar') or 0))
         if not kaynak_sip_id or not hedef_sip_id:
             return jsonify({'ok': False, 'mesaj': 'Kaynak ve hedef sipariş gerekli'}), 400
         if kaynak_sip_id == hedef_sip_id:
@@ -9035,14 +9051,14 @@ def create_app():
             cikis = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=cari.id,
                 cari_unvan=cari.unvan, islem_tip='Avans Devri (Çıkış)',
                 borc=tutar, alacak=0, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                borc_try=q3(try_kar), alacak_try=0, vade_tarihi=date.today(),
+                borc_try=q2(try_kar), alacak_try=0, vade_tarihi=date.today(),
                 aciklama=f'Avans {hedef_sip_id} siparişine devredildi (iptal: {kaynak_sip_id})',
                 kaynak='avans_devir', baglanti_tip='siparis', baglanti_id=kaynak_sip_id,
                 siparis_id=kaynak_sip_id, kullanici=session['kullanici'])
             giris = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=cari.id,
                 cari_unvan=cari.unvan, islem_tip='Avans Devri (Giriş)',
                 borc=0, alacak=tutar, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                borc_try=0, alacak_try=q3(try_kar), vade_tarihi=date.today(),
+                borc_try=0, alacak_try=q2(try_kar), vade_tarihi=date.today(),
                 aciklama=f'Avans {kaynak_sip_id} siparişinden devredildi',
                 kaynak='avans_devir', baglanti_tip='siparis', baglanti_id=hedef_sip_id,
                 siparis_id=hedef_sip_id, kullanici=session['kullanici'])
@@ -9050,14 +9066,14 @@ def create_app():
             cikis = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=cari.id,
                 cari_unvan=cari.unvan, islem_tip='Avans Devri (Çıkış)',
                 borc=0, alacak=tutar, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                borc_try=0, alacak_try=q3(try_kar), vade_tarihi=date.today(),
+                borc_try=0, alacak_try=q2(try_kar), vade_tarihi=date.today(),
                 aciklama=f'Verilen avans {hedef_sip_id} siparişine devredildi (iptal: {kaynak_sip_id})',
                 kaynak='avans_devir', baglanti_tip='siparis', baglanti_id=kaynak_sip_id,
                 siparis_id=kaynak_sip_id, kullanici=session['kullanici'])
             giris = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=cari.id,
                 cari_unvan=cari.unvan, islem_tip='Avans Devri (Giriş)',
                 borc=tutar, alacak=0, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                borc_try=q3(try_kar), alacak_try=0, vade_tarihi=date.today(),
+                borc_try=q2(try_kar), alacak_try=0, vade_tarihi=date.today(),
                 aciklama=f'Verilen avans {kaynak_sip_id} siparişinden devredildi',
                 kaynak='avans_devir', baglanti_tip='siparis', baglanti_id=hedef_sip_id,
                 siparis_id=hedef_sip_id, kullanici=session['kullanici'])
@@ -9079,8 +9095,8 @@ def create_app():
             return jsonify({'ok': False, 'mesaj': 'Cari, işlem tipi ve vade tarihi zorunlu'}), 400
 
         islem_tip = data['islem_tip']
-        borc = q3(float(data.get('borc') or 0))
-        alacak = q3(float(data.get('alacak') or 0))
+        borc = q2(float(data.get('borc') or 0))
+        alacak = q2(float(data.get('alacak') or 0))
         doviz = data.get('doviz', 'USD')
         siparis_id = data.get('siparis_id') or None
         stok_id = (data.get('stok_id') or '').strip() or None  # YENİ: stok bağlantısı
@@ -9093,7 +9109,7 @@ def create_app():
         transfer_yonu = (data.get('transfer_yonu') or 'cari').strip()  # 'cari' | 'kasa'
         mahsup_modu = (data.get('mahsup_modu') or 'cari').strip()      # 'cari' | 'fatura'
         karsilik_fatura_id = (data.get('karsilik_fatura_id') or '').strip() or None
-        islem_tutar = q3(float(data.get('tutar') or data.get('borc') or data.get('alacak') or 0))
+        islem_tutar = q2(float(data.get('tutar') or data.get('borc') or data.get('alacak') or 0))
 
         # ── TAHSILAT/ODEMEDE KASA ZORUNLU ──
         # Bu tipler tanimi geregi "para el degistirdi" demek. Nereye
@@ -9126,21 +9142,21 @@ def create_app():
         _fatura_tipleri = ('Fatura (Satis)', 'Fatura (Alis)',
                            'Alış Faturası', 'Satış Faturası',
                            'Alis Faturasi', 'Satis Faturasi')
-        kdv_oran = q3(float(data.get('kdv_oran') or 0))
+        kdv_oran = q2(float(data.get('kdv_oran') or 0))
         kdv_dahil_mi = bool(data.get('kdv_dahil_mi'))
         kdv_tutar = 0.0
         matrah = 0.0
         if islem_tip in _fatura_tipleri and kdv_oran > 0:
             if kdv_dahil_mi:
                 # Girilen tutar KDV dahil → matrahı ayır
-                matrah = q3(islem_tutar / (1 + kdv_oran / 100.0))
-                kdv_tutar = q3(islem_tutar - matrah)
+                matrah = q2(islem_tutar / (1 + kdv_oran / 100.0))
+                kdv_tutar = q2(islem_tutar - matrah)
                 # borc/alacak zaten genel toplam, değişmez
             else:
                 # Girilen tutar matrah → KDV'yi üste ekle, toplamı büyüt
                 matrah = islem_tutar
-                kdv_tutar = q3(matrah * kdv_oran / 100.0)
-                islem_tutar = q3(matrah + kdv_tutar)
+                kdv_tutar = q2(matrah * kdv_oran / 100.0)
+                islem_tutar = q2(matrah + kdv_tutar)
                 if borc > 0:
                     borc = islem_tutar
                 if alacak > 0:
@@ -9199,7 +9215,7 @@ def create_app():
                         _devreden_kdv_kalemi_olustur(_st.id, _st.kdv_tutar, _st.doviz,
                             aciklama=f'{_hedef_tip} faturalandırma - {_st.cins}',
                             fatura_no=_st.fatura_no)
-                    _ch = _stok_cari_hareket_olustur(_st.id, _st.uretici, q3((_st.matrah or 0)+(_st.kdv_tutar or 0)),
+                    _ch = _stok_cari_hareket_olustur(_st.id, _st.uretici, q2((_st.matrah or 0)+(_st.kdv_tutar or 0)),
                         _st.doviz, fatura_no=evrak_no,
                         aciklama=f'{_hedef_tip} faturalandırma — {_st.cins} — {evrak_no}',
                         fatura_durumu='faturali', alis_tarihi=_fatura_tarihi,
@@ -9241,7 +9257,7 @@ def create_app():
                     id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=kaynak.id,
                     cari_unvan=kaynak.unvan, islem_tip='Bakiye Transfer (Kasaya)',
                     borc=islem_tutar, alacak=0, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                    borc_try=q3(try_kar), alacak_try=0, vade_tarihi=vade,
+                    borc_try=q2(try_kar), alacak_try=0, vade_tarihi=vade,
                     evrak_no=evrak_no, aciklama=aciklama or f'Kasaya transfer: {kasa.ad}',
                     kaynak='virman', baglanti_tip='kasa', baglanti_id=str(kasa.id),
                     kullanici=session['kullanici'])
@@ -9254,15 +9270,15 @@ def create_app():
                 if kasa.doviz == doviz:
                     hedef_tutar = islem_tutar
                 elif kasa.doviz == 'TRY':
-                    hedef_tutar = q3(try_kar)
+                    hedef_tutar = q2(try_kar)
                 else:
                     kasa_kur = _kur_getir(kasa.doviz, vade)
                     if not kasa_kur or kasa_kur <= 0:
                         return jsonify({'ok': False,
                             'mesaj': f'{kasa.doviz} kuru alınamadı — farklı dövizli kasaya '
                                      f'transfer için kur gerekli. TCMB kurlarını güncelleyip tekrar dene.'}), 400
-                    hedef_tutar = q3(try_kar / kasa_kur)
-                kasa.bakiye = q3((kasa.bakiye or 0) + hedef_tutar)
+                    hedef_tutar = q2(try_kar / kasa_kur)
+                kasa.bakiye = q2((kasa.bakiye or 0) + hedef_tutar)
                 cevrim_notu = '' if kasa.doviz == doviz else f' ({islem_tutar:,.2f} {doviz} → {hedef_tutar:,.2f} {kasa.doviz})'
                 kh = KasaHareket(kasa_id=kasa.id, tip='giris', tutar=hedef_tutar,
                     tarih=date.today(),
@@ -9300,8 +9316,8 @@ def create_app():
                     borc=0 if borc_transferi else islem_tutar,
                     alacak=islem_tutar if borc_transferi else 0,
                     doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                    borc_try=0 if borc_transferi else q3(try_kar),
-                    alacak_try=q3(try_kar) if borc_transferi else 0,
+                    borc_try=0 if borc_transferi else q2(try_kar),
+                    alacak_try=q2(try_kar) if borc_transferi else 0,
                     vade_tarihi=vade,
                     evrak_no=evrak_no,
                     aciklama=aciklama or f'{hedef.unvan} cariye {tur_ek} transferi',
@@ -9316,8 +9332,8 @@ def create_app():
                     borc=islem_tutar if borc_transferi else 0,
                     alacak=0 if borc_transferi else islem_tutar,
                     doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                    borc_try=q3(try_kar) if borc_transferi else 0,
-                    alacak_try=0 if borc_transferi else q3(try_kar),
+                    borc_try=q2(try_kar) if borc_transferi else 0,
+                    alacak_try=0 if borc_transferi else q2(try_kar),
                     vade_tarihi=vade,
                     evrak_no=evrak_no,
                     aciklama=aciklama or f'{kaynak.unvan} cariden {tur_ek} transferi',
@@ -9358,7 +9374,7 @@ def create_app():
                     h = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=kaynak.id,
                         cari_unvan=kaynak.unvan, islem_tip='Mahsup (Fatura)',
                         borc=0, alacak=islem_tutar, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                        borc_try=0, alacak_try=q3(try_kar), vade_tarihi=vade,
+                        borc_try=0, alacak_try=q2(try_kar), vade_tarihi=vade,
                         evrak_no=evrak_no or fat.fatura_no,
                         aciklama=aciklama or f'Fatura {fat.fatura_no or fat.id} mahsubu',
                         kaynak='mahsup', baglanti_tip='fatura', baglanti_id=fat.id,
@@ -9367,7 +9383,7 @@ def create_app():
                     h = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=kaynak.id,
                         cari_unvan=kaynak.unvan, islem_tip='Mahsup (Fatura)',
                         borc=islem_tutar, alacak=0, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                        borc_try=q3(try_kar), alacak_try=0, vade_tarihi=vade,
+                        borc_try=q2(try_kar), alacak_try=0, vade_tarihi=vade,
                         evrak_no=evrak_no or fat.fatura_no,
                         aciklama=aciklama or f'Fatura {fat.fatura_no or fat.id} mahsubu',
                         kaynak='mahsup', baglanti_tip='fatura', baglanti_id=fat.id,
@@ -9391,7 +9407,7 @@ def create_app():
                 h1 = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=kaynak.id,
                     cari_unvan=kaynak.unvan, islem_tip='Mahsup (Karşılıklı)',
                     borc=0, alacak=islem_tutar, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                    borc_try=0, alacak_try=q3(try_kar), vade_tarihi=vade,
+                    borc_try=0, alacak_try=q2(try_kar), vade_tarihi=vade,
                     evrak_no=evrak_no, aciklama=aciklama or f'{hedef.unvan} ile mahsup',
                     kaynak='mahsup', baglanti_tip='cari', baglanti_id=hedef.id,
                     kullanici=session['kullanici'])
@@ -9399,7 +9415,7 @@ def create_app():
                 h2 = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=hedef.id,
                     cari_unvan=hedef.unvan, islem_tip='Mahsup (Karşılıklı)',
                     borc=islem_tutar, alacak=0, doviz=doviz, kur_uygulanan=q_kur(kur_t),
-                    borc_try=q3(try_kar), alacak_try=0, vade_tarihi=vade,
+                    borc_try=q2(try_kar), alacak_try=0, vade_tarihi=vade,
                     evrak_no=evrak_no, aciklama=aciklama or f'{kaynak.unvan} ile mahsup',
                     kaynak='mahsup', baglanti_tip='cari', baglanti_id=kaynak.id,
                     kullanici=session['kullanici'])
@@ -9447,8 +9463,8 @@ def create_app():
                 musteri=cari.unvan,
                 musteri_adres=getattr(cari, 'adres', None),
                 musteri_ulke=getattr(cari, 'ulke', None) if hasattr(cari, 'ulke') else None,
-                toplam=q3(tutar),
-                ara_toplam=q3(tutar),
+                toplam=q2(tutar),
+                ara_toplam=q2(tutar),
                 kdv_tutar=0,
                 kdv_oran=0,
                 doviz=doviz,
@@ -9557,10 +9573,10 @@ def create_app():
             kur_uygulanan=q_kur(kullanilan_kur),
             kur_kaynak=kur_kaynak,
             kur_gerekce=(kur_gerekce or None),   # SK1
-            borc_try=q3(borc_try), alacak_try=q3(alacak_try),
+            borc_try=q2(borc_try), alacak_try=q2(alacak_try),
             vade_tarihi=vade, siparis_id=siparis_id,
             kdv_dahil_mi=kdv_dahil_mi, kdv_oran=kdv_oran,
-            kdv_tutar=q3(kdv_tutar), matrah=q3(matrah),
+            kdv_tutar=q2(kdv_tutar), matrah=q2(matrah),
             kullanici=session['kullanici']
         )
         # AF1: STOK ALIS BORCUNA MAHSUP.
@@ -9599,8 +9615,8 @@ def create_app():
             if not e_kasa:
                 db.session.rollback()
                 return jsonify({'ok': False, 'mesaj': 'Seçilen kasa bulunamadı'}), 404
-            islem_tut = q3(borc + alacak)          # biri her zaman 0
-            tutar_try = q3(borc_try + alacak_try)  # TRY karşılığı (yukarıda hesaplandı)
+            islem_tut = q2(borc + alacak)          # biri her zaman 0
+            tutar_try = q2(borc_try + alacak_try)  # TRY karşılığı (yukarıda hesaplandı)
             if e_kasa.doviz == doviz:
                 k_tutar = islem_tut
             elif e_kasa.doviz == 'TRY':
@@ -9611,17 +9627,17 @@ def create_app():
                     db.session.rollback()
                     return jsonify({'ok': False,
                         'mesaj': f'{e_kasa.doviz} kuru alınamadı — farklı dövizli kasa için kur gerekli.'}), 400
-                k_tutar = q3(tutar_try / k_kur)
+                k_tutar = q2(tutar_try / k_kur)
             # Tahsilat = kasaya GIRIS, odeme = CIKIS. Odeme
             # yazimlari yukarida genisletildi; burada tahsilat
             # tarafi zaten tek yazimli.
             giris_mi = islem_tip in ('Tahsilat', 'Avans Tahsilati')
-            if not giris_mi and q3((e_kasa.bakiye or 0)) < k_tutar:
+            if not giris_mi and q2((e_kasa.bakiye or 0)) < k_tutar:
                 # Uyarı ver ama engelleme — eksi bakiye bilinçli olabilir
                 kasa_notu_eksi = ' (DİKKAT: kasa bakiyesi eksiye düştü)'
             else:
                 kasa_notu_eksi = ''
-            e_kasa.bakiye = q3((e_kasa.bakiye or 0) + (k_tutar if giris_mi else -k_tutar))
+            e_kasa.bakiye = q2((e_kasa.bakiye or 0) + (k_tutar if giris_mi else -k_tutar))
             cevrim = '' if e_kasa.doviz == doviz else f' ({islem_tut:,.2f} {doviz} → {k_tutar:,.2f} {e_kasa.doviz})'
             _cari_unvan_k = getattr(hareket, 'cari_unvan', None) or (Cari.query.get(data['cari_id']).unvan if Cari.query.get(data['cari_id']) else data['cari_id'])
             kh = KasaHareket(
@@ -9795,8 +9811,8 @@ def create_app():
             for bkh in bagli_khs:
                 bk = Kasa.query.get(bkh.kasa_id)
                 if bk:
-                    fark = q3(bkh.tutar or 0)
-                    bk.bakiye = q3((bk.bakiye or 0) + (-fark if bkh.tip == 'giris' else fark))
+                    fark = q2(bkh.tutar or 0)
+                    bk.bakiye = q2((bk.bakiye or 0) + (-fark if bkh.tip == 'giris' else fark))
                     silinen_kasa = bk.ad
                 db.session.delete(bkh)
         except Exception:
@@ -9931,11 +9947,14 @@ def create_app():
         toplam_fiyat = birim_fiyat * miktar
 
         return {
-            'm2_toplam': round(m2, 4),
-            'm3_toplam': round(m3, 6),
-            'sqft_toplam': round(sqft, 2),
+            # ON1: hepsi 2 hane, q2 ile (ROUND_HALF_UP). Onceden m2 4,
+            # m3 6 haneye yuvarlaniyordu; kayit 2 haneye inince ekranda
+            # ve belgede farkli degerler cikiyordu.
+            'm2_toplam': q2(m2),
+            'm3_toplam': q2(m3),
+            'sqft_toplam': q2(sqft),
             'olcu': olcu_str,
-            'toplam_fiyat': round(toplam_fiyat, 2)
+            'toplam_fiyat': q2(toplam_fiyat)
         }
 
 
@@ -10016,7 +10035,7 @@ def create_app():
             # Şimdilik kalem dövizi sipariş dövizine eşit varsayılıyor.
             # Farklı dövizler için kur çevrimi eklenebilir.
             toplam += (k.toplam_fiyat or 0)
-        siparis.toplam_tutar = round(toplam, 2)
+        siparis.toplam_tutar = q2(toplam)
 
 
     # ─── GET LİSTE ───
@@ -10346,7 +10365,7 @@ def create_app():
                     banka_adi=(cek_bilgi.get('banka_adi') or '').strip() or None,
                     sube=(cek_bilgi.get('sube') or '').strip() or None,
                     hesap_sahibi=(cek_bilgi.get('hesap_sahibi') or '').strip() or None,
-                    tutar=q3(cek_tutar), doviz=doviz,
+                    tutar=q2(cek_tutar), doviz=doviz,
                     keside_tarihi=_parse_date(cek_bilgi.get('keside_tarihi')),
                     vade_tarihi=_parse_date(data.get('vade_tarihi')) or bugun,
                     cari_id=cari.id, cari_unvan=musteri,
@@ -10375,19 +10394,19 @@ def create_app():
             if _hs_kasa_id and not cek_bilgi:
                 hs_kasa = Kasa.query.get(int(_hs_kasa_id))
                 if hs_kasa:
-                    satis_tutar = q3(fatura.toplam or 0)
+                    satis_tutar = q2(fatura.toplam or 0)
                     k_tutar = None
                     if hs_kasa.doviz == doviz:
                         k_tutar = satis_tutar
                     else:
                         _kur_d = _kur_getir(doviz, bugun) if doviz != 'TRY' else 1.0
-                        _try_tut = q3(satis_tutar * (_kur_d or 0)) if doviz != 'TRY' else satis_tutar
+                        _try_tut = q2(satis_tutar * (_kur_d or 0)) if doviz != 'TRY' else satis_tutar
                         if hs_kasa.doviz == 'TRY':
                             k_tutar = _try_tut if _try_tut else None
                         else:
                             _kur_k = _kur_getir(hs_kasa.doviz, bugun)
                             if _kur_k and _try_tut:
-                                k_tutar = q3(_try_tut / _kur_k)
+                                k_tutar = q2(_try_tut / _kur_k)
                     if k_tutar:
                         _cari_hareket_ekle(
                             cari_unvan=musteri, islem_tip='Tahsilat',
@@ -10395,7 +10414,7 @@ def create_app():
                             aciklama=f'Sıcak satış peşin tahsilat — {fatura.fatura_no}',
                             kaynak='sicak_satis', baglanti_tip='fatura', baglanti_id=fatura.id,
                             vade_tarihi=bugun, evrak_no=fatura.fatura_no)
-                        hs_kasa.bakiye = q3((hs_kasa.bakiye or 0) + k_tutar)
+                        hs_kasa.bakiye = q2((hs_kasa.bakiye or 0) + k_tutar)
                         _cvr = '' if hs_kasa.doviz == doviz else f' ({satis_tutar:,.2f} {doviz} → {k_tutar:,.2f} {hs_kasa.doviz})'
                         hs_kh = KasaHareket(
                             kasa_id=hs_kasa.id, tarih=bugun, tip='giris', tutar=k_tutar,
@@ -11104,9 +11123,9 @@ def create_app():
                 'birim': 'ton',
                 'adet': 1,
                 'fatura_durumu': _fd,
-                'matrah': q3(_matrah),
-                'kdv': q3(_kdv),
-                'toplam': q3(_matrah + _kdv),
+                'matrah': q2(_matrah),
+                'kdv': q2(_kdv),
+                'toplam': q2(_matrah + _kdv),
                 'doviz': s.doviz or 'USD'
             })
 
@@ -11138,9 +11157,9 @@ def create_app():
                 'birim': 'm²',
                 'adet': len(stoklar),
                 'fatura_durumu': 'faturasiz' if _faturasiz_var else 'faturali',
-                'matrah': q3(_matrah),
-                'kdv': q3(_kdv),
-                'toplam': q3(_matrah + _kdv),
+                'matrah': q2(_matrah),
+                'kdv': q2(_kdv),
+                'toplam': q2(_matrah + _kdv),
                 'doviz': ilk.doviz or 'USD'
             })
 
@@ -11180,9 +11199,9 @@ def create_app():
                 'birim': 'm²',
                 'adet': len(stoklar),
                 'fatura_durumu': 'faturasiz' if _faturasiz_var else 'faturali',
-                'matrah': q3(_matrah),
-                'kdv': q3(_kdv),
-                'toplam': q3(_matrah + _kdv),
+                'matrah': q2(_matrah),
+                'kdv': q2(_kdv),
+                'toplam': q2(_matrah + _kdv),
                 'doviz': ilk.doviz or 'USD'
             })
 
@@ -11498,7 +11517,7 @@ def create_app():
                     _dus = min(_tutar, _esdeger)
                     _tutar -= _dus
                     _geri = _kur_ile(_dus, _dv, _kdv)
-                    _kap[_ca] = q3(max(0.0, _havuz - (_geri if _geri
+                    _kap[_ca] = q2(max(0.0, _havuz - (_geri if _geri
                                                       is not None else 0.0)))
 
                 if _tutar <= 0.005:   # kurus artigi — kapanmis say
@@ -11510,7 +11529,7 @@ def create_app():
                 _not = '' if abs(_tutar - _tam) < 0.005 else ' (kısmi)'
                 kalemler.append({
                     'tarih': _vade.isoformat() if _vade else None,
-                    'yon': _yon, 'tutar': q3(_tutar),
+                    'yon': _yon, 'tutar': q2(_tutar),
                     'doviz': _dv,
                     'kaynak': 'cari', 'kayit_id': h.id,
                     'aciklama': (f"{_ad} — {_tip}{_not}".strip(' —')
@@ -11520,7 +11539,7 @@ def create_app():
                     # odeme zaten dusuldu. Ekran "iki kez mi sayildi"
                     # sorusuna cevap verebilsin diye asil tutar ve
                     # kapanan kisim da doner.
-                    'toplam_tutar': q3(_tam), 'kapanan': q3(_tam - _tutar),
+                    'toplam_tutar': q2(_tam), 'kapanan': q2(_tam - _tutar),
                 })
 
         # ── 2) ÇEKLER ─────────────────────────────────────────
@@ -11536,7 +11555,7 @@ def create_app():
             kalemler.append({
                 'tarih': ck.vade_tarihi.isoformat() if ck.vade_tarihi else None,
                 'yon': 'giris' if ck.yon == 'alinan' else 'cikis',
-                'tutar': q3(float(ck.tutar or 0)),
+                'tutar': q2(float(ck.tutar or 0)),
                 'doviz': (ck.doviz or 'TRY').upper(),
                 'kaynak': 'cek', 'kayit_id': ck.id,
                 'aciklama': f"Çek {_no} — {_ad}".strip(' —'),
@@ -11548,7 +11567,7 @@ def create_app():
             for t in _gider_tarihleri(g, bas, son):
                 kalemler.append({
                     'tarih': t.isoformat(), 'yon': 'cikis',
-                    'tutar': q3(float(g.tutar or 0)),
+                    'tutar': q2(float(g.tutar or 0)),
                     'doviz': (g.doviz or 'TRY').upper(),
                     'kaynak': 'sabit', 'kayit_id': g.id,
                     'aciklama': f"{g.ad} ({g.kategori or 'Diğer'})",
@@ -11561,7 +11580,7 @@ def create_app():
                 NakitPlan.kaynak == 'elle').all():
             kalemler.append({
                 'tarih': p.tarih.isoformat() if p.tarih else None,
-                'yon': p.yon, 'tutar': q3(float(p.tutar or 0)),
+                'yon': p.yon, 'tutar': q2(float(p.tutar or 0)),
                 'doviz': (p.doviz or 'TRY').upper(),
                 'kaynak': 'elle', 'kayit_id': p.id,
                 'aciklama': p.aciklama or 'Elle eklenen',
@@ -11605,7 +11624,7 @@ def create_app():
         acilis = {}
         for k in Kasa.query.filter(Kasa.aktif.isnot(False)).all():
             d = (k.doviz or 'TRY').upper()
-            acilis[d] = q3(float(acilis.get(d, 0)) + float(k.bakiye or 0))
+            acilis[d] = q2(float(acilis.get(d, 0)) + float(k.bakiye or 0))
 
         kalemler = _nakit_kalemleri(bas, son)
 
@@ -11654,7 +11673,7 @@ def create_app():
 
             def _cevir(tutar, kaynak_doviz):
                 # X birim A = X * kur(A) TL = X * kur(A) / kur(B) birim B
-                return q3(float(tutar) * _kurlar[kaynak_doviz] / _hedef_kur)
+                return q2(float(tutar) * _kurlar[kaynak_doviz] / _hedef_kur)
 
             for x in kalemler:
                 if x['doviz'] != _cev:
@@ -11664,12 +11683,12 @@ def create_app():
                     x['doviz'] = _cev
             _yeni_acilis = {}
             for _d, _v in acilis.items():
-                _yeni_acilis[_cev] = q3(float(_yeni_acilis.get(_cev, 0))
+                _yeni_acilis[_cev] = q2(float(_yeni_acilis.get(_cev, 0))
                                         + float(_cevir(_v, _d)))
-            acilis = _yeni_acilis or {_cev: q3(0)}
+            acilis = _yeni_acilis or {_cev: q2(0)}
             cevrim = {
                 'hedef': _cev,
-                'kurlar': {_d: q3(_k) for _d, _k in _kurlar.items()},
+                'kurlar': {_d: q2(_k) for _d, _k in _kurlar.items()},
                 'tarih': date.today().isoformat(),
                 'not': 'Tutarlar bugünkü kurla çevrildi; kur değişirse rakamlar değişir.',
             }
@@ -11678,7 +11697,7 @@ def create_app():
             kalemler = [x for x in kalemler if x['doviz'] == _suz]
             acilis = {_d: _v for _d, _v in acilis.items() if _d == _suz}
             if _suz not in acilis:
-                acilis[_suz] = q3(0)
+                acilis[_suz] = q2(0)
 
         # ── Vadesiz olanlari AYIR ──
         # Gizlemek projeksiyonu iyimser yapar; ayri gostermek dogru.
@@ -11733,7 +11752,7 @@ def create_app():
             satir = {'donem': a, 'gecmis': _gd, 'dovizler': {}}
             for d in sorted(set(list(donemler[a].keys()) + list(yurur.keys()))):
                 s = donemler[a].get(d, {'giris': 0.0, 'cikis': 0.0, 'kalemler': []})
-                net = q3(s['giris'] - s['cikis'])
+                net = q2(s['giris'] - s['cikis'])
 
                 # GERCEKLESMIS KALEMLER — tarihi bugunden ONCE olanlar.
                 #
@@ -11755,19 +11774,19 @@ def create_app():
                     else:
                         _cg += float(_x['tutar'])
 
-                net_bekleyen = q3((s['giris'] - _gg) - (s['cikis'] - _cg))
+                net_bekleyen = q2((s['giris'] - _gg) - (s['cikis'] - _cg))
                 if _gd:
                     kum = None            # ekranda "—"
                 else:
-                    yurur[d] = q3(float(yurur.get(d, 0)) + float(net_bekleyen))
+                    yurur[d] = q2(float(yurur.get(d, 0)) + float(net_bekleyen))
                     kum = yurur[d]
 
                 satir['dovizler'][d] = {
-                    'giris': q3(s['giris']), 'cikis': q3(s['cikis']),
+                    'giris': q2(s['giris']), 'cikis': q2(s['cikis']),
                     'net': net, 'kumulatif': kum, 'gecmis': _gd,
                     # Donem icinde COKTAN gerceklesmis kisim. Ekran
                     # bunu ayri gosterir; kumulatife katilmaz.
-                    'gerceklesmis_giris': q3(_gg), 'gerceklesmis_cikis': q3(_cg),
+                    'gerceklesmis_giris': q2(_gg), 'gerceklesmis_cikis': q2(_cg),
                     'net_bekleyen': net_bekleyen,
                     'kalem_sayisi': len(s['kalemler']),
                     'kalemler': sorted(s['kalemler'], key=lambda x: x['tarih'])[:40],
@@ -11780,7 +11799,7 @@ def create_app():
                 d = o.setdefault(x['doviz'], {'giris': 0.0, 'cikis': 0.0, 'adet': 0})
                 d['giris' if x['yon'] == 'giris' else 'cikis'] += float(x['tutar'])
                 d['adet'] += 1
-            return {k: {'giris': q3(v['giris']), 'cikis': q3(v['cikis']),
+            return {k: {'giris': q2(v['giris']), 'cikis': q2(v['cikis']),
                         'adet': v['adet']} for k, v in o.items()}
 
         sonuc = {
@@ -11909,7 +11928,7 @@ def create_app():
             return jsonify({'ok': False, 'mesaj': 'Tutar sifirdan buyuk olmali'}), 400
 
         p = NakitPlan(
-            id=_yeni_id('NP'), tarih=t, yon=yon, tutar=q3(tutar),
+            id=_yeni_id('NP'), tarih=t, yon=yon, tutar=q2(tutar),
             doviz=(d.get('doviz') or 'TRY').upper(),
             aciklama=(d.get('aciklama') or '').strip() or None,
             kaynak='elle', kaynak_id=(d.get('kaynak_id') or '').strip() or None,
@@ -12018,7 +12037,7 @@ def create_app():
         g = SabitGider(
             id=_yeni_id('SG'), ad=ad,
             kategori=(d.get('kategori') or 'Diğer').strip(),
-            tutar=q3(tutar), doviz=(d.get('doviz') or 'TRY').upper(),
+            tutar=q2(tutar), doviz=(d.get('doviz') or 'TRY').upper(),
             periyot=periyot,
             ayin_gunu=_gun if periyot in ('aylik', 'yillik') else None,
             haftanin_gunu=_hg if periyot == 'haftalik' else None,
@@ -12058,7 +12077,7 @@ def create_app():
                 return jsonify({'ok': False, 'mesaj': 'Tutar sayisal olmali'}), 400
             if _t <= 0:
                 return jsonify({'ok': False, 'mesaj': 'Tutar sifirdan buyuk olmali'}), 400
-            g.tutar = q3(_t)
+            g.tutar = q2(_t)
         if 'doviz' in d:
             g.doviz = (d['doviz'] or 'TRY').upper()
         if 'periyot' in d and d['periyot'] in GIDER_PERIYOT:
@@ -12129,7 +12148,7 @@ def create_app():
 
         yeni = SabitGider(
             id=_yeni_id('SG'), ad=g.ad, kategori=g.kategori,
-            tutar=q3(yeni_tutar), doviz=g.doviz, periyot=g.periyot,
+            tutar=q2(yeni_tutar), doviz=g.doviz, periyot=g.periyot,
             ayin_gunu=g.ayin_gunu, haftanin_gunu=g.haftanin_gunu, ay=g.ay,
             baslangic=gecerlilik, bitis=None, aktif=True,
             aciklama=(d.get('aciklama') or g.aciklama), grup_id=grup)
@@ -12354,7 +12373,7 @@ def create_app():
             if m.baglanti_tip and m.baglanti_tip.lower() == 'stok' and m.baglanti_id in stok_birim_map:
                 miktar, birim_ad = stok_birim_map[m.baglanti_id]
                 if miktar and miktar > 0:
-                    birim_maliyet = q3((m.tutar or 0) / miktar)
+                    birim_maliyet = q2((m.tutar or 0) / miktar)
             sonuc.append({
                 'id': m.id, 'maliyet_tarihi': m.maliyet_tarihi.isoformat(),
                 'maliyet_tip': m.maliyet_tip, 'baglanti_tip': m.baglanti_tip,
@@ -12405,12 +12424,12 @@ def create_app():
                     'cins': bilgi.get('cins') or '',
                     'cari_unvan': bilgi.get('uretici') or '',
                     'baglanti_no': bilgi['no'],
-                    'tutar': q3(bilgi['matrah']), 'doviz': bilgi['doviz'],
-                    'usd_karsilik': q3(bilgi['matrah']) if bilgi['doviz'] == 'USD' else None,
+                    'tutar': q2(bilgi['matrah']), 'doviz': bilgi['doviz'],
+                    'usd_karsilik': q2(bilgi['matrah']) if bilgi['doviz'] == 'USD' else None,
                     'fatura_no': bilgi['fatura_no'],
                     'aciklama': f"{bilgi['tip']} alış bedeli — {bilgi['cins'] or ''}".strip(),
                     'kur': None,
-                    'birim_maliyet': q3(bilgi['matrah'] / miktar) if miktar else None,
+                    'birim_maliyet': q2(bilgi['matrah'] / miktar) if miktar else None,
                     'birim_ad': birim_ad2,
                     'aktif': True,
                     'sanal': True,       # UI: düzenle/sil butonu gösterme
@@ -12448,11 +12467,11 @@ def create_app():
 
         # Net matrah ve KDV hesapla
         if kdv_dahil_mi and kdv_oran > 0:
-            net_tutar = round(tutar_ham / (1 + kdv_oran / 100), 4)
-            kdv_tutar = round(tutar_ham - net_tutar, 4)
+            net_tutar = q2(tutar_ham / (1 + kdv_oran / 100))
+            kdv_tutar = q2(tutar_ham - net_tutar)
         elif not kdv_dahil_mi and kdv_oran > 0:
             net_tutar = tutar_ham
-            kdv_tutar = round(tutar_ham * kdv_oran / 100, 4)
+            kdv_tutar = q2(tutar_ham * kdv_oran / 100)
         else:
             net_tutar = tutar_ham
             kdv_tutar = 0.0
@@ -12631,11 +12650,11 @@ def create_app():
 
         # Net matrah ve KDV
         if kdv_dahil_mi and kdv_oran > 0:
-            toplam_net = round(tutar_ham / (1 + kdv_oran / 100), 4)
-            toplam_kdv = round(tutar_ham - toplam_net, 4)
+            toplam_net = q2(tutar_ham / (1 + kdv_oran / 100))
+            toplam_kdv = q2(tutar_ham - toplam_net)
         elif not kdv_dahil_mi and kdv_oran > 0:
             toplam_net = tutar_ham
-            toplam_kdv = round(tutar_ham * kdv_oran / 100, 4)
+            toplam_kdv = q2(tutar_ham * kdv_oran / 100)
         else:
             toplam_net = tutar_ham
             toplam_kdv = 0.0
@@ -12675,8 +12694,8 @@ def create_app():
         for stok in stoklar:
             miktar = miktar_f(stok)
             oran = miktar / toplam_miktar
-            net_pay = q3(toplam_net * oran)
-            kdv_pay = q3(toplam_kdv * oran) if toplam_kdv > 0 else 0
+            net_pay = q2(toplam_net * oran)
+            kdv_pay = q2(toplam_kdv * oran) if toplam_kdv > 0 else 0
             if net_pay <= 0:
                 continue
 
@@ -13169,12 +13188,12 @@ def create_app():
                     'birim': s.birim,
                     'tarih': s.satis_tarihi.isoformat() if s.satis_tarihi else None,
                     'doviz': orj_doviz,
-                    'satis': q3(satis_orj),
-                    'maliyet': q3(maliyet_orj),
-                    'kar': q3(kar_orj),
-                    'satis_usd': q3(s.tutar_usd or 0),
-                    'maliyet_usd': q3(s.maliyet_usd or 0),
-                    'kar_usd': q3(s.kar_usd or 0),
+                    'satis': q2(satis_orj),
+                    'maliyet': q2(maliyet_orj),
+                    'kar': q2(kar_orj),
+                    'satis_usd': q2(s.tutar_usd or 0),
+                    'maliyet_usd': q2(s.maliyet_usd or 0),
+                    'kar_usd': q2(s.kar_usd or 0),
                     'marj': q_oran(s.marj_yuzde or 0),
                     'siparis_id': s.siparis_id,
                     'proforma_id': s.proforma_id,
@@ -13252,9 +13271,9 @@ def create_app():
                     'miktar': s.miktar,
                     'birim': s.birim,
                     'tarih': s.siparis_tarihi.isoformat() if s.siparis_tarihi else None,
-                    'satis_usd': q3(satis_usd),
-                    'maliyet_usd': q3(maliyet_usd),
-                    'kar_usd': q3(kar_usd),
+                    'satis_usd': q2(satis_usd),
+                    'maliyet_usd': q2(maliyet_usd),
+                    'kar_usd': q2(kar_usd),
                     'marj': q_oran(marj),
                     'durum': s.durum
                 })
@@ -13269,9 +13288,9 @@ def create_app():
             'data': result,
             'ozet': {
                 'adet': len(result),
-                'toplam_satis_usd': q3(toplam_satis),
-                'toplam_maliyet_usd': q3(toplam_maliyet),
-                'toplam_kar_usd': q3(toplam_kar),
+                'toplam_satis_usd': q2(toplam_satis),
+                'toplam_maliyet_usd': q2(toplam_maliyet),
+                'toplam_kar_usd': q2(toplam_kar),
                 'ort_marj': q_oran(ort_marj)
             },
             'mod': mod
@@ -13296,9 +13315,9 @@ def create_app():
             liste.append({
                 'musteri': r.musteri,
                 'adet': r.adet,
-                'satis_usd': q3(satis),
-                'maliyet_usd': q3(r.maliyet or 0),
-                'kar_usd': q3(kar),
+                'satis_usd': q2(satis),
+                'maliyet_usd': q2(r.maliyet or 0),
+                'kar_usd': q2(kar),
                 'marj': q_oran((kar / satis * 100) if satis else 0)
             })
         liste.sort(key=lambda x: x['kar_usd'], reverse=True)
@@ -13323,9 +13342,9 @@ def create_app():
             liste.append({
                 'cins': r.cins or '(belirsiz)',
                 'adet': r.adet,
-                'satis_usd': q3(satis),
-                'maliyet_usd': q3(r.maliyet or 0),
-                'kar_usd': q3(kar),
+                'satis_usd': q2(satis),
+                'maliyet_usd': q2(r.maliyet or 0),
+                'kar_usd': q2(kar),
                 'marj': q_oran((kar / satis * 100) if satis else 0)
             })
         liste.sort(key=lambda x: x['kar_usd'], reverse=True)
@@ -13480,12 +13499,12 @@ def create_app():
                                 or float(h.kur_uygulanan or 0))
                     if _o_try and _bol > 0:
                         _odenen += _o_try / _bol
-                _kalan = q3(float(h.alacak or 0) - float(_odenen))
+                _kalan = q2(float(h.alacak or 0) - float(_odenen))
                 if _kalan <= 0.01:
                     continue
                 stok_borclari.append({
                     'id': h.id, 'fatura_no': _fno,
-                    'toplam': q3(h.alacak or 0), 'odenen': q3(_odenen),
+                    'toplam': q2(h.alacak or 0), 'odenen': q2(_odenen),
                     'kalan': _kalan, 'doviz': h.doviz or 'USD',
                     'tarih': (h.hareket_tarihi.strftime('%d.%m.%Y')
                               if h.hareket_tarihi else ''),
@@ -13512,13 +13531,13 @@ def create_app():
             else:
                 odenen = db.session.query(db.func.sum(CariHareket.borc)).filter_by(
                     baglanti_tip='fatura', baglanti_id=f.id).scalar() or 0
-            kalan = q3((f.toplam or 0) - odenen)
+            kalan = q2((f.toplam or 0) - odenen)
             if kalan <= 0.01:
                 continue  # tam kapanmış, atla
             sonuc.append({
                 'kaynak': 'fatura',
                 'id': f.id, 'fatura_no': f.fatura_no or f.id,
-                'toplam': q3(f.toplam or 0), 'odenen': q3(odenen), 'kalan': kalan,
+                'toplam': q2(f.toplam or 0), 'odenen': q2(odenen), 'kalan': kalan,
                 'doviz': f.doviz or 'USD',
                 'tarih': f.fatura_tarihi.strftime('%d.%m.%Y') if f.fatura_tarihi else '',
                 'durum': f.durum,
@@ -13561,7 +13580,7 @@ def create_app():
         yaklasan_odemeler = [{
             'tarih': h.vade_tarihi.strftime('%d.%m.%Y') if h.vade_tarihi else '',
             'cari': (Cari.query.get(h.cari_id).unvan if h.cari_id and Cari.query.get(h.cari_id) else 'Bilinmeyen'),
-            'tutar': q3(h.alacak or 0), 'doviz': h.doviz or 'USD',
+            'tutar': q2(h.alacak or 0), 'doviz': h.doviz or 'USD',
             'aciklama': (h.aciklama or '')[:30]
         } for h in odemeler]
 
@@ -13572,14 +13591,14 @@ def create_app():
         yaklasan_tahsilatlar = [{
             'tarih': h.vade_tarihi.strftime('%d.%m.%Y') if h.vade_tarihi else '',
             'cari': (Cari.query.get(h.cari_id).unvan if h.cari_id and Cari.query.get(h.cari_id) else 'Bilinmeyen'),
-            'tutar': q3(h.borc or 0), 'doviz': h.doviz or 'USD',
+            'tutar': q2(h.borc or 0), 'doviz': h.doviz or 'USD',
             'aciklama': (h.aciklama or '')[:30]
         } for h in tahsilatlar]
 
         return jsonify({
             'ok': True,
-            'toplam_alacak': q3(toplam_alacak_try), 'toplam_borc': q3(toplam_borc_try),
-            'net_bakiye': q3(net_bakiye),
+            'toplam_alacak': q2(toplam_alacak_try), 'toplam_borc': q2(toplam_borc_try),
+            'net_bakiye': q2(net_bakiye),
             'yaklasan_odemeler': yaklasan_odemeler, 'yaklasan_tahsilatlar': yaklasan_tahsilatlar,
         })
 
@@ -13597,7 +13616,7 @@ def create_app():
             'id': c.id, 'yon': c.yon, 'tip': c.tip,
             'cek_no': c.cek_no, 'banka_adi': c.banka_adi, 'sube': c.sube,
             'hesap_sahibi': c.hesap_sahibi,
-            'tutar': q3(c.tutar or 0), 'doviz': c.doviz or 'TRY',
+            'tutar': q2(c.tutar or 0), 'doviz': c.doviz or 'TRY',
             'keside_tarihi': c.keside_tarihi.strftime('%Y-%m-%d') if c.keside_tarihi else None,
             'vade_tarihi': c.vade_tarihi.strftime('%Y-%m-%d') if c.vade_tarihi else None,
             'vade_goster': c.vade_tarihi.strftime('%d.%m.%Y') if c.vade_tarihi else '',
@@ -13642,7 +13661,7 @@ def create_app():
             t = {}
             for c in cekler:
                 d = c.doviz or 'TRY'
-                t[d] = q3(t.get(d, 0) + (c.tutar or 0))
+                t[d] = q2(t.get(d, 0) + (c.tutar or 0))
             return t
 
         # Vade yaklaşan / geçmiş (hatırlatma)
@@ -13716,7 +13735,7 @@ def create_app():
             banka_adi=(d.get('banka_adi') or '').strip() or None,
             sube=(d.get('sube') or '').strip() or None,
             hesap_sahibi=(d.get('hesap_sahibi') or '').strip() or None,
-            tutar=q3(tutar), doviz=d.get('doviz', 'TRY'),
+            tutar=q2(tutar), doviz=d.get('doviz', 'TRY'),
             keside_tarihi=_parse_date(d.get('keside_tarihi')),
             vade_tarihi=vade,
             cari_id=cari_id, cari_unvan=cari_unvan,
@@ -13750,7 +13769,7 @@ def create_app():
                     kur = _kur_getir(cdoviz, _cek_tarihi) if cdoviz != 'TRY' else 1.0
                 except Exception:
                     kur = 1.0
-                try_karsilik = q3(tutar * (kur or 1.0))
+                try_karsilik = q2(tutar * (kur or 1.0))
                 if yon == 'alinan':
                     # Müşteriden çek aldık → müşterinin borcu düşer → ALACAK (bizim defterimizde)
                     ch = CariHareket(
@@ -13759,7 +13778,7 @@ def create_app():
                         islem_tip='Çek Tahsilatı',
                         evrak_no=cek.cek_no or cek.id,
                         aciklama=f'Çek ile tahsilat ({cek.cek_no or cek.id})' + (' - ' + cek.aciklama if cek.aciklama else ''),
-                        borc=0, alacak=q3(tutar),
+                        borc=0, alacak=q2(tutar),
                         borc_try=0, alacak_try=try_karsilik,
                         doviz=cdoviz, vade_tarihi=vade,
                         kur_uygulanan=kur or 1.0,
@@ -13775,7 +13794,7 @@ def create_app():
                         islem_tip='Çek Ödemesi',
                         evrak_no=cek.cek_no or cek.id,
                         aciklama=f'Çek ile ödeme ({cek.cek_no or cek.id})' + (' - ' + cek.aciklama if cek.aciklama else ''),
-                        borc=q3(tutar), alacak=0,
+                        borc=q2(tutar), alacak=0,
                         borc_try=try_karsilik, alacak_try=0,
                         doviz=cdoviz, vade_tarihi=vade,
                         kur_uygulanan=kur or 1.0,
@@ -13810,7 +13829,7 @@ def create_app():
         for alan in ['cek_no', 'banka_adi', 'sube', 'hesap_sahibi', 'aciklama']:
             if alan in d: setattr(c, alan, (d.get(alan) or '').strip() or None)
         if 'tutar' in d:
-            try: c.tutar = q3(float(d['tutar']))
+            try: c.tutar = q2(float(d['tutar']))
             except (ValueError, TypeError): pass
         if 'doviz' in d: c.doviz = d['doviz']
         if 'vade_tarihi' in d:
@@ -13900,7 +13919,7 @@ def create_app():
                         cari_id=ciro_cari_id, cari_unvan=ciro_unvan,
                         islem_tip='Çek Cirosu',
                         aciklama=f'Çek cirosu ({c.cek_no or c.id})',
-                        borc=q3(c.tutar), alacak=0, doviz=c.doviz or 'TRY',
+                        borc=q2(c.tutar), alacak=0, doviz=c.doviz or 'TRY',
                         kaynak='cek', baglanti_tip='cek', baglanti_id=c.id,
                         kullanici=session.get('kullanici'))
                     db.session.add(_ch)
@@ -13920,7 +13939,7 @@ def create_app():
                     tip = 'giris' if c.yon == 'alinan' else 'cikis'
                     kh = KasaHareket(
                         kasa_id=int(d['kasa_id']), tarih=date.today(), tip=tip,
-                        tutar=q3(c.tutar),
+                        tutar=q2(c.tutar),
                         aciklama=f'Çek {"tahsilatı" if c.yon=="alinan" else "ödemesi"} ({c.cek_no or c.id})',
                         baglanti_tip='cek', baglanti_id=c.id,
                         cari_id=c.cari_id, kullanici=session.get('kullanici'))
@@ -13931,9 +13950,9 @@ def create_app():
                     _kasa_obj = db.session.get(Kasa, int(d['kasa_id']))
                     if _kasa_obj:
                         if tip == 'giris':
-                            _kasa_obj.bakiye = q3((_kasa_obj.bakiye or 0) + q3(c.tutar))
+                            _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) + q2(c.tutar))
                         else:
-                            _kasa_obj.bakiye = q3((_kasa_obj.bakiye or 0) - q3(c.tutar))
+                            _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) - q2(c.tutar))
                 except Exception:
                     pass
             mesaj = 'Çek tahsil edildi' if c.yon == 'alinan' else 'Çek ödendi'
@@ -13977,9 +13996,9 @@ def create_app():
                     if _k:
                         # Girişse bakiyeden düş, çıkışsa geri ekle (ters işlem)
                         if kh.tip == 'giris':
-                            _k.bakiye = q3((_k.bakiye or 0) - (kh.tutar or 0))
+                            _k.bakiye = q2((_k.bakiye or 0) - (kh.tutar or 0))
                         else:
-                            _k.bakiye = q3((_k.bakiye or 0) + (kh.tutar or 0))
+                            _k.bakiye = q2((_k.bakiye or 0) + (kh.tutar or 0))
                     db.session.delete(kh)
                     c.kasa_hareket_id = None
                     geri_mesaj += ' Kasa hareketi geri alındı.'
@@ -14073,9 +14092,9 @@ def create_app():
                 _k = db.session.get(Kasa, kh.kasa_id)
                 if _k:
                     if kh.tip == 'giris':
-                        _k.bakiye = q3((_k.bakiye or 0) - (kh.tutar or 0))
+                        _k.bakiye = q2((_k.bakiye or 0) - (kh.tutar or 0))
                     else:
-                        _k.bakiye = q3((_k.bakiye or 0) + (kh.tutar or 0))
+                        _k.bakiye = q2((_k.bakiye or 0) + (kh.tutar or 0))
                 db.session.delete(kh)
                 c.kasa_hareket_id = None
         # YAMA H3: DURUMU DA YAZ.
@@ -14246,7 +14265,7 @@ def create_app():
 
             if _gorebilir('maliyet'):
                 _ekle('Bu stoğun maliyetleri', '▤', [{
-                    'ad': f"{m.maliyet_tip} · {q3(m.tutar or 0):,.0f} {m.doviz or ''}".strip(),
+                    'ad': f"{m.maliyet_tip} · {q2(m.tutar or 0):,.0f} {m.doviz or ''}".strip(),
                     'ikon': '▤',
                     'ek': f"{_baglanti_okunabilir('stok', m.baglanti_id)}"
                           + (f" · {m.fatura_no}" if m.fatura_no else ''),
@@ -14280,7 +14299,7 @@ def create_app():
             if _gorebilir('satislar'):
                 _ekle('Bu stoğun satışları', '▤', [{
                     'ad': sk.musteri or '—', 'ikon': '▤',
-                    'ek': f"{sk.siparis_id or ''} · {q3(sk.satis_tutari or 0):,.0f} {sk.doviz or ''}".strip(' ·'),
+                    'ek': f"{sk.siparis_id or ''} · {q2(sk.satis_tutari or 0):,.0f} {sk.doviz or ''}".strip(' ·'),
                     'yol': f'/satislar?ara={quote(sk.blok_no or sk.stok_id or "")}'}
                     for sk in SatisKaydi.query.filter(
                         SatisKaydi.stok_id.in_(sid_list)).limit(12).all()])
@@ -14288,7 +14307,7 @@ def create_app():
             if _gorebilir('cari'):
                 _ekle('Bu stoğun cari hareketleri', '◉', [{
                     'ad': h.cari_unvan or '—', 'ikon': '◉',
-                    'ek': f"{h.islem_tip or ''} · {q3((h.borc or 0) or (h.alacak or 0)):,.0f} {h.doviz or ''}".strip(' ·'),
+                    'ek': f"{h.islem_tip or ''} · {q2((h.borc or 0) or (h.alacak or 0)):,.0f} {h.doviz or ''}".strip(' ·'),
                     'yol': f'/cari?ara={quote(h.cari_unvan or "")}'}
                     for h in CariHareket.query.filter(
                         func.lower(CariHareket.baglanti_tip) == 'stok',
@@ -14863,7 +14882,7 @@ def create_app():
         iskonto = float(p.iskonto_sabit or 0)
         ara = max(0.0, kalem_toplam - iskonto)
         kdv_oran = float(p.kdv_oran or 0) if (p.tur or '') == 'yurt_ici' else 0.0
-        return q3(ara + (ara * kdv_oran / 100.0))
+        return q2(ara + (ara * kdv_oran / 100.0))
 
     def _satici_bilgileri(data):
         """Proforma icin satici firma alanlarini uretir.
@@ -14981,7 +15000,7 @@ def create_app():
         # belgede her satir sifir gorunuyordu.
         for _k in ProformaKalem.query.filter_by(proforma_id=p.id).all():
             if not (_k.toplam_fiyat or 0) and (_k.birim_fiyat or 0) and (_k.miktar or 0):
-                _k.toplam_fiyat = q3((_k.miktar or 0) * (_k.birim_fiyat or 0))
+                _k.toplam_fiyat = q2((_k.miktar or 0) * (_k.birim_fiyat or 0))
             if not (_k.net_fiyat or 0):
                 _k.net_fiyat = _k.toplam_fiyat
         if not p.toplam:
@@ -15269,7 +15288,7 @@ def create_app():
         p_doviz = p.doviz or 'USD'
         risk = _cari_risk_durumu(cari, ek_tutar_doviz=(p.toplam or 0), ek_doviz=p_doviz)
         risk['ok'] = True
-        risk['proforma_tutari'] = q3(p.toplam or 0)
+        risk['proforma_tutari'] = q2(p.toplam or 0)
         risk['proforma_doviz'] = p_doviz
         return jsonify(risk)
 
@@ -16137,12 +16156,12 @@ def create_app():
 
         miktar = float(s.miktar or 0)
         b_fiyat = float(s.birim_fiyat or 0)
-        tutar = float(s.tutar or 0) or q3(miktar * b_fiyat)
+        tutar = float(s.tutar or 0) or q2(miktar * b_fiyat)
 
         kalem = {
             'urun_tip': s.stok_tip, 'cins': s.cins, 'ozellik': s.ozellik,
             'blok_no': s.blok_no, 'miktar': miktar, 'birim': s.birim,
-            'birim_fiyat': b_fiyat, 'toplam_fiyat': q3(tutar), 'doviz': doviz,
+            'birim_fiyat': b_fiyat, 'toplam_fiyat': q2(tutar), 'doviz': doviz,
             'boy': s.boy, 'yukseklik': s.yukseklik, 'kalinlik': s.kalinlik,
             'en': s.en, 'agirlik': s.agirlik_kg,
             'aciklama': f'Satis kaydi {s.id}',
@@ -16150,7 +16169,7 @@ def create_app():
 
         # KDV yalnizca yurtici satista; ihracat ve ihrac kayitlida sifir.
         kdv_oran = q_oran(data.get('kdv_oran') or 0) if satis_tipi == 'yurtici' else 0
-        kdv_tutar = q3(tutar * kdv_oran / 100) if kdv_oran > 0 else 0
+        kdv_tutar = q2(tutar * kdv_oran / 100) if kdv_oran > 0 else 0
 
         fatura = Fatura(
             id=_yeni_id('FTR'),
@@ -16162,8 +16181,8 @@ def create_app():
             musteri=musteri,
             musteri_adres=(cari.adres if cari else None),
             musteri_ulke=s.musteri_ulke or (getattr(cari, 'ulke', None) if cari else None),
-            toplam=q3(tutar + kdv_tutar),
-            ara_toplam=q3(tutar),
+            toplam=q2(tutar + kdv_tutar),
+            ara_toplam=q2(tutar),
             kdv_oran=kdv_oran,
             kdv_tutar=kdv_tutar,
             doviz=doviz,
@@ -16374,8 +16393,8 @@ def create_app():
             aylar_tr = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara']
             aylik.append({
                 'ay': f'{aylar_tr[ay_basi.month-1]} {ay_basi.year}',
-                'satis_usd': q3(toplam_usd),
-                'kar_usd': q3(toplam_kar),
+                'satis_usd': q2(toplam_usd),
+                'kar_usd': q2(toplam_kar),
                 'adet': len(satislar)
             })
 
@@ -16388,8 +16407,8 @@ def create_app():
         ).group_by(SatisKaydi.musteri).order_by(db.func.sum(SatisKaydi.kar_usd).desc()).limit(5).all()
         en_karli_musteri = [{
             'musteri': m.musteri,
-            'satis_usd': q3(m.satis or 0),
-            'kar_usd': q3(m.kar or 0),
+            'satis_usd': q2(m.satis or 0),
+            'kar_usd': q2(m.kar or 0),
             'adet': m.adet
         } for m in musteri_q]
 
@@ -16402,16 +16421,16 @@ def create_app():
         ).group_by(SatisKaydi.cins).order_by(db.func.sum(SatisKaydi.kar_usd).desc()).limit(5).all()
         en_karli_cins = [{
             'cins': c.cins or '(belirsiz)',
-            'satis_usd': q3(c.satis or 0),
-            'kar_usd': q3(c.kar or 0),
+            'satis_usd': q2(c.satis or 0),
+            'kar_usd': q2(c.kar or 0),
             'adet': c.adet
         } for c in cins_q]
 
         # Genel toplam (tüm zamanlar)
         tum = SatisKaydi.query.all()
         genel = {
-            'toplam_satis': q3(sum(s.tutar_usd or 0 for s in tum)),
-            'toplam_kar': q3(sum(s.kar_usd or 0 for s in tum)),
+            'toplam_satis': q2(sum(s.tutar_usd or 0 for s in tum)),
+            'toplam_kar': q2(sum(s.kar_usd or 0 for s in tum)),
             'toplam_adet': len(tum),
             'faturasiz': SatisKaydi.query.filter(
                 (SatisKaydi.fatura_no.is_(None)) | (SatisKaydi.fatura_no == '')
@@ -16425,8 +16444,8 @@ def create_app():
         ay_basi = bugun.replace(day=1)
         bu_ay = SatisKaydi.query.filter(SatisKaydi.satis_tarihi >= ay_basi).all()
         bu_ay_ozet = {
-            'satis': q3(sum(s.tutar_usd or 0 for s in bu_ay)),
-            'kar': q3(sum(s.kar_usd or 0 for s in bu_ay)),
+            'satis': q2(sum(s.tutar_usd or 0 for s in bu_ay)),
+            'kar': q2(sum(s.kar_usd or 0 for s in bu_ay)),
             'adet': len(bu_ay)
         }
 
@@ -16562,8 +16581,8 @@ def create_app():
                     'ozellik': k.yuzey_spec, 'blok_no': k.blok_no,
                     'boy': k.boy, 'yukseklik': k.yukseklik, 'kalinlik': k.kalinlik,
                     'adet': bu_parca,
-                    'miktar': q3(m2_birim * bu_parca),
-                    'agirlik': q3(agirlik_birim * bu_parca),
+                    'miktar': q2(m2_birim * bu_parca),
+                    'agirlik': q2(agirlik_birim * bu_parca),
                     'bundle_no': str(bundle_no),
                     'slab_no': str(slab_imlec) if bu_parca == 1 else f'{slab_imlec}-{slab_son}',
                     'birim': k.birim,
@@ -16655,8 +16674,8 @@ def create_app():
         if atanmamis['kalemler']:
             gruplar.append(atanmamis)
         for g in gruplar:
-            g['miktar'] = q3(g['miktar'])
-            g['agirlik'] = q3(g['agirlik'])
+            g['miktar'] = q2(g['miktar'])
+            g['agirlik'] = q2(g['agirlik'])
         return gruplar, len(atanmamis['kalemler'])
 
     def _proforma_belge_html(proforma_id, mod):
@@ -17458,10 +17477,10 @@ def create_app():
         try:
             b, y = float(boy or 0), float(yuk or 0)
             if b > 0 and y > 0:
-                return round(b * y / 10000.0 * int(adet or 0), 2)
+                return q2(b * y / 10000.0 * int(adet or 0))
         except (TypeError, ValueError):
             pass
-        return round(float(yedek or 0), 2)
+        return q2(yedek)
 
     def _etiket_listesi(p, kalemler, plaka=True):
         kont_no = {k.id: (k.konteyner_no or '').strip()
@@ -17744,7 +17763,7 @@ def create_app():
             'ok': True,
             'siparis': {
                 'id': sip.id, 'musteri': sip.musteri,
-                'tutar': q3(siparis_tutari),
+                'tutar': q2(siparis_tutari),
                 'doviz': sip.doviz or 'USD',
                 'durum': sip.durum,
                 'cins': (_ilk_kalem.cins if _ilk_kalem else None) or '-',
@@ -17756,20 +17775,20 @@ def create_app():
             'proformalar': proforma_list,
             'faturalar': fatura_list,
             'cari_hareket': {
-                'borc': q3(hareket_borc),
-                'alacak': q3(hareket_alacak),
+                'borc': q2(hareket_borc),
+                'alacak': q2(hareket_alacak),
                 'sayi': len(hareketler)
             },
             'karlilik': {
-                'satis_usd': q3(toplam_satis_usd),
-                'maliyet_usd': q3(toplam_maliyet_usd),
-                'kar_usd': q3(toplam_kar_usd),
+                'satis_usd': q2(toplam_satis_usd),
+                'maliyet_usd': q2(toplam_maliyet_usd),
+                'kar_usd': q2(toplam_kar_usd),
                 'marj': q_oran(ort_marj),
                 'satis_kaydi_sayisi': len(satis_kayitlari)
             },
             'tahsilat': {
-                'tahsil_edilen': q3(tahsil_toplam),
-                'fatura_toplam': q3(sum(f.toplam or 0 for f in faturalar))
+                'tahsil_edilen': q2(tahsil_toplam),
+                'fatura_toplam': q2(sum(f.toplam or 0 for f in faturalar))
             },
             'rezervasyon': {
                 'sayi': Rezervasyon.query.filter_by(siparis_id=siparis_id, iptal_nedeni=None).count(),
@@ -17906,9 +17925,9 @@ def create_app():
                 g = gruplar[anahtar]
                 g['stok_idler'].append(stok.id)
                 g['adet'] += 1
-                g['m2'] = q3(g['m2'] + m2)
-                g['miktar'] = q3(g['miktar'] + miktar)
-                g['sqft'] = q3(g['sqft'] + (m2 * M2_TO_SQFT if m2 else 0))
+                g['m2'] = q2(g['m2'] + m2)
+                g['miktar'] = q2(g['miktar'] + miktar)
+                g['sqft'] = q2(g['sqft'] + (m2 * M2_TO_SQFT if m2 else 0))
                 # Slab baslangici: gruptaki en kucuk slab no
                 try:
                     if slab_no and str(slab_no).isdigit():
@@ -17919,7 +17938,7 @@ def create_app():
                     pass
             else:
                 # BLOK / EBATLI: tek tek kalem
-                sqft = q3(m2 * M2_TO_SQFT) if m2 else 0
+                sqft = q2(m2 * M2_TO_SQFT) if m2 else 0
                 # EBATLI'da kasa_ici_adet onemli (proformada hesaplama için)
                 kasa_ici = getattr(stok, 'kasa_ici_adet', 1) or 1
                 anahtar = ('_TEKIL_', stok.id)
@@ -17931,11 +17950,11 @@ def create_app():
                     'mense': mense,
                     'slab_no': slab_no,
                     'boy': boy, 'yukseklik': yuk, 'kalinlik': kal,
-                    'm2': q3(m2), 'sqft': sqft,
-                    'miktar': q3(miktar), 'adet': 1,
+                    'm2': q2(m2), 'sqft': sqft,
+                    'miktar': q2(miktar), 'adet': 1,
                     'kasa_ici_adet': kasa_ici,  # EBATLI icin kasa basina plaka adedi
-                    'tonaj': q3(getattr(stok, 'tonaj', 0) or 0) if r.stok_tip == 'BLOK' else None,
-                    'hacim_m3': q3(getattr(stok, 'hacim_m3', 0) or 0) if r.stok_tip == 'BLOK' else None,
+                    'tonaj': q2(getattr(stok, 'tonaj', 0) or 0) if r.stok_tip == 'BLOK' else None,
+                    'hacim_m3': q2(getattr(stok, 'hacim_m3', 0) or 0) if r.stok_tip == 'BLOK' else None,
                     'birim': _sip_birim_vars or ('ton' if r.stok_tip == 'BLOK' else 'm2'),
                     'birim_fiyat': _sip_fiyat_vars,
                     'doviz': sip.doviz or 'USD'
@@ -17952,8 +17971,8 @@ def create_app():
                        .order_by(SiparisKalem.sira).all())
             for sk in sk_list:
                 u_tip = (sk.urun_tip or 'PLAKA').upper()
-                m2 = q3(sk.m2_toplam or 0)
-                miktar = q3(sk.miktar or 0)
+                m2 = q2(sk.m2_toplam or 0)
+                miktar = q2(sk.miktar or 0)
                 kalemler.append({
                     'stok_id': None,
                     'stok_idler': [],
@@ -17962,7 +17981,7 @@ def create_app():
                     'blok_no': '', 'slab_no': '',
                     'boy': sk.boy or 0, 'yukseklik': sk.yukseklik or 0,
                     'kalinlik': sk.kalinlik or (sk.en or 0),
-                    'm2': m2, 'sqft': q3(m2 * M2_TO_SQFT) if m2 else 0,
+                    'm2': m2, 'sqft': q2(m2 * M2_TO_SQFT) if m2 else 0,
                     'miktar': miktar,
                     'adet': sk.adet or 1,
                     'kasa_ici_adet': getattr(sk, 'kasa_ici_adet', 1) or 1,
@@ -18142,7 +18161,7 @@ def create_app():
                                     'mesaj': f'{alan} sayisal olmali'}), 400
         # VGM = tara + net (verilmemisse hesapla)
         if k.brut_kg is None and k.tara_kg is not None and k.net_kg is not None:
-            k.brut_kg = q3(k.tara_kg + k.net_kg)
+            k.brut_kg = q2(k.tara_kg + k.net_kg)
         db.session.add(k)
         db.session.flush()
 
@@ -18254,7 +18273,7 @@ def create_app():
                         return jsonify({'ok': False,
                                         'mesaj': f'{alan} sayisal olmali'}), 400
         if k.brut_kg is None and k.tara_kg is not None and k.net_kg is not None:
-            k.brut_kg = q3(k.tara_kg + k.net_kg)
+            k.brut_kg = q2(k.tara_kg + k.net_kg)
 
         # Sevkiyatin ilk konteyneri degistiyse ozet alanlari da guncelle
         if k.sevkiyat_id and k.sira == 1:
@@ -18717,9 +18736,9 @@ def create_app():
             musteri_adres=p.musteri_adres,
             musteri_ulke=p.musteri_ulke,
             toplam=toplam,
-            ara_toplam=q3(ara_toplam),
+            ara_toplam=q2(ara_toplam),
             kdv_oran=kdv_oran,
-            kdv_tutar=q3(kdv_tutar),
+            kdv_tutar=q2(kdv_tutar),
             doviz=p.doviz or 'USD',
             odeme_sekli=p.odeme_sekli,
             teslim_sekli=p.teslim_sekli,
@@ -18822,15 +18841,15 @@ def create_app():
                 'boy': k.get('boy'), 'yukseklik': k.get('yukseklik'),
                 'kalinlik': k.get('kalinlik'), 'adet': k.get('adet', 1),
                 'miktar': miktar, 'birim': k.get('birim'),
-                'birim_fiyat': b_fiyat, 'toplam_fiyat': q3(satir),
+                'birim_fiyat': b_fiyat, 'toplam_fiyat': q2(satir),
                 'net_fiyat': k.get('net_fiyat'), 'doviz': k.get('doviz', doviz),
                 'agirlik': k.get('agirlik'), 'aciklama': k.get('aciklama'),
             })
 
         # ── KDV: yalnizca yurtici satista. Ihracat ve ihrac kayitlida sifir. ──
         kdv_oran = q_oran(data.get('kdv_oran') or 0) if satis_tipi == 'yurtici' else 0
-        kdv_tutar = q3(ara_toplam * kdv_oran / 100) if kdv_oran > 0 else 0
-        toplam = q3(ara_toplam + kdv_tutar)
+        kdv_tutar = q2(ara_toplam * kdv_oran / 100) if kdv_oran > 0 else 0
+        toplam = q2(ara_toplam + kdv_tutar)
 
         # ── Tevkifat: KDV'nin beyan edilen kesri. Toplami DEGISTIRMEZ;
         #    alicinin beyan edecegi kisim ayrica saklanir. ──
@@ -18840,7 +18859,7 @@ def create_app():
             try:
                 pay, payda = [float(x) for x in tevkifat_oran.split('/', 1)]
                 if payda:
-                    tevkifat_tutar = q3(kdv_tutar * pay / payda)
+                    tevkifat_tutar = q2(kdv_tutar * pay / payda)
             except (ValueError, ZeroDivisionError):
                 tevkifat_oran, tevkifat_tutar = '', 0
 
@@ -18854,7 +18873,7 @@ def create_app():
             musteri_adres=data.get('musteri_adres') or (cari.adres if cari else None),
             musteri_ulke=data.get('musteri_ulke') or (getattr(cari, 'ulke', None) if cari else None),
             toplam=toplam,
-            ara_toplam=q3(ara_toplam),
+            ara_toplam=q2(ara_toplam),
             kdv_oran=kdv_oran,
             kdv_tutar=kdv_tutar,
             doviz=doviz,
@@ -18884,7 +18903,7 @@ def create_app():
 
         return jsonify({
             'ok': True, 'id': fatura.id,
-            'ara_toplam': q3(ara_toplam), 'kdv_tutar': kdv_tutar,
+            'ara_toplam': q2(ara_toplam), 'kdv_tutar': kdv_tutar,
             'tevkifat_tutar': tevkifat_tutar, 'toplam': toplam,
             'mesaj': f'Fatura taslak olarak olusturuldu: {fatura.id}. '
                      f'Cari borcu, fatura "Kesildi" yapilinca islenir.'})
@@ -19007,7 +19026,7 @@ def create_app():
             # Toplam alis maliyetini hesapla
             toplam_mal = sum((float(k.get('miktar') or 0) * float(k.get('birim_fiyat') or 0))
                              for k in mk)
-            f.alis_maliyeti = q3(toplam_mal)
+            f.alis_maliyeti = q2(toplam_mal)
 
         # FATURA NO DEĞİŞTİYSE: sistem genelinde ilişkili kayıtları güncelle
         if fatura_no_degisti:
@@ -19211,14 +19230,14 @@ def create_app():
         """
         doviz = (m.doviz or 'TRY').upper()
         if doviz == 'TRY':
-            return q3(m.tutar or 0), False
+            return q2(m.tutar or 0), False
         if m.try_karsilik:
-            return q3(m.try_karsilik), False
+            return q2(m.try_karsilik), False
         # Kalem tarihindeki kurdan çevirmeyi dene
         try:
             tl, kur = _try_karsilik(m.tutar or 0, doviz, m.kur, m.maliyet_tarihi)
             if tl and kur:
-                return q3(tl), False
+                return q2(tl), False
         except Exception:
             pass
         return None, True
@@ -19329,12 +19348,12 @@ def create_app():
                 'id': d.id, 'donem': d.donem, 'iade_tur': d.iade_tur,
                 'durum': d.durum, 'talep_tutar': talep,
                 'onaylanan_tutar': d.onaylanan_tutar or 0, 'alinan_tutar': alinan,
-                'bekleyen': q3(max(0.0, talep - alinan)), 'gun': gun,
+                'bekleyen': q2(max(0.0, talep - alinan)), 'gun': gun,
                 'fatura_adet': Fatura.query.filter_by(iade_dosya_id=d.id).count()})
         return jsonify({
             'ok': True, 'donemler': satirlar,
-            'genel_talep': q3(g_talep), 'genel_alinan': q3(g_alinan),
-            'genel_bekleyen': q3(max(0.0, g_talep - g_alinan)),
+            'genel_talep': q2(g_talep), 'genel_alinan': q2(g_alinan),
+            'genel_bekleyen': q2(max(0.0, g_talep - g_alinan)),
             'ortalama_gun': round(sum(sureler) / len(sureler)) if sureler else None})
 
     @app.route('/api/kdv-iade/<dosya_id>', methods=['GET'])
@@ -19395,10 +19414,10 @@ def create_app():
         return jsonify({'ok': True, 'dosya': _iade_dosya_ozet(d),
                         'faturalar': fatura_cikti, 'kalemler': kalem_cikti,
                         'toplamlar': {
-                            'yuklenilen_kdv_tl': q3(kdv_toplam),
+                            'yuklenilen_kdv_tl': q2(kdv_toplam),
                             'cevrilemeyen': cevrilemeyen,
                             'pasif': pasif,
-                            'fatura_toplam_tl': q3(fatura_tl) if not fatura_belirsiz else None,
+                            'fatura_toplam_tl': q2(fatura_tl) if not fatura_belirsiz else None,
                             'fatura_cevrilemeyen': fatura_belirsiz}})
 
     @app.route('/api/kdv-iade/<dosya_id>', methods=['PUT'])
@@ -19428,7 +19447,7 @@ def create_app():
         for alan in ['talep_tutar', 'onaylanan_tutar', 'alinan_tutar']:
             if alan in data:
                 try:
-                    setattr(d, alan, q3(float(data.get(alan) or 0)))
+                    setattr(d, alan, q2(float(data.get(alan) or 0)))
                 except (TypeError, ValueError):
                     return jsonify({'ok': False,
                                     'mesaj': f'{alan} sayisal olmali'}), 400
@@ -19518,7 +19537,7 @@ def create_app():
                 'fatura_tarihi': f.fatura_tarihi.isoformat() if f.fatura_tarihi else None,
                 'toplam': f.toplam, 'doviz': f.doviz,
                 'ettn': getattr(f, 'ettn', None),
-                'izli_kdv_adet': len(izli), 'izli_kdv_tl': q3(izli_tl)})
+                'izli_kdv_adet': len(izli), 'izli_kdv_tl': q2(izli_tl)})
 
         # Dönem içindeki, hiçbir dosyaya bağlı olmayan serbest kalemler
         kalemler = Maliyet.query.filter(
@@ -19937,12 +19956,12 @@ def create_app():
         if db.session.get(CariHareket, hid):
             return None
 
-        tutar = q3(float(cek.tutar or 0))
+        tutar = q2(float(cek.tutar or 0))
         if tutar <= 0:
             return None
         doviz = (cek.doviz or 'TRY').upper()
         kur = _kur_getir(doviz) or 1.0
-        try_karsilik = q3(tutar * kur) if doviz != 'TRY' else tutar
+        try_karsilik = q2(tutar * kur) if doviz != 'TRY' else tutar
         alinan = (cek.yon == 'alinan')
 
         h = CariHareket(
@@ -20009,7 +20028,7 @@ def create_app():
                 continue
             gorulen.add(h.id)
             toplam += _hareket_fatura_esdegeri(h, f_doviz)
-        return q3(toplam)
+        return q2(toplam)
 
     def _fatura_tahsilat_durumu(fatura_id):
         """Faturanın tahsilat durumunu hesaplar ve durumunu günceller.
@@ -20082,17 +20101,17 @@ def create_app():
 
         f_kur = None
         if odeme_doviz == f_doviz:
-            esdeger = q3(tutar)
+            esdeger = q2(tutar)
         else:
             f_kur = 1.0 if f_doviz == 'TRY' else _kur_getir(f_doviz)
             if not f_kur or f_kur <= 0:
                 return jsonify({'ok': False,
                     'mesaj': f'{f_doviz} icin guncel kur bulunamadi (çapraz döviz çevrimi için gerekli).'}), 400
-            esdeger = q3((tutar * odeme_kur) / f_kur)
+            esdeger = q2((tutar * odeme_kur) / f_kur)
 
         # Mevcut tahsilat + yeni tutar faturayı aşıyor mu? (çek + çapraz döviz dahil)
         mevcut_tahsil = _fatura_odenen_esdeger(f)
-        kalan = q3((f.toplam or 0) - mevcut_tahsil)
+        kalan = q2((f.toplam or 0) - mevcut_tahsil)
         tolerans = 0.01 if odeme_doviz == f_doviz else max(0.01, kalan * 0.005)
         if esdeger > kalan + tolerans:
             msj = f'Tutar kalan bakiyeyi asiyor. Kalan: {kalan:,.2f} {f_doviz}'
@@ -20120,7 +20139,7 @@ def create_app():
                 banka_adi=(cek_bilgi.get('banka_adi') or '').strip() or None,
                 sube=(cek_bilgi.get('sube') or '').strip() or None,
                 hesap_sahibi=(cek_bilgi.get('hesap_sahibi') or '').strip() or None,
-                tutar=q3(tutar), doviz=f.doviz or 'USD',
+                tutar=q2(tutar), doviz=f.doviz or 'USD',
                 keside_tarihi=_parse_date(cek_bilgi.get('keside_tarihi')),
                 vade_tarihi=cek_vade,
                 cari_id=cari.id if cari else None, cari_unvan=f.musteri,
@@ -20185,15 +20204,15 @@ def create_app():
                     # Kasa dövizi ödeme dövizinden farklıysa TRY köprüsüyle çevir
                     cevrim = ''
                     if kasa.doviz == odeme_doviz:
-                        k_tutar = q3(tutar)
+                        k_tutar = q2(tutar)
                     elif kasa.doviz == 'TRY':
-                        k_tutar = q3(tutar * odeme_kur)
+                        k_tutar = q2(tutar * odeme_kur)
                         cevrim = f' ({tutar:,.2f} {odeme_doviz} → {k_tutar:,.2f} TRY)'
                     else:
                         kk = _kur_getir(kasa.doviz)
                         if not kk or kk <= 0:
                             raise ValueError(f'{kasa.doviz} kuru alınamadı')
-                        k_tutar = q3((tutar * odeme_kur) / kk)
+                        k_tutar = q2((tutar * odeme_kur) / kk)
                         cevrim = f' ({tutar:,.2f} {odeme_doviz} → {k_tutar:,.2f} {kasa.doviz})'
                     kh = KasaHareket(
                         kasa_id=kasa.id, tip='giris', tutar=k_tutar,
@@ -20207,8 +20226,8 @@ def create_app():
                         kullanici=session.get('kullanici')
                     )
                     db.session.add(kh)
-                    kasa.bakiye = q3((kasa.bakiye or 0) + k_tutar)
-                    kasa_mesaj = f' Kasa: {kasa.ad} +{k_tutar:,.2f} {kasa.doviz} (bakiye {q3(kasa.bakiye):,.2f}){cevrim}'
+                    kasa.bakiye = q2((kasa.bakiye or 0) + k_tutar)
+                    kasa_mesaj = f' Kasa: {kasa.ad} +{k_tutar:,.2f} {kasa.doviz} (bakiye {q2(kasa.bakiye):,.2f}){cevrim}'
             except Exception as e:
                 app.logger.warning(f'Kasa entegrasyonu hatası: {e}')
                 kasa_mesaj = f' ⚠️ Kasa kaydı yapılamadı: {e}'
@@ -20222,7 +20241,7 @@ def create_app():
         else:
             db.session.flush()
 
-        yeni_kalan = q3(kalan - esdeger)
+        yeni_kalan = q2(kalan - esdeger)
         msj = f'{tutar:,.2f} {odeme_doviz} tahsil edildi'
         if _capraz:
             _kur_goster = f_kur if odeme_doviz == 'TRY' else odeme_kur
@@ -20241,7 +20260,7 @@ def create_app():
             msj += f" {kur_farki.get('mesaj', '')}"
         elif kur_farki:
             _kf_id = kur_farki.id
-            msj += f' Otomatik kur farkı: {kur_farki.islem_tip} {q3((kur_farki.borc or 0) + (kur_farki.alacak or 0)):,.2f} TRY.'
+            msj += f' Otomatik kur farkı: {kur_farki.islem_tip} {q2((kur_farki.borc or 0) + (kur_farki.alacak or 0)):,.2f} TRY.'
         msj += kasa_mesaj
         return jsonify({'ok': True, 'mesaj': msj, 'durum': f.durum,
                         'kalan': yeni_kalan, 'esdeger': esdeger,
@@ -20286,7 +20305,7 @@ def create_app():
             'tutar': h.alacak,
             'doviz': h.doviz,
             # Çapraz dövizli ödemenin fatura dövizindeki eşdeğeri (aynı dövizde tutara eşit)
-            'esdeger': q3(_hareket_fatura_esdegeri(h, _f_doviz)),
+            'esdeger': q2(_hareket_fatura_esdegeri(h, _f_doviz)),
             'evrak_no': h.evrak_no,
             'tip': h.islem_tip or ('Çek' if h.kaynak == 'cek' else 'Tahsilat'),
             'aciklama': h.aciklama
@@ -20297,8 +20316,8 @@ def create_app():
             'ok': True,
             'fatura_toplam': f.toplam or 0,
             'doviz': _f_doviz,
-            'tahsil_edilen': q3(toplam_tahsil),
-            'kalan': q3((f.toplam or 0) - toplam_tahsil),
+            'tahsil_edilen': q2(toplam_tahsil),
+            'kalan': q2((f.toplam or 0) - toplam_tahsil),
             'tahsilatlar': tahsilatlar
         })
 
@@ -20341,8 +20360,8 @@ def create_app():
         for bkh in bagli:
             bk = Kasa.query.get(bkh.kasa_id)
             if bk:
-                t = q3(bkh.tutar or 0)
-                bk.bakiye = q3((bk.bakiye or 0) + (-t if bkh.tip == 'giris' else t))
+                t = q2(bkh.tutar or 0)
+                bk.bakiye = q2((bk.bakiye or 0) + (-t if bkh.tip == 'giris' else t))
                 kasa_geri.append(f'{bk.ad} {"-" if bkh.tip == "giris" else "+"}{t:,.2f} {bk.doviz}')
             db.session.delete(bkh)
         db.session.delete(h)
@@ -20395,7 +20414,7 @@ def create_app():
         sonuc = []
         for k in kasalar:
             is_ana = bool(getattr(k, 'ana_kasa', False))
-            bakiye_goster = q3(alt_kasa_toplam.get(k.doviz, 0)) if is_ana else q3(k.bakiye or 0)
+            bakiye_goster = q2(alt_kasa_toplam.get(k.doviz, 0)) if is_ana else q2(k.bakiye or 0)
 
             giris = db.session.query(db.func.sum(KasaHareket.tutar)).filter_by(
                 kasa_id=k.id, tip='giris').scalar() or 0
@@ -20407,10 +20426,10 @@ def create_app():
                 'ad': k.ad,
                 'doviz': k.doviz,
                 'bakiye': bakiye_goster,
-                'baslangic_bakiye': q3(getattr(k, 'baslangic_bakiye', 0) or 0),
+                'baslangic_bakiye': q2(getattr(k, 'baslangic_bakiye', 0) or 0),
                 'aciklama': getattr(k, 'aciklama', '') or '',
-                'giris_toplam': q3(giris),
-                'cikis_toplam': q3(cikis),
+                'giris_toplam': q2(giris),
+                'cikis_toplam': q2(cikis),
                 'ana_kasa': is_ana,
                 # Banka baglantisi: bagliysa banka adi/IBAN da doner
                 'banka_id': getattr(k, 'banka_id', None),
@@ -20456,11 +20475,11 @@ def create_app():
             k = Kasa(
                 ad=ad,
                 doviz=(data.get('doviz') or 'TRY').upper(),
-                bakiye=q3(baslangic),
+                bakiye=q2(baslangic),
             )
             # Opsiyonel alanlar
             if hasattr(Kasa, 'baslangic_bakiye'):
-                k.baslangic_bakiye = q3(baslangic)
+                k.baslangic_bakiye = q2(baslangic)
             if hasattr(Kasa, 'aciklama'):
                 k.aciklama = data.get('aciklama') or ''
             if hasattr(Kasa, 'aktif'):
@@ -20478,7 +20497,7 @@ def create_app():
                 kh = KasaHareket(
                     kasa_id=k.id,
                     tip='giris',
-                    tutar=q3(baslangic),
+                    tutar=q2(baslangic),
                     aciklama='Başlangıç bakiyesi (açılış)',
                 )
                 if hasattr(KasaHareket, 'tarih'):
@@ -20529,8 +20548,8 @@ def create_app():
                 yeni_bas = float(data['baslangic_bakiye'] or 0)
                 eski_bas = getattr(k, 'baslangic_bakiye', 0) or 0
                 fark = yeni_bas - eski_bas
-                k.baslangic_bakiye = q3(yeni_bas)
-                k.bakiye = q3((k.bakiye or 0) + fark)
+                k.baslangic_bakiye = q2(yeni_bas)
+                k.bakiye = q2((k.bakiye or 0) + fark)
             except (ValueError, TypeError):
                 pass
 
@@ -20613,7 +20632,7 @@ def create_app():
                 'id': h.id,
                 'tarih': tarih_iso,
                 'tip': h.tip,
-                'tutar': q3(h.tutar or 0),
+                'tutar': q2(h.tutar or 0),
                 'evrak_no': getattr(h, 'evrak_no', '') or '',
                 'siparis_id': getattr(h, 'siparis_id', '') or '',
                 'aciklama': h.aciklama or '',
@@ -20655,11 +20674,11 @@ def create_app():
         davranirsa hangisinin dogru oldugu belirsizlesir.
         """
         if not bool(getattr(k, 'ana_kasa', False)):
-            return q3(float(k.bakiye or 0))
+            return q2(float(k.bakiye or 0))
         alt_q = Kasa.query.filter_by(doviz=k.doviz)
         if hasattr(Kasa, 'ana_kasa'):
             alt_q = alt_q.filter_by(ana_kasa=False)
-        return q3(sum(float(a.bakiye or 0) for a in alt_q.all()))
+        return q2(sum(float(a.bakiye or 0) for a in alt_q.all()))
 
     @app.route('/api/kasa/defter', methods=['GET'])
     def api_kasa_defter():
@@ -20742,10 +20761,10 @@ def create_app():
                 'tarih': h.tarih.isoformat() if h.tarih else None,
                 'tip': h.tip,
                 'yon': 'giris' if y > 0 else ('cikis' if y < 0 else 'bilinmiyor'),
-                'tutar': q3(tutar),
-                'giris': q3(tutar) if y > 0 else None,
-                'cikis': q3(tutar) if y < 0 else None,
-                'bakiye': q3(yuruyen),
+                'tutar': q2(tutar),
+                'giris': q2(tutar) if y > 0 else None,
+                'cikis': q2(tutar) if y < 0 else None,
+                'bakiye': q2(yuruyen),
                 'aciklama': h.aciklama or '',
                 'evrak_no': getattr(h, 'evrak_no', '') or '',
                 'baglanti_tip': getattr(h, 'baglanti_tip', None),
@@ -20758,7 +20777,7 @@ def create_app():
                 'kullanici': getattr(h, 'kullanici', '') or '',
             })
 
-        kapanis = q3(yuruyen)
+        kapanis = q2(yuruyen)
 
         # ── MUTABAKAT ──
         # "Donem sonu bugunu gectiyse kapanis = Kasa.bakiye olmali"
@@ -20775,12 +20794,12 @@ def create_app():
         for h in KasaHareket.query.filter(filtre, KasaHareket.tarih > son).all():
             sonraki += _yon(h) * float(h.tutar or 0)
         kayitli = _kasa_gercek_bakiye(k)
-        beklenen = q3(float(kapanis) + sonraki)
-        fark = q3(float(beklenen) - float(kayitli))
+        beklenen = q2(float(kapanis) + sonraki)
+        fark = q2(float(beklenen) - float(kayitli))
         mutabakat = {
             'kayitli_bakiye': kayitli,
             'hesaplanan': kapanis,
-            'sonraki_hareketler': q3(sonraki),
+            'sonraki_hareketler': q2(sonraki),
             'beklenen': beklenen,
             'fark': fark,
             'tutuyor': abs(float(fark)) < 0.01,
@@ -20792,10 +20811,10 @@ def create_app():
                      'ana_kasa': bool(getattr(k, 'ana_kasa', False)),
                      'bakiye': _kasa_gercek_bakiye(k)},
             'baslangic': bas.isoformat(), 'bitis': son.isoformat(),
-            'devir': q3(devir),
+            'devir': q2(devir),
             'hareketler': satirlar,
-            'ozet': {'giris': q3(toplam_g), 'cikis': q3(toplam_c),
-                     'net': q3(toplam_g - toplam_c), 'kapanis': kapanis,
+            'ozet': {'giris': q2(toplam_g), 'cikis': q2(toplam_c),
+                     'net': q2(toplam_g - toplam_c), 'kapanis': kapanis,
                      'adet': len(satirlar)},
             'mutabakat': mutabakat,
             'bilinmeyen_tip': bilinmeyen,
@@ -20836,14 +20855,14 @@ def create_app():
         if tip == 'cikis' and (k.bakiye or 0) < tutar:
             return jsonify({
                 'ok': False,
-                'mesaj': f'Yetersiz bakiye. Mevcut: {q3(k.bakiye or 0):,.2f} {k.doviz}'
+                'mesaj': f'Yetersiz bakiye. Mevcut: {q2(k.bakiye or 0):,.2f} {k.doviz}'
             }), 400
 
         try:
             kh = KasaHareket(
                 kasa_id=k.id,
                 tip=tip,
-                tutar=q3(tutar),
+                tutar=q2(tutar),
                 aciklama=data.get('aciklama') or '',
             )
             if hasattr(KasaHareket, 'tarih'):
@@ -20866,9 +20885,9 @@ def create_app():
 
             # Bakiye güncelle
             if tip == 'giris':
-                k.bakiye = q3((k.bakiye or 0) + tutar)
+                k.bakiye = q2((k.bakiye or 0) + tutar)
             else:
-                k.bakiye = q3((k.bakiye or 0) - tutar)
+                k.bakiye = q2((k.bakiye or 0) - tutar)
 
             db.session.flush()
             _log_audit('EKLE', 'kasa_hareket', kh.id,
@@ -20881,7 +20900,7 @@ def create_app():
             return jsonify({
                 'ok': True,
                 'id': kh.id,
-                'yeni_bakiye': q3(k.bakiye),
+                'yeni_bakiye': q2(k.bakiye),
                 'mesaj': f'{tip.capitalize()} kaydedildi. Yeni bakiye: {k.bakiye:,.2f} {k.doviz}'
             })
         except Exception as e:
@@ -20937,22 +20956,22 @@ def create_app():
 
             # 1) Kaynaktan CIKIS
             cikis = KasaHareket(
-                kasa_id=kaynak.id, tip='cikis', tutar=q3(tutar), tarih=_tarih,
+                kasa_id=kaynak.id, tip='cikis', tutar=q2(tutar), tarih=_tarih,
                 aciklama=_metin,
                 baglanti_tip='virman', baglanti_id=str(hedef.id),
                 kullanici=session.get('kullanici')
             )
-            kaynak.bakiye = q3((kaynak.bakiye or 0) - tutar)
+            kaynak.bakiye = q2((kaynak.bakiye or 0) - tutar)
             db.session.add(cikis)
 
             # 2) Hedefe GIRIS
             giris = KasaHareket(
-                kasa_id=hedef.id, tip='giris', tutar=q3(tutar), tarih=_tarih,
+                kasa_id=hedef.id, tip='giris', tutar=q2(tutar), tarih=_tarih,
                 aciklama=_metin,
                 baglanti_tip='virman', baglanti_id=str(kaynak.id),
                 kullanici=session.get('kullanici')
             )
-            hedef.bakiye = q3((hedef.bakiye or 0) + tutar)
+            hedef.bakiye = q2((hedef.bakiye or 0) + tutar)
             db.session.add(giris)
 
             # Denetim izi commit'ten ÖNCE — _log_audit kendi commit'ini yapmaz
@@ -20992,9 +21011,9 @@ def create_app():
         if k:
             # Bakiyeyi geri al
             if h.tip == 'giris':
-                k.bakiye = q3((k.bakiye or 0) - (h.tutar or 0))
+                k.bakiye = q2((k.bakiye or 0) - (h.tutar or 0))
             else:
-                k.bakiye = q3((k.bakiye or 0) + (h.tutar or 0))
+                k.bakiye = q2((k.bakiye or 0) + (h.tutar or 0))
 
         _log_audit('SIL', 'kasa_hareket', hareket_id,
                    eski={'kasa_id': h.kasa_id, 'tip': h.tip, 'tutar': h.tutar})
@@ -21066,16 +21085,16 @@ def create_app():
         # Başlangıç bakiyesi hem kasa alanında hem açılış hareketi olarak tutulduğu
         # için baslangic_bakiye'den başlamak çift sayıma yol açıyordu; bu formülle
         # son satır her zaman güncel bakiyeye eşit çıkar.
-        _net = sum(q3(h.tutar or 0) if h.tip == 'giris' else -q3(h.tutar or 0) for h in hareketler)
+        _net = sum(q2(h.tutar or 0) if h.tip == 'giris' else -q2(h.tutar or 0) for h in hareketler)
         if is_ana:
-            _guncel = sum(q3(a.bakiye or 0) for a in alt_kasalar.all())
+            _guncel = sum(q2(a.bakiye or 0) for a in alt_kasalar.all())
         else:
-            _guncel = q3(k.bakiye or 0)
-        yuruyen = q3(_guncel - _net)
+            _guncel = q2(k.bakiye or 0)
+        yuruyen = q2(_guncel - _net)
         row_idx = header_row + 1
         for h in hareketler:
-            tutar = q3(h.tutar or 0)
-            yuruyen = q3(yuruyen + tutar) if h.tip == 'giris' else q3(yuruyen - tutar)
+            tutar = q2(h.tutar or 0)
+            yuruyen = q2(yuruyen + tutar) if h.tip == 'giris' else q2(yuruyen - tutar)
             tarih_val = h.tarih.strftime('%d.%m.%Y') if getattr(h, 'tarih', None) else ''
 
             col = 1
@@ -21097,7 +21116,7 @@ def create_app():
             son_row.font = Font(bold=True)
             bakiye_son_col = len(headers)
             son_bakiye_cell = sheet.cell(row=row_idx, column=bakiye_son_col,
-                                          value=q3(k.bakiye if not is_ana else yuruyen))
+                                          value=q2(k.bakiye if not is_ana else yuruyen))
             son_bakiye_cell.font = Font(bold=True)
             son_bakiye_cell.number_format = '#,##0.00'
 
@@ -21167,14 +21186,14 @@ def create_app():
             c.alignment = Alignment(horizontal='center')
 
         # Açılış = güncel toplam bakiye − hareketlerin neti (kendini doğrulayan)
-        _net = sum(q3(h.tutar or 0) if h.tip == 'giris' else -q3(h.tutar or 0) for h in hareketler)
-        _guncel = sum(q3(a.bakiye or 0) for a in kasalar)
-        yuruyen = q3(_guncel - _net)
+        _net = sum(q2(h.tutar or 0) if h.tip == 'giris' else -q2(h.tutar or 0) for h in hareketler)
+        _guncel = sum(q2(a.bakiye or 0) for a in kasalar)
+        yuruyen = q2(_guncel - _net)
 
         row_idx = header_row + 1
         for h in hareketler:
-            tutar = q3(h.tutar or 0)
-            yuruyen = q3(yuruyen + tutar) if h.tip == 'giris' else q3(yuruyen - tutar)
+            tutar = q2(h.tutar or 0)
+            yuruyen = q2(yuruyen + tutar) if h.tip == 'giris' else q2(yuruyen - tutar)
             tarih_val = h.tarih.strftime('%d.%m.%Y') if getattr(h, 'tarih', None) else ''
             sheet.cell(row=row_idx, column=1, value=tarih_val)
             sheet.cell(row=row_idx, column=2, value=kasa_adi_map.get(h.kasa_id, '-'))
@@ -21191,10 +21210,10 @@ def create_app():
         row_idx += 1
         for a in kasalar:
             sheet.cell(row=row_idx, column=2, value=a.ad)
-            cb = sheet.cell(row=row_idx, column=7, value=q3(a.bakiye or 0)); cb.number_format = '#,##0.00'
+            cb = sheet.cell(row=row_idx, column=7, value=q2(a.bakiye or 0)); cb.number_format = '#,##0.00'
             row_idx += 1
         sr = sheet.cell(row=row_idx, column=1, value='Konsolide Güncel Bakiye:'); sr.font = Font(bold=True)
-        sc = sheet.cell(row=row_idx, column=7, value=q3(_guncel))
+        sc = sheet.cell(row=row_idx, column=7, value=q2(_guncel))
         sc.font = Font(bold=True); sc.number_format = '#,##0.00'
 
         for col_idx in range(1, len(headers) + 1):

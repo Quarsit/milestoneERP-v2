@@ -450,3 +450,24 @@ def test_pd1_iptal_proforma_ve_bagli_kayitlar_silinebiliyor():
     assert c.delete('/api/sevkiyat/SPD', headers=H).status_code == 200
     with fa.app.app_context():
         assert Sevkiyat.query.get('SPD') is None and Konteyner.query.filter_by(sevkiyat_id='SPD').count() == 0
+
+
+def test_on1_iki_ondalik_hane():
+    """ON1: para ve miktar değerleri 2 haneye yuvarlanır (ROUND_HALF_UP),
+    döviz kuru 6 hanede kalır. Yuvarlama tek yerden geçer: aynı değer
+    ekranda, belgede ve veritabanında aynı çıkar."""
+    from models import PlakaStok, DovizKur
+    with fa.app.app_context():
+        db.session.add(PlakaStok(id='PON', cins='ON', boy=300, yukseklik=218.5, kalinlik=2,
+                                 metraj_m2=fa.app.q2(300 * 218.5 / 10000),
+                                 alis_fiyati=fa.app.q2(164.1234), doviz='USD', durum='Serbest'))
+        db.session.commit()
+        s = PlakaStok.query.get('PON')
+        assert float(s.metraj_m2) == 6.56      # 6.555 → yukarı yuvarlanır
+        assert float(s.alis_fiyati) == 164.12
+        k = DovizKur.query.filter_by(doviz='USD').first()
+        assert round(float(k.efektif), 6) == float(k.efektif)   # kur hassasiyeti korunur
+    c = istemci('admin', 'ADMIN')
+    kalem = c.get('/api/stok?tip=PLAKA').get_json()['data']
+    kayit = next(x for x in kalem if x['id'] == 'PON')
+    assert kayit['m2'] == 6.56

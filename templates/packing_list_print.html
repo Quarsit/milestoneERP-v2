@@ -217,7 +217,7 @@ function plakaDegistir(goster) {
             {{ _ceviri('belge.subtotal', dil) if _ceviri('belge.subtotal', dil) != 'belge.subtotal' else 'Ara Toplam' }}
           </td>
           <td class="r">{{ ns.g_adet }}</td>
-          <td class="r">{{ '%.3f'|format(ns.g_m) }}</td>
+          <td class="r">{{ '%.2f'|format(ns.g_m) }}</td>
           <td class="r">{{ '{:,.0f}'.format(ns.g_kg) if ns.g_kg else '' }}</td>
           {% if tip != 'EBATLI' %}<td></td>{% endif %}
         </tr>
@@ -263,7 +263,7 @@ function plakaDegistir(goster) {
         <td class="r">{{ k.yukseklik|int if k.yukseklik else '' }}</td>
         <td class="r">{% if k.urun_tip == 'BLOK' %}{{ (k.en or k.kalinlik)|int if (k.en or k.kalinlik) else '' }}{% else %}{{ k.kalinlik if k.kalinlik else '' }}{% endif %}</td>
         <td class="r">{{ (k.adet or 1) * (k.kasa_ici_adet or 1) }}</td>
-        <td class="r">{{ '%.3f'|format(k.miktar or 0) }}{% if nsb.karma_birim %} {{ (k.birim or '')|lower }}{% endif %}</td>
+        <td class="r">{{ '%.2f'|format(k.miktar or 0) }}{% if nsb.karma_birim %} {{ (k.birim or '')|lower }}{% endif %}</td>
         <td class="r">{{ '{:,.0f}'.format(k_agirlik) if k_agirlik else '' }}</td>
         {% if k.urun_tip != 'EBATLI' and plaka_goster %}<td class="r">{{ k.slab_no or '' }}</td>{% endif %}
       </tr>
@@ -276,7 +276,7 @@ function plakaDegistir(goster) {
       <tr style="background:#F2F2EE;font-weight:600">
         <td colspan="{{ _sut - _kuyruk }}" style="text-align:right;font-size:8pt">{{ _ceviri('ara_toplam', dil) }}</td>
         <td class="r">{{ ns.g_adet }}</td>
-        <td class="r">{{ '%.3f'|format(ns.g_m) }}</td>
+        <td class="r">{{ '%.2f'|format(ns.g_m) }}</td>
         <td class="r">{{ '{:,.0f}'.format(ns.g_kg) if ns.g_kg else '' }}</td>
         {% if tip != 'EBATLI' and plaka_goster %}<td></td>{% endif %}
       </tr>
@@ -287,7 +287,7 @@ function plakaDegistir(goster) {
            olunca yanlis kaliyor. _sut'tan turetiliyor. #}
         <td colspan="{{ _sut - _kuyruk }}" style="text-align:right;color:#C25934">{{ _ceviri('belge.totally', dil) }}</td>
         <td class="r">{{ ns.toplam_adet }}</td>
-        <td class="r">{{ '%.3f'|format(ns.toplam_m) }}</td>
+        <td class="r">{{ '%.2f'|format(ns.toplam_m) }}</td>
         <td class="r">{{ '{:,.0f}'.format(ns.toplam_kg) if ns.toplam_kg else '' }}</td>
         {# Bos hucre KOSULSUZDU: plaka kapaliyken de ekleniyordu. #}
         {% if tip != 'EBATLI' and plaka_goster %}<td></td>{% endif %}
