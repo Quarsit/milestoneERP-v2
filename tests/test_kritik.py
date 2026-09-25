@@ -404,3 +404,49 @@ def test_sd1_iptal_siparis_silinince_baglar_cozulur():
         assert rez.siparis_id is None and rez.siparis_kalem_id is None and rez.iptal_nedeni
         pf = Proforma.query.get('PSD')
         assert pf.siparis_id is None and pf.durum != 'Siparise Donustu'
+
+
+def test_pd1_iptal_proforma_ve_bagli_kayitlar_silinebiliyor():
+    """PD1: iptal proforma silinirken rezervasyon, konteyner ve satış kaydı
+    bağları çözülmeliydi; çözülmediği için 500 dönüyordu. Faturası olan
+    proforma ise silinmemeli. Aynı sınıf: çek ve sevkiyat silme."""
+    from models import (Proforma, ProformaKalem, Rezervasyon, Konteyner,
+                        Sevkiyat, Fatura)
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add_all([
+            Proforma(id='PPD', musteri='ACIK CARI', cari_id='C1', toplam=100, doviz='USD',
+                     durum='Iptal', aktif_surum=True, revizyon_no=0, ana_pi_id='PPD'),
+            ProformaKalem(proforma_id='PPD', urun_tip='PLAKA', cins='T', adet=1, miktar=1,
+                          birim='m2', birim_fiyat=100, toplam_fiyat=100, doviz='USD', sira=1),
+        ])
+        db.session.flush()
+        db.session.add_all([
+            Konteyner(proforma_id='PPD', sira=1, konteyner_no='MSCU1', tip="20' DC"),
+            Rezervasyon(id='RPD', proforma_id='PPD', stok_tip='PLAKA', stok_id='PX',
+                        musteri='ACIK CARI'),
+            Fatura(id='FPD', fatura_no='F-PD', musteri='ACIK CARI', cari_id='C1',
+                   proforma_id='PPD', toplam=100, doviz='USD', durum='Kesildi', yon='satis'),
+        ])
+        db.session.commit()
+    # Faturası varken silinemez
+    r = c.delete('/api/proforma/PPD', headers=H)
+    assert r.status_code == 400 and 'fatura' in r.get_json()['mesaj'].lower()
+    with fa.app.app_context():
+        Fatura.query.filter_by(id='FPD').delete()
+        db.session.commit()
+    r = c.delete('/api/proforma/PPD', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    with fa.app.app_context():
+        assert Proforma.query.get('PPD') is None
+        assert Konteyner.query.filter_by(proforma_id='PPD').count() == 0
+        assert Rezervasyon.query.get('RPD').proforma_id is None
+
+        # Sevkiyat: konteyneri bağlıyken silinebilmeli
+        db.session.add(Sevkiyat(id='SPD', musteri='ACIK CARI', durum='Hazirlaniyor'))
+        db.session.flush()
+        db.session.add(Konteyner(sevkiyat_id='SPD', sira=1, konteyner_no='MSCU2', tip="40' HC"))
+        db.session.commit()
+    assert c.delete('/api/sevkiyat/SPD', headers=H).status_code == 200
+    with fa.app.app_context():
+        assert Sevkiyat.query.get('SPD') is None and Konteyner.query.filter_by(sevkiyat_id='SPD').count() == 0

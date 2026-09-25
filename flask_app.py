@@ -13093,6 +13093,16 @@ def create_app():
         if s.durum != 'Iptal':
             geri = _sevkiyat_stoklarini_guncelle(sevk_id, 'Satildi')
 
+        # PD1 sınıfı: konteynerler sevkiyata FK ile bağlı. Proformaya da
+        # bağlı olanlarda yalnızca sevkiyat bağı kopar (plan proformada
+        # kalır); yalnız bu sevkiyata ait olanlar silinir.
+        for _k in Konteyner.query.filter_by(sevkiyat_id=sevk_id).all():
+            if _k.proforma_id:
+                _k.sevkiyat_id = None
+            else:
+                db.session.delete(_k)
+        db.session.flush()
+
         _log_audit('SIL', 'sevkiyat', sevk_id, eski={'musteri': s.musteri, 'durum': s.durum, 'siparis_id': s.siparis_id})
         db.session.delete(s)
         db.session.commit()
@@ -15502,6 +15512,27 @@ def create_app():
         kalem_sayisi = ProformaKalem.query.filter_by(proforma_id=proforma_id).count()
         # Iptal durumunda zaten stoklar serbest olmus olmali, yine de garanti olsun
         iptal_say = _proforma_rezervasyonlarini_iptal_et(proforma_id, 'Proforma silindi')
+
+        # ── PD1 — SILMEDEN ONCE BAGLARI COZ ──
+        # SD1 ile ayni sinif: PostgreSQL yabanci anahtarlari zorluyor,
+        # proformayi isaret eden satirlar kaldigi surece silme 500 doner.
+        # (Hata SQLite'ta gorunmuyordu; testler artik FK zorluyor.)
+        #
+        # FATURASI olan proforma silinmez — fatura gerceklesmis islem.
+        _fat = Fatura.query.filter_by(proforma_id=proforma_id).count()
+        if _fat:
+            return jsonify({'ok': False, 'error': 'bagli_fatura',
+                'mesaj': f'Bu proformaya bağlı {_fat} fatura var; silinemez. '
+                         f'Önce faturayı iptal edin ya da proformayı İptal durumunda bırakın.'}), 400
+        # Rezervasyonlar iptal edildi (yukarida); proforma bagi da kopar.
+        for _r in Rezervasyon.query.filter_by(proforma_id=proforma_id).all():
+            _r.proforma_id = None
+        # Konteyner PLANI proformanin parcasi — proformayla birlikte gider.
+        Konteyner.query.filter_by(proforma_id=proforma_id).delete(synchronize_session=False)
+        # Satis kaydi (kar/zarar izi) KALIR, yalnizca bag kopar.
+        for _sk in SatisKaydi.query.filter_by(proforma_id=proforma_id).all():
+            _sk.proforma_id = None
+        db.session.flush()
         _log_audit('SIL', 'proforma', proforma_id, eski={'musteri': p.musteri, 'durum': p.durum, 'kalem': kalem_sayisi})
         db.session.delete(p)
         db.session.commit()
