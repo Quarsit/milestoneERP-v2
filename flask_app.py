@@ -476,10 +476,19 @@ def create_app():
             kayitli = json.loads(k.yetkiler or '{}')
         except Exception:
             kayitli = {}
-        # Kayitli yetki JSON'i hic yoksa (eski kullanici): tum modullere 'yazma' (geriye uyumluluk)
-        # Kayitli yetki JSON'i varsa: tanimsiz modul -> 'gizli' (yeni eklenen modullere otomatik erisim yok)
+        # ── F12 · YETKI TANIMSIZSA ERISIM YOK ──
+        # Eskiden bos yetki JSON'u "eski kullanici" sayilip TUM
+        # modullere 'yazma' veriyordu. Yetki kutularini isaretlemeden
+        # acilan her yeni kullanici da bu yoldan tam yetkili oluyordu
+        # (model varsayilani '{}'). Artik tanimsiz yetki = 'gizli';
+        # yetki acikca verilir.
+        #
+        # ROL YEDEGI: yetki JSON'i bos ama rolu ADMIN olan kullanici
+        # yukarida zaten tam yetki aliyor. Diger roller icin gecmise
+        # donuk erisim, goc betigiyle (yetki_goc.py) acik yetkiye
+        # cevrilir — sessizce herkese yazma vermek yerine.
         if not kayitli:
-            return {m: 'yazma' for m in YETKI_MODULLERI}
+            return {m: 'gizli' for m in YETKI_MODULLERI}
         _sonuc = {m: kayitli.get(m, 'gizli') for m in YETKI_MODULLERI}
         # ALT YETKILER KORUNUR (YT2). Ustteki sozluk kavramasi
         # yalnizca MODUL anahtarlarini aliyordu; 'fatura.tahsilat'
@@ -1207,6 +1216,35 @@ def create_app():
         except Exception as exc:
             app.logger.warning(f'_en_yakin_kur: {exc}')
         return None
+
+    def _usd_cevrim(tutar, doviz, tarih=None):
+        """F15 — tutarı USD'ye çevirir (TCMB çapraz kuruyla).
+
+        Eskiden maliyet ekranlarında EUR→USD için SABİT 1,08 çarpanı
+        yazılıydı. Kur 1,05'e indiğinde maliyet olduğundan yüksek,
+        1,16'ya çıktığında düşük hesaplanıyordu — üstelik fark
+        doğrudan kârlılığa yazılıyordu.
+
+        Artık TCMB'nin TL kurları üzerinden çapraz kur kullanılır:
+            USD karşılığı = tutar × (DÖVİZ/TRY) ÷ (USD/TRY)
+        Kur bulunamazsa tutar OLDUĞU GİBİ döner ve uyarı düşer —
+        sıfır yazmak maliyeti yok ederdi.
+        """
+        t = float(tutar or 0)
+        dv = (doviz or 'USD').upper()
+        if not t or dv == 'USD':
+            return t
+        usd_kur = float(_kur_getir('USD', tarih) or 0) or float(_en_yakin_kur('USD', tarih) or 0)
+        if usd_kur <= 0:
+            app.logger.warning(f'USD kuru bulunamadı — {dv} tutarı çevrilmeden kullanıldı')
+            return t
+        if dv == 'TRY':
+            return t / usd_kur
+        dv_kur = float(_kur_getir(dv, tarih) or 0) or float(_en_yakin_kur(dv, tarih) or 0)
+        if dv_kur <= 0:
+            app.logger.warning(f'{dv} kuru bulunamadı — tutar çevrilmeden kullanıldı')
+            return t
+        return t * dv_kur / usd_kur
 
     def _try_karsilik(tutar, doviz, kur=None, tarih=None):
         """
@@ -2397,10 +2435,36 @@ def create_app():
                 ~Maliyet.maliyet_tip.in_(['Devreden KDV', 'Iade KDV'])
             ).scalar() or 0
 
-        # Ek maliyetler stoklara eşit dağıtılır
+        # ── F2 · EK MALİYET ORANTILI DAĞITILIR ──
+        # Eskiden stok SAYISINA bölünüyordu: 20 m² plaka ile 0,5 m²
+        # parça aynı nakliye/işçilik payını alıyordu. Artık her stok
+        # kendi DEĞERİ oranında pay alır (kalem birim fiyatı × stoğun
+        # o birimdeki ölçüsü). Ortak fiziksel birim yok — bir siparişte
+        # blok (ton) ile plaka (m²) birlikte olabilir — bu yüzden ortak
+        # payda PARADIR.
+        # Değer hesaplanamazsa (kalemsiz eski rezervasyon) eşit paya
+        # düşülür: sessizce yanlış rakam üretmek yerine eski davranış.
         stok_sayi = len(rezler)
-        per_stok_ek_maliyet_usd = ek_maliyet_usd / stok_sayi if stok_sayi > 0 else 0
-        per_stok_ek_maliyet_try = ek_maliyet_try / stok_sayi if stok_sayi > 0 else 0
+        _tes_agirlik = {}
+        for _rz in rezler:
+            _st = _stok_getir(_rz.stok_id, _rz.stok_tip)
+            if not _st:
+                continue
+            _kl = SiparisKalem.query.get(_rz.siparis_kalem_id) if _rz.siparis_kalem_id else None
+            _bir = ((_kl.birim if _kl else None) or
+                    ('ton' if _rz.stok_tip == 'BLOK' else 'm2')).lower()
+            _deger = float((_kl.birim_fiyat if _kl else 0) or 0) * float(_stok_olcu(_st, _bir) or 0)
+            if _deger > 0:
+                _tes_agirlik[_rz.id] = _deger
+        _tes_agirlik_top = sum(_tes_agirlik.values())
+
+        def _ek_maliyet_payi(rez_id):
+            """Bu stoğa düşen ek maliyet payı (USD, TRY)."""
+            if _tes_agirlik_top > 0 and rez_id in _tes_agirlik:
+                _o = _tes_agirlik[rez_id] / _tes_agirlik_top
+            else:
+                _o = (1.0 / stok_sayi) if stok_sayi else 0
+            return ek_maliyet_usd * _o, ek_maliyet_try * _o
         # Not: her stoğun ALIM FİYATI kendi kaydından alınır (asağıdaki döngüde)
 
         # Bağlı proforma (en son aktif olan)
@@ -2481,8 +2545,9 @@ def create_app():
             alim_maliyet_usd = _usd_cevir(stok_alis_birim_fiyat * alis_olcu, stok_doviz)
 
             # TOPLAM MALİYET = stoğun alım maliyeti + paya düşen ek maliyet
-            stok_maliyet_usd = alim_maliyet_usd + per_stok_ek_maliyet_usd
-            stok_maliyet_try = (alim_maliyet_usd * kur_usd if kur_usd else 0) + per_stok_ek_maliyet_try
+            _pay_ek_usd, _pay_ek_try = _ek_maliyet_payi(r.id)
+            stok_maliyet_usd = alim_maliyet_usd + _pay_ek_usd
+            stok_maliyet_try = (alim_maliyet_usd * kur_usd if kur_usd else 0) + _pay_ek_try
 
             # Kar/marj
             kar_usd = tutar_usd - stok_maliyet_usd
@@ -3042,6 +3107,41 @@ def create_app():
             # ── STOKLU FATURA: her stok icin ayri SatisKaydi ──
             olusan = 0
             n = len(rezler)
+
+            # ── F2 · GELIR ve EK MALIYET ORANTILI DAGITILIR ──
+            # Eskiden ikisi de stok SAYISINA bolunuyordu. Olculdu
+            # (25.09): 20 m2 + 0,5 m2 iki plakali 10.250 USD faturada
+            # her ikisine de 5.125 USD gelir yaziliyordu; yarim metrelik
+            # parca 5.075 USD "kar" ediyor gorunuyordu. Fatura toplami
+            # ve cari dogruydu, URUN BAZLI karlilik anlamsizdi.
+            #
+            # Artik her rezervasyonun DOGAL degeri hesaplanir:
+            #   kalem birim fiyati x stogun o birimdeki olcusu
+            # Paylar bu degerlerin oranina gore dagitilir; toplam yine
+            # faturanin matrahina esittir (iskonto ve yuvarlama farki
+            # otomatik olceklenir). Deger bulunamazsa o stok icin ESIT
+            # pay kullanilir — eski davranis, sessiz yanlis yerine.
+            _f_agirlik = {}
+            for _rz in rezler:
+                _st = _stok_getir(_rz.stok_id, _rz.stok_tip)
+                if not _st:
+                    continue
+                _kl = SiparisKalem.query.get(_rz.siparis_kalem_id) if _rz.siparis_kalem_id else None
+                if not _kl and _rz.siparis_id:
+                    _kl = (SiparisKalem.query.filter_by(siparis_id=_rz.siparis_id)
+                           .order_by(SiparisKalem.sira).first())
+                _bir = ((_kl.birim if _kl else None) or
+                        ('ton' if _rz.stok_tip == 'BLOK' else 'm2')).lower()
+                _deger = float((_kl.birim_fiyat if _kl else 0) or 0) * float(_stok_olcu(_st, _bir) or 0)
+                if _deger > 0:
+                    _f_agirlik[_rz.id] = _deger
+            _f_agirlik_top = sum(_f_agirlik.values())
+
+            def _pay_orani(rez_id):
+                if _f_agirlik_top > 0 and rez_id in _f_agirlik:
+                    return _f_agirlik[rez_id] / _f_agirlik_top
+                return (1.0 / n) if n else 0
+
             for rz in rezler:
                 stok = _stok_getir(rz.stok_id, rz.stok_tip)
                 if not stok:
@@ -3053,11 +3153,11 @@ def create_app():
                 alis_olcu = _stok_olcu(stok, alis_birim)
                 stok_doviz = getattr(stok, 'doviz', 'USD') or 'USD'
                 alim_usd = _usd(alis_fiyat * alis_olcu, stok_doviz)
-                # Ek maliyet payi (esit bolustur)
-                pay_ek = ek_maliyet_usd / n if n else 0
+                # Ek maliyet ve gelir payi: stogun DEGERI oraninda (F2)
+                _oran = _pay_orani(rz.id)
+                pay_ek = ek_maliyet_usd * _oran
                 maliyet_usd = alim_usd + pay_ek
-                # Bu stogun satis payi (faturayi stok sayisina bol)
-                satis_pay_usd = satis_toplam_usd / n if n else 0
+                satis_pay_usd = satis_toplam_usd * _oran
                 kar_usd = satis_pay_usd - maliyet_usd
                 marj = (kar_usd / satis_pay_usd * 100) if satis_pay_usd else 0
 
@@ -3082,7 +3182,7 @@ def create_app():
                 fdoviz = (f.doviz or 'USD').upper()
                 # Pay tutarı orijinal döviz cinsinden
                 fatura_toplam_orj = f.ara_toplam or f.toplam or 0  # KDV haric (matrah)
-                satis_pay_orj = (fatura_toplam_orj / n) if n else 0
+                satis_pay_orj = fatura_toplam_orj * _oran
                 # Maliyet orijinal dövize çevir (USD -> hedef)
                 if fdoviz == 'USD':
                     maliyet_orj = maliyet_usd
@@ -12781,10 +12881,7 @@ def create_app():
             kdv_tutar = 0.0
 
         def _usd(t, dv):
-            if dv == 'USD': return t
-            if dv == 'EUR': return t * 1.08
-            k = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-            return t / (k.efektif if k else 45.07)
+            return _usd_cevrim(t, dv)          # F15: TCMB çapraz kuru
 
         # Ana maliyet kaydı
         m = Maliyet(id=_yeni_id('MYT'), maliyet_tip=maliyet_tip,
@@ -12869,13 +12966,10 @@ def create_app():
                 m.maliyet_tarihi = datetime.strptime(str(data['maliyet_tarihi'])[:10], '%Y-%m-%d').date()
             except ValueError:
                 return jsonify({'ok': False, 'mesaj': 'Tarih GG.AA.YYYY biçiminde olmalı'}), 400
-        usd_karsilik = m.tutar
-        if m.doviz == 'EUR':
-            usd_karsilik = m.tutar * 1.08
-        elif m.doviz == 'TRY':
-            usd_kur = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-            usd_karsilik = m.tutar / (usd_kur.efektif if usd_kur else 45.07)
-        m.usd_karsilik = usd_karsilik
+        # F15: EUR icin sabit 1,08 ve TRY icin sabit 45,07 yedegi vardi.
+        # Ikisi de TCMB kuruyla degistirildi (maliyet tarihindeki kur).
+        m.usd_karsilik = q2(_usd_cevrim(m.tutar, m.doviz,
+                                        getattr(m, 'maliyet_tarihi', None)))
         m.kullanici = session.get('kullanici', m.kullanici)
         m.guncelleme = datetime.now()
         _log_audit('GUNCELLE', 'maliyet', m.id,
@@ -12964,10 +13058,7 @@ def create_app():
             toplam_kdv = 0.0
 
         def _usd(t, dv):
-            if dv == 'USD': return t
-            if dv == 'EUR': return t * 1.08
-            k = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-            return t / (k.efektif if k else 45.07)
+            return _usd_cevrim(t, dv)          # F15: TCMB çapraz kuru
 
         SATILMIS_DURUMLAR = ['Satildi', 'Sevkedildi', 'Teslim Edildi']
         def _durum_uygun(durum):
@@ -12975,15 +13066,31 @@ def create_app():
             if hedef == 'satilmis': return durum in SATILMIS_DURUMLAR
             return True
 
+        # ── F4 · DAĞITIM ÖLÇÜSÜ ÜRÜN TİPİNE GÖRE ──
+        # Blok TONLA alınır ve tonla satılır; maliyeti m³ ile dağıtmak
+        # yoğunluğu taşa göre değiştiği için sapma yaratıyordu (aynı
+        # hacimde iki blok farklı ağırlıkta olabilir). Artık tonaj
+        # esas; tonajı girilmemiş bloklarda m³'e düşülür ve yanıtta
+        # bu AÇIKÇA söylenir — sessizce yanlış ölçü kullanılmaz.
+        olcu_notu = ''
         if urun_tipi == 'BLOK':
             hepsi_stok = BlokStok.query.filter_by(blok_no=blok_no).all()
-            miktar_f = lambda s: s.hacim_m3 or 1
+            _tonajli = [s for s in hepsi_stok if (getattr(s, 'tonaj', 0) or 0) > 0]
+            if _tonajli and len(_tonajli) == len(hepsi_stok):
+                miktar_f = lambda s: (s.tonaj or 0) or 1
+                olcu_notu = 'tonaj'
+            else:
+                miktar_f = lambda s: (s.hacim_m3 or 0) or 1
+                olcu_notu = ('hacim (m³) — bloklardan bazılarında tonaj yok, '
+                             'tonaj girilirse dağıtım daha doğru olur')
         elif urun_tipi == 'PLAKA':
             hepsi_stok = PlakaStok.query.filter_by(blok_no=blok_no).all()
-            miktar_f = lambda s: s.metraj_m2 or 1
+            miktar_f = lambda s: (s.metraj_m2 or 0) or 1
+            olcu_notu = 'metraj (m²)'
         else:
             hepsi_stok = EbatliStok.query.filter_by(kasa_no=blok_no).all()
-            miktar_f = lambda s: s.metraj_m2 or 1
+            miktar_f = lambda s: (s.metraj_m2 or 0) or 1
+            olcu_notu = 'metraj (m²)'
 
         stoklar = [s for s in hepsi_stok if _durum_uygun(s.durum)]
         if not stoklar:
@@ -13047,7 +13154,8 @@ def create_app():
         db.session.commit()
         kdv_msg = f' + KDV {toplam_kdv:,.2f} {doviz}' if toplam_kdv > 0 else ''
         cari_msg = ' — cari alacak kaydı oluşturuldu' if cari_id else ''
-        msg = f'{eklenen} stoka maliyet dağıtıldı (Net: {toplam_net:,.2f} {doviz}{kdv_msg}){cari_msg}'
+        msg = (f'{eklenen} stoka maliyet dağıtıldı (Net: {toplam_net:,.2f} {doviz}{kdv_msg}){cari_msg}'
+               + (f' · dağıtım ölçüsü: {olcu_notu}' if olcu_notu else ''))
         if sk_guncel > 0: msg += f', {sk_guncel} satış kaydının kârlılığı güncellendi'
         return jsonify({'ok': True, 'adet': eklenen,
                         'satis_kaydi_guncel': sk_guncel, 'mesaj': msg})
@@ -14252,13 +14360,29 @@ def create_app():
                     c.kasa_hareket_id = kh.id
                     # Kasa bakiyesini güncelle (alınan çek tahsili → giriş, verilen çek ödemesi → çıkış)
                     _kasa_obj = db.session.get(Kasa, int(d['kasa_id']))
-                    if _kasa_obj:
-                        if tip == 'giris':
-                            _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) + q2(c.tutar))
-                        else:
-                            _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) - q2(c.tutar))
-                except Exception:
-                    pass
+                    if not _kasa_obj:
+                        raise ValueError(f'Kasa bulunamadı (id: {d["kasa_id"]})')
+                    if tip == 'giris':
+                        _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) + q2(c.tutar))
+                    else:
+                        _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) - q2(c.tutar))
+                except Exception as _ke:
+                    # F13 — SESSIZ YUTMA KALDIRILDI.
+                    # Eskiden `except: pass` vardi: kasa kaydi
+                    # yazilamasa bile cek "Tahsil Edildi" isaretleniyor,
+                    # para hicbir kasaya girmiyordu. Kullanici bunu
+                    # yalnizca aylar sonra mutabakatta gorurdu.
+                    #
+                    # NOT: hata metni ROLLBACK'ten ONCE alinir ve ORM
+                    # nesnesine (c.id) DOKUNULMAZ — bozuk oturumda
+                    # nesne okumak ikinci bir istisna firlatir ve
+                    # 400 yerine 500 doner.
+                    _hata = str(_ke)
+                    db.session.rollback()
+                    app.logger.warning(f'Çek kasa kaydı yapılamadı ({cek_id}): {_hata}')
+                    return jsonify({'ok': False, 'error': 'kasa_hatasi', 'mesaj':
+                                    f'Kasa kaydı yapılamadı: {_hata}. Çek durumu '
+                                    f'DEĞİŞTİRİLMEDİ — kasa seçimini kontrol edin.'}), 400
             mesaj = 'Çek tahsil edildi' if c.yon == 'alinan' else 'Çek ödendi'
 
         elif islem == 'karsiliksiz':
@@ -19100,7 +19224,12 @@ def create_app():
         elif not p.siparis_id:
             fatura_tipi = 'teklif'
         else:
-            rez_var = Rezervasyon.query.filter_by(siparis_id=p.siparis_id).first()
+            # F3: IPTAL EDILMIS rezervasyon sayilmaz. Eskiden iptal
+            # edilmis tek bir rezervasyon bile faturayi 'stoklu'
+            # yapiyordu; dis alim (transit) faturasinin alis maliyeti
+            # boylece hic sorulmuyordu.
+            rez_var = Rezervasyon.query.filter_by(
+                siparis_id=p.siparis_id, iptal_nedeni=None).first()
             fatura_tipi = 'stoklu' if rez_var else 'transit'
 
         fatura = Fatura(
@@ -21058,12 +21187,20 @@ def create_app():
                     kasa.bakiye = q2((kasa.bakiye or 0) + k_tutar)
                     kasa_mesaj = f' Kasa: {kasa.ad} +{k_tutar:,.2f} {kasa.doviz} (bakiye {q2(kasa.bakiye):,.2f}){cevrim}'
             except Exception as e:
-                app.logger.warning(f'Kasa entegrasyonu hatası: {e}')
-                kasa_mesaj = f' ⚠️ Kasa kaydı yapılamadı: {e}'
-                if not commit:
-                    # Toplu tahsilatta kasa kaydi basarisizsa HICBIRI
-                    # yazilmamali — para cariye dusup kasaya girmezdi.
-                    return jsonify({'ok': False, 'mesaj': f'Kasa kaydı yapılamadı: {e}'}), 400
+                # F11 — KASA HATASI ISLEMI IPTAL EDER.
+                # Eskiden yalnizca TOPLU tahsilatta iptal ediliyordu;
+                # TEK tahsilatta uyari yazilip cari alacak ve fatura
+                # kapanisi yine de commit ediliyordu. Sonuc: para
+                # cariye "tahsil edildi" diye dusuyor ama hicbir
+                # kasaya girmiyordu — iki ekran arasinda kayboluyordu.
+                # Artik iki yol da ayni davraniyor: kasa yazilamazsa
+                # HICBIR SEY yazilmaz, kullanici hatayi gorur.
+                _hata = str(e)
+                db.session.rollback()
+                app.logger.warning(f'Kasa entegrasyonu hatası: {_hata}')
+                return jsonify({'ok': False, 'error': 'kasa_hatasi', 'mesaj':
+                                f'Kasa kaydı yapılamadı: {_hata}. Tahsilat KAYDEDİLMEDİ — '
+                                f'kasa seçimini kontrol edip tekrar deneyin.'}), 400
 
         if commit:
             db.session.commit()

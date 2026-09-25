@@ -836,3 +836,116 @@ def test_av2_toplu_avans_siparislere_dagitilir():
     r = c.post('/api/avans/devret', headers=H, json={
         'kaynak_siparis_id': 'AV1', 'hedef_siparis_id': 'AV2', 'tutar': 50000})
     assert r.status_code == 400 and 'fazla olamaz' in r.get_json()['mesaj']
+
+
+def test_f12_yetkisiz_kullanici_yazamaz():
+    """F12: yetki JSON'u boş olan kullanıcı eskiden TÜM modüllere
+    yazabiliyordu (geriye uyumluluk kuralı). Artık tanımsız yetki =
+    erişim yok; ADMIN rolü etkilenmiyor."""
+    from models import Kullanici
+    with fa.app.app_context():
+        if not Kullanici.query.filter_by(ad='yetkisiz').first():
+            db.session.add(Kullanici(ad='yetkisiz', sifre=generate_password_hash('x'),
+                                     rol='SATIS', cari_kapsam='tumu', yetkiler='{}'))
+            db.session.commit()
+    c = istemci('yetkisiz', 'SATIS')
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'C1', 'islem_tip': 'Tahsilat', 'alacak': 100, 'doviz': 'USD',
+        'vade_tarihi': '2026-03-05'})
+    assert r.status_code in (401, 403), r.get_data(as_text=True)
+    assert c.get('/api/fatura').status_code in (401, 403)
+    # ADMIN etkilenmiyor
+    assert istemci('admin', 'ADMIN').get('/api/fatura').status_code == 200
+
+
+def test_f13_cek_kasa_hatasi_durumu_degistirmez():
+    """F13: çek tahsilinde kasa kaydı yazılamazsa eskiden hata sessizce
+    yutuluyor, çek yine 'Tahsil Edildi' oluyordu — para hiçbir kasaya
+    girmeden tahsil görünüyordu."""
+    from models import Cek
+    with fa.app.app_context():
+        db.session.add(Cek(id='CEKF13', yon='alinan', tutar=5000, doviz='USD',
+                           cari_id='C1', cari_unvan='ACIK CARI', durum='Portfoyde',
+                           cek_no='F13-1', vade_tarihi=date(2026, 6, 1),
+                           keside_tarihi=date(2026, 3, 1), aktif=True))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/cek/CEKF13/durum', headers=H,
+               json={'islem': 'tahsil_et', 'kasa_id': 999999})   # olmayan kasa
+    assert r.status_code == 400 and 'Kasa' in r.get_json()['mesaj']
+    with fa.app.app_context():
+        assert Cek.query.get('CEKF13').durum == 'Portfoyde'   # durum değişmedi
+
+
+def test_f2_karlilik_orantili_dagitilir():
+    """F2: aynı faturadaki 20 m² ve 0,5 m² plakalar eskiden EŞİT gelir
+    ve eşit ek maliyet alıyordu. Artık her stok kendi değeri oranında
+    pay alır; toplam yine fatura matrahına eşittir."""
+    from models import (Fatura, Siparis, SiparisKalem, Rezervasyon,
+                        PlakaStok, SatisKaydi, Maliyet)
+    with fa.app.app_context():
+        db.session.add(Siparis(id='SIPF2', musteri='ACIK CARI', cari_id='C1', doviz='USD',
+                               toplam_tutar=10250, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 3, 1)))
+        db.session.add_all([
+            PlakaStok(id='PLKBUY', blok_no='B9', cins='TEST', metraj_m2=20,
+                      alis_fiyati=100, alis_fiyat_birim='m2', doviz='USD', durum='Satildi'),
+            PlakaStok(id='PLKKUC', blok_no='B9', cins='TEST', metraj_m2=0.5,
+                      alis_fiyati=100, alis_fiyat_birim='m2', doviz='USD', durum='Satildi')])
+        db.session.flush()
+        k = SiparisKalem(siparis_id='SIPF2', sira=1, urun_tip='PLAKA', cins='TEST',
+                         miktar=20.5, birim='m2', birim_fiyat=500, toplam_fiyat=10250,
+                         doviz='USD', adet=2, stoktan_geldi=True)
+        db.session.add(k)
+        db.session.flush()
+        for sid, m2 in (('PLKBUY', 20), ('PLKKUC', 0.5)):
+            db.session.add(Rezervasyon(id='RZ' + sid[-3:], stok_id=sid, stok_tip='PLAKA',
+                                       siparis_id='SIPF2', siparis_kalem_id=k.id,
+                                       cari_id='C1', musteri='ACIK CARI', miktar=m2))
+        # sipariş bazlı ek maliyet: 1.025 USD nakliye
+        db.session.add(Maliyet(id='MF2', maliyet_tip='Nakliye', baglanti_tip='siparis',
+                               baglanti_id='SIPF2', tutar=1025, doviz='USD',
+                               usd_karsilik=1025, maliyet_tarihi=date(2026, 3, 1)))
+        db.session.add(Fatura(id='FF2', fatura_no='F-F2', musteri='ACIK CARI', cari_id='C1',
+                              siparis_id='SIPF2', toplam=10250, ara_toplam=10250,
+                              doviz='USD', durum='Taslak', yon='satis',
+                              satis_tipi='ihracat', fatura_tipi='stoklu',
+                              fatura_tarihi=date(2026, 3, 2)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    assert c.post('/api/fatura/FF2/durum', headers=H,
+                  json={'durum': 'Kesildi'}).status_code == 200
+    with fa.app.app_context():
+        kayit = {s.stok_id: s for s in SatisKaydi.query.filter_by(fatura_id='FF2').all()}
+        assert len(kayit) == 2
+        buyuk, kucuk = kayit['PLKBUY'], kayit['PLKKUC']
+        # gelir: 20/20,5 ve 0,5/20,5 oranında
+        assert abs(float(buyuk.tutar_usd) - 10000) < 1
+        assert abs(float(kucuk.tutar_usd) - 250) < 1
+        # ek maliyet de aynı oranda (1.025 → 1.000 / 25) + kendi alışı
+        assert abs(float(buyuk.maliyet_usd) - 3000) < 2      # 2.000 alış + 1.000 pay
+        assert abs(float(kucuk.maliyet_usd) - 75) < 2        # 50 alış + 25 pay
+        # toplam gelir fatura matrahına eşit
+        assert abs(sum(float(s.tutar_usd) for s in kayit.values()) - 10250) < 1
+
+
+def test_f3_iptal_rezervasyon_fatura_tipini_bozmaz():
+    """F3: iptal edilmiş tek bir rezervasyon bile faturayı 'stoklu'
+    yapıyordu; dış alım faturasının alış maliyeti hiç sorulmuyordu."""
+    from models import Proforma, Siparis, Rezervasyon, Fatura
+    with fa.app.app_context():
+        db.session.add(Siparis(id='SIPF3', musteri='ACIK CARI', cari_id='C1', doviz='USD',
+                               toplam_tutar=5000, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 3, 1)))
+        db.session.flush()
+        db.session.add(Proforma(id='PIF3', siparis_id='SIPF3', musteri='ACIK CARI',
+                                cari_id='C1', toplam=5000, doviz='USD',
+                                durum='Onaylandi', tur='ihracat'))
+        db.session.add(Rezervasyon(id='RZF3', stok_id='YOK', stok_tip='PLAKA',
+                                   siparis_id='SIPF3', cari_id='C1', musteri='ACIK CARI',
+                                   iptal_nedeni='Müşteri vazgeçti'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/proforma/PIF3/faturaya_donustur', headers=H, json={})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()['fatura_tipi'] == 'transit'      # eskiden 'stoklu' idi
