@@ -1063,8 +1063,19 @@ async function avansDevret() {
       body: JSON.stringify({ kaynak_siparis_id: AV_KAYNAK, hedef_siparis_id: hedef, tutar })
     });
     bildir(d.mesaj || 'Avans devredildi');
-    avansKapat();
     await yukle();
+    // AV2: tek tahsilat birkaç siparişe dağıtılıyorsa pencere AÇIK
+    // kalsın — kalan avansla ikinci devri yapmak için baştan
+    // başlamak gerekmesin. Avans bittiyse kapanır.
+    const kalan = await api(`/api/siparis/${encodeURIComponent(AV_KAYNAK)}/avans_bakiyesi`)
+      .then(x => Number(x && x.avans) || 0).catch(() => 0);
+    if (kalan > 0) {
+      const musteri = (TUM.find(x => x.id === AV_KAYNAK) || {}).musteri || '';
+      await avansAc(AV_KAYNAK, musteri);
+      bildir(`Kalan avans: ${para2(kalan, d.doviz || '')} — başka siparişe de devredebilirsiniz`);
+    } else {
+      avansKapat();
+    }
   } catch (e) { /* */ }
   finally { btn.disabled = false; btn.textContent = 'Devret'; }
 }

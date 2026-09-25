@@ -9154,6 +9154,14 @@ def create_app():
         if tutar > mevcut + 0.01:
             return jsonify({'ok': False, 'mesaj': f'Devir tutarı ({tutar}) mevcut avanstan ({mevcut}) fazla olamaz'}), 400
 
+        # AV2: aciklamada "(iptal: X)" ifadesi kaynak siparis GERCEKTEN
+        # iptal edildiyse yazilir. Toplu gelen avansi siparislere
+        # dagitirken de devir kullaniliyor; orada "iptal" demek
+        # ekstrede duran, yanlis bir iz birakiyordu.
+        _kaynak_iptal = (kaynak_sip.durum or '') == 'Iptal Edildi'
+        _kaynak_not = (f'iptal: {kaynak_sip_id}' if _kaynak_iptal
+                       else f'kaynak: {kaynak_sip_id}')
+
         kur_t = _kur_getir(doviz, date.today()) if doviz != 'TRY' else 1.0
         if not kur_t or kur_t <= 0:
             kur_t = 1.0
@@ -9166,7 +9174,7 @@ def create_app():
                 cari_unvan=cari.unvan, islem_tip='Avans Devri (Çıkış)',
                 borc=tutar, alacak=0, doviz=doviz, kur_uygulanan=q_kur(kur_t),
                 borc_try=q2(try_kar), alacak_try=0, vade_tarihi=date.today(),
-                aciklama=f'Avans {hedef_sip_id} siparişine devredildi (iptal: {kaynak_sip_id})',
+                aciklama=f'Avans {hedef_sip_id} siparişine devredildi ({_kaynak_not})',
                 kaynak='avans_devir', baglanti_tip='siparis', baglanti_id=kaynak_sip_id,
                 siparis_id=kaynak_sip_id, kullanici=session['kullanici'])
             giris = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=cari.id,
@@ -9181,7 +9189,7 @@ def create_app():
                 cari_unvan=cari.unvan, islem_tip='Avans Devri (Çıkış)',
                 borc=0, alacak=tutar, doviz=doviz, kur_uygulanan=q_kur(kur_t),
                 borc_try=0, alacak_try=q2(try_kar), vade_tarihi=date.today(),
-                aciklama=f'Verilen avans {hedef_sip_id} siparişine devredildi (iptal: {kaynak_sip_id})',
+                aciklama=f'Verilen avans {hedef_sip_id} siparişine devredildi ({_kaynak_not})',
                 kaynak='avans_devir', baglanti_tip='siparis', baglanti_id=kaynak_sip_id,
                 siparis_id=kaynak_sip_id, kullanici=session['kullanici'])
             giris = CariHareket(id=_yeni_id('HR'), hareket_tarihi=date.today(), cari_id=cari.id,

@@ -786,3 +786,53 @@ def test_am2_avans_proformada_ve_kesim_sonrasinda():
     assert 'mahsup' in r.get_json()['mesaj']
     t = c.get('/api/fatura/FAM2/tahsilatlar').get_json()
     assert t['tahsil_edilen'] == 25000 and t['kalan'] == 25000 and t['avans_acik'] == 0
+
+
+def test_av2_toplu_avans_siparislere_dagitilir():
+    """AV2: tek seferde gelen avans önce bir siparişe girilip diğerlerine
+    devredilebilmeli. Her adımda cari bakiyesi ve kasa DOĞRU kalmalı;
+    devir kasaya dokunmamalı. Kaynak sipariş iptal değilse açıklamada
+    'iptal' yazmamalı."""
+    from models import CariHareket, Siparis, Kasa
+    with fa.app.app_context():
+        for i, t in (('AV1', 30000), ('AV2', 40000), ('AV3', 50000)):
+            db.session.add(Siparis(id=i, musteri='ACIK CARI', cari_id='C1', doviz='USD',
+                                   toplam_tutar=t, durum='Onaylandi',
+                                   siparis_tarihi=date(2026, 3, 1)))
+        db.session.add(Kasa(ad='AV Kasa USD', doviz='USD', bakiye=0))
+        db.session.commit()
+        kasa_id = Kasa.query.filter_by(ad='AV Kasa USD').first().id
+
+    def bakiye():
+        with fa.app.app_context():
+            hs = CariHareket.query.filter_by(cari_id='C1').all()
+            return round(sum(float(h.borc or 0) - float(h.alacak or 0) for h in hs), 2)
+
+    def avans(sip):
+        return c.get(f'/api/siparis/{sip}/avans_bakiyesi').get_json()['avans']
+
+    c = istemci('admin', 'ADMIN')
+    once = bakiye()
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'C1', 'islem_tip': 'Avans Tahsilati', 'alacak': 46000, 'doviz': 'USD',
+        'vade_tarihi': '2026-03-05', 'hareket_tarihi': '2026-03-05',
+        'siparis_id': 'AV1', 'kasa_id': kasa_id})
+    assert r.status_code == 200
+    assert avans('AV1') == 46000            # tamamı ilk siparişte
+    assert round(bakiye() - once, 2) == -46000.0
+
+    for hedef, tutar in (('AV2', 12000), ('AV3', 25000)):
+        r = c.post('/api/avans/devret', headers=H, json={
+            'kaynak_siparis_id': 'AV1', 'hedef_siparis_id': hedef, 'tutar': tutar})
+        assert r.status_code == 200, r.get_data(as_text=True)
+    assert (avans('AV1'), avans('AV2'), avans('AV3')) == (9000, 12000, 25000)
+    # Devir para hareketi DEĞİLDİR: cari toplamı ve kasa değişmez
+    assert round(bakiye() - once, 2) == -46000.0
+    with fa.app.app_context():
+        assert float(Kasa.query.get(kasa_id).bakiye) == 46000.0
+        devirler = CariHareket.query.filter_by(kaynak='avans_devir', siparis_id='AV2').all()
+        assert devirler and all('iptal' not in (d.aciklama or '') for d in devirler)
+    # Kalandan fazlası devredilemez
+    r = c.post('/api/avans/devret', headers=H, json={
+        'kaynak_siparis_id': 'AV1', 'hedef_siparis_id': 'AV2', 'tutar': 50000})
+    assert r.status_code == 400 and 'fazla olamaz' in r.get_json()['mesaj']
