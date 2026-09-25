@@ -518,6 +518,11 @@ class Fatura(db.Model):
     kdv_oran        = db.Column(Olcu, default=0)
     kdv_tutar       = db.Column(Para, default=0)
     doviz           = db.Column(db.String(5), default='USD')
+    # FK2 — SOZLESME (elle girilen) KURU. Boşsa fatura tarihinin TCMB
+    # döviz alış kuru kullanılır. Doluysa kesimde ve cari hareketinde bu
+    # kur esas alınır (GİB özelgesi: sözleşmede kur kararlaştırılmışsa
+    # TL karşılığı o kurdan bulunur) ve hareket kur_kaynak='MANUEL' olur.
+    kur_ozel        = db.Column(Kur)
     odeme_sekli     = db.Column(db.String(50))
     teslim_sekli    = db.Column(db.String(50))
     durum           = db.Column(db.String(30), default='Taslak')

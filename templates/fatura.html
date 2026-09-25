@@ -191,6 +191,34 @@
         <div class="form-alan"><label>Müşteri Adresi</label><textarea id="dAdres" placeholder="Faturada görünür"></textarea></div>
         <div class="form-alan"><label>Müşteri Ülkesi</label><input id="dUlke" placeholder="USA, Germany…"></div>
       </div>
+      <!-- FT1/FK2 — tutar ve sözleşme kuru düzenleme.
+           Kalem satırları düzenlenince matrah kalem toplamına eşitlenir;
+           matrahı doğrudan yazmak iskontolu faturalarda kalem toplamını
+           bozmadan düzeltme imkânı verir. -->
+      <div style="border:1px solid var(--cizgi);border-radius:var(--r-kucuk);padding:12px;margin-bottom:12px">
+        <div style="font-size:.78rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:8px">Tutar ve Kur</div>
+        <div id="dTutarUyari" class="not" style="display:none;margin-bottom:10px"></div>
+        <div id="dKalemKutu" style="display:none;margin-bottom:10px;max-height:210px;overflow:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+            <thead><tr style="text-align:left;color:var(--soluk)">
+              <th style="padding:3px 4px;font-weight:600">Kalem</th>
+              <th style="padding:3px 4px;font-weight:600;width:84px">Miktar</th>
+              <th style="padding:3px 4px;font-weight:600;width:96px">Birim Fiyat</th>
+              <th style="padding:3px 4px;font-weight:600;width:96px;text-align:right">Tutar</th>
+            </tr></thead>
+            <tbody id="dKalemGovde"></tbody>
+          </table>
+        </div>
+        <div class="form-satir" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="form-alan"><label>Matrah (KDV hariç)</label>
+            <input id="dMatrah" type="number" step="0.01" oninput="duzMatrahElle()"></div>
+          <div class="form-alan" id="dKdvAlan"><label>KDV Oranı (%)</label>
+            <input id="dKdv" type="number" step="0.01" oninput="duzToplamCiz()"></div>
+          <div class="form-alan" id="dKurAlan"><label>Sözleşme Kuru (TRY)</label>
+            <input id="dKur" type="number" step="0.0001" placeholder="TCMB" oninput="duzToplamCiz()"></div>
+        </div>
+        <div id="dToplamOzet" class="mono" style="font-size:.82rem;color:var(--soluk);line-height:1.5"></div>
+      </div>
       <div class="form-alan" style="margin-bottom:12px"><label>Kur Farkı Davranışı</label>
         <select id="dKurFarki">
           <option value="gider">Gider/Gelir Modu — cari kapansın (ihracat)</option>
@@ -661,6 +689,16 @@ async function kesTlGoster(f) {
   const trT = t => t ? t.split('-').reverse().join('.') : '';
   const k4 = v => Number(v).toLocaleString('tr-TR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
   const ft = f.fatura_tarihi || new Date().toISOString().slice(0, 10);
+  // FK2: faturaya sözleşme kuru girildiyse kesim o kurdan yapılır —
+  // pencere de TCMB'yi değil onu göstermeli.
+  const ozel = Number(f.kur_ozel) || 0;
+  if (ozel > 0) {
+    const tlo = (Number(f.toplam) || 0) * ozel;
+    kutu.innerHTML = `<div style="background:var(--notr-bg);border-radius:var(--r-kucuk);padding:9px 12px">
+      Cariye işlenecek TL karşılığı: <b class="mono">${tlo.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</b><br>
+      <span style="color:var(--soluk)">1 ${dv} = ${k4(ozel)} ₺ · sözleşme kuru (elle girildi) · TCMB kuru kullanılmaz</span></div>`;
+    return;
+  }
   try {
     const g = await api(`/api/doviz_kur?doviz=${dv}&tarih=${encodeURIComponent(ft)}`);
     const kur = Number(g && g.alis) || 0;
@@ -723,15 +761,108 @@ function secenekDoldur(el, liste, secili) {
     hepsi.map(x => `<option value="${kacar(x)}"${x === s ? ' selected' : ''}>${kacar(x)}</option>`).join('');
 }
 
+/* ── FT1/FK2 — tutar ve sözleşme kuru ──────────────────────────────
+   DUZ_F      : düzenlenen faturanın son hali (kalemleriyle)
+   DUZ_KALEM  : düzenlenebilir kalem kopyası
+   DUZ_DURUM  : neyin elle değiştirildiği — kaydederken YALNIZCA
+                değişeni göndeririz. Her kaydetmede kalem toplamını
+                göndermek, proformadan gelen İSKONTOLU faturanın
+                matrahını sessizce iskontosuz hale getirirdi. */
+let DUZ_F = null, DUZ_KALEM = [], DUZ_DURUM = { kalem: false, matrah: false };
+
+function duzKalemCiz() {
+  const kutu = document.getElementById('dKalemKutu');
+  const govde = document.getElementById('dKalemGovde');
+  if (!DUZ_KALEM.length) { kutu.style.display = 'none'; govde.innerHTML = ''; return; }
+  kutu.style.display = '';
+  const ad = k => [k.cins, k.ozellik, k.olcu || [k.boy, k.yukseklik, k.kalinlik].filter(Boolean).join('×')]
+    .filter(Boolean).join(' · ') || 'Kalem';
+  govde.innerHTML = DUZ_KALEM.map((k, i) => `
+    <tr style="border-top:1px solid var(--cizgi)">
+      <td style="padding:4px">${kacar(ad(k))}${k.birim ? `<span style="color:var(--soluk)"> (${kacar(k.birim)})</span>` : ''}</td>
+      <td style="padding:4px"><input type="number" step="0.01" value="${Number(k.miktar) || 0}"
+          oninput="duzKalemDegisti(${i}, 'miktar', this.value)" style="width:100%;padding:3px 5px;font-size:.78rem"></td>
+      <td style="padding:4px"><input type="number" step="0.01" value="${Number(k.birim_fiyat) || 0}"
+          oninput="duzKalemDegisti(${i}, 'birim_fiyat', this.value)" style="width:100%;padding:3px 5px;font-size:.78rem"></td>
+      <td style="padding:4px;text-align:right" class="mono" id="dKalemTut${i}">${(Number(k.toplam_fiyat) || 0).toFixed(2)}</td>
+    </tr>`).join('');
+}
+
+function duzKalemDegisti(i, alan, deger) {
+  const k = DUZ_KALEM[i];
+  if (!k) return;
+  k[alan] = parseFloat(deger) || 0;
+  k.toplam_fiyat = (Number(k.miktar) || 0) * (Number(k.birim_fiyat) || 0);
+  const h = document.getElementById('dKalemTut' + i);
+  if (h) h.textContent = k.toplam_fiyat.toFixed(2);
+  DUZ_DURUM.kalem = true; DUZ_DURUM.matrah = false;
+  document.getElementById('dMatrah').value =
+    DUZ_KALEM.reduce((a, x) => a + (Number(x.toplam_fiyat) || 0), 0).toFixed(2);
+  duzToplamCiz();
+}
+
+/* Matrah ELLE yazıldıysa kalem toplamı değil o geçerlidir —
+   iskontolu faturada kalemler iskontosuz kalır, matrah nettir. */
+function duzMatrahElle() { DUZ_DURUM.matrah = true; DUZ_DURUM.kalem = false; duzToplamCiz(); }
+
+function duzToplamCiz() {
+  const f = DUZ_F || {};
+  const dv = f.doviz || 'USD';
+  const matrah = parseFloat(document.getElementById('dMatrah').value) || 0;
+  const oran = (f.satis_tipi === 'yurtici') ? (parseFloat(document.getElementById('dKdv').value) || 0) : 0;
+  const kdv = matrah * oran / 100;
+  const toplam = matrah + kdv;
+  const kur = parseFloat(document.getElementById('dKur').value) || 0;
+  const s2 = v => v.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let satir = `Matrah ${s2(matrah)}${oran ? ` + KDV ${s2(kdv)}` : ''} = <b>${s2(toplam)} ${kacar(dv)}</b>`;
+  if (dv !== 'TRY') {
+    satir += kur > 0
+      ? ` · sözleşme kuru ${kur.toLocaleString('tr-TR', { minimumFractionDigits: 4 })} → <b>${s2(toplam * kur)} ₺</b> cariye`
+      : ' · kur: fatura tarihinin TCMB döviz alışı';
+  }
+  document.getElementById('dToplamOzet').innerHTML = satir;
+}
+
 async function duzAc(id) {
   SECILI = TUM.find(x => x.id === id);
   if (!SECILI) return;
   await lookupYukle();
   let f = SECILI;
   try { const d = await api(`/api/fatura/${encodeURIComponent(id)}`); if (d.fatura) f = { ...SECILI, ...d.fatura }; } catch (e) { /* */ }
+  DUZ_F = f;
+  DUZ_DURUM = { kalem: false, matrah: false };
+  DUZ_KALEM = (f.kalemler || []).map(k => ({ ...k }));
+  duzKalemCiz();
+  const matrah = Number(f.ara_toplam) || Number(f.toplam) || 0;
+  document.getElementById('dMatrah').value = matrah ? matrah.toFixed(2) : '';
+  document.getElementById('dKdv').value = Number(f.kdv_oran) || 0;
+  document.getElementById('dKdvAlan').style.display = (f.satis_tipi === 'yurtici') ? '' : 'none';
+  document.getElementById('dKurAlan').style.display = ((f.doviz || 'USD') === 'TRY') ? 'none' : '';
+  document.getElementById('dKur').value = Number(f.kur_ozel) || '';
+  // Uyarılar: kesilmiş fatura, iskontolu proforma, kalem/matrah farkı
+  const uyari = [];
+  if (f.durum !== 'Taslak')
+    uyari.push('Bu fatura kesilmiş — tutar değişirse cari hesap, kur ve kârlılık kayıtları da güncellenir.');
+  const kalemToplam = DUZ_KALEM.reduce((a, x) => a + (Number(x.toplam_fiyat) || 0), 0);
+  if (DUZ_KALEM.length && Math.abs(kalemToplam - matrah) > 0.02)
+    uyari.push(`Kalem toplamı (${kalemToplam.toFixed(2)}) matrahtan farklı — muhtemelen iskonto var. Kalemleri düzenlerseniz matrah kalem toplamına eşitlenir; iskontoyu korumak için yalnızca matrahı yazın.`);
+  if (f.proforma_id)
+    uyari.push('Commercial Invoice proformadan basılır; belgeyi de değiştirmek için proformayı güncelleyin.');
+  const uk = document.getElementById('dTutarUyari');
+  uk.style.display = uyari.length ? '' : 'none';
+  uk.innerHTML = uyari.map(x => kacar(x)).join('<br>');
+  duzToplamCiz();
   document.getElementById('duzAlt').textContent = `${f.musteri || ''} · ${para(f.toplam, f.doviz)}`;
   document.getElementById('dFNo').value = f.fatura_no || '';
-  document.getElementById('dTipi').value = f.fatura_tipi || 'stoklu';
+  // Listede olmayan bir tip (ör. doğrudan faturanın 'stoksuz'u) seçeneğe
+  // eklenir — aksi halde seçim boşalır ve kaydetmek tipi siler.
+  const dTipi = document.getElementById('dTipi');
+  dTipi.value = f.fatura_tipi || 'stoklu';
+  if (!dTipi.value) {
+    dTipi.insertAdjacentHTML('beforeend',
+      `<option value="${kacar(f.fatura_tipi)}">${kacar(f.fatura_tipi)}</option>`);
+    dTipi.value = f.fatura_tipi;
+  }
   document.getElementById('dFTarih').value = f.fatura_tarihi || '';
   document.getElementById('dVade').value = f.vade_tarihi || '';
   secenekDoldur(document.getElementById('dOdeme'), LOOKUP_ODEME, f.odeme_sekli);
@@ -800,6 +931,19 @@ async function duzKaydet() {
     };
     const yeniNo = document.getElementById('dFNo').value.trim();
     if (yeniNo) govde.fatura_no = yeniNo;  // boş no gönderme — mevcut no silinmesin
+
+    // ── FT1/FK2 — tutar ve kur: YALNIZCA değişen gönderilir ──
+    const f = DUZ_F || {};
+    const matrah = parseFloat(document.getElementById('dMatrah').value) || 0;
+    const oran = parseFloat(document.getElementById('dKdv').value) || 0;
+    const eskiMatrah = Number(f.ara_toplam) || Number(f.toplam) || 0;
+    if (DUZ_DURUM.kalem) govde.kalemler = DUZ_KALEM;
+    else if (DUZ_DURUM.matrah && Math.abs(matrah - eskiMatrah) > 0.005) govde.ara_toplam = matrah;
+    if (f.satis_tipi === 'yurtici' && Math.abs(oran - (Number(f.kdv_oran) || 0)) > 0.0001) govde.kdv_oran = oran;
+    if ((f.doviz || 'USD') !== 'TRY') {
+      const kur = parseFloat(document.getElementById('dKur').value) || 0;
+      if (Math.abs(kur - (Number(f.kur_ozel) || 0)) > 0.0000005) govde.kur = kur || null;
+    }
     const d = await api(`/api/fatura/${encodeURIComponent(SECILI.id)}`, {
       method: 'PUT', body: JSON.stringify(govde)
     });

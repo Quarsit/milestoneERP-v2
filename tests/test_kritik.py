@@ -584,3 +584,84 @@ def test_ek1_ek2_ekstre_dili_ve_kur_esasi():
     assert 'Rate Basis' in tr          # yabancı cari → İngilizce belge
     assert 'Rate Basis' not in usd     # aynı dövizde çevrim yok, satır basılmaz
     assert 'lang="en"' in usd
+
+
+def test_ft1_fk2_fatura_tutari_ve_sozlesme_kuru():
+    """FT1: faturanın tutarı düzenlenebilmeli; değişiklik cari hesaba ve
+    kârlılığa işlenmeli. FK2: fatura tarihine göre TCMB kuru yerine elle
+    sözleşme kuru girilebilmeli (girildiyse kesim de onu kullanır)."""
+    from models import Fatura, CariHareket, SatisKaydi, DovizKur
+    with fa.app.app_context():
+        if not DovizKur.query.filter_by(doviz='USD', tarih=date(2026, 3, 2)).first():
+            db.session.add(DovizKur(doviz='USD', tarih=date(2026, 3, 2),
+                                    alis=30.0, satis=30.0, efektif=30.0))
+        db.session.add(Fatura(id='FFT', fatura_no='F-FT', musteri='ACIK CARI', cari_id='C1',
+                              toplam=1000, ara_toplam=1000, doviz='USD', durum='Kesildi',
+                              yon='satis', satis_tipi='ihracat',
+                              fatura_tarihi=date(2026, 3, 2), vade_tarihi=date(2026, 4, 2),
+                              kalemler_json=json.dumps([
+                                  {'cins': 'Emperador', 'miktar': 100, 'birim': 'm2',
+                                   'birim_fiyat': 10, 'toplam_fiyat': 1000}])))
+        db.session.add(CariHareket(id='HFT', cari_id='C1', cari_unvan='ACIK CARI',
+                                   islem_tip='Fatura (Satis)', borc=1000, alacak=0, doviz='USD',
+                                   kur_uygulanan=30.0, kur_kaynak='TCMB',
+                                   borc_try=30000, alacak_try=0,
+                                   kaynak='fatura', baglanti_tip='fatura', baglanti_id='FFT',
+                                   hareket_tarihi=date(2026, 3, 2), vade_tarihi=date(2026, 4, 2)))
+        db.session.add(SatisKaydi(id='SKFT', fatura_id='FFT', musteri='ACIK CARI',
+                                  stok_tip='PLAKA', doviz='USD', tutar=1000, tutar_usd=1000,
+                                  tutar_try=30000, maliyet_usd=600, kar_usd=400, marj_yuzde=40,
+                                  satis_tarihi=date(2026, 3, 2)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    # ── FT1: kalem fiyatı düzeltiliyor → toplam, cari ve kârlılık birlikte ──
+    r = c.put('/api/fatura/FFT', headers=H, json={'kalemler': [
+        {'cins': 'Emperador', 'miktar': 100, 'birim': 'm2', 'birim_fiyat': 12}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        f = Fatura.query.get('FFT')
+        assert float(f.toplam) == 1200.0 and float(f.ara_toplam) == 1200.0
+        assert json.loads(f.kalemler_json)[0]['toplam_fiyat'] == 1200
+        h = CariHareket.query.get('HFT')
+        assert float(h.borc) == 1200.0 and float(h.borc_try) == 36000.0
+        sk = SatisKaydi.query.get('SKFT')
+        assert float(sk.tutar_usd) == 1200.0 and float(sk.kar_usd) == 600.0
+
+    # ── FK2: sözleşme kuru girilir → TCMB yerine o kur işlenir ──
+    r = c.put('/api/fatura/FFT', headers=H, json={'kur': 41.5})
+    assert r.status_code == 200 and 'kur' in r.get_json()['mesaj']
+    with fa.app.app_context():
+        h = CariHareket.query.get('HFT')
+        assert float(h.kur_uygulanan) == 41.5 and h.kur_kaynak == 'MANUEL'
+        assert float(h.borc_try) == 49800.0        # 1200 × 41,5
+    # Tarih değişse bile sözleşme kuru TCMB ile EZİLMEZ
+    c.put('/api/fatura/FFT', headers=H, json={'fatura_tarihi': '2026-03-02'})
+    with fa.app.app_context():
+        assert float(CariHareket.query.get('HFT').kur_uygulanan) == 41.5
+    # Boş gönderilirse TCMB kuruna dönülür
+    r = c.put('/api/fatura/FFT', headers=H, json={'kur': None})
+    assert r.status_code == 200
+    with fa.app.app_context():
+        h = CariHareket.query.get('HFT')
+        assert h.kur_kaynak == 'TCMB' and float(h.kur_uygulanan) == 30.0
+        assert float(h.borc_try) == 36000.0
+
+    # ── Tahsilatın altına düşüren tutar reddedilir ──
+    with fa.app.app_context():
+        db.session.add(CariHareket(id='HFTT', cari_id='C1', cari_unvan='ACIK CARI',
+                                   islem_tip='Tahsilat', borc=0, alacak=900, doviz='USD',
+                                   kur_uygulanan=30.0, borc_try=0, alacak_try=27000,
+                                   kaynak='tahsilat', baglanti_tip='fatura', baglanti_id='FFT',
+                                   hareket_tarihi=date(2026, 3, 5)))
+        db.session.commit()
+    r = c.put('/api/fatura/FFT', headers=H, json={'ara_toplam': 500})
+    assert r.status_code == 400 and r.get_json().get('error') == 'tahsilat_asiyor'
+    with fa.app.app_context():
+        assert float(Fatura.query.get('FFT').toplam) == 1200.0   # değişmedi
+
+    # ── İptal faturanın tutarı/kuru değiştirilemez ──
+    with fa.app.app_context():
+        Fatura.query.get('FFT').durum = 'Iptal'
+        db.session.commit()
+    assert c.put('/api/fatura/FFT', headers=H, json={'kur': 44}).status_code == 400

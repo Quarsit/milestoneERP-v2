@@ -2829,12 +2829,14 @@ def create_app():
     def _cari_hareket_ekle(cari_unvan, islem_tip, borc=0, alacak=0, doviz='USD',
                             aciklama=None, kaynak='manuel', baglanti_tip=None,
                             baglanti_id=None, vade_tarihi=None, evrak_no=None,
-                            kur=None, hareket_tarihi=None):
+                            kur=None, hareket_tarihi=None, kur_kaynak='TCMB'):
         """
         Cari hareket kaydı oluşturur (commit ETMEZ - çağıran commit eder).
         Müşteri unvanından cari_id bulur. Otomatik borç/alacak için kullanılır.
         Cari bulunamazsa ValueError firlatir (sessizce kaybetmemek icin).
         kur: verilirse (manuel/çapraz döviz senaryosu) TCMB yerine bu kur kullanılır.
+        kur_kaynak: 'MANUEL' verilirse hareket sözleşme kuruyla işlenmiş sayılır
+            (FK2) ve sonraki eşitlemelerde TCMB kuruyla EZİLMEZ.
         hareket_tarihi: verilmezse bugün (FK1: fatura kesiminde fatura tarihi).
         """
         cari = _cari_bul(cari_unvan)
@@ -2859,7 +2861,7 @@ def create_app():
             alacak=alacak or 0,
             doviz=doviz or 'USD',
             kur_uygulanan=q_kur(kullanilan_kur),
-            kur_kaynak='TCMB',
+            kur_kaynak=(kur_kaynak or 'TCMB'),
             borc_try=q2(borc_try),
             alacak_try=q2(alacak_try),
             vade_tarihi=vade_tarihi,
@@ -19111,6 +19113,8 @@ def create_app():
             fatura_tipi=data.get('fatura_tipi') or 'stoksuz',
             yon=data.get('yon') or 'satis',
             kur_farki_modu=('cari' if doviz == 'TRY' else 'gider'),
+            kur_ozel=(q_kur(float(data.get('kur'))) if (data.get('kur') or 0)
+                      and float(data.get('kur') or 0) > 0 else None),
             satis_tipi=satis_tipi,
             tevkifat_oran=tevkifat_oran,
             tevkifat_tutar=tevkifat_tutar,
@@ -19161,6 +19165,7 @@ def create_app():
             'kdv_tutar': getattr(f, 'kdv_tutar', 0) or 0,
             'tevkifat_oran': getattr(f, 'tevkifat_oran', '') or '',
             'tevkifat_tutar': getattr(f, 'tevkifat_tutar', 0) or 0,
+            'kur_ozel': getattr(f, 'kur_ozel', None),
             'odeme_sekli': getattr(f, 'odeme_sekli', '') or '',
             'kur_farki_modu': getattr(f, 'kur_farki_modu', 'gider') or 'gider',
             'teslim_sekli': getattr(f, 'teslim_sekli', '') or '',
@@ -19203,6 +19208,10 @@ def create_app():
             'musteri': f.musteri, 'musteri_adres': f.musteri_adres, 'musteri_ulke': f.musteri_ulke,
             'toplam': f.toplam, 'ara_toplam': f.ara_toplam,
             'kdv_oran': f.kdv_oran, 'kdv_tutar': f.kdv_tutar, 'doviz': f.doviz,
+            'tevkifat_oran': getattr(f, 'tevkifat_oran', '') or '',
+            'tevkifat_tutar': getattr(f, 'tevkifat_tutar', 0) or 0,
+            # FK2: sozlesme kuru (bos = fatura tarihinin TCMB kuru)
+            'kur_ozel': getattr(f, 'kur_ozel', None),
             'odeme_sekli': f.odeme_sekli, 'teslim_sekli': f.teslim_sekli,
             'durum': f.durum, 'aciklama': f.aciklama, 'kalemler': kalemler,
             'fatura_tipi': getattr(f, 'fatura_tipi', 'stoklu'),
@@ -19225,6 +19234,152 @@ def create_app():
         if haric_fatura_id:
             q = q.filter(Fatura.id != haric_fatura_id)
         return q.first() is not None
+
+    def _fatura_tahsil_edilen(f):
+        """Faturaya yapilan odemelerin FATURA DOVIZINDEKI toplami.
+
+        Tahsilat ekraniyla ayni mantik: faturaya bagli alacak
+        hareketleri + o faturaya baglanmis ceklerin hareketleri.
+        Tutar duzenlemesinde "tahsilatin altina dusurme" denetimi
+        buradan beslenir.
+        """
+        hareketler = CariHareket.query.filter(
+            CariHareket.baglanti_tip == 'fatura',
+            CariHareket.baglanti_id == f.id,
+            CariHareket.alacak > 0).all()
+        gorulen = {h.id for h in hareketler}
+        for ch in CariHareket.query.filter(
+                CariHareket.baglanti_tip == 'cek',
+                CariHareket.alacak > 0,
+                CariHareket.baglanti_id.in_(
+                    db.session.query(Cek.id).filter_by(fatura_id=f.id))).all():
+            if ch.id not in gorulen:
+                hareketler.append(ch)
+        _dv = f.doviz or 'USD'
+        return q2(sum(_hareket_fatura_esdegeri(h, _dv) or 0 for h in hareketler))
+
+    def _fatura_tutar_yenile(f, data):
+        """FT1 — faturanin TUTARINI duzenler, toplami yeniden kurar.
+
+        Eskiden PUT yalnizca metin/tarih alanlarini kabul ediyordu;
+        yanlis fiyatli ya da eksik kalemli bir faturayi duzeltmenin
+        tek yolu iptal edip yeniden kesmekti.
+
+        Kabul edilen alanlar (hepsi istege bagli):
+          kalemler      [{miktar, birim_fiyat, toplam_fiyat, ...}]
+                        verilirse kalem anlik goruntusu yenilenir ve
+                        matrah kalemlerden toplanir
+          ara_toplam    kalem yoksa/toplu duzeltmede dogrudan matrah
+          kdv_oran      YALNIZCA yurt ici satista uygulanir; ihracat ve
+                        ihrac kayitlida 0'a zorlanir
+          tevkifat_oran '5/10' gibi; toplami degistirmez, ayrica saklanir
+
+        Doner: (degisti_mi, hata_mesaji)
+        """
+        alanlar = ('kalemler', 'ara_toplam', 'kdv_oran', 'tevkifat_oran')
+        if not any(a in data for a in alanlar):
+            return False, None
+
+        ara = None
+        if 'kalemler' in data:
+            gelen = data.get('kalemler') or []
+            if not gelen:
+                return False, 'Fatura en az bir kalem icermeli.'
+            kalem_list, ara = [], 0.0
+            for k in gelen:
+                try:
+                    miktar = float(k.get('miktar') or 0)
+                    b_fiyat = float(k.get('birim_fiyat') or 0)
+                    satir = (float(k.get('toplam_fiyat'))
+                             if k.get('toplam_fiyat') not in (None, '')
+                             else miktar * b_fiyat)
+                except (TypeError, ValueError):
+                    return False, 'Kalem miktar/fiyat degerleri sayi olmali.'
+                if miktar < 0 or b_fiyat < 0 or satir < 0:
+                    return False, 'Kalem miktar/fiyat degerleri negatif olamaz.'
+                ara += satir
+                satir_k = dict(k)
+                satir_k['miktar'] = miktar
+                satir_k['birim_fiyat'] = b_fiyat
+                satir_k['toplam_fiyat'] = q2(satir)
+                kalem_list.append(satir_k)
+            f.kalemler_json = json.dumps(kalem_list, ensure_ascii=False, default=str)
+        elif 'ara_toplam' in data:
+            try:
+                ara = float(data.get('ara_toplam') or 0)
+            except (TypeError, ValueError):
+                return False, 'Matrah sayi olmali.'
+        if ara is None:
+            ara = float(f.ara_toplam or f.toplam or 0)
+        if ara < 0:
+            return False, 'Matrah negatif olamaz.'
+
+        # KDV: ihracat ve ihrac kayitli satista KDV yok (fatura kesiminde
+        # oldugu gibi burada da zorlanir, elle oran girilse bile).
+        satis_tipi = (getattr(f, 'satis_tipi', None) or 'ihracat')
+        if 'kdv_oran' in data:
+            try:
+                kdv_oran = q_oran(float(data.get('kdv_oran') or 0))
+            except (TypeError, ValueError):
+                return False, 'KDV orani sayi olmali.'
+        else:
+            kdv_oran = f.kdv_oran or 0
+        if satis_tipi != 'yurtici':
+            kdv_oran = 0
+        kdv_tutar = q2(ara * float(kdv_oran) / 100) if kdv_oran else 0
+
+        # Tevkifat: KDV'nin beyan edilen kesri. TOPLAMI DEGISTIRMEZ.
+        tevkifat_oran = (data.get('tevkifat_oran')
+                         if 'tevkifat_oran' in data
+                         else getattr(f, 'tevkifat_oran', '')) or ''
+        tevkifat_oran = str(tevkifat_oran).strip()
+        tevkifat_tutar = 0
+        if tevkifat_oran and '/' in tevkifat_oran and kdv_tutar:
+            try:
+                pay, payda = [float(x) for x in tevkifat_oran.split('/', 1)]
+                if payda:
+                    tevkifat_tutar = q2(kdv_tutar * pay / payda)
+            except (ValueError, ZeroDivisionError):
+                tevkifat_oran, tevkifat_tutar = '', 0
+
+        f.ara_toplam = q2(ara)
+        f.kdv_oran = kdv_oran
+        f.kdv_tutar = kdv_tutar
+        f.tevkifat_oran = tevkifat_oran
+        f.tevkifat_tutar = tevkifat_tutar
+        f.toplam = q2(ara + kdv_tutar)
+        return True, None
+
+    def _fatura_satis_kaydi_esitle(f, eski):
+        """FT1 — tutar/tarih degisikligi KARLILIK kayitlarina da islenir.
+
+        SatisKaydi satirlari fatura kesilirken matrahtan pay alir.
+        Fatura sonradan duzeltilince kar/marj eski tutarla kalirdi.
+        Satirlar yeni matrah oraninda olceklenir; tarih degistiyse
+        satis tarihi de fatura tarihine cekilir (donem raporlari).
+        """
+        kayitlar = SatisKaydi.query.filter_by(fatura_id=f.id).all()
+        if not kayitlar:
+            return ''
+        eski_matrah = float(eski.get('ara_toplam') or eski.get('toplam') or 0)
+        yeni_matrah = float(f.ara_toplam or f.toplam or 0)
+        tarih_degisti = eski.get('fatura_tarihi') != f.fatura_tarihi
+        tutar_degisti = abs(yeni_matrah - eski_matrah) > 0.005
+        if not (tarih_degisti or tutar_degisti):
+            return ''
+        oran = (yeni_matrah / eski_matrah) if eski_matrah > 0 else 0
+        for sk in kayitlar:
+            if tarih_degisti and f.fatura_tarihi:
+                sk.satis_tarihi = f.fatura_tarihi
+            if tutar_degisti and oran > 0:
+                sk.tutar = q2((sk.tutar or 0) * oran)
+                sk.tutar_usd = q2((sk.tutar_usd or 0) * oran)
+                sk.tutar_try = q2((sk.tutar_try or 0) * oran)
+                sk.birim_fiyat = q2((sk.birim_fiyat or 0) * oran)
+                sk.kar_usd = q2((sk.tutar_usd or 0) - (sk.maliyet_usd or 0))
+                sk.marj_yuzde = q_oran((sk.kar_usd / sk.tutar_usd * 100)
+                                       if sk.tutar_usd else 0)
+        return f'{len(kayitlar)} satış kaydı güncellendi'
 
     def _fatura_cari_hareketi_esitle(f, eski):
         """FD1 — Faturadaki degisikligi CARI HAREKETE isler.
@@ -19252,7 +19407,10 @@ def create_app():
         vade_degisti = eski.get('vade_tarihi') != f.vade_tarihi
         tutar_degisti = (abs(float(f.toplam or 0) - float(eski.get('toplam') or 0)) > 0.005
                          or (f.doviz or '') != (eski.get('doviz') or ''))
-        if not (tarih_degisti or vade_degisti or tutar_degisti):
+        # FK2: faturaya sozlesme kuru girildi ya da silindi mi?
+        ozel_kur = float(getattr(f, 'kur_ozel', None) or 0)
+        kur_degisti = abs(ozel_kur - float(eski.get('kur_ozel') or 0)) > 0.0000005
+        if not (tarih_degisti or vade_degisti or tutar_degisti or kur_degisti):
             return ''
 
         degisen = []
@@ -19268,8 +19426,18 @@ def create_app():
                 elif (h.alacak or 0) > 0:
                     h.alacak = q2(f.toplam or 0)
                 h.doviz = f.doviz or h.doviz
-            # Kur: MANUEL (sozlesme) kuru korunur, TCMB kuru tarihe gore yenilenir
-            if (h.kur_kaynak or 'TCMB') != 'MANUEL' and (tarih_degisti or tutar_degisti):
+            # ── KUR ──
+            # FK2: faturada sozlesme kuru varsa HER ZAMAN o gecerlidir.
+            # Silinmisse TCMB'ye donulur. Ikisi de yoksa eski davranis:
+            # MANUEL isaretli hareketin kuru korunur, TCMB kuru fatura
+            # tarihine gore yenilenir.
+            if ozel_kur > 0:
+                h.kur_uygulanan = q_kur(ozel_kur)
+                h.kur_kaynak = 'MANUEL'
+            elif kur_degisti:
+                h.kur_kaynak = 'TCMB'
+                h.kur_uygulanan = q_kur(_kur_getir(h.doviz or 'USD', f.fatura_tarihi))
+            elif (h.kur_kaynak or 'TCMB') != 'MANUEL' and (tarih_degisti or tutar_degisti):
                 h.kur_uygulanan = q_kur(_kur_getir(h.doviz or 'USD', f.fatura_tarihi))
             _kur = float(h.kur_uygulanan or 0) or _kur_getir(h.doviz or 'USD', f.fatura_tarihi)
             _b, _ = _try_karsilik(h.borc or 0, h.doviz or 'USD', _kur)
@@ -19289,6 +19457,7 @@ def create_app():
         if tarih_degisti: parcalar.append('tarih')
         if vade_degisti: parcalar.append('vade')
         if tutar_degisti: parcalar.append('tutar')
+        if kur_degisti: parcalar.append('kur')
         return f'cari hareket güncellendi ({", ".join(parcalar)})'
 
     @app.route('/api/fatura/<fatura_id>', methods=['PUT'])
@@ -19300,7 +19469,15 @@ def create_app():
         data = request.get_json(silent=True) or {}
         # FD1: degisiklik CARIYE de islensin diye eski degerler saklanir.
         _eski = {'fatura_tarihi': f.fatura_tarihi, 'vade_tarihi': f.vade_tarihi,
-                 'toplam': float(f.toplam or 0), 'doviz': f.doviz}
+                 'toplam': float(f.toplam or 0), 'doviz': f.doviz,
+                 'ara_toplam': float(f.ara_toplam or 0),
+                 'kur_ozel': float(getattr(f, 'kur_ozel', None) or 0)}
+        # FT1/FK2: tutar ve kur, iptal edilmis faturada degistirilemez —
+        # o faturanin cari borcu ve satis kaydi zaten geri alinmistir.
+        _para_alanlari = ('kalemler', 'ara_toplam', 'kdv_oran', 'tevkifat_oran', 'kur')
+        if f.durum == 'Iptal' and any(a in data for a in _para_alanlari):
+            return jsonify({'ok': False,
+                'mesaj': 'İptal edilmiş faturanın tutarı ve kuru değiştirilemez.'}), 400
         # Mukerrer fatura no kontrolu
         eski_fn = (f.fatura_no or '').strip()
         yeni_fn = (data.get('fatura_no') or '').strip()
@@ -19323,6 +19500,35 @@ def create_app():
             toplam_mal = sum((float(k.get('miktar') or 0) * float(k.get('birim_fiyat') or 0))
                              for k in mk)
             f.alis_maliyeti = q2(toplam_mal)
+
+        # ── FT1 — TUTAR DUZENLEME ──
+        # Kalemler ya da matrah gelirse toplam yeniden kurulur.
+        _tutar_degisti, _tutar_hata = _fatura_tutar_yenile(f, data)
+        if _tutar_hata:
+            db.session.rollback()
+            return jsonify({'ok': False, 'mesaj': _tutar_hata}), 400
+        if _tutar_degisti:
+            # Tahsil edilenin altina dusurmek cariyi eksi bakiyede
+            # birakir; once tahsilat geri alinmali.
+            _tahsil = _fatura_tahsil_edilen(f)
+            if _tahsil > 0 and float(f.toplam or 0) + 0.005 < _tahsil:
+                db.session.rollback()
+                return jsonify({'ok': False, 'error': 'tahsilat_asiyor', 'mesaj':
+                    f'Yeni tutar ({float(f.toplam or 0):,.2f} {f.doviz}) tahsil edilenin '
+                    f'({_tahsil:,.2f} {f.doviz}) altında. Önce tahsilatı geri alın.'}), 400
+
+        # ── FK2 — SOZLESME (OZEL) KURU ──
+        # Bos gonderilirse TCMB kuruna donulur.
+        if 'kur' in data:
+            try:
+                _yeni_kur = float(data.get('kur') or 0)
+            except (TypeError, ValueError):
+                db.session.rollback()
+                return jsonify({'ok': False, 'mesaj': 'Kur sayı olmalı.'}), 400
+            if _yeni_kur < 0:
+                db.session.rollback()
+                return jsonify({'ok': False, 'mesaj': 'Kur negatif olamaz.'}), 400
+            f.kur_ozel = q_kur(_yeni_kur) if _yeni_kur > 0 else None
 
         # FATURA NO DEĞİŞTİYSE: sistem genelinde ilişkili kayıtları güncelle
         if fatura_no_degisti:
@@ -19349,14 +19555,20 @@ def create_app():
         # uzerinden hesaplanan TL karsiligi da eskisi oluyordu.
         # Vade degisince yaslandirma (vadesi gecen) yanlis calisiyordu.
         _cari_mesaj = _fatura_cari_hareketi_esitle(f, _eski)
+        # FT1: karlilik (SatisKaydi) da yeni tutar/tarihle esitlenir.
+        _sk_mesaj = _fatura_satis_kaydi_esitle(f, _eski)
 
         try:
             db.session.commit()
             _mesaj = 'Fatura guncellendi'
             if fatura_no_degisti:
                 _mesaj += f' (no: {yeni_fn}, ilişkili kayıtlar güncellendi)'
+            if _tutar_degisti:
+                _mesaj += f' · tutar {float(f.toplam or 0):,.2f} {f.doviz}'
             if _cari_mesaj:
                 _mesaj += ' · ' + _cari_mesaj
+            if _sk_mesaj:
+                _mesaj += ' · ' + _sk_mesaj
             return jsonify({'ok': True, 'mesaj': _mesaj})
         except Exception as e:
             db.session.rollback()
@@ -20090,9 +20302,19 @@ def create_app():
                 # O tarihte kur yoksa (hafta sonu/tatil) _kur_getir bir
                 # önceki iş gününü verir. Hiç yoksa kesim DURUR —
                 # sessizce bugünün kuruna düşmek yanlış tutar yazardı.
+                # FK2: faturada sozlesme kuru girilmisse TCMB yerine o
+                # kullanilir; hareket MANUEL isaretlenir ki sonraki
+                # duzenlemelerde TCMB kuruyla ezilmesin.
                 _ft = f.fatura_tarihi or date.today()
                 _fdv = (f.doviz or 'USD').upper()
-                _fkur = 1.0 if _fdv == 'TRY' else float(_kur_getir(_fdv, _ft) or 0)
+                _ozel_kur = float(getattr(f, 'kur_ozel', None) or 0)
+                _fkaynak = 'TCMB'
+                if _fdv == 'TRY':
+                    _fkur = 1.0
+                elif _ozel_kur > 0:
+                    _fkur, _fkaynak = _ozel_kur, 'MANUEL'
+                else:
+                    _fkur = float(_kur_getir(_fdv, _ft) or 0)
                 if _fkur <= 0:
                     db.session.rollback()
                     return jsonify({'ok': False, 'mesaj':
@@ -20111,9 +20333,12 @@ def create_app():
                         vade_tarihi=f.vade_tarihi,
                         evrak_no=f.fatura_no,
                         kur=_fkur,
+                        kur_kaynak=_fkaynak,
                         hareket_tarihi=_ft
                     )
                     ekstra = f' Cariye {f.toplam:,.2f} {f.doviz} borc islendi.'
+                    if _fkaynak == 'MANUEL':
+                        ekstra += f' (sozlesme kuru {_fkur:,.4f}).'
                 except ValueError as e:
                     # Cari bulunamadi - fatura kesilemez (borc kritik)
                     db.session.rollback()
