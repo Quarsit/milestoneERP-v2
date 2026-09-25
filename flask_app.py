@@ -10770,9 +10770,49 @@ def create_app():
                 'mesaj': f'Bu siparis "{sip.durum}" durumunda. Silmek icin once IPTAL EDILDI durumuna almalisiniz.'
             }), 400
 
+        # ── SD1 — SILMEDEN ONCE BAGLARI COZ ──
+        # PostgreSQL yabanci anahtarlari ZORLAR (SQLite varsayilan olarak
+        # zorlamaz, bu yuzden hata yalnizca uretimde goruluyordu):
+        # rezervasyon.siparis_kalem_id bir siparis kalemini isaret ettigi
+        # surece kalem silinemez ve istek 500 doner. Once bagli kayitlar
+        # cozulur, sonra siparis silinir.
+        #
+        # SEVKIYAT ve SATIS KAYDI COZULMEZ — onlar gerceklesmis islem.
+        # Boyle bir bag varsa silme REDDEDILIR; sessizce kopartmak
+        # sevkiyati sahipsiz birakirdi.
+        _sevk = Sevkiyat.query.filter_by(siparis_id=siparis_id).count()
+        _satis = SatisKaydi.query.filter_by(siparis_id=siparis_id).count()
+        if _sevk or _satis:
+            _neden = []
+            if _sevk: _neden.append(f'{_sevk} sevkiyat')
+            if _satis: _neden.append(f'{_satis} satış kaydı')
+            return jsonify({'ok': False, 'error': 'bagli_kayit',
+                'mesaj': 'Bu siparişe bağlı ' + ' ve '.join(_neden) + ' var; silinemez. '
+                         'Sipariş iptal durumunda kalabilir ya da önce bağlı kayıtlar kaldırılmalı.'}), 400
+
         serbest = _siparis_stoklarini_serbest_birak(siparis_id, 'Siparis silindi')
         rezler = Rezervasyon.query.filter_by(siparis_id=siparis_id).all()
-        Maliyet.query.filter_by(baglanti_id=siparis_id, baglanti_tip='siparis').delete()
+        for _r in rezler:
+            if not _r.iptal_nedeni:
+                _r.iptal_nedeni = 'Siparis silindi'
+                if hasattr(_r, 'iptal_tarihi'):
+                    _r.iptal_tarihi = datetime.now()
+                if hasattr(_r, 'iptal_eden'):
+                    _r.iptal_eden = session.get('kullanici', 'sistem')
+            _r.siparis_id = None
+            _r.siparis_kalem_id = None
+        # Bagli proformalar siparissiz kalir; "Siparise Donustu" isareti de
+        # geri alinir, yoksa olmayan bir siparise donusmus gorunurdu.
+        for _pf in Proforma.query.filter_by(siparis_id=siparis_id).all():
+            _pf.siparis_id = None
+            if _pf.durum == 'Siparise Donustu':
+                _pf.durum = 'Onaylandi'
+        # Maliyet baglanti_tip'i kayitlarda 'Siparis' (buyuk harfli) tutuluyor;
+        # kucuk harfli filtre hicbir satiri bulmuyor ve maliyetler oksuz kaliyordu.
+        Maliyet.query.filter(
+            Maliyet.baglanti_id == siparis_id,
+            db.func.lower(Maliyet.baglanti_tip) == 'siparis').delete(synchronize_session=False)
+        db.session.flush()
 
         _log_audit('SIL', 'siparis', siparis_id, eski={
             'musteri': sip.musteri, 'durum': sip.durum, 'toplam_tutar': sip.toplam_tutar

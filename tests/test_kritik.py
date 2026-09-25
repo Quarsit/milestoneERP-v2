@@ -27,6 +27,22 @@ os.environ['MILESTONE_ACILIS_ATLA'] = '1'
 sys.path.insert(0, KOK)
 os.chdir(KOK)
 
+from sqlalchemy import event as _event  # noqa: E402
+from sqlalchemy.engine import Engine as _Engine  # noqa: E402
+
+
+# SD1 — YABANCI ANAHTARLAR TESTTE DE ZORLANIR.
+# Uretim PostgreSQL; o yabanci anahtarlari zorluyor. SQLite varsayilan
+# olarak ZORLAMAZ, bu yuzden "silince 500" sinifi hatalar testlerden
+# gecip uretimde patliyordu (siparis silme, SD1).
+@_event.listens_for(_Engine, 'connect')
+def _sqlite_fk_ac(dbapi_con, _kayit):
+    try:
+        dbapi_con.execute('PRAGMA foreign_keys=ON')
+    except Exception:
+        pass
+
+
 import flask_app as fa  # noqa: E402
 from models import (db, Cari, Kullanici, Cek, CariHareket, BlokStok,  # noqa: E402
                     Rezervasyon, Fatura, Kasa, KasaHareket, DovizKur)
@@ -346,3 +362,45 @@ def test_bs1_govdesiz_post_400_vermiyor():
     r = c.post('/api/proforma/PET/siparise_donustur',
                headers={**H, 'Content-Type': 'application/json'})
     assert r.status_code == 200 and r.get_json()['ok'] is True
+
+
+def test_sd1_iptal_siparis_silinince_baglar_cozulur():
+    """SD1: iptal edilen sipariş silinirken rezervasyon ve proforma bağları
+    çözülmeliydi; çözülmediği için PostgreSQL yabancı anahtar hatası verip
+    500 dönüyordu. Sevkiyatı olan sipariş ise silinmemeli."""
+    from models import Proforma, ProformaKalem, Rezervasyon, Siparis, Sevkiyat
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add_all([
+            BlokStok(id='BSD', blok_no='SD-1', cins='TEST', boy=300, yukseklik=150, en=120,
+                     hacim_m3=5.4, tonaj=15, durum='Serbest'),
+            Proforma(id='PSD', musteri='ACIK CARI', cari_id='C1', toplam=500, doviz='USD',
+                     durum='Onaylandi', aktif_surum=True, revizyon_no=0, ana_pi_id='PSD'),
+            ProformaKalem(proforma_id='PSD', urun_tip='BLOK', cins='TEST', blok_no='SD-1',
+                          boy=300, yukseklik=150, en=120, adet=1, miktar=15, birim='ton',
+                          birim_fiyat=100, toplam_fiyat=1500, doviz='USD', sira=1, stok_id='BSD'),
+        ])
+        db.session.commit()
+    sid = c.post('/api/proforma/PSD/siparise_donustur', headers=H, json={}).get_json()['siparis_id']
+    with fa.app.app_context():
+        assert Rezervasyon.query.filter_by(siparis_id=sid).count() == 1
+    assert c.put(f'/api/siparis/{sid}', headers=H, json={'durum': 'Iptal Edildi'}).status_code == 200
+
+    # Sevkiyatı olan sipariş silinemez
+    with fa.app.app_context():
+        db.session.add(Sevkiyat(id='SVK-SD', siparis_id=sid, musteri='ACIK CARI', durum='Hazirlaniyor'))
+        db.session.commit()
+    r = c.delete(f'/api/siparis/{sid}', headers=H)
+    assert r.status_code == 400 and 'sevkiyat' in r.get_json()['mesaj'].lower()
+    with fa.app.app_context():
+        Sevkiyat.query.filter_by(id='SVK-SD').delete()
+        db.session.commit()
+
+    r = c.delete(f'/api/siparis/{sid}', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    with fa.app.app_context():
+        assert Siparis.query.get(sid) is None
+        rez = Rezervasyon.query.filter_by(stok_id='BSD').first()
+        assert rez.siparis_id is None and rez.siparis_kalem_id is None and rez.iptal_nedeni
+        pf = Proforma.query.get('PSD')
+        assert pf.siparis_id is None and pf.durum != 'Siparise Donustu'
