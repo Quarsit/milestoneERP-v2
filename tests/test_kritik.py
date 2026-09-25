@@ -665,3 +665,61 @@ def test_ft1_fk2_fatura_tutari_ve_sozlesme_kuru():
         Fatura.query.get('FFT').durum = 'Iptal'
         db.session.commit()
     assert c.put('/api/fatura/FFT', headers=H, json={'kur': 44}).status_code == 400
+
+
+def test_am1_siparis_avansi_faturaya_mahsup_edilir():
+    """AM1: siparişe gelen avans, fatura kesilince otomatik mahsup
+    edilmeli — fatura 'ödenecek' tutarı avans düşülmüş göstermeli,
+    cari bakiyesi değişmemeli. İptalde avans siparişe dönmeli."""
+    from models import Fatura, CariHareket, Siparis, DovizKur
+    with fa.app.app_context():
+        if not DovizKur.query.filter_by(doviz='USD', tarih=date(2026, 3, 2)).first():
+            db.session.add(DovizKur(doviz='USD', tarih=date(2026, 3, 2),
+                                    alis=30.0, satis=30.0, efektif=30.0))
+        db.session.add(Siparis(id='SIPAM', musteri='ACIK CARI', cari_id='C1',
+                               doviz='USD', toplam_tutar=50000, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 3, 1)))
+        db.session.add(Fatura(id='FAM', fatura_no='F-AM', musteri='ACIK CARI', cari_id='C1',
+                              siparis_id='SIPAM', toplam=50000, ara_toplam=50000,
+                              doviz='USD', durum='Taslak', yon='satis',
+                              satis_tipi='ihracat', fatura_tipi='teklif',
+                              fatura_tarihi=date(2026, 3, 2)))
+        db.session.add(CariHareket(id='HAVANS', cari_id='C1', cari_unvan='ACIK CARI',
+                                   islem_tip='Avans Tahsilati', borc=0, alacak=15000,
+                                   doviz='USD', kur_uygulanan=30.0, borc_try=0,
+                                   alacak_try=450000, kaynak='tahsilat',
+                                   siparis_id='SIPAM', baglanti_tip='siparis',
+                                   baglanti_id='SIPAM', hareket_tarihi=date(2026, 3, 1)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    def _bakiye():
+        with fa.app.app_context():
+            hs = CariHareket.query.filter_by(cari_id='C1').all()
+            return round(sum(float(h.borc or 0) - float(h.alacak or 0) for h in hs), 2)
+
+    onceki_bakiye = _bakiye()
+    r = c.post('/api/fatura/FAM/durum', headers=H, json={'durum': 'Kesildi'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert 'mahsup' in r.get_json()['mesaj']
+
+    # Fatura 15.000 tahsil edilmiş, 35.000 açık görünmeli
+    t = c.get('/api/fatura/FAM/tahsilatlar').get_json()
+    assert t['tahsil_edilen'] == 15000 and t['kalan'] == 35000
+    assert t['avans_mahsup'] == 15000 and t['avans_acik'] == 0
+    with fa.app.app_context():
+        assert Fatura.query.get('FAM').durum == 'Kismi Tahsil'
+        # Cari bakiyesi: fatura borcu kadar arttı, mahsup onu DEĞİŞTİRMEDİ
+        assert round(_bakiye() - onceki_bakiye, 2) == 50000.0
+        # Siparişte açık avans kalmadı (aynı avans ikinci kez mahsup edilemez)
+        av = fa.app.view_functions  # noqa: F841 (kapsam kontrolü değil)
+    assert c.post('/api/fatura/FAM/avans_mahsup', headers=H).status_code == 400
+
+    # ── İPTAL: mahsup geri alınır, avans siparişe döner ──
+    r = c.post('/api/fatura/FAM/durum', headers=H, json={'durum': 'Iptal'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(baglanti_id='FAM', kaynak='avans_mahsup').count() == 0
+        assert CariHareket.query.filter_by(kaynak='avans_mahsup').count() == 0
+        assert round(_bakiye() - onceki_bakiye, 2) == 0.0
+    assert c.get('/api/fatura/FAM/tahsilatlar').get_json()['avans_acik'] == 15000

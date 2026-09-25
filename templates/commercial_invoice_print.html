@@ -204,6 +204,20 @@ tbody td.c{text-align:center}
         <span>{{ _ceviri('belge.total_label', dil) }} {{ p.doviz or 'USD' }}</span>
         <span>{{ '{:,.2f}'.format(p.toplam or 0) }}</span>
       </div>
+      {#- AM1: alınan avans ve ÖDENECEK tutar. Avans zaten tahsil
+          edilmiş paradır; belgede görünmezse müşteri toplamın tamamını
+          ödemesi gerektiğini sanır. Yalnızca cari hesaba MAHSUP EDİLMİŞ
+          tutar yazılır — belge ile ekstre birbirini tutsun. -#}
+      {% if avans_bilgi and avans_bilgi.mahsup > 0 %}
+      <div class="tot-row" style="color:#c0392b">
+        <span>{{ _ceviri('belge.advance_received', dil) }}</span>
+        <span>- {{ '{:,.2f}'.format(avans_bilgi.mahsup) }}</span>
+      </div>
+      <div class="tot-final" style="border-top:1px solid #232824">
+        <span>{{ _ceviri('belge.balance_due', dil) }} {{ avans_bilgi.doviz }}</span>
+        <span>{{ '{:,.2f}'.format(avans_bilgi.kalan) }}</span>
+      </div>
+      {% endif %}
     </div>
   </div>
 

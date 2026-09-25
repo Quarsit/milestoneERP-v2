@@ -105,6 +105,9 @@
            önce görünsün. Eskiden yalnızca ekstrede, satır altında
            görünüyordu. -->
       <div id="kTl" style="margin-top:12px;font-size:.82rem;line-height:1.5"></div>
+      <!-- AM1: siparişte avans varsa kesimde mahsup edilecek — kullanıcı
+           kesmeden ÖNCE ödenecek tutarı görsün. -->
+      <div id="kAvans" style="margin-top:10px;font-size:.82rem;line-height:1.5"></div>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="kesKapat()">Vazgeç</button>
@@ -587,6 +590,8 @@ async function detayAc(id) {
     <div class="alan-grid">
       ${alan('Toplam', para(f.toplam, f.doviz), true)}
       ${alan('Tahsil Edilen', para(t.tahsil_edilen, f.doviz), true)}
+      ${(t.avans_mahsup || 0) > 0 ? alan('Avans Mahsubu', `<span style="color:var(--verde)">${para(t.avans_mahsup, f.doviz)}</span>`, true) : ''}
+      ${(t.avans_acik || 0) > 0 ? alan('Açık Avans', `<span style="color:var(--kehribar);font-weight:700">${para(t.avans_acik, t.avans_doviz || f.doviz)}</span>`, true) : ''}
       ${alan('Kalan', `<span style="${(t.kalan || 0) > 0 ? 'color:var(--kirmizi);font-weight:700' : 'color:var(--verde);font-weight:700'}">${para(t.kalan, f.doviz)}</span>`)}
       ${alan('Vade', kacar(f.vade_tarihi || '—'), true)}
       ${alan('Fatura Tarihi', kacar(f.fatura_tarihi || '—'), true)}
@@ -626,6 +631,12 @@ async function detayAc(id) {
     eylem.push(`<button class="blok-btn birincil" onclick="kesAc('${kacar(id)}')">Fatura no gir & kes</button>`);
   if (['Kesildi', 'Kismi Tahsil'].includes(f.durum) && (t.kalan || 0) > 0 && yazabilir('fatura'))
     eylem.push(`<button class="blok-btn birincil" onclick="tahAc('${kacar(id)}')">Tahsilat gir</button>`);
+  // AM1: siparişte mahsup bekleyen avans varsa tek tıkla faturaya işlenir
+  if ((t.avans_acik || 0) > 0 && ['Kesildi', 'Kismi Tahsil'].includes(f.durum)
+      && (t.kalan || 0) > 0 && yazabilir('fatura'))
+    eylem.push(`<button class="blok-btn birincil" onclick="avansMahsupEt('${kacar(id)}')">Avansı mahsup et · ${para(Math.min(t.avans_acik, t.kalan), t.avans_doviz || f.doviz)}</button>`);
+  if ((t.avans_mahsup || 0) > 0 && f.durum !== 'Iptal' && yazabilir('fatura'))
+    eylem.push(`<button class="blok-btn" onclick="avansMahsupGeriAl('${kacar(id)}')">Avans mahsubunu geri al</button>`);
   if (f.durum !== 'Iptal' && yazabilir('fatura'))
     eylem.push(`<button class="blok-btn" onclick="duzAc('${kacar(id)}')">Bilgileri düzenle</button>`);
   // F6: Taslak faturanın ETTN'i olamaz — GİB'e gitmemiştir.
@@ -666,6 +677,24 @@ async function faturaIptal(id) {
   } catch (e) { /* tahsilat_var vb. hatalar api() içinde kullanıcıya gösterilir */ }
 }
 
+/* ── AM1: avans mahsubu ── */
+async function avansMahsupEt(id) {
+  try {
+    const d = await api(`/api/fatura/${encodeURIComponent(id)}/avans_mahsup`, { method: 'POST' });
+    bildir(d.mesaj || 'Avans faturaya mahsup edildi');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* api() bildiriyor */ }
+}
+
+async function avansMahsupGeriAl(id) {
+  if (!await onayla('Avans mahsubu geri alınsın mı?\n\nAvans bağlı olduğu siparişe döner, fatura yeniden açık görünür.')) return;
+  try {
+    const d = await api(`/api/fatura/${encodeURIComponent(id)}/avans_mahsup`, { method: 'DELETE' });
+    bildir(d.mesaj || 'Mahsup geri alındı');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* */ }
+}
+
 /* ── Fatura kes ── */
 function kesAc(id) {
   SECILI = TUM.find(x => x.id === id);
@@ -675,6 +704,35 @@ function kesAc(id) {
   document.getElementById('kVade').value = SECILI.vade_tarihi || '';
   document.getElementById('kesModal').classList.add('acik');
   kesTlGoster(SECILI);
+  kesAvansGoster(SECILI);
+}
+
+/* AM1 — siparişteki açık avans kesimde faturaya mahsup edilir.
+   Kullanıcı "Kes" demeden önce ödenecek tutarı görmeli; sürpriz
+   olmasın diye burada yazıyoruz. */
+async function kesAvansGoster(f) {
+  const kutu = document.getElementById('kAvans');
+  if (!kutu) return;
+  kutu.innerHTML = '';
+  if (!f.siparis_id) return;
+  try {
+    const a = await api(`/api/siparis/${encodeURIComponent(f.siparis_id)}/avans_bakiyesi`);
+    const avans = Number(a && a.avans) || 0;
+    if (!(avans > 0) || (a.yon && a.yon !== 'alinan')) return;
+    const dv = a.doviz || f.doviz || 'USD';
+    const toplam = Number(f.toplam) || 0;
+    const mahsup = Math.min(avans, toplam);
+    const kalan = Math.max(0, toplam - mahsup);
+    const ayni = (dv || '').toUpperCase() === (f.doviz || 'USD').toUpperCase();
+    kutu.innerHTML = ayni
+      ? `<div style="background:var(--notr-bg);border-radius:var(--r-kucuk);padding:9px 12px">
+           Bu siparişte <b>${para(avans, dv)}</b> avans var — kesildiğinde faturaya mahsup edilecek.<br>
+           <span style="color:var(--soluk)">Fatura ${para(toplam, f.doviz)} · mahsup ${para(mahsup, dv)} ·
+           <b>ödenecek ${para(kalan, f.doviz)}</b></span></div>`
+      : `<div class="not" style="background:var(--kehribar-bg);color:var(--kehribar)">
+           Siparişteki ${para(avans, dv)} avans fatura dövizinden (${f.doviz}) farklı —
+           otomatik mahsup edilmeyecek, kestikten sonra elle girin.</div>`;
+  } catch (e) { /* avans bilgisi alınamadıysa sessiz geç */ }
 }
 
 /* FK1: sunucu fatura kesilirken FATURA TARİHİNİN TCMB döviz alış

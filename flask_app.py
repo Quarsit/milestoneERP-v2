@@ -139,6 +139,7 @@ def create_app():
         'belge.discount_fixed': ('Discount', 'İskonto'),
         'belge.item_discounts': ('Item Discounts', 'Kalem İskontoları'),
         'belge.advance_fixed': ('Advance', 'Avans'),
+        'belge.advance_received': ('Less: Advance Received', 'Alınan Avans (mahsup)'),
         'belge.balance_due': ('Balance Due', 'Kalan Bakiye'),
         'belge.bank': ('Bank', 'Banka'),
         'belge.bank_details': ('Bank Details', 'Banka Bilgileri'),
@@ -276,6 +277,7 @@ def create_app():
     _ISLEM_EN = {'Tahsilat': 'Collection', 'Odeme': 'Payment', 'Ödeme': 'Payment',
                  'Avans Tahsilati': 'Advance Received', 'Avans Odemesi': 'Advance Paid',
                  'Avans Devri (Giriş)': 'Advance Transfer (In)', 'Avans Devri (Çıkış)': 'Advance Transfer (Out)',
+                 'Avans Mahsubu': 'Advance Applied',
                  'Fatura (Satis)': 'Sales Invoice', 'Fatura (Alis)': 'Purchase Invoice',
                  'Iade (Satis)': 'Sales Return', 'Iade (Alis)': 'Purchase Return',
                  'Vade Farki (Borc)': 'Late Fee (Debit)', 'Vade Farki (Alacak)': 'Late Fee (Credit)',
@@ -387,6 +389,8 @@ def create_app():
         ('alış', 'purchase'),
         ('Verilen avans', 'Advance paid'),
         ('Avans', 'Advance'),
+        ('faturasına mahsup edildi', 'applied to invoice'),
+        ('siparişindeki avanstan mahsup', 'applied from the advance on order'),
         ('siparişine devredildi', 'transferred to order'),
         ('siparişinden devredildi', 'transferred from order'),
         ('iptal', 'cancelled'),
@@ -540,6 +544,8 @@ def create_app():
     import re as _re_alt
     ALT_YOL_DESENLERI = [
         (_re_alt.compile(r'^/api/fatura/[^/]+/tahsilat'), 'fatura.tahsilat'),
+        # AM1: avans mahsubu da bir tahsilat islemidir
+        (_re_alt.compile(r'^/api/fatura/[^/]+/avans_mahsup'), 'fatura.tahsilat'),
         (_re_alt.compile(r'^/api/tahsilat'), 'fatura.tahsilat'),
         # TT1: toplu tahsilat tekli tahsilatla AYNI yetkiyi ister
         (_re_alt.compile(r'^/api/cari/[^/]+/toplu_tahsilat'), 'fatura.tahsilat'),
@@ -3237,6 +3243,7 @@ def create_app():
                 ('ebatli_stok', 'mense', "VARCHAR(50) DEFAULT 'TURKIYE'"),
                 ('proforma_kalem', 'mense', 'VARCHAR(50)'),
                 ('proforma', 'iskonto_aciklama', 'VARCHAR(200)'),   # IA1
+                ('faturalar', 'kur_ozel', 'NUMERIC(18,6)'),         # FK2
             ]
             for tablo, sutun, tip in eklenecek:
                 if tablo not in mufettis.get_table_names():
@@ -3260,6 +3267,42 @@ def create_app():
                             "UPDATE proforma SET revizyon_no = 0 WHERE revizyon_no IS NULL"))
                         baglanti.execute(_text(
                             f"UPDATE proforma SET aktif_surum = {_bool_true} WHERE aktif_surum IS NULL"))
+
+            # ── SD2 — GENEL SUTUN DENETIMI ──
+            # Yukaridaki liste ELLE tutuluyordu. Modele bir sutun
+            # eklenip listeye yazilmazsa (ya da Alembic gocu unutulursa)
+            # o tabloyu okuyan HER SAYFA 500 veriyordu: fatura listesi
+            # bos, genel arama sonucsuz. Olculdu (25.09, kur_ozel).
+            #
+            # Burada modellerin tamami gercek semayla karsilastirilir ve
+            # EKSIK sutunlar eklenir. Yalnizca EKLER: sutun silmez, tip
+            # degistirmez, NOT NULL koymaz (dolu tabloda ALTER patlar) —
+            # yani veriye dokunmaz. Gocun yerini almaz, ag olarak durur.
+            mufettis = _inspect(db.engine)          # onbellek tazelenir
+            _mevcut_tablolar = set(mufettis.get_table_names())
+            for _tablo in db.metadata.sorted_tables:
+                if _tablo.name not in _mevcut_tablolar:
+                    continue
+                _var = {s['name'] for s in mufettis.get_columns(_tablo.name)}
+                for _kolon in _tablo.columns:
+                    if _kolon.name in _var or _kolon.primary_key:
+                        continue
+                    try:
+                        _tip = _kolon.type.compile(db.engine.dialect)
+                    except Exception:
+                        continue                     # derlenemeyen tip: gece atla
+                    try:
+                        with db.engine.begin() as baglanti:
+                            baglanti.execute(_text(
+                                f'ALTER TABLE {_tablo.name} ADD COLUMN {_kolon.name} {_tip}'))
+                        print(f'Migrasyon (SD2): {_tablo.name}.{_kolon.name} '
+                              f'{_tip} sutunu eklendi.')
+                        app.logger.warning(
+                            f'[SD2] Eksik sutun eklendi: {_tablo.name}.{_kolon.name}. '
+                            f'Goc calistirilmamis olabilir: python goc.py uygula')
+                    except Exception as _e:
+                        app.logger.error(
+                            f'[SD2] {_tablo.name}.{_kolon.name} eklenemedi: {_e}')
         except Exception as hata:
             print(f'Migrasyon uyarisi: {hata}')
 
@@ -9042,7 +9085,12 @@ def create_app():
         Döner: (net_avans, doviz)  — pozitif = kullanılabilir avans var
         """
         hrk = CariHareket.query.filter_by(cari_id=cari_id, siparis_id=siparis_id).filter(
-            CariHareket.islem_tip.in_(['Avans Tahsilati', 'Avans Odemesi', 'Avans Devri (Giriş)', 'Avans Devri (Çıkış)'])
+            CariHareket.islem_tip.in_(['Avans Tahsilati', 'Avans Odemesi',
+                                       'Avans Devri (Giriş)', 'Avans Devri (Çıkış)',
+                                       # AM1: faturaya mahsup edilen avans ARTIK
+                                       # acik degildir; bakiyeden dusmezse ayni
+                                       # avans ikinci kez mahsup edilebilirdi.
+                                       'Avans Mahsubu'])
         ).all()
         net = 0.0
         doviz = 'USD'
@@ -16839,6 +16887,31 @@ def create_app():
             ProformaKalem.sira, ProformaKalem.id).all()
         return p, kalemler, None
 
+    def _belge_avans_bilgisi(proforma):
+        """AM1 — ticari faturada gosterilecek AVANS bilgisi.
+
+        ZINCIR: proforma → Fatura.proforma_id → faturaya mahsup edilen
+        avans hareketleri. Belgeye yalnizca GERCEKTEN mahsup edilmis
+        tutar yazilir; cari hesapla birebir ayni olsun diye. Mahsup
+        yoksa belge eskisi gibi basar.
+
+        Doner: {'mahsup': 15000.0, 'kalan': 35000.0, 'doviz': 'USD'} ya da None
+        """
+        if not proforma:
+            return None
+        f = Fatura.query.filter_by(proforma_id=proforma.id).filter(
+            Fatura.durum != 'Iptal').first()
+        if not f:
+            return None
+        mahsup = db.session.query(db.func.sum(CariHareket.alacak)).filter(
+            CariHareket.baglanti_tip == 'fatura', CariHareket.baglanti_id == f.id,
+            CariHareket.kaynak == 'avans_mahsup').scalar() or 0
+        mahsup = q2(mahsup)
+        if mahsup <= 0:
+            return None
+        return {'mahsup': mahsup, 'kalan': q2(float(f.toplam or 0) - mahsup),
+                'doviz': f.doviz or proforma.doviz or 'USD'}
+
     def _sozlesme_kuru_bul(proforma):
         """Proformaya bagli faturada SOZLESME KURU kullanildi mi?
 
@@ -16967,6 +17040,7 @@ def create_app():
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
                                sozlesme_kuru=_sozlesme_kuru_bul(p),   # SK3
+                               avans_bilgi=_belge_avans_bilgisi(p),   # AM1
                                toplam_yazili=toplam_yazili)
 
     def _html_to_pdf(html_str):
@@ -17677,6 +17751,7 @@ def create_app():
                                atanmamis_kalem=_kont_atanmamis,
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
                                sozlesme_kuru=_sozlesme_kuru_bul(p),   # SK3
+                               avans_bilgi=_belge_avans_bilgisi(p),   # AM1
                                toplam_yazili=toplam_yazili)
 
 
@@ -20250,6 +20325,7 @@ def create_app():
 
         eski_durum = f.durum
         ekstra = ''
+        _av_tutar = 0          # AM1: kesimde mahsup edilen avans
 
         # ── KURAL: Tahsilat durumlarina gecis icin once Kesildi olmali ──
         tahsilat_durumlari = ['Kismi Tahsil', 'Tahsil Edildi']
@@ -20344,6 +20420,17 @@ def create_app():
                     db.session.rollback()
                     return jsonify({'ok': False, 'mesaj': str(e)}), 400
 
+            # ── AM1: SİPARİŞ AVANSI FATURAYA MAHSUP ──
+            # Avans zaten tahsil edilmiş paradır; fatura kesilince
+            # ödenecek tutardan düşmelidir. Yapılmazsa fatura tamamen
+            # açık görünür ve vadesi gelince gecikmişe düşer.
+            _av_tutar, _av_doviz, _av_mesaj = _fatura_avans_mahsubu(f)
+            if _av_mesaj:
+                ekstra += ' ' + _av_mesaj + '.'
+            # Durum, asagida f.durum = yeni_durum ile yazilacagi icin
+            # tahsilat durumu ORADAN SONRA hesaplanir (yoksa 'Kesildi'
+            # mahsubun yazdigi 'Kismi Tahsil'i ezer).
+
             # SatisKaydi olustur (kar hesabi - karlilik bu kayitlardan beslenir)
             sk_adet, sk_hata = _fatura_satis_kaydi_olustur(fatura_id)
             if sk_hata:
@@ -20377,10 +20464,15 @@ def create_app():
         # önce tahsilatları geri almalı (müşteri ödemesi cari hesapta asılı kalmasın).
         if yeni_durum == 'Iptal' and eski_durum in ('Kesildi', 'Kismi Tahsil', 'Tahsil Edildi'):
             # Faturaya bağlı aktif tahsilat (alacak hareketi) var mı?
+            # AM1: avans mahsubu GERÇEK tahsilat değildir — parayı
+            # müşteri zaten avans olarak göndermişti. İptalde mahsup
+            # kendiliğinden geri alınır (avans siparişe döner), bu
+            # yüzden iptali engellememeli.
             aktif_tahsilat = CariHareket.query.filter(
                 CariHareket.baglanti_tip == 'fatura',
                 CariHareket.baglanti_id == fatura_id,
-                CariHareket.alacak > 0).first()
+                CariHareket.alacak > 0,
+                db.func.coalesce(CariHareket.kaynak, '') != 'avans_mahsup').first()
             # Çek yoluyla tahsilat var mı?
             # YAMA H3: PASIF cekler de elenir.
             # Gecmiste 'Sil' ile pasife cekilmis ama durumu eski kalmis
@@ -20397,11 +20489,16 @@ def create_app():
                              '(ve varsa cekleri) geri almalisiniz. Boylece musteri odemesi '
                              'cari hesapta asili kalmaz.'}), 400
 
+            # AM1: önce mahsup geri alınır — avans siparişe döner.
+            _geri, _geri_dv = _fatura_avans_mahsup_geri_al(f)
             borc_hareket = CariHareket.query.filter_by(
                 baglanti_tip='fatura', baglanti_id=fatura_id, kaynak='fatura').first()
             if borc_hareket:
                 db.session.delete(borc_hareket)
                 ekstra = ' Borc hareketi geri alindi.'
+            if _geri > 0:
+                ekstra += (f' {_geri:,.2f} {_geri_dv} avans mahsubu geri alindi '
+                           f'(avans siparise dondu).')
             # Bu faturadan olusan SatisKaydi'lari sil (karlilikten dus)
             sat_kayitlar = SatisKaydi.query.filter_by(fatura_id=fatura_id).all()
             for sk in sat_kayitlar:
@@ -20432,6 +20529,9 @@ def create_app():
                     app.logger.info(f'[SENKRO] Fatura {fatura_id} Iptal -> Proforma {pf.id}: Faturalandi -> Onaylandi')
 
         f.durum = yeni_durum
+        # AM1: avans mahsup edildiyse fatura kismen/tamamen kapanmistir.
+        if yeni_durum == 'Kesildi' and _av_tutar > 0:
+            _fatura_tahsilat_durumu(fatura_id)
         _log_audit('DURUM', 'fatura', fatura_id,
                    eski={'durum': eski_durum}, yeni={'durum': yeni_durum})
         ok, hata = _safe_commit(f'Fatura durum: {eski_durum}->{yeni_durum}')
@@ -20563,6 +20663,128 @@ def create_app():
             gorulen.add(h.id)
             toplam += _hareket_fatura_esdegeri(h, f_doviz)
         return q2(toplam)
+
+    def _fatura_avans_mahsubu(f):
+        """AM1 — siparişe gelen AVANSI faturaya mahsup eder.
+
+        NEDEN: Müşteri 50.000 USD'lik siparişe 15.000 USD avans
+        gönderdiyse, o siparişin faturası kesildiğinde ödenecek tutar
+        35.000 USD'dir. Eskiden avans cari hesapta ALACAK olarak,
+        fatura ayrı bir BORÇ olarak duruyordu: net bakiye doğruydu
+        ama fatura "hiç tahsil edilmemiş" görünüyor, vadesi gelince
+        gecikmiş listesine düşüyor ve belgede avanstan söz edilmiyordu.
+
+        NASIL (avans devriyle aynı desen — iki bağlı hareket):
+          • SİPARİŞE  borç  → o siparişteki avans kapanır
+          • FATURAYA  alacak → fatura o kadar tahsil edilmiş sayılır
+        Net cari bakiye DEĞİŞMEZ; para yeniden sayılmaz, yalnızca
+        hangi belgeye ait olduğu kaydedilir. Kasaya dokunulmaz —
+        para zaten avans alınırken kasaya girmişti.
+
+        SINIRLAR: mahsup, faturanın kalanını aşamaz (fazla avans
+        siparişte açık kalır) ve avans fatura dövizinden farklıysa
+        yapılmaz (çevrim kararı kullanıcınındır).
+
+        Döner: (tutar, doviz, mesaj)
+        """
+        # NOT: durum kontrolu CAGIRANA ait. Kesim akisinda f.durum
+        # bu noktada hala 'Taslak'tir (durum en sonda yazilir);
+        # burada 'Taslak' elenirse mahsup hic calismaz.
+        if not f.siparis_id or f.durum == 'Iptal':
+            return 0, (f.doviz or 'USD'), ''
+        cari = (Cari.query.get(f.cari_id) if f.cari_id else None) or _cari_bul(f.musteri)
+        if not cari:
+            return 0, (f.doviz or 'USD'), ''
+        net, avans_doviz = _siparis_avans_bakiyesi(cari.id, f.siparis_id)
+        f_doviz = (f.doviz or 'USD').upper()
+        if net <= 0.005:
+            return 0, f_doviz, ''
+        if (avans_doviz or f_doviz).upper() != f_doviz:
+            return 0, avans_doviz, (
+                f'{net:,.2f} {avans_doviz} avans fatura dövizinden ({f_doviz}) '
+                f'farklı — mahsup edilmedi, elle girin')
+        kalan = q2(float(f.toplam or 0) - _fatura_odenen_esdeger(f))
+        if kalan <= 0.005:
+            return 0, f_doviz, ''
+        tutar = q2(min(net, kalan))
+        if tutar <= 0.005:
+            return 0, f_doviz, ''
+
+        # Kur: faturanın kendi borç hareketiyle AYNI olmalı; yoksa
+        # mahsup TL tarafında yapay kur farkı yaratır.
+        borc_h = CariHareket.query.filter_by(
+            baglanti_tip='fatura', baglanti_id=f.id).filter(CariHareket.borc > 0).first()
+        kur = float(getattr(borc_h, 'kur_uygulanan', 0) or 0) or \
+            float(getattr(f, 'kur_ozel', None) or 0) or \
+            (1.0 if f_doviz == 'TRY' else float(_kur_getir(f_doviz, f.fatura_tarihi) or 0))
+        if kur <= 0:
+            kur = 1.0
+        tarih = f.fatura_tarihi or date.today()
+        try_kar, _ = _try_karsilik(tutar, f_doviz, kur)
+        kullanici = session.get('kullanici', 'sistem')
+
+        kapanan = CariHareket(
+            id=_yeni_id('HR'), hareket_tarihi=tarih, cari_id=cari.id,
+            cari_unvan=cari.unvan, islem_tip='Avans Mahsubu',
+            borc=tutar, alacak=0, doviz=f_doviz, kur_uygulanan=q_kur(kur),
+            kur_kaynak=(getattr(borc_h, 'kur_kaynak', None) or 'TCMB'),
+            borc_try=q2(try_kar), alacak_try=0, vade_tarihi=tarih,
+            evrak_no=f.fatura_no,
+            aciklama=f'Avans {f.fatura_no or f.id} faturasına mahsup edildi',
+            kaynak='avans_mahsup', baglanti_tip='siparis', baglanti_id=f.siparis_id,
+            siparis_id=f.siparis_id, kullanici=kullanici)
+        db.session.add(kapanan)
+        db.session.flush()
+        odeme = CariHareket(
+            id=_yeni_id('HR'), hareket_tarihi=tarih, cari_id=cari.id,
+            cari_unvan=cari.unvan, islem_tip='Avans Mahsubu',
+            borc=0, alacak=tutar, doviz=f_doviz, kur_uygulanan=q_kur(kur),
+            kur_kaynak=(getattr(borc_h, 'kur_kaynak', None) or 'TCMB'),
+            borc_try=0, alacak_try=q2(try_kar), vade_tarihi=tarih,
+            evrak_no=f.fatura_no,
+            aciklama=f'{f.siparis_id} siparişindeki avanstan mahsup',
+            kaynak='avans_mahsup', baglanti_tip='fatura', baglanti_id=f.id,
+            kapanis_hareket_id=kapanan.id, kullanici=kullanici)
+        db.session.add(odeme)
+        db.session.flush()
+        _log_audit('EKLE', 'avans_mahsup', f.id,
+                   yeni={'siparis': f.siparis_id, 'tutar': float(tutar),
+                         'doviz': f_doviz, 'hareketler': [kapanan.id, odeme.id]},
+                   aciklama=f'Avans mahsubu: {f.siparis_id} → {f.fatura_no or f.id}')
+        return tutar, f_doviz, f'{tutar:,.2f} {f_doviz} avans faturaya mahsup edildi'
+
+    def _fatura_avans_mahsup_geri_al(f):
+        """AM1 — mahsubu geri alır: iki bacak da silinir, avans siparişe
+        döner. Fatura iptalinde ve elle 'mahsubu geri al' isteğinde
+        çağrılır. Tek bacağı silmek bakiyeyi bozardı, o yüzden ikisi
+        birlikte silinir."""
+        odemeler = CariHareket.query.filter_by(
+            baglanti_tip='fatura', baglanti_id=f.id, kaynak='avans_mahsup').all()
+        if not odemeler:
+            return 0, ''
+        toplam, doviz = 0.0, (f.doviz or 'USD')
+        for o in odemeler:
+            toplam += float(o.alacak or 0)
+            doviz = o.doviz or doviz
+            if o.kapanis_hareket_id:
+                esi = CariHareket.query.get(o.kapanis_hareket_id)
+                if esi is not None:
+                    db.session.delete(esi)
+            db.session.delete(o)
+        _log_audit('SIL', 'avans_mahsup', f.id,
+                   eski={'tutar': toplam, 'doviz': doviz},
+                   aciklama=f'Avans mahsubu geri alındı: {f.fatura_no or f.id}')
+        return q2(toplam), doviz
+
+    def _fatura_acik_avans(f):
+        """Faturanın siparişinde mahsup edilmeyi bekleyen avans."""
+        if not f.siparis_id:
+            return 0, (f.doviz or 'USD')
+        cari = (Cari.query.get(f.cari_id) if f.cari_id else None) or _cari_bul(f.musteri)
+        if not cari:
+            return 0, (f.doviz or 'USD')
+        net, dv = _siparis_avans_bakiyesi(cari.id, f.siparis_id)
+        return (q2(net) if net > 0 else 0), dv
 
     def _fatura_tahsilat_durumu(fatura_id):
         """Faturanın tahsilat durumunu hesaplar ve durumunu günceller.
@@ -20846,14 +21068,62 @@ def create_app():
         } for h in hareketler]
 
         toplam_tahsil = sum(t['esdeger'] or 0 for t in tahsilatlar)
+        # AM1: siparişte mahsup bekleyen avans ve bu faturaya mahsup edilmiş tutar
+        _av_acik, _av_doviz = _fatura_acik_avans(f)
+        _av_mahsup = q2(sum(float(h.alacak or 0) for h in hareketler
+                            if (h.kaynak or '') == 'avans_mahsup'))
         return jsonify({
             'ok': True,
             'fatura_toplam': f.toplam or 0,
             'doviz': _f_doviz,
             'tahsil_edilen': q2(toplam_tahsil),
             'kalan': q2((f.toplam or 0) - toplam_tahsil),
+            'avans_acik': _av_acik, 'avans_doviz': _av_doviz,
+            'avans_mahsup': _av_mahsup,
+            'siparis_id': f.siparis_id,
             'tahsilatlar': tahsilatlar
         })
+
+    @app.route('/api/fatura/<fatura_id>/avans_mahsup', methods=['POST'])
+    def api_fatura_avans_mahsup(fatura_id):
+        """AM1 — siparişteki açık avansı bu faturaya mahsup eder.
+
+        Kesimde otomatik yapılır; bu uç, kesimden SONRA gelen avanslar
+        ve 25.09 öncesi kesilmiş faturalar için elle tetiklemeyi sağlar.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        f = Fatura.query.get(fatura_id)
+        if not f:
+            return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
+        if f.durum in ('Taslak', 'Iptal'):
+            return jsonify({'ok': False,
+                'mesaj': 'Yalnızca kesilmiş faturaya avans mahsup edilir.'}), 400
+        tutar, doviz, mesaj = _fatura_avans_mahsubu(f)
+        if tutar <= 0:
+            return jsonify({'ok': False,
+                'mesaj': mesaj or 'Bu siparişte mahsup edilecek açık avans yok.'}), 400
+        _fatura_tahsilat_durumu(fatura_id)
+        ok, hata = _safe_commit(f'Avans mahsubu: {fatura_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'tutar': tutar, 'doviz': doviz, 'mesaj': mesaj})
+
+    @app.route('/api/fatura/<fatura_id>/avans_mahsup', methods=['DELETE'])
+    def api_fatura_avans_mahsup_geri(fatura_id):
+        """AM1 — mahsubu geri alır; avans siparişe döner."""
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        f = Fatura.query.get(fatura_id)
+        if not f:
+            return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
+        tutar, doviz = _fatura_avans_mahsup_geri_al(f)
+        if tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Bu faturada avans mahsubu yok.'}), 400
+        _fatura_tahsilat_durumu(fatura_id)
+        ok, hata = _safe_commit(f'Avans mahsubu geri alindi: {fatura_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj':
+                        f'{tutar:,.2f} {doviz} mahsup geri alındı, avans siparişe döndü.'})
 
     @app.route('/api/tahsilat/<hareket_id>', methods=['DELETE'])
     def api_tahsilat_sil(hareket_id):
