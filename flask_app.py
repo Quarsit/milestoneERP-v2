@@ -139,7 +139,7 @@ def create_app():
         'belge.discount_fixed': ('Discount', 'İskonto'),
         'belge.item_discounts': ('Item Discounts', 'Kalem İskontoları'),
         'belge.advance_fixed': ('Advance', 'Avans'),
-        'belge.advance_received': ('Less: Advance Received', 'Alınan Avans (mahsup)'),
+        'belge.advance_received': ('Less: Advance Received', 'Alınan Avans'),
         'belge.balance_due': ('Balance Due', 'Kalan Bakiye'),
         'belge.bank': ('Bank', 'Banka'),
         'belge.bank_details': ('Bank Details', 'Banka Bilgileri'),
@@ -9773,9 +9773,27 @@ def create_app():
             kur_farki = _kur_farki_hesapla_ve_olustur(
                 hareket, islet=bool((request.get_json(silent=True) or {}).get('kur_farki_islet')))
 
+        # ── AM1 — KESİMDEN SONRA GELEN AVANS da faturaya işlenir ──
+        # Avans genelde faturadan ÖNCE gelir ve kesimde mahsup edilir.
+        # Sonradan gelirse fatura açık kalıyor, avans ayrı duruyordu.
+        # Siparişin TEK açık faturası varsa mahsup burada yapılır;
+        # birden fazlaysa hangisine gideceği kullanıcının kararıdır
+        # (fatura ekranındaki "Avansı mahsup et" düğmesi).
+        _avans_notu = ''
+        if islem_tip in ('Avans Tahsilati', 'Avans Tahsilatı') and siparis_id:
+            _acik = Fatura.query.filter_by(siparis_id=siparis_id).filter(
+                Fatura.durum.in_(['Kesildi', 'Kismi Tahsil'])).all()
+            if len(_acik) == 1:
+                db.session.flush()
+                _amt, _adv, _amsg = _fatura_avans_mahsubu(_acik[0])
+                if _amt > 0:
+                    _fatura_tahsilat_durumu(_acik[0].id)
+                    _avans_notu = (f', {_amsg} '
+                                   f'({_acik[0].fatura_no or _acik[0].id})')
+
         db.session.commit()
 
-        msg = 'Cari hareket eklendi' + kasa_notu
+        msg = 'Cari hareket eklendi' + kasa_notu + _avans_notu
         if fatura_id:
             msg += f', Fatura {fatura_id} ({fatura_yon}) otomatik olusturuldu (durumu Kesildi)'
         # EK2: onaysiz durumda SOZLUK doner (kayit olusmadi),
@@ -16887,6 +16905,51 @@ def create_app():
             ProformaKalem.sira, ProformaKalem.id).all()
         return p, kalemler, None
 
+    def _siparis_alinan_avans(siparis_id, cari_id, doviz):
+        """AM2 — bir siparişe MÜŞTERİDEN gelen toplam avans.
+
+        Belgede (PI) "alınan avans / ödenecek kalan" satırları bundan
+        beslenir. Devir ÇIKIŞLARI düşülür (o para artık başka siparişin
+        avansıdır); faturaya MAHSUP edilen avans DÜŞÜLMEZ — müşteri o
+        parayı yine bu iş için ödedi, belgede görünmeye devam etmeli.
+
+        Belge tek dövizlidir: proformanın dövizinden farklı avanslar
+        sayılmaz (yaklaşık kurla belgeye rakam yazmak yanlış olur).
+        """
+        if not siparis_id or not cari_id:
+            return 0
+        dv = (doviz or 'USD').upper()
+        hrk = CariHareket.query.filter_by(cari_id=cari_id, siparis_id=siparis_id).filter(
+            CariHareket.islem_tip.in_(['Avans Tahsilati', 'Avans Tahsilatı',
+                                       'Avans Devri (Giriş)', 'Avans Devri (Çıkış)'])).all()
+        toplam = 0.0
+        for h in hrk:
+            if (h.doviz or dv).upper() != dv:
+                continue
+            if (h.islem_tip or '') == 'Avans Devri (Çıkış)':
+                toplam -= float(h.borc or 0)
+            else:
+                toplam += float(h.alacak or 0)
+        return q2(max(toplam, 0))
+
+    def _belge_alinan_avans(proforma):
+        """AM2 — proformada gösterilecek avans bilgisi.
+
+        Doner: {'alinan': 15000.0, 'kalan': 35000.0, 'doviz': 'USD'} ya da None
+        """
+        if not proforma or not getattr(proforma, 'siparis_id', None):
+            return None
+        cari = (Cari.query.get(proforma.cari_id) if proforma.cari_id else None) \
+            or _cari_bul(proforma.musteri)
+        if not cari:
+            return None
+        dv = (proforma.doviz or 'USD').upper()
+        alinan = _siparis_alinan_avans(proforma.siparis_id, cari.id, dv)
+        if alinan <= 0:
+            return None
+        return {'alinan': alinan,
+                'kalan': q2(float(proforma.toplam or 0) - alinan), 'doviz': dv}
+
     def _belge_avans_bilgisi(proforma):
         """AM1 — ticari faturada gosterilecek AVANS bilgisi.
 
@@ -17041,6 +17104,7 @@ def create_app():
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
                                sozlesme_kuru=_sozlesme_kuru_bul(p),   # SK3
                                avans_bilgi=_belge_avans_bilgisi(p),   # AM1
+                               avans_alinan=_belge_alinan_avans(p),   # AM2
                                toplam_yazili=toplam_yazili)
 
     def _html_to_pdf(html_str):
@@ -17752,6 +17816,7 @@ def create_app():
                                toplam_adet=toplam_adet, toplam_agirlik=toplam_agirlik,
                                sozlesme_kuru=_sozlesme_kuru_bul(p),   # SK3
                                avans_bilgi=_belge_avans_bilgisi(p),   # AM1
+                               avans_alinan=_belge_alinan_avans(p),   # AM2
                                toplam_yazili=toplam_yazili)
 
 

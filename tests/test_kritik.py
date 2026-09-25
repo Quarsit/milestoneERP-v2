@@ -723,3 +723,66 @@ def test_am1_siparis_avansi_faturaya_mahsup_edilir():
         assert CariHareket.query.filter_by(kaynak='avans_mahsup').count() == 0
         assert round(_bakiye() - onceki_bakiye, 2) == 0.0
     assert c.get('/api/fatura/FAM/tahsilatlar').get_json()['avans_acik'] == 15000
+
+
+def test_am2_avans_proformada_ve_kesim_sonrasinda():
+    """AM2: sipariş hesabına giren avans PROFORMADA 'alınan avans /
+    ödenecek kalan' olarak görünmeli. AM1-ek: fatura kesildikten SONRA
+    gelen avans da faturaya otomatik işlenmeli."""
+    from models import Fatura, CariHareket, Siparis, Proforma, ProformaKalem, DovizKur, Kasa
+    with fa.app.app_context():
+        if not DovizKur.query.filter_by(doviz='USD', tarih=date(2026, 3, 2)).first():
+            db.session.add(DovizKur(doviz='USD', tarih=date(2026, 3, 2),
+                                    alis=30.0, satis=30.0, efektif=30.0))
+        if not Kasa.query.filter_by(ad='Test USD').first():
+            db.session.add(Kasa(ad='Test USD', doviz='USD', bakiye=0))
+        db.session.add(Siparis(id='SIPAM2', musteri='ACIK CARI', cari_id='C1', doviz='USD',
+                               toplam_tutar=50000, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 3, 1)))
+        db.session.flush()
+        db.session.add(Proforma(id='PIAM2', siparis_id='SIPAM2', musteri='ACIK CARI',
+                                cari_id='C1', toplam=50000, doviz='USD',
+                                durum='Onaylandi', tur='ihracat'))
+        db.session.flush()
+        db.session.add(ProformaKalem(proforma_id='PIAM2', sira=1, urun_tip='PLAKA',
+                                     cins='Emperador', miktar=500, birim='m2',
+                                     birim_fiyat=100, toplam_fiyat=50000, doviz='USD', adet=25))
+        db.session.add(CariHareket(id='HAV2', cari_id='C1', cari_unvan='ACIK CARI',
+                                   islem_tip='Avans Tahsilati', borc=0, alacak=15000,
+                                   doviz='USD', kur_uygulanan=30.0, borc_try=0,
+                                   alacak_try=450000, kaynak='tahsilat', siparis_id='SIPAM2',
+                                   baglanti_tip='siparis', baglanti_id='SIPAM2',
+                                   hareket_tarihi=date(2026, 3, 1)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    # ── PROFORMA: alınan avans ve ödenecek kalan basılmalı ──
+    g = c.get('/api/proforma/PIAM2/html?mod=pi').get_data(as_text=True)
+    assert 'Advance Received' in g          # yabancı cari → İngilizce belge
+    assert 'Balance Due' in g
+    assert '15,000.00' in g and '35,000.00' in g
+
+    # ── Fatura kesildikten SONRA gelen avans ──
+    with fa.app.app_context():
+        db.session.add(Fatura(id='FAM2', fatura_no='F-AM2', musteri='ACIK CARI', cari_id='C1',
+                              siparis_id='SIPAM2', proforma_id='PIAM2', toplam=50000,
+                              ara_toplam=50000, doviz='USD', durum='Kesildi', yon='satis',
+                              satis_tipi='ihracat', fatura_tarihi=date(2026, 3, 2)))
+        db.session.add(CariHareket(id='HBORC2', cari_id='C1', cari_unvan='ACIK CARI',
+                                   islem_tip='Satis Faturasi', borc=50000, alacak=0,
+                                   doviz='USD', kur_uygulanan=30.0, borc_try=1500000,
+                                   alacak_try=0, kaynak='fatura', baglanti_tip='fatura',
+                                   baglanti_id='FAM2', hareket_tarihi=date(2026, 3, 2)))
+        db.session.commit()
+        kasa_id = Kasa.query.filter_by(ad='Test USD').first().id
+    # mevcut avans faturaya işlensin (kesim öncesi gelen)
+    assert c.post('/api/fatura/FAM2/avans_mahsup', headers=H).status_code == 200
+    # yeni avans: cari hareket girilir → tek açık faturaya kendiliğinden işlenir
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'C1', 'islem_tip': 'Avans Tahsilati', 'alacak': 10000,
+        'doviz': 'USD', 'vade_tarihi': '2026-03-05', 'hareket_tarihi': '2026-03-05',
+        'siparis_id': 'SIPAM2', 'kasa_id': kasa_id})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert 'mahsup' in r.get_json()['mesaj']
+    t = c.get('/api/fatura/FAM2/tahsilatlar').get_json()
+    assert t['tahsil_edilen'] == 25000 and t['kalan'] == 25000 and t['avans_acik'] == 0

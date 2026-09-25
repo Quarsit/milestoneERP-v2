@@ -243,6 +243,21 @@ tbody td.c{text-align:center}
         <span>{{ '{:,.2f}'.format(p.toplam or 0) }}</span>
       </div>
 
+      {#- AM2: GERÇEKTEN ALINAN AVANS.
+          Müşteri avans gönderdikten sonra çoğu zaman "ödediğimi gösteren
+          proforma" ister. Sipariş hesabına avans girdiyse belge artık
+          alınan avansı ve ödenecek kalanı yazar; girmediyse aşağıdaki
+          ESKİ davranış sürer (proformadaki avans ŞARTI: %30 gibi). -#}
+      {% if avans_alinan and avans_alinan.alinan > 0 %}
+      <div class="tot-row" style="margin-top:4px;color:#c0392b;font-weight:600">
+        <span>{{ _ceviri('belge.advance_received', dil) }}</span>
+        <span>- {{ '{:,.2f}'.format(avans_alinan.alinan) }}</span>
+      </div>
+      <div class="tot-row" style="font-weight:700;border-top:1px solid #232824;padding-top:3px">
+        <span>{{ _ceviri('belge.balance_due', dil) }} {{ avans_alinan.doviz }}</span>
+        <span>{{ '{:,.2f}'.format(avans_alinan.kalan) }}</span>
+      </div>
+      {% else %}
       {% set avans = p.avans_tutari or 0 %}
       {% if avans > 0 %}
       <div class="tot-row" style="margin-top:4px;color:#232824;font-weight:600">
@@ -250,6 +265,7 @@ tbody td.c{text-align:center}
         <span>{{ '{:,.2f}'.format(avans) }}</span>
       </div>
       <div class="tot-row" style="font-weight:600"><span>{{ _ceviri('belge.balance_due', dil) }}</span><span>{{ '{:,.2f}'.format((p.toplam or 0) - avans) }}</span></div>
+      {% endif %}
       {% endif %}
 
     </div>
