@@ -188,6 +188,13 @@ tbody td.c{text-align:center}
 
   <div class="totals-wrap">
     <div class="totals-box">
+      {# IA1: genel iskonto ve gerekçesi — ticari faturada da görünür #}
+      {% if (p.iskonto_sabit or 0) > 0 %}
+      <div class="tot-row" style="color:#c0392b"><span>{{ _ceviri('belge.discount', dil) }}</span><span>- {{ '{:,.2f}'.format(p.iskonto_sabit or 0) }}</span></div>
+      {% if p.iskonto_aciklama %}
+      <div class="tot-row" style="color:#555;font-size:8px"><span>{{ p.iskonto_aciklama }}</span><span></span></div>
+      {% endif %}
+      {% endif %}
       {% if p.kdv_oran and p.kdv_oran > 0 and p.tur == 'yurt_ici' %}
       {% set net_kdv_oncesi = (p.toplam or 0) / (1 + p.kdv_oran/100) %}
       <div class="tot-row"><span>{{ _ceviri('belge.subtotal_ex_vat', dil) }}</span><span>{{ '{:,.2f}'.format(net_kdv_oncesi) }}</span></div>

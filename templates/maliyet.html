@@ -93,6 +93,7 @@
        (flask_app.py) ama sekmesi yoktu — yalnizca "Tumu"nde
        gorunuyorlardi. KDV izleme yaparken tam bu kayitlara bakiliyor. -->
   <button class="cip" data-t="KDV">KDV</button>
+  <button class="cip" data-t="Vergi">Diğer Vergiler</button>
   <button class="cip" data-t="Diğer">Diğer</button>
   <!-- ML1: sistem her stok icin sanal bir 'Alış Bedeli' satiri
        uretiyor (maliyet_tip='Alış Bedeli'). Digerleri gibi
@@ -168,6 +169,8 @@
             <option>Kesim / Fason / Üretim</option>
             <option>Gümrük/Liman Masrafı</option>
             <option>Komisyon</option>
+            <option>KDV</option>
+            <option>Diğer Vergiler</option>
             <option>Diğer</option>
           </select>
         </div>
@@ -214,6 +217,8 @@
             <option>Gümrük/Liman Masrafı</option>
             <option>Kesim / Fason / Üretim</option>
             <option>Komisyon</option>
+            <option>KDV</option>
+            <option>Diğer Vergiler</option>
             <option>Diğer</option>
           </select>
         </div>
@@ -427,7 +432,8 @@ function ciz() {
 
 
 
-  const RENK = { 'Nakliye':'--mavi', 'Gümrük':'--kehribar', 'Kesim':'--verde', 'Komisyon':'--cizgi-koyu' };
+  const RENK = { 'Nakliye':'--mavi', 'Gümrük':'--kehribar', 'Kesim':'--verde', 'Komisyon':'--cizgi-koyu',
+                 'KDV':'--kirmizi', 'Vergi':'--kirmizi' };
   const renkBul = t => {
     for (const k in RENK) if ((t || '').includes(k)) return RENK[k];
     return '--cizgi-koyu';
@@ -516,6 +522,8 @@ function detayAc(id) {
     eylem.push(`<button class="blok-btn" onclick="location.href='/stok'">Stoğu aç</button>`);
   // Sanal "Alış Bedeli" satırı silinemez — stok kartından gelir
   if (yazabilir('maliyet') && !m.sanal)
+    eylem.push(`<button class="blok-btn" onclick="maliyetDuzenle('${kacar(id)}')">Düzenle</button>`);
+  if (yazabilir('maliyet') && !m.sanal)
     eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="maliyetSil('${kacar(id)}')">Sil</button>`);
   eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
   const ustBilgi = [kacar(m.baglanti_no || m.baglanti_id || ''), para(m.tutar, m.doviz)]
@@ -533,6 +541,35 @@ function detayAc(id) {
   if ((m.baglanti_tip || '').toLowerCase() === 'stok' && m.baglanti_id) {
     urunMaliyetiYukle(m.baglanti_id, m.stok_tip);
   }
+}
+
+/* MD1 — MALİYET DÜZENLEME.
+   Uç nokta (PUT /api/maliyet/<id>) vardı ama onu çağıran hiçbir şey
+   yoktu: yanlış girilen tutar ya da tip için kayıt siliniyor, yeniden
+   giriliyordu. Silme bağlı stoğun birim maliyetini yeniden hesaplıyor,
+   ara adımda maliyet eksik görünüyordu. */
+const MALIYET_TIPLERI = ['Nakliye (Ocak-Fabrika)', 'Gümrük/Liman Masrafı',
+  'Kesim / Fason / Üretim', 'Komisyon', 'KDV', 'Diğer Vergiler', 'Diğer'];
+
+async function maliyetDuzenle(id) {
+  const m = TUM.find(x => x.id === id);
+  if (!m) return;
+  const tipler = MALIYET_TIPLERI.includes(m.maliyet_tip)
+    ? MALIYET_TIPLERI : [m.maliyet_tip || 'Diğer', ...MALIYET_TIPLERI];
+  const f = await formSor('Maliyeti düzenle', [
+    { ad: 'maliyet_tip', etiket: 'Maliyet Tipi', tip: 'select', secenekler: tipler, deger: m.maliyet_tip || 'Diğer' },
+    { ad: 'tutar', etiket: 'Tutar', tip: 'number', deger: m.tutar, zorunlu: true },
+    { ad: 'doviz', etiket: 'Döviz', tip: 'select', secenekler: ['USD', 'EUR', 'TRY'], deger: m.doviz || 'USD' },
+    { ad: 'maliyet_tarihi', etiket: 'Tarih', tip: 'date', deger: (m.maliyet_tarihi || '').slice(0, 10) },
+    { ad: 'fatura_no', etiket: 'Fatura No', deger: m.fatura_no || '' },
+    { ad: 'aciklama', etiket: 'Açıklama', deger: m.aciklama || '' },
+  ], { metin: 'Bağlı stok ya da siparişin birim maliyeti kaydettikten sonra yeniden hesaplanır.' });
+  if (!f) return;
+  try {
+    await api(`/api/maliyet/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(f) });
+    bildir('Maliyet güncellendi');
+    cekmeceKapat(); await yukle();
+  } catch (e) { /* api() mesajı gösterir */ }
 }
 
 async function maliyetSil(id) {

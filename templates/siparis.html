@@ -292,6 +292,10 @@
           <select id="spUretici" onchange="stokSuz()" style="max-width:160px"></select>
           <select id="spCins" onchange="stokSuz()" style="max-width:140px"></select>
           <select id="spBlok" onchange="stokSuz()" style="max-width:120px"></select>
+          <!-- YF1: yüzey/özellik süzgeci. Aynı cinsin cilalı ve honed
+               plakaları tek listede karışıyordu; 200 plakalık depoda
+               doğru olanı seçmek göz kararına kalıyordu. -->
+          <select id="spOzellik" onchange="stokSuz()" style="max-width:150px"></select>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
           <button type="button" class="mini-btn" onclick="stokHepsi(true)">Tümünü seç</button>
@@ -722,12 +726,14 @@ function stokSecenekDoldur() {
   const fU = (document.getElementById('spUretici') || {}).value || '';
   const fC = (document.getElementById('spCins') || {}).value || '';
   const fB = (document.getElementById('spBlok') || {}).value || '';
+  const fO = (document.getElementById('spOzellik') || {}).value || '';
   /* Kendi süzgecini kendisi daraltmaz; yoksa bir değer seçilince
      listede yalnız o kalır ve başkasına geçilemez. */
   const gecer = (x, haric) =>
     (haric === 'uretici' || !fU || (x.uretici || '') === fU) &&
     (haric === 'cins'    || !fC || (x.cins || '') === fC) &&
-    (haric === 'blok_no' || !fB || (x.blok_no || '') === fB);
+    (haric === 'blok_no' || !fB || (x.blok_no || '') === fB) &&
+    (haric === 'ozellik' || !fO || (x.ozellik || '') === fO);
   const dold = (id, alan, etiket) => {
     const sel = document.getElementById(id);
     if (!sel) return;
@@ -742,6 +748,7 @@ function stokSecenekDoldur() {
   dold('spUretici', 'uretici', 'üretici');
   dold('spCins', 'cins', 'cins');
   dold('spBlok', 'blok_no', 'blok no');
+  dold('spOzellik', 'ozellik', 'yüzey/özellik');
 }
 
 function stokSuz() { stokSecenekDoldur(); stokCiz(); }
@@ -751,10 +758,12 @@ function stokSuzulmus() {
   const fU = (document.getElementById('spUretici') || {}).value || '';
   const fC = (document.getElementById('spCins') || {}).value || '';
   const fB = (document.getElementById('spBlok') || {}).value || '';
+  const fO = (document.getElementById('spOzellik') || {}).value || '';
   return SERBEST_STOK.filter(s =>
     (!fU || (s.uretici || '') === fU) &&
     (!fC || (s.cins || '') === fC) &&
     (!fB || (s.blok_no || '') === fB) &&
+    (!fO || (s.ozellik || '') === fO) &&
     (!ara || [s.cins, s.blok_no, s.id, s.ozellik].filter(Boolean)
       .join(' ').toLocaleLowerCase('tr').includes(ara)));
 }

@@ -212,13 +212,23 @@ tbody td.c{text-align:center}
       <div class="tot-row" style="color:#c0392b"><span>{{ _ceviri('belge.item_discounts', dil) }}</span><span>- {{ '{:,.2f}'.format(ns.toplam_brut - ns.toplam_net) }}</span></div>
       {% endif %}
 
+      {# IA1: SABİT TUTARLI genel iskonto HİÇ BASILMIYORDU.
+         Ekran iskontoyu daima `iskonto_sabit` alanına yazıyor, yüzde
+         alanı (`iskonto`) 0 kalıyordu; koşul yalnızca yüzdeye baktığı
+         için indirim belgede görünmüyor, yalnızca toplam düşük
+         çıkıyordu. Alıcı indirimi göremiyordu. #}
       {% set genel_isk = p.iskonto or 0 %}
-      {% if genel_isk > 0 %}
+      {% set genel_sabit = p.iskonto_sabit or 0 %}
+      {% if genel_isk > 0 or genel_sabit > 0 %}
       <div class="tot-row"><span>{{ _ceviri('belge.subtotal', dil) }}</span><span>{{ '{:,.2f}'.format(ns.toplam_net) }}</span></div>
-      {% if p.iskonto_tip == 'SAB' %}
-      <div class="tot-row" style="color:#c0392b"><span>{{ _ceviri('belge.discount_fixed', dil) }}</span><span>- {{ '{:,.2f}'.format(p.iskonto_sabit or 0) }}</span></div>
+      {% if genel_sabit > 0 or p.iskonto_tip == 'SAB' %}
+      <div class="tot-row" style="color:#c0392b"><span>{{ _ceviri('belge.discount_fixed', dil) }}</span><span>- {{ '{:,.2f}'.format(genel_sabit) }}</span></div>
       {% else %}
       <div class="tot-row" style="color:#c0392b"><span>{{ _ceviri('belge.discount', dil) }} ({{ "%.1f"|format(genel_isk) }}%)</span><span>- {{ '{:,.2f}'.format(ns.toplam_net * genel_isk / 100) }}</span></div>
+      {% endif %}
+      {# IA1: iskonto gerekçesi #}
+      {% if p.iskonto_aciklama %}
+      <div class="tot-row" style="color:#555;font-size:8px"><span>{{ p.iskonto_aciklama }}</span><span></span></div>
       {% endif %}
       {% endif %}
 

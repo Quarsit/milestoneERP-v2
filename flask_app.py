@@ -3154,6 +3154,7 @@ def create_app():
                 ('plaka_stok', 'mense', "VARCHAR(50) DEFAULT 'TURKIYE'"),
                 ('ebatli_stok', 'mense', "VARCHAR(50) DEFAULT 'TURKIYE'"),
                 ('proforma_kalem', 'mense', 'VARCHAR(50)'),
+                ('proforma', 'iskonto_aciklama', 'VARCHAR(200)'),   # IA1
             ]
             for tablo, sutun, tip in eklenecek:
                 if tablo not in mufettis.get_table_names():
@@ -4695,7 +4696,7 @@ def create_app():
     @app.route('/api/stok/ekle', methods=['POST'])
     def api_stok_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         tip = data.get('tip')
 
         # ── ZORUNLU ALAN DOĞRULAMASI ──
@@ -4992,7 +4993,7 @@ def create_app():
         Fatura no + tarih girilince tedarikçi cariye borç (alış faturası) oluşturur.
         """
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         stok = _stok_getir(stok_id, tip.upper())
         if not stok:
             return jsonify({'ok': False, 'mesaj': 'Stok bulunamadı'}), 404
@@ -5036,7 +5037,7 @@ def create_app():
         tarihini ve durumu günceller.
         """
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         stok = _stok_getir(stok_id, tip.upper())
         if not stok:
             return jsonify({'ok': False, 'mesaj': 'Stok bulunamadı'}), 404
@@ -5055,7 +5056,7 @@ def create_app():
     @app.route('/api/stok/<stok_id>', methods=['PUT'])
     def api_stok_guncelle(stok_id):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         for model in [BlokStok, PlakaStok, EbatliStok]:
             stok = model.query.get(stok_id)
             if stok:
@@ -5391,7 +5392,7 @@ def create_app():
         if not _yetki_var_mi('stok', 'yazma'):
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         tip = (data.get('tip') or '').upper()
         idler = data.get('stok_idler') or []
 
@@ -5501,7 +5502,7 @@ def create_app():
     @app.route('/api/stok/toplu_import', methods=['POST'])
     def api_stok_toplu_import():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         plakalar = data.get('plakalar', [])
         if not plakalar: return jsonify({'ok': False, 'mesaj': 'Plaka listesi boş'}), 400
         eklenen = 0
@@ -5839,7 +5840,7 @@ def create_app():
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
         if not _crm_cari_al(cari_id):
             return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         ozet = (d.get('ozet') or '').strip()
         if not ozet:
             return jsonify({'ok': False, 'mesaj': 'Özet zorunlu'}), 400
@@ -5876,7 +5877,7 @@ def create_app():
         a = db.session.get(CariAktivite, aktivite_id)
         if not a or not _cari_gorulebilir_mi(a.cari_id):
             return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         if 'ozet' in d:
             _o = (d.get('ozet') or '').strip()
             if not _o:
@@ -5921,7 +5922,7 @@ def create_app():
         a = db.session.get(CariAktivite, aktivite_id)
         if not a or not _cari_gorulebilir_mi(a.cari_id):
             return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         a.tamamlandi = bool(d.get('tamamlandi', True))
         a.tamamlanma = date.today() if a.tamamlandi else None
         ok, hata = _safe_commit(f'Aktivite tamamlama: {aktivite_id}')
@@ -6022,7 +6023,7 @@ def create_app():
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
         if not _crm_cari_al(cari_id):
             return jsonify({'ok': False, 'mesaj': 'Müşteri bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         ad = (d.get('ad') or '').strip()
         if not ad:
             return jsonify({'ok': False, 'mesaj': 'Kişi adı zorunlu'}), 400
@@ -6054,7 +6055,7 @@ def create_app():
         k = db.session.get(CariKisi, kisi_id)
         if not k or not _cari_gorulebilir_mi(k.cari_id):
             return jsonify({'ok': False, 'mesaj': 'Kişi bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         if 'ad' in d:
             _a = (d.get('ad') or '').strip()
             if not _a:
@@ -6127,7 +6128,7 @@ def create_app():
             return jsonify({'ok': False,
                             'mesaj': 'Erişim yalnızca müşterinin sorumlusu ya '
                                      'da yönetici tarafından verilebilir'}), 403
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         kim = (d.get('kullanici') or '').strip()
         if not kim:
             return jsonify({'ok': False, 'mesaj': 'Kullanıcı zorunlu'}), 400
@@ -6199,7 +6200,7 @@ def create_app():
     @app.route('/api/cari', methods=['POST'])
     def api_cari_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if not data.get('unvan'): return jsonify({'ok': False, 'mesaj': 'Unvan zorunlu'}), 400
 
         risk = data.get('risk_limiti')
@@ -6259,7 +6260,7 @@ def create_app():
         c = Cari.query.get(cari_id)
         if not c:
             return jsonify({'ok': False, 'mesaj': 'Cari bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         _eski = {'unvan': c.unvan, 'cari_tip': c.cari_tip, 'ulke': c.ulke}
 
         # GORUNURLUK DOGRULAMASI
@@ -6565,7 +6566,7 @@ def create_app():
         cari = Cari.query.get(cari_id)
         if not cari:
             return jsonify({'ok': False, 'mesaj': 'Cari bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         idler = [str(x) for x in (d.get('fatura_idler') or []) if x]
         if not idler:
             return jsonify({'ok': False, 'mesaj': 'Fatura seçilmedi'}), 400
@@ -7874,7 +7875,7 @@ def create_app():
         """
         try:
             if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-            data = request.json or {}
+            data = request.get_json(silent=True) or {}
 
             kesim_yon = (data.get('kesim_yon') or '').upper()
             kaynak_ids = data.get('kaynak_ids') or []
@@ -8722,7 +8723,7 @@ def create_app():
         p = Proforma.query.get(proforma_id)
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
-        yeni_sip = request.args.get('siparis_id') or (request.json or {}).get('siparis_id')
+        yeni_sip = request.args.get('siparis_id') or (request.get_json(silent=True) or {}).get('siparis_id')
         if not yeni_sip:
             return jsonify({'ok': False, 'mesaj': 'siparis_id parametresi gerekli'}), 400
         sip = Siparis.query.get(yeni_sip)
@@ -8746,7 +8747,7 @@ def create_app():
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
 
-        yeni_tip = (request.args.get('tip') or (request.json or {}).get('tip') or '').strip()
+        yeni_tip = (request.args.get('tip') or (request.get_json(silent=True) or {}).get('tip') or '').strip()
         if yeni_tip not in ('stoklu', 'transit', 'teklif'):
             return jsonify({'ok': False, 'mesaj': 'Gecerli tip: stoklu, transit, teklif'}), 400
 
@@ -8770,7 +8771,7 @@ def create_app():
         f = Fatura.query.get(fatura_id)
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
-        yeni_doviz = (request.args.get('doviz') or (request.json or {}).get('doviz') or 'TRY').upper()
+        yeni_doviz = (request.args.get('doviz') or (request.get_json(silent=True) or {}).get('doviz') or 'TRY').upper()
         eski_doviz = f.doviz
         f.doviz = yeni_doviz
         # Kur farki modu da otomatik
@@ -8805,7 +8806,7 @@ def create_app():
         f = Fatura.query.get(fatura_id)
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
-        yeni_sip = request.args.get('siparis_id') or (request.json or {}).get('siparis_id')
+        yeni_sip = request.args.get('siparis_id') or (request.get_json(silent=True) or {}).get('siparis_id')
         if not yeni_sip:
             return jsonify({'ok': False, 'mesaj': 'siparis_id parametresi gerekli (?siparis_id=SIP-XXX)'}), 400
         sip = Siparis.query.get(yeni_sip)
@@ -8993,7 +8994,7 @@ def create_app():
         Hem alınan (müşteri) hem verilen (tedarikçi) avanslar için çalışır.
         """
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kaynak_sip_id = (data.get('kaynak_siparis_id') or '').strip()
         hedef_sip_id = (data.get('hedef_siparis_id') or '').strip()
         tutar = q3(float(data.get('tutar') or 0))
@@ -9073,7 +9074,7 @@ def create_app():
     @app.route('/api/cari/hareket', methods=['POST'])
     def api_hareket_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if not data.get('cari_id') or not data.get('islem_tip') or not data.get('vade_tarihi'):
             return jsonify({'ok': False, 'mesaj': 'Cari, işlem tipi ve vade tarihi zorunlu'}), 400
 
@@ -9640,7 +9641,7 @@ def create_app():
         kur_farki = None
         if islem_tip in tahsilat_odeme_tipleri:
             kur_farki = _kur_farki_hesapla_ve_olustur(
-                hareket, islet=bool((request.json or {}).get('kur_farki_islet')))
+                hareket, islet=bool((request.get_json(silent=True) or {}).get('kur_farki_islet')))
 
         db.session.commit()
 
@@ -9669,7 +9670,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         hareket = CariHareket.query.get(hareket_id)
         if not hareket: return jsonify({'ok': False, 'mesaj': 'Hareket bulunamadı'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         # ── FATURA KAYDI KORUMASI ──
         # DELETE bu kaydi koruyor ama PUT korumuyordu. Olculdu:
@@ -10116,7 +10117,7 @@ def create_app():
     def api_siparis_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         import json as _json
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         # Parent sipariş
         sip = Siparis(
@@ -10208,7 +10209,7 @@ def create_app():
     def api_sicak_satis():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         import json as _json
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         musteri = (data.get('musteri') or '').strip()
         if not musteri:
@@ -10440,7 +10441,7 @@ def create_app():
         import json as _json
         sip = Siparis.query.get(siparis_id)
         if not sip: return jsonify({'ok': False, 'mesaj': 'Bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         # Sipariş seviyesi alanlar
         for alan in ['musteri', 'doviz', 'odeme_sekli', 'teslim_sekli', 'aciklama',
@@ -10543,7 +10544,7 @@ def create_app():
             # Eşik Ayarlar'dan gelir (0 = kapı kapalı). Yönetici zorla geçebilir (?zorla=1).
             if eski_durum == 'Onaylandi' and yeni_durum == 'Uretimde':
                 esik = _uretim_avans_esigi()
-                zorla = str((request.json or {}).get('zorla', '')).lower() in ('1', 'true', 'evet')
+                zorla = str((request.get_json(silent=True) or {}).get('zorla', '')).lower() in ('1', 'true', 'evet')
                 if esik > 0 and not zorla:
                     td = _siparis_tahsilat_durumu(siparis_id)
                     if td and td['yuzde'] < esik:
@@ -10646,7 +10647,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if session.get('rol') not in ('admin', 'ADMIN'):
             return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         def _yaz(deger_ad, deger):
             k = Veriler.query.filter_by(kategori='smtp_ayar', deger=deger_ad).first()
             if not k:
@@ -10667,7 +10668,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if session.get('rol') not in ('admin', 'ADMIN'):
             return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
-        alici = (request.json or {}).get('alici', '').strip()
+        alici = (request.get_json(silent=True) or {}).get('alici', '').strip()
         if not alici or '@' not in alici:
             return jsonify({'ok': False, 'mesaj': 'Test icin gecerli bir alici e-posta girin.'}), 400
 
@@ -10743,7 +10744,7 @@ def create_app():
         if session.get('rol') not in ('admin', 'ADMIN'):
             return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
         try:
-            yuzde = float((request.json or {}).get('yuzde', 0))
+            yuzde = float((request.get_json(silent=True) or {}).get('yuzde', 0))
         except (ValueError, TypeError):
             yuzde = 0
         yuzde = max(0, min(100, yuzde))
@@ -10921,7 +10922,7 @@ def create_app():
     @app.route('/api/rezervasyon', methods=['POST'])
     def api_rezervasyon_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         stok_ids = data.get('stok_idler', [])
         if not stok_ids:
             return jsonify({'ok': False, 'mesaj': 'Stok seçilmedi'}), 400
@@ -11852,7 +11853,7 @@ def create_app():
             return jsonify({'error': 'Unauthorized'}), 401
         if not _yetki_var_mi('kasa', 'yazma'):
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         t = _parse_date(d.get('tarih'))
         if not t:
             return jsonify({'ok': False, 'mesaj': 'Tarih zorunlu (YYYY-AA-GG)'}), 400
@@ -11895,7 +11896,7 @@ def create_app():
         p = NakitPlan.query.get(plan_id)
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Kalem bulunamadi'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         p.gerceklesti = bool(d.get('gerceklesti', True))
         if p.gerceklesti:
             p.gerceklesme_tarihi = _parse_date(d.get('tarih')) or date.today()
@@ -11939,7 +11940,7 @@ def create_app():
             return jsonify({'error': 'Unauthorized'}), 401
         if not _yetki_var_mi('kasa', 'yazma'):
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         ad = (d.get('ad') or '').strip()
         if not ad:
             return jsonify({'ok': False, 'mesaj': 'Gider adi zorunlu'}), 400
@@ -12006,7 +12007,7 @@ def create_app():
         g = SabitGider.query.get(gider_id)
         if not g:
             return jsonify({'ok': False, 'mesaj': 'Gider bulunamadi'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         for alan in ('ad', 'kategori', 'aciklama'):
             if alan in d:
                 setattr(g, alan, (d.get(alan) or '').strip() or None)
@@ -12058,7 +12059,7 @@ def create_app():
         if not g:
             return jsonify({'ok': False, 'mesaj': 'Gider bulunamadı'}), 404
 
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         try:
             yeni_tutar = float(d.get('tutar'))
         except (TypeError, ValueError):
@@ -12127,7 +12128,7 @@ def create_app():
         if not g:
             return jsonify({'ok': False, 'mesaj': 'Gider bulunamadı'}), 404
 
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         bitis = _parse_date(d.get('tarih'))
         if not bitis:
             return jsonify({'ok': False,
@@ -12389,7 +12390,7 @@ def create_app():
     @app.route('/api/maliyet', methods=['POST'])
     def api_maliyet_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         doviz       = data.get('doviz', 'USD')
         maliyet_tip = data.get('maliyet_tip')
         # Bağlantı tipini küçük harfe normalleştir — bazı ekranlar 'Stok',
@@ -12483,10 +12484,28 @@ def create_app():
                          'Degistirmek icin stok kartindaki alis fiyatini duzenleyin.'}), 400
         m = Maliyet.query.get(maliyet_id)
         if not m: return jsonify({'ok': False, 'mesaj': 'Bulunamadı'}), 404
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if 'maliyet_tip' in data: m.maliyet_tip = data['maliyet_tip']
-        if 'tutar' in data: m.tutar = data['tutar']
+        if 'tutar' in data:
+            # MD1: tutar SAYIYA cevrilir. Ekrandan metin gelirse
+            # ('1.250,00') carpma islemleri patlardi.
+            try:
+                m.tutar = float(str(data['tutar']).replace(',', '.'))
+            except (TypeError, ValueError):
+                return jsonify({'ok': False, 'mesaj': 'Tutar sayı olmalı'}), 400
+            if m.tutar <= 0:
+                return jsonify({'ok': False, 'mesaj': 'Tutar sıfırdan büyük olmalı'}), 400
         if 'doviz' in data: m.doviz = data['doviz']
+        # MD1 — DUZENLEME: bu üç alan modelde vardı ama PUT onları
+        # işlemiyordu; yanlış girilen fatura no ya da tarih yalnızca
+        # kaydı silip yeniden girerek düzeltilebiliyordu.
+        if 'fatura_no' in data: m.fatura_no = (data.get('fatura_no') or '').strip() or None
+        if 'aciklama' in data: m.aciklama = (data.get('aciklama') or '').strip() or None
+        if data.get('maliyet_tarihi'):
+            try:
+                m.maliyet_tarihi = datetime.strptime(str(data['maliyet_tarihi'])[:10], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'ok': False, 'mesaj': 'Tarih GG.AA.YYYY biçiminde olmalı'}), 400
         usd_karsilik = m.tutar
         if m.doviz == 'EUR':
             usd_karsilik = m.tutar * 1.08
@@ -12494,6 +12513,11 @@ def create_app():
             usd_kur = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
             usd_karsilik = m.tutar / (usd_kur.efektif if usd_kur else 45.07)
         m.usd_karsilik = usd_karsilik
+        m.kullanici = session.get('kullanici', m.kullanici)
+        m.guncelleme = datetime.now()
+        _log_audit('GUNCELLE', 'maliyet', m.id,
+                   yeni={'tip': m.maliyet_tip, 'tutar': m.tutar, 'doviz': m.doviz,
+                         'fatura_no': m.fatura_no, 'tarih': str(m.maliyet_tarihi or '')})
         db.session.flush()
         sk_guncel = _satis_kaydi_maliyet_guncelle([m.baglanti_id])
         if m.baglanti_id and str(m.baglanti_id).startswith('BLK'):
@@ -12549,7 +12573,7 @@ def create_app():
     @app.route('/api/maliyet/blok_dagilim', methods=['POST'])
     def api_maliyet_blok_dagilim():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         urun_tipi   = data.get('urun_tipi')
         blok_no     = data.get('blok_no')
         maliyet_tip = data.get('maliyet_tip')
@@ -12718,7 +12742,7 @@ def create_app():
     @app.route('/api/sevkiyat', methods=['POST'])
     def api_sevkiyat_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         # Siparise bagli sevkiyat olusturuluyorsa siparis Hazir/Uretimde olmali
         sip_id = data.get('siparis_id')
         if sip_id:
@@ -12762,7 +12786,7 @@ def create_app():
         s = Sevkiyat.query.get(sevk_id)
         if not s: return jsonify({'ok': False, 'mesaj': 'Sevkiyat bulunamadi'}), 404
 
-        yeni_durum = (request.json or {}).get('durum', '').strip()
+        yeni_durum = (request.get_json(silent=True) or {}).get('durum', '').strip()
         gecerli = ['Hazirlaniyor', 'Sevk Edildi', 'Yolda', 'Gumrukte', 'Teslim Edildi', 'Iptal']
         if yeni_durum not in gecerli:
             return jsonify({'ok': False, 'mesaj': f'Gecersiz durum. Gecerli: {", ".join(gecerli)}'}), 400
@@ -12811,7 +12835,7 @@ def create_app():
                 sip = Siparis.query.get(s.siparis_id)
                 if sip and sip.durum in ('Hazir', 'Uretimde', 'Onaylandi'):
                     sip.durum = 'Teslim Edildi'
-                    teslim_t = _parse_date((request.json or {}).get('gercek_teslim')) or date.today()
+                    teslim_t = _parse_date((request.get_json(silent=True) or {}).get('gercek_teslim')) or date.today()
                     sat_sayisi = _siparis_teslim_edildi(s.siparis_id, teslim_t)
                     s.gercek_teslim = teslim_t
                     ekstra += f' Mal sevk edildi (yüklemede teslim). Siparis {sip.id} Teslim Edildi, {sat_sayisi} satis kaydi olustu.'
@@ -12848,7 +12872,7 @@ def create_app():
                 if sip and sip.durum not in ('Teslim Edildi', 'Iptal Edildi'):
                     if sip.durum in ('Hazir', 'Uretimde', 'Onaylandi'):
                         sip.durum = 'Teslim Edildi'
-                        teslim_t = _parse_date((request.json or {}).get('gercek_teslim')) or date.today()
+                        teslim_t = _parse_date((request.get_json(silent=True) or {}).get('gercek_teslim')) or date.today()
                         sat_sayisi = _siparis_teslim_edildi(s.siparis_id, teslim_t)
                         s.gercek_teslim = teslim_t
                         ekstra += f' Siparis {sip.id} Teslim Edildi, {sat_sayisi} satis kaydi olustu.'
@@ -12976,7 +13000,7 @@ def create_app():
             return jsonify({'ok': False, 'mesaj': 'Sevkiyat bulunamadi'}), 404
         if s.durum == 'Iptal':
             return jsonify({'ok': False, 'mesaj': 'Iptal edilmis sevkiyat duzenlenemez'}), 400
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         _eski = {'muhur_no': s.muhur_no, 'vgm': s.vgm, 'bl_no': s.bl_no}
 
@@ -13273,7 +13297,7 @@ def create_app():
     @app.route('/api/banka', methods=['POST'])
     def api_banka_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         if not d.get('banka_adi'):
             return jsonify({'ok': False, 'mesaj': 'Banka adi zorunlu'}), 400
         # Varsayilan secilmisse digerlerini sifirla
@@ -13296,7 +13320,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         b = Banka.query.get(banka_id)
         if not b: return jsonify({'ok': False, 'mesaj': 'Banka bulunamadi'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         if d.get('varsayilan') and not b.varsayilan:
             Banka.query.update({'varsayilan': False})
         for alan in ['banka_adi','sube','hesap_no','iban','swift','doviz','aciklama']:
@@ -13611,7 +13635,7 @@ def create_app():
     @app.route('/api/cek', methods=['POST'])
     def api_cek_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         yon = d.get('yon')
         if yon not in ('alinan', 'verilen'):
             return jsonify({'ok': False, 'mesaj': 'Yön "alinan" veya "verilen" olmalı'}), 400
@@ -13731,7 +13755,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         c = Cek.query.get(cek_id)
         if not c: return jsonify({'ok': False, 'mesaj': 'Çek bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         # Sadece temel bilgiler düzenlenebilir (durum ayrı endpoint'ten yönetilir)
         for alan in ['cek_no', 'banka_adi', 'sube', 'hesap_sahibi', 'aciklama']:
             if alan in d: setattr(c, alan, (d.get(alan) or '').strip() or None)
@@ -13761,7 +13785,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         c = Cek.query.get(cek_id)
         if not c: return jsonify({'ok': False, 'mesaj': 'Çek bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         islem = d.get('islem')  # 'tahsile_ver','tahsil_et','ciro','teminat','karsiliksiz','iade','odendi'
         onceki = c.durum
         mesaj = ''
@@ -13945,7 +13969,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         c = Cek.query.get(cek_id)
         if not c: return jsonify({'ok': False, 'mesaj': 'Çek bulunamadı'}), 404
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         fatura_id = (d.get('fatura_id') or '').strip() or None
         if not fatura_id:
             return jsonify({'ok': False, 'mesaj': 'Fatura seçilmedi'}), 400
@@ -14030,7 +14054,7 @@ def create_app():
     @app.route('/api/ayarlar/kdv_oran', methods=['POST'])
     def api_ayarlar_kdv_oran():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         try:
             oran = float(d.get('oran', 20))
         except Exception:
@@ -14266,7 +14290,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if session.get('rol') not in ('admin', 'ADMIN'):
             return jsonify({'ok': False, 'mesaj': 'Bu islem icin yonetici yetkisi gerekli.'}), 403
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         logo = (data.get('logo') or '').strip()
         if not logo:
             return jsonify({'ok': False, 'mesaj': 'Logo verisi bos.'}), 400
@@ -14340,7 +14364,7 @@ def create_app():
     def api_ayarlar_firma_post():
         """Satıcı firma varsayılan bilgisini kaydet/güncelle."""
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         satici = (data.get('satici_firma') or '').strip()
         kayit = Veriler.query.filter_by(kategori='firma').first()
         if not kayit:
@@ -14376,7 +14400,7 @@ def create_app():
         # aradigi icin GERCEK YONETICILER 403 aliyordu.
         if (session.get('rol') or '').upper() != 'ADMIN':
             return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         # Eksik alan onceden KeyError -> 500 veriyordu. Dogrulanmis
         # 400 hem daha dogru hem istemcide anlasilir mesaj verir.
         kategori = (data.get('kategori') or '').strip()
@@ -14563,7 +14587,7 @@ def create_app():
         v = Veriler.query.get(id)
         if not v:
             return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if data.get('deger'):
             v.deger = data['deger']
         if data.get('kisaltma') is not None:
@@ -14605,7 +14629,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if session.get('rol') not in ('ADMIN', 'admin'):
             return jsonify({'ok': False, 'mesaj': 'Yetkisiz'}), 403
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if not data.get('ad'):
             return jsonify({'ok': False, 'mesaj': 'Kullanıcı adı zorunlu'}), 400
         if Kullanici.query.filter_by(ad=data['ad']).first():
@@ -14668,7 +14692,7 @@ def create_app():
         k = Kullanici.query.get(id)
         if not k:
             return jsonify({'ok': False, 'mesaj': 'Kullanıcı bulunamadı'}), 404
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if data.get('sifre'):
             k.sifre = generate_password_hash(data['sifre'])
         if data.get('rol'):
@@ -14743,6 +14767,7 @@ def create_app():
                         'genel_bundle_sayisi': getattr(p, 'genel_bundle_sayisi', 10) or 10,
                         'karma_bundle': bool(getattr(p, 'karma_bundle', False)),
                         'iskonto': p.iskonto_sabit or 0,
+                        'iskonto_aciklama': p.iskonto_aciklama or '',
                         'iskonto_tip': 'SAB', 'avans_deger': p.avans_tutari or 0, 'avans_tip': 'SAB',
                         'doviz': p.doviz, 'banka_adi': p.banka_adi, 'iban': p.iban, 'swift': p.swift,
                         'satici_firma': p.satici_firma, 'odeme_sekli': p.odeme_sekli, 'teslim_sekli': p.teslim_sekli,
@@ -14817,7 +14842,7 @@ def create_app():
     @app.route('/api/proforma', methods=['POST'])
     def api_proforma_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json
+        data = request.get_json(silent=True) or {}
         # siparis_id varsa - bu proforma mevcut bir siparise bagli
         siparis_id = data.get('siparis_id')
         p = Proforma(id=_yeni_id('PI'), musteri=data['musteri'],
@@ -14830,6 +14855,7 @@ def create_app():
                      musteri_ulke=data.get('musteri_ulke'), tur=data.get('tur','ihracat'), kdv_oran=data.get('kdv_oran',0),
                      proforma_tipi=data.get('proforma_tipi', 'satis' if siparis_id else 'teklif'),
                      packing_list=data.get('packing_list',False), iskonto_sabit=data.get('iskonto',0),
+                     iskonto_aciklama=(data.get('iskonto_aciklama') or '').strip()[:200] or None,
                      genel_bundle_sayisi=data.get('genel_bundle_sayisi',10),
                      karma_bundle=bool(data.get('karma_bundle',False)),
                      avans_tutari=data.get('avans_deger',0), doviz=data.get('doviz','USD'), banka_adi=data.get('banka_adi'),
@@ -14941,7 +14967,7 @@ def create_app():
         p = Proforma.query.get(proforma_id)
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         try:
             # Eski rezervasyonlari iptal et (siparise bagli degilse)
@@ -14994,6 +15020,7 @@ def create_app():
             # On yuzden farkli adla gelen alanlar (form adi -> model alani)
             if 'iskonto' in data:
                 p.iskonto_sabit = data.get('iskonto')
+                p.iskonto_aciklama = (data.get('iskonto_aciklama') or '').strip()[:200] or None
             if 'avans_deger' in data:
                 p.avans_tutari = data.get('avans_deger')
 
@@ -15103,7 +15130,7 @@ def create_app():
                 'mesaj': f'Bu eski bir surum (arsiv). Guncel surum uzerinden revize edin: '
                          f'{aktif.id if aktif else "?"}'}), 400
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kok_id = p.ana_pi_id or p.id
         # Zincirdeki en yuksek revizyon no + 1
         mevcut_max = db.session.query(db.func.max(Proforma.revizyon_no)).filter(
@@ -15123,6 +15150,7 @@ def create_app():
             tur=p.tur, kdv_oran=p.kdv_oran, packing_list=p.packing_list,
             genel_bundle_sayisi=p.genel_bundle_sayisi, karma_bundle=p.karma_bundle,
             iskonto=p.iskonto, iskonto_tip=p.iskonto_tip, iskonto_sabit=p.iskonto_sabit,
+            iskonto_aciklama=p.iskonto_aciklama,
             avans_yuzdesi=p.avans_yuzdesi, avans_tutari=p.avans_tutari, avans_tip=p.avans_tip,
             avans_sabit=p.avans_sabit, doviz=p.doviz, toplam=p.toplam,
             banka_adi=p.banka_adi, iban=p.iban, swift=p.swift, ulke=p.ulke,
@@ -15219,7 +15247,7 @@ def create_app():
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
 
-        yeni_durum = (request.json or {}).get('durum', '').strip()
+        yeni_durum = (request.get_json(silent=True) or {}).get('durum', '').strip()
         gecerli_durumlar = ['Taslak', 'Ic Onay', 'Gonderildi', 'Onaylandi',
                             'Siparise Donustu', 'Faturalandi', 'Kaybedildi',
                             'Iptal', 'Revize']
@@ -15328,7 +15356,7 @@ def create_app():
             if not _proforma_onay_yetkisi_var_mi():
                 return jsonify({'ok': False, 'error': 'onay_yetkisi_yok',
                     'mesaj': 'Onay reddetme yetkiniz yok.'}), 403
-            red_notu = (request.json or {}).get('red_notu', '').strip()
+            red_notu = (request.get_json(silent=True) or {}).get('red_notu', '').strip()
             p.onay_reddeden = aktif_kullanici
             p.onay_red_notu = red_notu or 'Gerekce belirtilmedi'
             p.onaylayan = None  # önceki onay varsa temizle
@@ -15462,7 +15490,7 @@ def create_app():
         if not h:
             return jsonify({'ok': False, 'mesaj': 'Hareket bulunamadi'}), 404
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         yeni = (data.get('fatura_no') or '').strip()
         if not yeni:
             return jsonify({'ok': False, 'mesaj': 'Fatura numarasi bos olamaz'}), 400
@@ -15795,7 +15823,7 @@ def create_app():
         # aradigi icin GERCEK YONETICILER 403 aliyordu.
         if (session.get('rol') or '').upper() != 'ADMIN':
             return jsonify({'error': 'Sadece admin geri yükleyebilir'}), 403
-        dosya = request.json.get('dosya')
+        dosya = (request.get_json(silent=True) or {}).get('dosya')
         if not dosya: return jsonify({'ok': False, 'mesaj': 'Dosya adı gerekli'}), 400
         basarili, mesaj = yedek_modul.yedek_geri_yukle(dosya)
         return jsonify({'ok': basarili, 'mesaj': mesaj})
@@ -15810,7 +15838,7 @@ def create_app():
         # aradigi icin GERCEK YONETICILER 403 aliyordu.
         if (session.get('rol') or '').upper() != 'ADMIN':
             return jsonify({'error': 'Sadece admin silebilir'}), 403
-        dosya = request.json.get('dosya')
+        dosya = (request.get_json(silent=True) or {}).get('dosya')
         if not dosya: return jsonify({'ok': False, 'mesaj': 'Dosya adı gerekli'}), 400
         basarili, mesaj = yedek_modul.yedek_sil(dosya)
         return jsonify({'ok': basarili, 'mesaj': mesaj})
@@ -16024,7 +16052,7 @@ def create_app():
             return jsonify({'ok': False, 'mesaj':
                             f'Bu satisin fatura numarasi zaten var: {s.fatura_no}'}), 400
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         musteri = (s.musteri or '').strip()
         if not musteri:
             return jsonify({'ok': False, 'mesaj':
@@ -16114,7 +16142,7 @@ def create_app():
         if not s:
             return jsonify({'ok': False, 'mesaj': 'Bulunamadi'}), 404
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         if 'fatura_no' in data:
             s.fatura_no = (data.get('fatura_no') or '').strip() or None
         if 'fatura_tarihi' in data:
@@ -17157,7 +17185,7 @@ def create_app():
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
 
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         belgeler = d.get('belgeler') or []
         on_metin = (d.get('on_metin') or '').strip()
         if not belgeler:
@@ -18013,7 +18041,7 @@ def create_app():
         """Proformaya/sevkiyata konteyner ekler."""
         if _auth_required():
             return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         pid = (data.get('proforma_id') or '').strip() or None
         sid = (data.get('sevkiyat_id') or '').strip() or None
         ok, yanit = _konteyner_sahip_kontrol(pid, sid)
@@ -18083,7 +18111,7 @@ def create_app():
         if not Proforma.query.get(proforma_id):
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         try:
             adet = int(data.get('adet') or 0)
         except (TypeError, ValueError):
@@ -18127,7 +18155,7 @@ def create_app():
         ok, yanit = _konteyner_sahip_kontrol(k.proforma_id, k.sevkiyat_id)
         if not ok:
             return yanit
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         if 'tip' in data:
             t = (data.get('tip') or '').strip()
@@ -18214,7 +18242,7 @@ def create_app():
         p = Proforma.query.get(proforma_id)
         if not p:
             return jsonify({'ok': False, 'mesaj': 'Proforma bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kalem_idler = data.get('kalem_idler') or []
         kid = data.get('konteyner_id')
         if not kalem_idler:
@@ -18264,7 +18292,7 @@ def create_app():
                             'mesaj': f'"{p.durum}" durumundaki teklif kayıp '
                                      f'olarak işaretlenemez.'}), 400
 
-        d = request.json or {}
+        d = request.get_json(silent=True) or {}
         sebep = (d.get('sebep') or '').strip().lower()
         if sebep not in KAYIP_SEBEPLERI:
             return jsonify({
@@ -18412,7 +18440,7 @@ def create_app():
         if not kalemler:
             return jsonify({'ok': False, 'mesaj': 'Proformanin kalemi yok — siparis uretilemez.'}), 400
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         try:
             sip = Siparis(
@@ -18559,7 +18587,7 @@ def create_app():
             return jsonify({'ok': False,
                 'mesaj': f'Bu proformadan zaten fatura olusturulmus: {mevcut.id}'}), 400
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         # Kalemleri JSON snapshot olarak sakla
         kalemler = ProformaKalem.query.filter_by(proforma_id=proforma_id).order_by(
@@ -18695,7 +18723,7 @@ def create_app():
         """
         if _auth_required():
             return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         musteri = (data.get('musteri') or '').strip()
         if not musteri:
@@ -18886,7 +18914,7 @@ def create_app():
         f = Fatura.query.get(fatura_id)
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         # Mukerrer fatura no kontrolu
         eski_fn = (f.fatura_no or '').strip()
         yeni_fn = (data.get('fatura_no') or '').strip()
@@ -18996,7 +19024,7 @@ def create_app():
         f = Fatura.query.get(fatura_id)
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         # Taslak fatura GİB'e gitmemiştir; ETTN'i olamaz.
         if f.durum == 'Taslak' and (data.get('ettn') or '').strip():
@@ -19177,7 +19205,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if not _yetki_var_mi('fatura', 'yazma'):
             return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         donem = (data.get('donem') or '').strip()[:7]
         ilk, son = _donem_araligi(donem)
         if not ilk:
@@ -19310,7 +19338,7 @@ def create_app():
         d = KdvIadeDosya.query.get(dosya_id)
         if not d:
             return jsonify({'ok': False, 'mesaj': 'Dosya bulunamadi'}), 404
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         if 'durum' in data:
             yeni_durum = (data.get('durum') or '').strip()
@@ -19456,7 +19484,7 @@ def create_app():
         if d.durum in IADE_KILITLI:
             return jsonify({'ok': False, 'mesaj':
                             f'"{d.durum}" durumundaki dosyanin icerigi degistirilemez.'}), 400
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         f_idler = data.get('fatura_idler') or []
         m_idler = data.get('maliyet_idler') or []
         izli_dahil = bool(data.get('izli_kdv'))
@@ -19528,7 +19556,7 @@ def create_app():
         if d.durum in IADE_KILITLI:
             return jsonify({'ok': False, 'mesaj':
                             f'"{d.durum}" durumundaki dosyanin icerigi degistirilemez.'}), 400
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         f_idler = data.get('fatura_idler') or []
         m_idler = data.get('maliyet_idler') or []
         c_f = Fatura.query.filter(Fatura.id.in_(f_idler),
@@ -19603,7 +19631,7 @@ def create_app():
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         yeni_durum = data.get('durum')
         gecerli = ['Taslak', 'Kesildi', 'Kismi Tahsil', 'Tahsil Edildi', 'Iptal']
         if yeni_durum not in gecerli:
@@ -19938,7 +19966,7 @@ def create_app():
         f = Fatura.query.get(fatura_id)
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
-        return _fatura_tahsilat_uygula(f, fatura_id, request.json or {}, commit=True)
+        return _fatura_tahsilat_uygula(f, fatura_id, request.get_json(silent=True) or {}, commit=True)
 
     def _fatura_tahsilat_uygula(f, fatura_id, data, commit=True):
         """TT1: tek faturaya tahsilat — tek ve toplu tahsilatin ORTAK
@@ -20327,7 +20355,7 @@ def create_app():
     def api_kasa_ekle():
         """Yeni kasa oluşturur. Başlangıç bakiyesi varsa otomatik 'giris' hareketi açar."""
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         ad = (data.get('ad') or '').strip()
         if not ad:
@@ -20411,7 +20439,7 @@ def create_app():
         if not k:
             return jsonify({'ok': False, 'mesaj': 'Kasa bulunamadı'}), 404
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         eski = {'ad': k.ad, 'doviz': k.doviz,
                 'baslangic_bakiye': getattr(k, 'baslangic_bakiye', 0)}
 
@@ -20706,7 +20734,7 @@ def create_app():
     def api_kasa_hareket_ekle():
         """Manuel kasa hareketi (giriş/çıkış). Bakiye otomatik güncellenir."""
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
 
         kasa_id = data.get('kasa_id')
         tip = (data.get('tip') or '').strip().lower()
@@ -20797,7 +20825,7 @@ def create_app():
         Ornek: nakit kasadan bankaya para yatirma / bankadan nakit cekme."""
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if _yazma_yetki_guard(): return _yazma_yetki_guard()
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kaynak_id = data.get('kaynak_kasa_id')
         hedef_id = data.get('hedef_kasa_id')
         try:

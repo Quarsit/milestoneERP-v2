@@ -428,6 +428,18 @@
             <input id="tKonum" placeholder="Depo 2 (opsiyonel)"></div>
         </div>
         <div class="form-satir f3">
+          <!-- F5/TN1: tekil stok formundaki "nakliye dahil" işareti toplu
+               aktarmada yoktu; Excel'den giren yüzlerce plakada bu bilgi
+               kaybediliyordu. Bilgi amaçlıdır, maliyeti etkilemez. -->
+          <div class="form-alan" style="grid-column:1 / -1;display:flex;align-items:flex-end">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
+              <input id="tNakliyeDahil" type="checkbox" style="width:16px;height:16px" onchange="topluOnizle()">
+              Alış fiyatına nakliye dahil
+              <span style="color:var(--soluk);font-size:.78rem;font-weight:400">· bilgi amaçlı, maliyeti etkilemez</span>
+            </label>
+          </div>
+        </div>
+        <div class="form-satir f3">
           <div class="form-alan"><label>Giriş Tarihi</label>
             <input id="tGirisTarih" type="date" data-buyuk-harf="hayir"></div>
           <div class="form-alan"><label>Alış / Fatura Tarihi</label>
@@ -2041,6 +2053,7 @@ async function topluKaydet() {
     kdv_dahil_mi: kdvli && document.getElementById('tKdvDahil').checked,
     giris_tarihi: document.getElementById('tGirisTarih').value || null,
     alis_tarihi: document.getElementById('tAlisTarih').value || null,
+    nakliye_dahil: document.getElementById('tNakliyeDahil').checked,   // TN1
   };
   const ortakAciklama = document.getElementById('tAciklama').value.trim();
   const konum = document.getElementById('tKonum').value.trim();
@@ -2117,7 +2130,9 @@ async function topluKaydet() {
       baslangic_no: basNo,
       kasa_adedi: k.kasa_adedi || 1,
       kasa_ici_adet: k.kasa_ici_adet || 1,
-      aciklama: k.aciklama || ortakAciklama || '',
+      // TN1: nakliye dahil işaretliyse tekil formdaki notun aynısı düşülür.
+      aciklama: [k.aciklama || ortakAciklama || '', ortak.nakliye_dahil ? NAKLIYE_NOT : '']
+                  .filter(Boolean).join(' ').trim(),
     });
     try {
       /* DİKKAT: oluşturma uç noktası /api/stok DEĞİL, /api/stok/ekle'dir.

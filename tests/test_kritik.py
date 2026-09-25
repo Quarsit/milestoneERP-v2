@@ -297,3 +297,52 @@ def test_pl1_plaka_tercihi_pl_ve_etikette_ortak():
     assert '45 · 1–8' in c.get('/api/proforma/PET/etiket?plaka=1').get_data(as_text=True)
     c.post('/api/proforma/PET/etiket_ayar', json={'plaka': True}, headers=H)
     assert '45 · 1–8' in c.get('/api/proforma/PET/etiket').get_data(as_text=True)
+
+
+def test_md1_maliyet_duzenleme_ve_ia1_iskonto_aciklamasi():
+    """MD1: maliyet kaydı düzenlenebiliyor (tip, tutar, tarih, fatura no,
+    açıklama) ve geçersiz tutar reddediliyor.
+    IA1: proformanın iskonto açıklaması kaydediliyor ve geri okunuyor."""
+    from models import Maliyet, Proforma
+    from datetime import date as _d
+    with fa.app.app_context():
+        db.session.add(Maliyet(id='MLY1', maliyet_tip='Nakliye (Ocak-Fabrika)', baglanti_tip='Stok',
+                               baglanti_id='B1', tutar=100, doviz='USD', usd_karsilik=100,
+                               maliyet_tarihi=_d(2026, 1, 5)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.put('/api/maliyet/MLY1', headers=H, json={
+        'maliyet_tip': 'Diğer Vergiler', 'tutar': 250.5, 'doviz': 'USD',
+        'maliyet_tarihi': '2026-02-09', 'fatura_no': 'A-77', 'aciklama': 'liman resmi'})
+    assert r.status_code == 200
+    with fa.app.app_context():
+        m = Maliyet.query.get('MLY1')
+        assert (m.maliyet_tip, float(m.tutar), m.fatura_no, m.aciklama) == \
+               ('Diğer Vergiler', 250.5, 'A-77', 'liman resmi')
+        assert m.maliyet_tarihi == _d(2026, 2, 9)
+    assert c.put('/api/maliyet/MLY1', headers=H, json={'tutar': 'abc'}).status_code == 400
+    assert c.put('/api/maliyet/MLY1', headers=H, json={'tutar': -5}).status_code == 400
+
+    # IA1 — iskonto açıklaması
+    r = c.post('/api/proforma', headers=H, json={
+        'musteri': 'ACIK CARI', 'cari_id': 'C1', 'doviz': 'USD', 'toplam': 900,
+        'iskonto': 100, 'iskonto_aciklama': '2026 sezon anlaşması',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'X', 'adet': 1, 'miktar': 5,
+                      'birim': 'm2', 'birim_fiyat': 200, 'toplam_fiyat': 1000}]})
+    assert r.status_code == 200
+    pid = r.get_json().get('id')
+    with fa.app.app_context():
+        assert Proforma.query.get(pid).iskonto_aciklama == '2026 sezon anlaşması'
+    d = c.get(f'/api/proforma/{pid}/detay_full').get_json()
+    assert d['iskonto_aciklama'] == '2026 sezon anlaşması'
+    pi = c.get(f'/api/proforma/{pid}/html?mod=pi').get_data(as_text=True)
+    assert '2026 sezon anlaşması' in pi
+
+
+def test_bs1_govdesiz_post_400_vermiyor():
+    """BS1: gövdesiz POST'ta Flask isteği okuyamadan HTML 400 döndürüyordu
+    (proforma → sipariş dönüşümü bu yüzden çalışmıyordu)."""
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/proforma/PET/siparise_donustur',
+               headers={**H, 'Content-Type': 'application/json'})
+    assert r.status_code == 200 and r.get_json()['ok'] is True

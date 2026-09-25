@@ -802,6 +802,9 @@ class Proforma(db.Model):
     iskonto         = db.Column(Para, default=0)
     iskonto_tip     = db.Column(db.String(5), default='%')
     iskonto_sabit   = db.Column(Para, default=0)
+    # IA1: genel iskontonun gerekçesi — belgede iskonto satırının
+    # yanında basılır ("2026 sezon anlaşması" gibi).
+    iskonto_aciklama = db.Column(db.String(200))
     avans_yuzdesi   = db.Column(Olcu, default=0)
     avans_tutari    = db.Column(Para, default=0)
     avans_tip       = db.Column(db.String(5), default='%')
