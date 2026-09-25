@@ -1083,16 +1083,19 @@ function sozlesmeKurDegisti() {
   }
 }
 
-/* Kur esası yalnızca dövizli ekstrede anlamlı — TRY'de gizlenir. */
+/* EK2 — KUR ESASI SORUSU TERSTİ.
+   Soru YALNIZCA TL ekstrede anlamlı: dövizli hareketler TL'ye orada
+   çevriliyor, hangi kurla çevrileceği seçime bağlı. USD/EUR ekstrede
+   tutarlar zaten o dövizde; soru sorulmasının karşılığı yok ve
+   kullanıcıyı gereksiz bir tercihe zorluyordu. */
 function ekstreKipGoster() {
   const d = document.getElementById('eksDoviz').value;
   const alan = document.getElementById('eksKurAlan');
   const acik = document.getElementById('eksAciklama');
-  alan.style.display = (d === 'TRY') ? 'none' : '';
-  if (d === 'TRY') {
-    acik.innerHTML = '<strong>TRY ekstre</strong> — tüm hareketler ' +
-      'işlem günündeki kurla TL\'ye çevrilir. Kur farkı hesabı ve ' +
-      'TL bazlı mutabakat için kullanılır.';
+  alan.style.display = (d === 'TRY') ? '' : 'none';
+  if (d !== 'TRY') {
+    acik.innerHTML = `<strong>${d} ekstre</strong> — hareketler ${d} cinsinden listelenir. ` +
+      'Farklı dövizdeki hareketler işlem günü kuruyla çevrilir.';
   } else {
     const m = document.getElementById('eksKurModu').value;
     acik.innerHTML = (m === 'islem')
@@ -1137,7 +1140,8 @@ function eksSeciliTipler() {
 function ekstreAc() {
   if (!EKSTRE_CARI) return;
   const d = document.getElementById('eksDoviz').value;
-  const m = document.getElementById('eksKurModu').value;
+  // EK2: kur esası yalnızca TL ekstrede sorulur; diğerlerinde işlem günü kuru.
+  const m = (d === 'TRY') ? document.getElementById('eksKurModu').value : 'islem';
   ekstreKapat();
   window.open(`/api/cari/${encodeURIComponent(EKSTRE_CARI)}/ekstre_pdf` +
               `?doviz=${encodeURIComponent(d)}&kur_modu=${encodeURIComponent(m)}`

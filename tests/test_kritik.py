@@ -531,3 +531,56 @@ def test_sg1_sg2_siparis_guncelleme_ve_stoktan_ekleme():
     assert c.put(f'/api/siparis/{sid}', headers=H, json={'aciklama': 'not'}).status_code == 200
     assert c.post(f'/api/siparis/{sid}/stok_ekle', headers=H,
                   json={'stok_ids': ['SPK1']}).status_code == 400
+
+
+def test_fd1_fatura_degisikligi_cariye_yansir():
+    """FD1: fatura tarihi/vadesi/tutarı değişince bağlı cari hareket de
+    güncellenmeliydi. Eskiden yalnızca fatura no yansıyordu: ekstre eski
+    tarihi, eski kuru ve eski vadeyi gösteriyordu."""
+    from models import Fatura, CariHareket, DovizKur
+    with fa.app.app_context():
+        for t, k in ((date(2026, 3, 2), 30.0), (date(2026, 5, 4), 40.0)):
+            if not DovizKur.query.filter_by(doviz='USD', tarih=t).first():
+                db.session.add(DovizKur(doviz='USD', tarih=t, alis=k, satis=k, efektif=k))
+        db.session.add(Fatura(id='FFD', fatura_no='F-FD', musteri='ACIK CARI', cari_id='C1',
+                              toplam=1000, doviz='USD', durum='Kesildi', yon='satis',
+                              fatura_tarihi=date(2026, 3, 2), vade_tarihi=date(2026, 4, 2)))
+        db.session.add(CariHareket(id='HFD', cari_id='C1', cari_unvan='ACIK CARI',
+                                   islem_tip='Fatura (Satis)', borc=1000, alacak=0, doviz='USD',
+                                   kur_uygulanan=30.0, borc_try=30000, alacak_try=0,
+                                   kaynak='fatura', baglanti_tip='fatura', baglanti_id='FFD',
+                                   hareket_tarihi=date(2026, 3, 2), vade_tarihi=date(2026, 4, 2)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.put('/api/fatura/FFD', headers=H, json={
+        'fatura_tarihi': '2026-05-04', 'vade_tarihi': '2026-06-04'})
+    assert r.status_code == 200 and 'cari hareket' in r.get_json()['mesaj']
+    with fa.app.app_context():
+        h = CariHareket.query.get('HFD')
+        assert h.hareket_tarihi == date(2026, 5, 4)     # ekstredeki tarih
+        assert h.vade_tarihi == date(2026, 6, 4)        # yaşlandırma buradan okunur
+        assert float(h.kur_uygulanan) == 40.0           # yeni tarihin kuru
+        assert float(h.borc_try) == 40000.0
+        # Sözleşme kuru (MANUEL) korunur
+        h.kur_kaynak = 'MANUEL'; h.kur_uygulanan = 52.0
+        db.session.commit()
+    c.put('/api/fatura/FFD', headers=H, json={'fatura_tarihi': '2026-03-02'})
+    with fa.app.app_context():
+        h = CariHareket.query.get('HFD')
+        assert float(h.kur_uygulanan) == 52.0 and float(h.borc_try) == 52000.0
+
+
+def test_ek1_ek2_ekstre_dili_ve_kur_esasi():
+    """EK1: yabancı cariye İngilizce ekstrede açıklamalar da İngilizce.
+    EK2: kur esası satırı TL ekstrede basılır (dövizlide çevrim yok)."""
+    cev = fa.app.jinja_env.globals['_aciklama_cevir']
+    assert cev('Tahsilat: X - Fatura MLS1', 'en') == 'Collection: X - Invoice MLS1'
+    assert cev('Toplu tahsilat — Fatura MLS1', 'en').startswith('Bulk collection')
+    assert cev('Çek alındı (No: 45) — MLS1', 'en').startswith('Cheque received')
+    assert cev('Tahsilat: X - Fatura MLS1', 'tr') == 'Tahsilat: X - Fatura MLS1'
+    c = istemci('admin', 'ADMIN')
+    tr = c.get('/api/cari/C1/ekstre_pdf?doviz=TRY&kur_modu=islem').get_data(as_text=True)
+    usd = c.get('/api/cari/C1/ekstre_pdf?doviz=USD').get_data(as_text=True)
+    assert 'Rate Basis' in tr          # yabancı cari → İngilizce belge
+    assert 'Rate Basis' not in usd     # aynı dövizde çevrim yok, satır basılmaz
+    assert 'lang="en"' in usd

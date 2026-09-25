@@ -355,9 +355,73 @@ def create_app():
             return str(deger)
         return _ODEME_EN.get(str(deger), str(deger))
 
+    # EK1 — EKSTRE ACIKLAMALARI INGILIZCE BELGEDE TURKCE KALIYORDU.
+    # Islem tipi cevriliyordu ama aciklama serbest metin diye oldugu
+    # gibi basiliyordu: "Tahsilat: NORTHSTONE - Fatura MLS2026000031".
+    # Yurt disindaki musteri belgenin yarisini okuyamiyordu.
+    #
+    # Aciklamalar SERBEST METIN ama buyuk cogunlugu sistemin kendi
+    # urettigi kaliplardan geliyor. Kaliplar cevrilir, kalan metin
+    # (fatura no, unvan, blok no) oldugu gibi korunur. Cevrilemeyen
+    # bir sey kalirsa Turkce gorunur — bilgi KAYBOLMAZ.
+    _ACIKLAMA_EN = [
+        ('PLAKA', 'SLAB'), ('EBATLI', 'CUT-TO-SIZE'), ('BLOK', 'BLOCK'),
+        ('Toplu tahsilat', 'Bulk collection'),
+        ('Sıcak satış peşin tahsilat', 'Quick sale cash collection'),
+        ('Sıcak satış faturası', 'Quick sale invoice'),
+        ('sıcak satış peşin tahsilat', 'quick sale cash collection'),
+        ('Sıcak satış', 'Quick sale'),
+        ('karşılığı alınan çek', 'cheque received against'),
+        ('Çek alındı', 'Cheque received'),
+        ('Çek ile tahsilat', 'Collection by cheque'),
+        ('Çek ile ödeme', 'Payment by cheque'),
+        ('Çek tahsilatı', 'Cheque collection'),
+        ('Çek ödemesi', 'Cheque payment'),
+        ('Çek cirosu', 'Cheque endorsement'),
+        ('nolu çek', 'cheque no'),
+        ('Tahsilat', 'Collection'),
+        ('Ödeme', 'Payment'),
+        ('Fatura', 'Invoice'),
+        ('faturalandırma', 'invoicing'),
+        ('faturasız giriş', 'entry without invoice'),
+        ('alış', 'purchase'),
+        ('Verilen avans', 'Advance paid'),
+        ('Avans', 'Advance'),
+        ('siparişine devredildi', 'transferred to order'),
+        ('siparişinden devredildi', 'transferred from order'),
+        ('iptal', 'cancelled'),
+        ('belgesiz', 'no document'),
+        ('Açılış Bakiyesi', 'Opening Balance'),
+        ('Acilis Bakiyesi', 'Opening Balance'),
+        ('Kur farkı', 'FX difference'),
+        ('Vade farkı', 'Late fee'),
+        ('Mahsup', 'Offset'),
+        ('Virman', 'Transfer'),
+        ('Kasa', 'Cash account'),
+        ('Banka', 'Bank'),
+        ('güncellendi, cari hareket eşitlendi', 'updated, account entry synced'),
+        ('İade', 'Return'),
+        ('Blok', 'Block'),
+        ('Plaka', 'Slab'),
+        ('Kasalı', 'Crated'),
+    ]
+
     def _aciklama_cevir(metin, dil='en'):
-        # Serbest metin — güvenli davranış: olduğu gibi döndür
-        return '' if metin is None else str(metin)
+        """Ekstre aciklamasini belge diline cevirir (kalip bazli)."""
+        if metin is None:
+            return ''
+        s = str(metin)
+        try:
+            d = str(dil).lower() if dil else 'en'
+        except Exception:
+            d = 'en'
+        if d.startswith('tr') or not s.strip():
+            return s
+        import re as _re
+        for tr, en in _ACIKLAMA_EN:
+            s = _re.sub(_re.escape(tr), en, s, flags=_re.IGNORECASE) \
+                if tr[0].islower() else _re.sub(_re.escape(tr), en, s)
+        return s
 
     app.jinja_env.globals['_deger_cevir'] = _deger_cevir
     app.jinja_env.globals['_odeme_cevir'] = _odeme_cevir
@@ -19162,6 +19226,71 @@ def create_app():
             q = q.filter(Fatura.id != haric_fatura_id)
         return q.first() is not None
 
+    def _fatura_cari_hareketi_esitle(f, eski):
+        """FD1 — Faturadaki degisikligi CARI HAREKETE isler.
+
+        Neler esitlenir:
+          • hareket_tarihi  ← fatura_tarihi
+          • vade_tarihi     ← fatura vadesi (yaslandirma buradan okunur)
+          • borc/alacak     ← fatura toplami (yon'e gore)
+          • kur + TL karsiligi ← YENI fatura tarihinin TCMB kuru
+
+        SOZLESME KURU KORUNUR: kur_kaynak='MANUEL' olan harekette kur
+        elle belirlenmistir (GIB ozelgesi: sozlesmede kur varsa o
+        gecerli). Onun kuru yeniden hesaplanmaz, yalnizca TL karsiligi
+        ayni kurla tutara gore duzeltilir.
+
+        TAHSILAT hareketlerine DOKUNULMAZ — onlar kendi tarih ve
+        kurlariyla gerceklesmis islemlerdir.
+        """
+        hareketler = CariHareket.query.filter_by(
+            baglanti_tip='fatura', baglanti_id=f.id).filter(
+            CariHareket.kaynak.in_(['fatura', 'sicak_satis', 'fatura_kesim'])).all()
+        if not hareketler:
+            return ''
+        tarih_degisti = eski.get('fatura_tarihi') != f.fatura_tarihi
+        vade_degisti = eski.get('vade_tarihi') != f.vade_tarihi
+        tutar_degisti = (abs(float(f.toplam or 0) - float(eski.get('toplam') or 0)) > 0.005
+                         or (f.doviz or '') != (eski.get('doviz') or ''))
+        if not (tarih_degisti or vade_degisti or tutar_degisti):
+            return ''
+
+        degisen = []
+        for h in hareketler:
+            if tarih_degisti and f.fatura_tarihi:
+                h.hareket_tarihi = f.fatura_tarihi
+            if vade_degisti:
+                h.vade_tarihi = f.vade_tarihi
+            if tutar_degisti:
+                # Yon korunur: borc tarafinda olan borc kalir.
+                if (h.borc or 0) > 0:
+                    h.borc = q2(f.toplam or 0)
+                elif (h.alacak or 0) > 0:
+                    h.alacak = q2(f.toplam or 0)
+                h.doviz = f.doviz or h.doviz
+            # Kur: MANUEL (sozlesme) kuru korunur, TCMB kuru tarihe gore yenilenir
+            if (h.kur_kaynak or 'TCMB') != 'MANUEL' and (tarih_degisti or tutar_degisti):
+                h.kur_uygulanan = q_kur(_kur_getir(h.doviz or 'USD', f.fatura_tarihi))
+            _kur = float(h.kur_uygulanan or 0) or _kur_getir(h.doviz or 'USD', f.fatura_tarihi)
+            _b, _ = _try_karsilik(h.borc or 0, h.doviz or 'USD', _kur)
+            _a, _ = _try_karsilik(h.alacak or 0, h.doviz or 'USD', _kur)
+            h.borc_try, h.alacak_try = q2(_b), q2(_a)
+            degisen.append(h.id)
+
+        _log_audit('GUNCELLE', 'cari_hareket', ','.join(degisen),
+                   eski={'fatura_tarihi': str(eski.get('fatura_tarihi') or ''),
+                         'vade_tarihi': str(eski.get('vade_tarihi') or ''),
+                         'toplam': eski.get('toplam')},
+                   yeni={'fatura_tarihi': str(f.fatura_tarihi or ''),
+                         'vade_tarihi': str(f.vade_tarihi or ''),
+                         'toplam': float(f.toplam or 0)},
+                   aciklama=f'Fatura {f.fatura_no or f.id} güncellendi, cari hareket eşitlendi')
+        parcalar = []
+        if tarih_degisti: parcalar.append('tarih')
+        if vade_degisti: parcalar.append('vade')
+        if tutar_degisti: parcalar.append('tutar')
+        return f'cari hareket güncellendi ({", ".join(parcalar)})'
+
     @app.route('/api/fatura/<fatura_id>', methods=['PUT'])
     def api_fatura_guncelle(fatura_id):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -19169,6 +19298,9 @@ def create_app():
         if not f:
             return jsonify({'ok': False, 'mesaj': 'Fatura bulunamadi'}), 404
         data = request.get_json(silent=True) or {}
+        # FD1: degisiklik CARIYE de islensin diye eski degerler saklanir.
+        _eski = {'fatura_tarihi': f.fatura_tarihi, 'vade_tarihi': f.vade_tarihi,
+                 'toplam': float(f.toplam or 0), 'doviz': f.doviz}
         # Mukerrer fatura no kontrolu
         eski_fn = (f.fatura_no or '').strip()
         yeni_fn = (data.get('fatura_no') or '').strip()
@@ -19210,9 +19342,22 @@ def create_app():
                         ch.aciklama = ch.aciklama.replace(eski_fn, yeni_fn)
             app.logger.info(f'Fatura no degisti: {eski_fn} -> {yeni_fn}, iliskili kayitlar guncellendi')
 
+        # ── FD1 — DEGISIKLIK CARI HESABA YANSIR ──
+        # Eskiden yalnizca fatura no iliskili kayitlara yaziliyordu.
+        # Fatura TARIHI degisince cari hareketin tarihi ESKI kaliyor,
+        # dolayisiyla ekstre eski tarihi gosteriyor VE o tarihin kuru
+        # uzerinden hesaplanan TL karsiligi da eskisi oluyordu.
+        # Vade degisince yaslandirma (vadesi gecen) yanlis calisiyordu.
+        _cari_mesaj = _fatura_cari_hareketi_esitle(f, _eski)
+
         try:
             db.session.commit()
-            return jsonify({'ok': True, 'mesaj': 'Fatura guncellendi' + (f' (no: {yeni_fn}, ilişkili kayıtlar güncellendi)' if fatura_no_degisti else '')})
+            _mesaj = 'Fatura guncellendi'
+            if fatura_no_degisti:
+                _mesaj += f' (no: {yeni_fn}, ilişkili kayıtlar güncellendi)'
+            if _cari_mesaj:
+                _mesaj += ' · ' + _cari_mesaj
+            return jsonify({'ok': True, 'mesaj': _mesaj})
         except Exception as e:
             db.session.rollback()
             return jsonify({'ok': False, 'mesaj': str(e)}), 500

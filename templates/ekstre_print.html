@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="{{ 'tr' if (dil or '').lower().startswith('tr') else 'en' }}">
 <head>
   <meta charset="UTF-8">
   <title>{{ baslik }} - {{ cari.unvan }}</title>
@@ -114,9 +114,11 @@
     {# YAMA E2: Hangi kur esasiyla hesaplandigi BELGEYE yazilir.
        Mutabakatta karsi taraf bunu bilmeli; ayni hesap iki farkli
        esasla iki farkli sayi verir. #}
-    {% if (hedef_doviz or cari.para_birimi) != 'TRY' %}
+    {# EK2: kur esasi TL ekstrede anlamli — her hareket TL'ye orada
+       cevriliyor. Ayni dovizdeki ekstrede cevrim yok, satir basilmaz. #}
+    {% if (hedef_doviz or cari.para_birimi or 'TRY') == 'TRY' %}
     <div class="info-row"><span class="info-label">{{ _ceviri('kur_esasi', dil) }}:</span> <span class="info-value">
-      {% if kur_modu == 'guncel' %}Güncel kur ({{ bugun.strftime('%d.%m.%Y') }}){% else %}{{ _ceviri('islem_gunu_kuru', dil) }}{% endif %}
+      {% if kur_modu == 'guncel' %}{{ 'Güncel kur' if (dil or '').lower().startswith('tr') else 'Current rate' }} ({{ bugun.strftime('%d.%m.%Y') }}){% else %}{{ _ceviri('islem_gunu_kuru', dil) }}{% endif %}
     </span></div>
     {% endif %}
     <div class="info-row"><span class="info-label">{{ _ceviri('adres', dil) }}:</span> <span class="info-value" style="font-weight:normal;">{{ cari.adres or '-' }}</span></div>
