@@ -601,6 +601,11 @@ async function detayAc(id) {
       eylem.push(`<button class="blok-btn" onclick="location.href='/proforma?siparis_id=${encodeURIComponent(id)}&musteri=${encodeURIComponent(s.musteri || '')}'">Proforma oluştur</button>`);
     }
   }
+  /* SG1: sipariş düzenleme. Teslim edilmiş ya da sevkiyatı olan
+     siparişte kalemler kilitli — sunucu da reddeder, düğme yine de
+     açılır çünkü termin/açıklama gibi bilgiler güncellenebilir. */
+  if (yazabilir('siparis') && sip.durum !== 'Iptal Edildi')
+    eylem.push(`<button class="blok-btn" onclick="duzenleAc('${kacar(id)}')">Düzenle</button>`);
   if (yazabilir('cari'))
     eylem.push(`<button class="blok-btn" onclick="avansAc('${kacar(id)}','${kacar(sip.musteri || '')}')">Avans devret</button>`);
   if (izinli.includes('Iptal Edildi') && yazabilir('siparis'))
@@ -659,7 +664,12 @@ document.getElementById('ara').addEventListener('input', e => {
 
 let CARILER = [], SERBEST_STOK = [], SECILI_STOK = [], KALEMLER = [];
 
+let DUZENLE_ID = null;   // dolu ise modal DÜZENLEME modunda → PUT
+
 async function yeniAc() {
+  DUZENLE_ID = null;
+  document.querySelector('#modal .modal-bas h3').textContent = 'Yeni Sipariş';
+  document.getElementById('fKaydet').textContent = 'Siparişi Oluştur';
   acenteleriYukle(); komisyonHesapla(); kdvHesapla();
   // Cins/yüzey alanları Ayarlar > Listeler'den beslenir, girilen değer BÜYÜK HARF olur
   listeyeBagla('kCins', 'cins');
@@ -683,7 +693,48 @@ async function yeniAc() {
     : '<option value="">— müşteri yok, Cari ekranından ekle —</option>';
   await stokYukle();
 }
-function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
+function modalKapat() { document.getElementById('modal').classList.remove('acik'); DUZENLE_ID = null; }
+
+/* SG1 — SİPARİŞİ DÜZENLE.
+   Uç nokta (PUT /api/siparis/<id>) kalem değişimini zaten destekliyordu
+   ama ekranda yolu yoktu: yanlış girilen bir sipariş silinip yeniden
+   oluşturuluyor, rezervasyonlar ve proforma bağı kopuyordu. */
+async function duzenleAc(id) {
+  let d;
+  try { d = await api(`/api/siparis/${encodeURIComponent(id)}`); } catch (e) { return; }
+  const sip = d.siparis || d;
+  const kalemler = d.kalemler || sip.kalemler || [];
+  cekmeceKapat();
+  await yeniAc();                      // formu sıfırla, listeleri doldur
+  DUZENLE_ID = id;
+  document.querySelector('#modal .modal-bas h3').textContent = 'Siparişi Düzenle · ' + id;
+  document.getElementById('fKaydet').textContent = 'Değişiklikleri Kaydet';
+  const ata = (alan, deger) => {
+    const el = document.getElementById(alan);
+    if (el && deger !== undefined && deger !== null) el.value = deger;
+  };
+  ata('fMusteri', sip.musteri); ata('fDoviz', sip.doviz || 'USD');
+  ata('fDurum', sip.durum); ata('fSatisTipi', sip.satis_tipi || 'ihracat');
+  ata('fOdeme', sip.odeme_sekli); ata('fTeslim', sip.teslim_sekli);
+  ata('fTermin', (sip.termin || '').slice(0, 10)); ata('fAciklama', sip.aciklama || '');
+  ata('fAcente', sip.acente_cari_id || ''); ata('fKomYontem', sip.komisyon_yontem || '');
+  ata('fKomDeger', sip.komisyon_deger || 0); ata('fKomDoviz', sip.komisyon_doviz || sip.doviz || 'USD');
+  ata('fKomAciklama', sip.komisyon_aciklama || '');
+  ata('fKdvOran', sip.kdv_oran || 0); ata('fTevkifat', sip.tevkifat_oran || '');
+  KALEMLER = kalemler.map(k => ({
+    urun_tip: k.urun_tip || 'PLAKA', cins: k.cins || '', ozellik: k.ozellik || '',
+    boy: k.boy || null, yukseklik: k.yukseklik || null, kalinlik: k.kalinlik || null,
+    en: k.en || null, adet: k.adet || 1, kasa_ici_adet: k.kasa_ici_adet || 1,
+    miktar: parseFloat(k.miktar) || 0, birim: k.birim || 'm2',
+    birim_fiyat: parseFloat(k.birim_fiyat) || 0,
+    toplam_fiyat: parseFloat(k.toplam_fiyat) || 0,
+    kg_toplam: k.kg_toplam || 0, notlar: k.notlar || '',
+    stok_ids: k.stok_ids || [],
+  }));
+  SECILI_STOK = [];
+  kalemListeCiz(); komisyonHesapla(); kdvHesapla();
+  document.getElementById('modal').classList.add('acik');
+}
 
 /** Bir <select>'i Ayarlar > Listeler'deki kategoriden doldurur (liste boşsa varsayılanlar kalır). */
 async function secenekleriDoldur(selectId, kategori) {
@@ -918,10 +969,12 @@ async function siparisKaydet() {
   if (!musteri) { bildir('Müşteri seç.', true); return; }
   if (!KALEMLER.length) { bildir('En az bir kalem ekle.', true); return; }
   const btn = document.getElementById('fKaydet');
-  btn.disabled = true; btn.textContent = 'Oluşturuluyor…';
+  const duzenleme = !!DUZENLE_ID;
+  const eskiYazi = btn.textContent;
+  btn.disabled = true; btn.textContent = duzenleme ? 'Kaydediliyor…' : 'Oluşturuluyor…';
   try {
-    const d = await api('/api/siparis', {
-      method: 'POST',
+    const d = await api(duzenleme ? `/api/siparis/${encodeURIComponent(DUZENLE_ID)}` : '/api/siparis', {
+      method: duzenleme ? 'PUT' : 'POST',
       body: JSON.stringify({
         musteri,
         doviz: document.getElementById('fDoviz').value,
@@ -944,10 +997,10 @@ async function siparisKaydet() {
         kalemler: KALEMLER
       })
     });
-    bildir('Sipariş oluşturuldu · ' + (d.id || ''));
+    bildir(duzenleme ? 'Sipariş güncellendi · ' + DUZENLE_ID : 'Sipariş oluşturuldu · ' + (d.id || ''));
     modalKapat(); await yukle();
-  } catch (e) { /* */ }
-  finally { btn.disabled = false; btn.textContent = 'Siparişi Oluştur'; }
+  } catch (e) { /* api() mesajı gösterir (kalem kilitliyse sunucu söyler) */ }
+  finally { btn.disabled = false; btn.textContent = eskiYazi; }
 }
 
 /* ═══ AVANS DEVRİ ═══

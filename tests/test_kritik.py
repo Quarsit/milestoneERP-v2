@@ -471,3 +471,63 @@ def test_on1_iki_ondalik_hane():
     kalem = c.get('/api/stok?tip=PLAKA').get_json()['data']
     kayit = next(x for x in kalem if x['id'] == 'PON')
     assert kayit['m2'] == 6.56
+
+
+def test_sg1_sg2_siparis_guncelleme_ve_stoktan_ekleme():
+    """SG1: sipariş kalemleri güncellenebiliyor (rezervasyon bağları
+    çözülüyor); sevkiyatı olan sipariş kilitli.
+    SG2: stoktan seçilen ürünler mevcut siparişe kalem olarak ekleniyor,
+    aynı blok/ölçü tek kalemde toplanıyor, başka siparişteki stok atlanıyor."""
+    from models import Siparis, SiparisKalem, Rezervasyon, PlakaStok, Sevkiyat
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        for i in range(4):
+            db.session.add(PlakaStok(id=f'SPK{i}', cins='SG', ozellik='POLISHED', blok_no='B9',
+                                     boy=300, yukseklik=200, kalinlik=2, metraj_m2=6.0,
+                                     durum='Serbest', doviz='USD'))
+        db.session.add(PlakaStok(id='SPKX', cins='SG', ozellik='HONED', blok_no='B9',
+                                 boy=300, yukseklik=200, kalinlik=2, metraj_m2=6.0,
+                                 durum='Serbest', doviz='USD'))
+        db.session.commit()
+    sid = c.post('/api/siparis', headers=H, json={
+        'musteri': 'ACIK CARI', 'doviz': 'USD', 'durum': 'Onaylandi',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'SG', 'adet': 1, 'miktar': 6,
+                      'birim': 'm2', 'birim_fiyat': 100, 'stok_ids': ['SPK0']}]}).get_json()['id']
+
+    # SG2 — üç stok ekle: ikisi aynı yüzey (tek kalem), biri farklı (ayrı kalem)
+    r = c.post(f'/api/siparis/{sid}/stok_ekle', headers=H,
+               json={'stok_ids': ['SPK1', 'SPK2', 'SPKX'], 'birim_fiyat': 120})
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    assert r.get_json()['kalem'] == 2
+    with fa.app.app_context():
+        kalemler = SiparisKalem.query.filter_by(siparis_id=sid).order_by(SiparisKalem.sira).all()
+        assert len(kalemler) == 3
+        cift = [k for k in kalemler if k.ozellik == 'POLISHED' and k.adet == 2][0]
+        assert float(cift.miktar) == 12.0 and float(cift.toplam_fiyat) == 1440.0
+        assert Rezervasyon.query.filter_by(siparis_id=sid, iptal_nedeni=None).count() == 4
+
+    # Başka siparişteki stok atlanır
+    sid2 = c.post('/api/siparis', headers=H, json={
+        'musteri': 'ACIK CARI', 'doviz': 'USD', 'durum': 'Onaylandi',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'SG', 'adet': 1, 'miktar': 6,
+                      'birim': 'm2', 'birim_fiyat': 100, 'stok_ids': ['SPK3']}]}).get_json()['id']
+    r = c.post(f'/api/siparis/{sid}/stok_ekle', headers=H, json={'stok_ids': ['SPK3']})
+    assert r.status_code == 400 and sid2 in r.get_json()['mesaj']
+
+    # SG1 — kalem güncelleme: eski kalemler silinir, bağlar çözülür
+    r = c.put(f'/api/siparis/{sid}', headers=H, json={'kalemler': [
+        {'urun_tip': 'PLAKA', 'cins': 'SG', 'adet': 1, 'miktar': 6.5, 'birim': 'm2',
+         'birim_fiyat': 150, 'stok_ids': ['SPK0']}]})
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    with fa.app.app_context():
+        kl = SiparisKalem.query.filter_by(siparis_id=sid).all()
+        assert len(kl) == 1 and float(kl[0].toplam_fiyat) == 975.0
+        assert float(Siparis.query.get(sid).toplam_tutar) == 975.0
+        db.session.add(Sevkiyat(id='SVK-SG', siparis_id=sid, musteri='ACIK CARI', durum='Hazirlaniyor'))
+        db.session.commit()
+    # Sevkiyat varken kalem değişmez, ama sipariş bilgisi güncellenir
+    r = c.put(f'/api/siparis/{sid}', headers=H, json={'kalemler': []})
+    assert r.status_code == 400 and 'sevkiyat' in r.get_json()['mesaj'].lower()
+    assert c.put(f'/api/siparis/{sid}', headers=H, json={'aciklama': 'not'}).status_code == 200
+    assert c.post(f'/api/siparis/{sid}/stok_ekle', headers=H,
+                  json={'stok_ids': ['SPK1']}).status_code == 400

@@ -133,6 +133,10 @@
 <div id="secCubuk" style="display:none;align-items:center;gap:10px;margin-bottom:10px;
      padding:8px 12px;background:var(--verde-acik);border-radius:8px;font-size:.85rem">
   <strong><span id="secSayi">0</span> stok seçildi</strong>
+  <!-- SG2: seçili stokları AÇIK bir siparişe kalem olarak ekle.
+       Eskiden tek yol yeni sipariş açmaktı; sonradan gelen mal mevcut
+       siparişe eklenemiyordu. -->
+  <button class="blok-btn" id="secSipBtn" onclick="siparisEkleAc()">Siparişe ekle</button>
   <button class="blok-btn" id="secSilBtn" onclick="secilenleriSil()"
           style="color:var(--kirmizi)">Seçilenleri Sil</button>
 </div>
@@ -475,6 +479,34 @@
     <div class="modal-alt">
       <button class="iptal-btn" onclick="topluKapat()">Kapat</button>
       <button class="btn-yeni" id="tKaydet" onclick="topluKaydet()" disabled>İçe Aktar</button>
+    </div>
+  </div>
+</div>
+
+<!-- SG2 — Seçili stokları mevcut siparişe ekleme -->
+<div class="modal-ortu" id="sipEkleModal" onclick="if(event.target===this)sipEkleKapat()">
+  <div class="modal" style="width:560px" role="dialog" aria-label="Siparişe ekle">
+    <div class="modal-bas">
+      <h3>Seçili Stokları Siparişe Ekle</h3>
+      <p id="sipEkleAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-alan"><label>Sipariş</label>
+        <select id="sipEkleSec"></select>
+      </div>
+      <div class="form-satir f2" style="margin-top:12px">
+        <div class="form-alan"><label>Birim Fiyat
+          <span style="font-weight:400;color:var(--soluk)">· opsiyonel</span></label>
+          <input id="sipEkleFiyat" type="number" step="0.01" placeholder="boş = 0, sonra düzenlersiniz"></div>
+        <div class="form-alan"><label>Sipariş Dövizi</label>
+          <input id="sipEkleDoviz" readonly style="background:var(--notr-bg)"></div>
+      </div>
+      <div class="not" style="margin-top:12px">Aynı blok, ölçü ve yüzeydeki stoklar tek kalemde toplanır.
+        Stoklar seçilen siparişe rezerve edilir. Başka siparişe bağlı ya da satılmış stoklar atlanır.</div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="sipEkleKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="sipEkleBtn" onclick="siparisEkleUygula()">Siparişe Ekle</button>
     </div>
   </div>
 </div>
@@ -1033,6 +1065,53 @@ function secDurumGuncelle() {
   c.style.display = (SECIM_KIPI && SECILENLER.size) ? 'flex' : 'none';
   const s = document.getElementById('secSayi');
   if (s) s.textContent = SECILENLER.size;
+}
+
+/* SG2 — seçili stokları mevcut siparişe ekle.
+   POST /api/siparis/<id>/stok_ekle {stok_ids, birim_fiyat} */
+let SIP_LISTE = [];
+async function siparisEkleAc() {
+  const idler = [...SECILENLER];
+  if (!idler.length) return;
+  let d;
+  try { d = await api('/api/siparis?durum=aktif&per_page=200'); } catch (e) { return; }
+  SIP_LISTE = (d.data || []).filter(x => !['Teslim Edildi', 'Iptal Edildi'].includes(x.durum));
+  if (!SIP_LISTE.length) {
+    bilgiGoster('Açık sipariş yok', 'Stok eklenebilecek açık sipariş bulunamadı. Önce sipariş oluşturun.');
+    return;
+  }
+  document.getElementById('sipEkleAlt').textContent = `${idler.length} stok seçildi`;
+  document.getElementById('sipEkleSec').innerHTML = SIP_LISTE.map(x =>
+    `<option value="${kacar(x.id)}">${kacar(x.id)} · ${kacar(x.musteri || '')} · ${kacar(x.durum || '')} · ${para(x.toplam_tutar || 0, x.doviz)}</option>`).join('');
+  sipEkleDovizGuncelle();
+  document.getElementById('sipEkleSec').onchange = sipEkleDovizGuncelle;
+  document.getElementById('sipEkleFiyat').value = '';
+  document.getElementById('sipEkleModal').classList.add('acik');
+}
+function sipEkleDovizGuncelle() {
+  const id = document.getElementById('sipEkleSec').value;
+  const s = SIP_LISTE.find(x => x.id === id);
+  document.getElementById('sipEkleDoviz').value = (s && s.doviz) || 'USD';
+}
+function sipEkleKapat() { document.getElementById('sipEkleModal').classList.remove('acik'); }
+async function siparisEkleUygula() {
+  const id = document.getElementById('sipEkleSec').value;
+  const idler = [...SECILENLER];
+  if (!id || !idler.length) return;
+  const fiyat = document.getElementById('sipEkleFiyat').value;
+  const btn = document.getElementById('sipEkleBtn');
+  btn.disabled = true; btn.textContent = 'Ekleniyor…';
+  try {
+    const d = await api(`/api/siparis/${encodeURIComponent(id)}/stok_ekle`, {
+      method: 'POST',
+      body: JSON.stringify({ stok_ids: idler, birim_fiyat: fiyat === '' ? null : parseFloat(fiyat) })
+    });
+    bildir(d.mesaj || 'Siparişe eklendi');
+    SECILENLER.clear(); secDurumGuncelle();
+    sipEkleKapat();
+    await Promise.all([listeyiCiz(), kpiYukle()]);
+  } catch (e) { /* api() mesajı gösterir */ }
+  finally { btn.disabled = false; btn.textContent = 'Siparişe Ekle'; }
 }
 
 async function secilenleriSil() {

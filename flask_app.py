@@ -10029,9 +10029,15 @@ def create_app():
 
 
     def _siparis_toplam_guncelle(siparis):
-        """Bir siparişin toplam_tutar'ını kalemlerden hesaplar (sipariş döviziyle)."""
+        """Bir siparişin toplam_tutar'ını kalemlerden hesaplar (sipariş döviziyle).
+
+        SG1: kalemler ILISKI UZERINDEN degil, SORGUYLA okunur. Ayni
+        oturumda kalem silinip yenisi eklendiginde iliski koleksiyonu
+        bayat kalabiliyor ve toplam ESKI kalemlerden hesaplaniyordu.
+        """
+        db.session.flush()
         toplam = 0
-        for k in siparis.kalemler:
+        for k in SiparisKalem.query.filter_by(siparis_id=siparis.id).all():
             # Şimdilik kalem dövizi sipariş dövizine eşit varsayılıyor.
             # Farklı dövizler için kur çevrimi eklenebilir.
             toplam += (k.toplam_fiyat or 0)
@@ -10474,6 +10480,18 @@ def create_app():
 
         # KALEM GÜNCELLEMESİ (eğer "kalemler" key'i gönderildiyse full replace)
         if 'kalemler' in data:
+            # ── SG1 — KALEM DEGISIMI NE ZAMAN YASAK ──
+            # Teslim edilmis ya da sevkiyata/satis kaydina baglanmis
+            # siparisin kalemleri degistirilemez: sevk edilen mal ile
+            # belge birbirini tutmaz hale gelirdi.
+            _sevk = Sevkiyat.query.filter_by(siparis_id=siparis_id).count()
+            _satis = SatisKaydi.query.filter_by(siparis_id=siparis_id).count()
+            if (sip.durum == 'Teslim Edildi') or _sevk or _satis:
+                _neden = ('sipariş teslim edilmiş' if sip.durum == 'Teslim Edildi'
+                          else (f'{_sevk} sevkiyat' if _sevk else f'{_satis} satış kaydı') + ' bağlı')
+                return jsonify({'ok': False, 'error': 'kalem_kilitli',
+                    'mesaj': f'Kalemler değiştirilemez — {_neden}. '
+                             f'Sipariş bilgileri (termin, açıklama, ödeme) yine güncellenebilir.'}), 400
             # Önce mevcut kalemleri ve rezervasyonları temizle
             # Stokları serbest bırak (sipariş henüz Teslim Edildi değilse)
             for k in list(sip.kalemler):
@@ -10494,6 +10512,14 @@ def create_app():
                     r.iptal_nedeni = 'Kalem güncellendi'
                     r.iptal_tarihi = datetime.now()
                     r.iptal_eden = session.get('kullanici', 'sistem')
+                # SD1 sinifi: rezervasyon ve satis kaydi kalemi FK ile
+                # isaret ediyor. Bag kopmadan kalem silinemez —
+                # PostgreSQL 500 doner (SQLite'ta gorunmez).
+                Rezervasyon.query.filter_by(siparis_kalem_id=k.id).update(
+                    {'siparis_kalem_id': None}, synchronize_session=False)
+                SatisKaydi.query.filter_by(siparis_kalem_id=k.id).update(
+                    {'siparis_kalem_id': None}, synchronize_session=False)
+                db.session.flush()
                 db.session.delete(k)
             db.session.flush()
 
@@ -10776,6 +10802,144 @@ def create_app():
         return jsonify({'ok': True, 'yuzde': yuzde,
                         'mesaj': f'Uretim avans esigi %{yuzde:g} olarak ayarlandi'
                                  + (' (kapi kapali)' if yuzde == 0 else '')})
+
+    # ══════════════════════════════════════════════════════════
+    #  SG2 — STOKTAN MEVCUT SIPARISE EKLEME
+    # ══════════════════════════════════════════════════════════
+    # Depoda stok secip "yeni siparis" acmak zorunda kalmadan, ACIK
+    # bir siparise kalem eklemek icin. Ayni blok/cins/olcu/yuzey
+    # stoklari TEK KALEMDE toplanir (proforma bundle bolmesi ve
+    # ceki listesi bu sekilde dogru calisir).
+    @app.route('/api/siparis/<siparis_id>/stok_ekle', methods=['POST'])
+    def api_siparis_stok_ekle(siparis_id):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        import json as _json
+        sip = Siparis.query.get(siparis_id)
+        if not sip:
+            return jsonify({'ok': False, 'mesaj': 'Siparis bulunamadi'}), 404
+        if sip.durum in ('Teslim Edildi', 'Iptal Edildi'):
+            return jsonify({'ok': False, 'error': 'durum',
+                'mesaj': f'Sipariş "{sip.durum}" durumunda; stok eklenemez.'}), 400
+        if Sevkiyat.query.filter_by(siparis_id=siparis_id).count():
+            return jsonify({'ok': False, 'error': 'sevkiyat_var',
+                'mesaj': 'Bu siparişe bağlı sevkiyat var; kalem eklenemez.'}), 400
+
+        data = request.get_json(silent=True) or {}
+        stok_ids = [str(x) for x in (data.get('stok_ids') or []) if x]
+        if not stok_ids:
+            return jsonify({'ok': False, 'mesaj': 'Stok seçilmedi'}), 400
+        birim_fiyat = data.get('birim_fiyat')
+        try:
+            birim_fiyat = q2(birim_fiyat) if birim_fiyat not in (None, '') else None
+        except (TypeError, ValueError):
+            birim_fiyat = None
+
+        gruplar, sira_liste, atlanan = {}, [], []
+        for sid in stok_ids:
+            stok, tip = None, None
+            for _t, _m in (('PLAKA', PlakaStok), ('BLOK', BlokStok), ('EBATLI', EbatliStok)):
+                _s = _m.query.get(sid)
+                if _s is not None:
+                    stok, tip = _s, _t
+                    break
+            if stok is None:
+                atlanan.append(f'{sid} (bulunamadı)')
+                continue
+            # BASKA SIPARISE BAGLI STOK ALINMAZ — sessizce tasimak, o
+            # siparisi eksiltmek demek olurdu.
+            _baskasi = Rezervasyon.query.filter(
+                Rezervasyon.stok_id == sid,
+                Rezervasyon.iptal_nedeni.is_(None),
+                Rezervasyon.siparis_id.isnot(None),
+                Rezervasyon.siparis_id != siparis_id).first()
+            if _baskasi:
+                atlanan.append(f'{sid} ({_baskasi.siparis_id} siparişinde)')
+                continue
+            if stok.durum not in ('Serbest', 'Rezerve'):
+                atlanan.append(f'{sid} ({stok.durum})')
+                continue
+
+            cins = getattr(stok, 'cins', '') or ''
+            ozellik = getattr(stok, 'ozellik', '') or ''
+            no = getattr(stok, 'blok_no', None) or getattr(stok, 'kasa_no', None) or ''
+            boy = getattr(stok, 'boy', 0) or 0
+            yuk = getattr(stok, 'yukseklik', 0) or 0
+            kal = getattr(stok, 'kalinlik', 0) or getattr(stok, 'en', 0) or 0
+            if tip == 'BLOK':
+                miktar = getattr(stok, 'tonaj', 0) or 0
+                birim = 'ton'
+            else:
+                miktar = getattr(stok, 'metraj_m2', 0) or 0
+                birim = 'm2'
+            anahtar = (tip, cins, ozellik, no, boy, yuk, kal)
+            if anahtar not in gruplar:
+                gruplar[anahtar] = {
+                    'urun_tip': tip, 'cins': cins, 'ozellik': ozellik, 'blok_no': no,
+                    'boy': boy, 'yukseklik': yuk, 'kalinlik': kal if tip != 'BLOK' else None,
+                    'en': kal if tip == 'BLOK' else None,
+                    'adet': 0, 'miktar': 0.0, 'birim': birim,
+                    'kasa_ici_adet': getattr(stok, 'kasa_ici_adet', 1) or 1,
+                    'stok_ids': [],
+                }
+                sira_liste.append(anahtar)
+            g = gruplar[anahtar]
+            g['adet'] += 1
+            g['miktar'] = q2(g['miktar'] + float(miktar or 0))
+            g['stok_ids'].append(sid)
+
+        if not sira_liste:
+            return jsonify({'ok': False, 'error': 'uygun_stok_yok',
+                'mesaj': 'Eklenebilecek stok yok: ' + (', '.join(atlanan) or 'seçim boş')}), 400
+
+        try:
+            _sonraki = (db.session.query(db.func.max(SiparisKalem.sira))
+                        .filter_by(siparis_id=sip.id).scalar() or 0)
+            eklenen_kalem, rez_sayisi = 0, 0
+            for anahtar in sira_liste:
+                g = gruplar[anahtar]
+                _sonraki += 1
+                _fiyat = birim_fiyat if birim_fiyat is not None else 0
+                hesap = _kalem_hesapla({
+                    'urun_tip': g['urun_tip'], 'boy': g['boy'], 'yukseklik': g['yukseklik'],
+                    'en': g['en'], 'kalinlik': g['kalinlik'], 'adet': g['adet'],
+                    'kasa_ici_adet': g['kasa_ici_adet'],
+                    'birim_fiyat': _fiyat, 'miktar': g['miktar'],
+                })
+                kalem = SiparisKalem(
+                    siparis_id=sip.id, sira=_sonraki,
+                    urun_tip=g['urun_tip'], cins=g['cins'], ozellik=g['ozellik'],
+                    aciklama=g['blok_no'] or None,
+                    boy=g['boy'], yukseklik=g['yukseklik'], en=g['en'], kalinlik=g['kalinlik'],
+                    olcu=hesap['olcu'], adet=g['adet'], kasa_ici_adet=g['kasa_ici_adet'],
+                    miktar=g['miktar'], birim=g['birim'],
+                    m2_toplam=hesap['m2_toplam'], m3_toplam=hesap['m3_toplam'],
+                    sqft_toplam=hesap['sqft_toplam'],
+                    birim_fiyat=_fiyat, toplam_fiyat=hesap['toplam_fiyat'],
+                    doviz=sip.doviz or 'USD',
+                    stoktan_geldi=True, stok_ids_json=_json.dumps(g['stok_ids']))
+                db.session.add(kalem)
+                db.session.flush()
+                rez_sayisi += _kalem_rezervasyonlari_olustur(sip, kalem, g['stok_ids'])
+                eklenen_kalem += 1
+
+            _siparis_toplam_guncelle(sip)
+            _log_audit('GUNCELLE', 'siparis', sip.id,
+                       yeni={'eklenen_kalem': eklenen_kalem, 'stok': len(stok_ids),
+                             'atlanan': len(atlanan)},
+                       aciklama='Stoktan siparise kalem eklendi')
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            app.logger.exception('Stoktan siparise ekleme basarisiz')
+            return jsonify({'ok': False, 'mesaj': f'Ekleme basarisiz: {e}'}), 500
+
+        mesaj = f'{eklenen_kalem} kalem eklendi ({rez_sayisi} stok rezerve edildi)'
+        if birim_fiyat is None:
+            mesaj += ' — birim fiyatlar BOŞ, siparişi düzenleyip girin'
+        if atlanan:
+            mesaj += f'. Atlanan: {", ".join(atlanan[:5])}' + (' …' if len(atlanan) > 5 else '')
+        return jsonify({'ok': True, 'siparis_id': sip.id, 'kalem': eklenen_kalem,
+                        'rezervasyon': rez_sayisi, 'atlanan': atlanan, 'mesaj': mesaj})
 
     @app.route('/api/siparis/<siparis_id>', methods=['DELETE'])
     def api_siparis_sil(siparis_id):
