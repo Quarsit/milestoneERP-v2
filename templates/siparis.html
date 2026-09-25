@@ -119,6 +119,48 @@
 </div>
 
 <!-- Avans devri modalı -->
+<!-- F1 — KALEM KARŞILAMA PLANI: bir kalem stok + üretim + dış alım
+     karışımıyla karşılanabilir. Stok satırları stok seçilince
+     kendiliğinden oluşur; üretim ve dış alım buradan girilir. -->
+<div class="modal-ortu" id="karsilamaModal" onclick="if(event.target===this)karsilamaKapat()">
+  <div class="modal" style="width:680px;max-width:100%" role="dialog" aria-label="Karşılama planı">
+    <div class="modal-bas">
+      <h3>Karşılama Planı</h3>
+      <p id="krsAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div id="krsOzet" style="background:var(--notr-bg);border-radius:var(--r-kucuk);padding:9px 12px;font-size:.82rem;margin-bottom:12px"></div>
+      <div id="krsListe" style="margin-bottom:14px"></div>
+      <div style="border-top:1px solid var(--cizgi);padding-top:12px">
+        <div style="font-size:.78rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:8px">Kaynak ekle</div>
+        <div class="form-satir" style="grid-template-columns:1fr 1.4fr">
+          <div class="form-alan"><label>Kaynak</label>
+            <select id="krsTip">
+              <option value="URETIM">Üretimden (kesim)</option>
+              <option value="DIS_ALIM">Dış alım (tedarikçi)</option>
+            </select>
+          </div>
+          <div class="form-alan"><label>Tedarikçi / Blok — açıklama</label>
+            <input id="krsAd" placeholder="ör. ALBSTONE SHPK ya da blok T-14"></div>
+        </div>
+        <div class="form-satir" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="form-alan"><label>Miktar</label>
+            <input id="krsMiktar" type="number" step="0.01" oninput="krsHesapla()"></div>
+          <div class="form-alan"><label>Birim Maliyet</label>
+            <input id="krsMaliyet" type="number" step="0.01" oninput="krsHesapla()"></div>
+          <div class="form-alan"><label>Döviz</label>
+            <select id="krsDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select></div>
+        </div>
+        <div id="krsHesap" class="mono" style="font-size:.8rem;color:var(--soluk);margin-top:-4px"></div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="karsilamaKapat()">Kapat</button>
+      <button class="btn-yeni" id="krsKaydet" onclick="karsilamaEkle()">Kaynağı ekle</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-ortu" id="avansModal" onclick="if(event.target===this)avansKapat()">
   <div class="modal" style="width:520px" role="dialog" aria-label="Avans devri">
     <div class="modal-bas">
@@ -551,6 +593,11 @@ async function detayAc(id) {
             </div>
           </div>
           <span class="m">${para(k.toplam_fiyat, k.doviz)}</span>
+          <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;margin-top:4px;
+                      font-size:.74rem;color:var(--soluk)">
+            <span>${karsilamaOzetMetni(k)}</span>
+            ${yazabilir('siparis') ? `<button class="mini-btn" onclick="event.stopPropagation();karsilamaAc('${kacar(sip.id)}', ${k.id})">Karşılama</button>` : ''}
+          </div>
         </div>`).join('')
       : '<div class="bos" style="padding:12px">Kalem kaydı yok.</div>'}
     </div>
@@ -1001,6 +1048,124 @@ async function siparisKaydet() {
     modalKapat(); await yukle();
   } catch (e) { /* api() mesajı gösterir (kalem kilitliyse sunucu söyler) */ }
   finally { btn.disabled = false; btn.textContent = eskiYazi; }
+}
+
+/* ═══ F1 · KALEM KARŞILAMA ═══
+   Bir kalem tek kaynaktan gelmek zorunda değil. Stok satırları stok
+   seçilince kendiliğinden yazılır; üretim ve dış alım buradan girilir.
+   Kârlılık ve fatura tipi bu kırılımdan okunur. */
+const KRS_AD = { STOK: 'stok', URETIM: 'üretim', DIS_ALIM: 'dış alım' };
+let KRS_SIP = null, KRS_KALEM = null, KRS_VERI = null;
+
+function karsilamaOzetMetni(k) {
+  const satirlar = k.karsilama || [];
+  const hedef = Number(k.miktar) || 0;
+  if (!satirlar.length) {
+    return hedef ? `Karşılama girilmemiş · ${hedef.toLocaleString('tr-TR')} ${kacar(k.birim || '')} açık` : 'Karşılama girilmemiş';
+  }
+  const toplam = satirlar.reduce((a, x) => a + (Number(x.miktar) || 0), 0);
+  const parcalar = {};
+  satirlar.forEach(x => { parcalar[x.kaynak_tip] = (parcalar[x.kaynak_tip] || 0) + (Number(x.miktar) || 0); });
+  const metin = Object.entries(parcalar)
+    .map(([t, m]) => `${m.toLocaleString('tr-TR')} ${kacar(k.birim || '')} ${KRS_AD[t] || t}`).join(' + ');
+  const acik = Math.max(0, hedef - toplam);
+  return metin + (acik > 0.005 ? ` · ${acik.toLocaleString('tr-TR')} ${kacar(k.birim || '')} açık` : ' · tam');
+}
+
+async function karsilamaAc(siparisId, kalemId) {
+  KRS_SIP = siparisId; KRS_KALEM = kalemId;
+  document.getElementById('karsilamaModal').classList.add('acik');
+  document.getElementById('krsListe').innerHTML = '<div class="yukleniyor">Yükleniyor…</div>';
+  document.getElementById('krsMiktar').value = '';
+  document.getElementById('krsMaliyet').value = '';
+  document.getElementById('krsAd').value = '';
+  await karsilamaYenile();
+}
+function karsilamaKapat() {
+  document.getElementById('karsilamaModal').classList.remove('acik');
+  if (KRS_SIP) detayAc(KRS_SIP);          // çekmecedeki özet tazelensin
+}
+
+async function karsilamaYenile() {
+  try {
+    KRS_VERI = await api(`/api/siparis/${encodeURIComponent(KRS_SIP)}/kalem/${KRS_KALEM}/karsilama`);
+  } catch (e) { return; }
+  const k = KRS_VERI.kalem || {};
+  document.getElementById('krsAlt').textContent =
+    `${k.cins || ''} · ${(k.miktar || 0).toLocaleString('tr-TR')} ${k.birim || ''} × ${para2(k.birim_fiyat, k.doviz)}`;
+  const acik = Number(KRS_VERI.acik) || 0;
+  document.getElementById('krsOzet').innerHTML =
+    `Karşılanan <b>${(KRS_VERI.karsilanan || 0).toLocaleString('tr-TR')}</b> / ${(KRS_VERI.hedef || 0).toLocaleString('tr-TR')} ${kacar(k.birim || '')}`
+    + (acik > 0.005
+        ? ` · <span style="color:var(--kehribar);font-weight:700">${acik.toLocaleString('tr-TR')} ${kacar(k.birim || '')} açık</span>`
+        : ' · <span style="color:var(--verde);font-weight:700">tam karşılandı</span>');
+  const satirlar = KRS_VERI.satirlar || [];
+  document.getElementById('krsListe').innerHTML = satirlar.length ? satirlar.map(x => `
+    <div class="kalem-satir">
+      <span class="rozet ${x.kaynak_tip === 'STOK' ? 'rz-yesil' : x.kaynak_tip === 'URETIM' ? 'rz-mavi' : 'rz-kehribar'}">${kacar(KRS_AD[x.kaynak_tip] || x.kaynak_tip)}</span>
+      <div>
+        <div>${kacar(x.kaynak_ad || x.kaynak_ref || '—')}</div>
+        <div style="color:var(--soluk);font-size:.76rem">
+          ${(x.miktar || 0).toLocaleString('tr-TR')} ${kacar(x.birim || '')} ·
+          birim maliyet ${para2(x.birim_maliyet, x.doviz)} ·
+          toplam ${para2((x.miktar || 0) * (x.birim_maliyet || 0), x.doviz)}
+        </div>
+      </div>
+      ${x.kaynak_tip === 'STOK'
+        ? '<span style="color:var(--soluk);font-size:.74rem">stoktan</span>'
+        : `<button class="mini-btn" style="color:var(--kirmizi)" onclick="karsilamaSil('${kacar(x.id)}')">Sil</button>`}
+    </div>`).join('') : '<div class="bos" style="padding:10px">Henüz kaynak girilmemiş.</div>';
+  krsHesapla();
+}
+
+function krsHesapla() {
+  const k = (KRS_VERI && KRS_VERI.kalem) || {};
+  const m = parseFloat(document.getElementById('krsMiktar').value) || 0;
+  const bm = parseFloat(document.getElementById('krsMaliyet').value) || 0;
+  const dv = document.getElementById('krsDoviz').value;
+  const kutu = document.getElementById('krsHesap');
+  if (!m) { kutu.textContent = ''; return; }
+  const acik = Number(KRS_VERI && KRS_VERI.acik) || 0;
+  const gelir = m * (Number(k.birim_fiyat) || 0);
+  kutu.innerHTML = `${m.toLocaleString('tr-TR')} ${kacar(k.birim || '')} × ${para2(bm, dv)} = `
+    + `<b>${para2(m * bm, dv)}</b> maliyet · bu payın geliri ${para2(gelir, k.doviz)}`
+    + (m > acik + 0.005 ? ` · <span style="color:var(--kirmizi)">açık miktarı (${acik.toLocaleString('tr-TR')}) aşıyor</span>` : '');
+}
+
+async function karsilamaEkle() {
+  const miktar = parseFloat(document.getElementById('krsMiktar').value) || 0;
+  if (miktar <= 0) { bildir('Miktar gir.', true); return; }
+  const btn = document.getElementById('krsKaydet');
+  btn.disabled = true; btn.textContent = 'Ekleniyor…';
+  try {
+    const d = await api(`/api/siparis/${encodeURIComponent(KRS_SIP)}/kalem/${KRS_KALEM}/karsilama`, {
+      method: 'POST',
+      body: JSON.stringify({
+        kaynak_tip: document.getElementById('krsTip').value,
+        kaynak_ad: document.getElementById('krsAd').value,
+        miktar,
+        birim: (KRS_VERI && KRS_VERI.kalem && KRS_VERI.kalem.birim) || 'm2',
+        birim_maliyet: parseFloat(document.getElementById('krsMaliyet').value) || 0,
+        doviz: document.getElementById('krsDoviz').value
+      })
+    });
+    bildir(d.mesaj || 'Karşılama eklendi');
+    document.getElementById('krsMiktar').value = '';
+    document.getElementById('krsMaliyet').value = '';
+    document.getElementById('krsAd').value = '';
+    await karsilamaYenile();
+  } catch (e) { /* api() bildiriyor */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaynağı ekle'; }
+}
+
+async function karsilamaSil(id) {
+  if (!await onayla('Bu karşılama satırı silinsin mi?')) return;
+  try {
+    await api(`/api/siparis/${encodeURIComponent(KRS_SIP)}/karsilama/${encodeURIComponent(id)}`,
+              { method: 'DELETE' });
+    bildir('Karşılama satırı silindi');
+    await karsilamaYenile();
+  } catch (e) { /* */ }
 }
 
 /* ═══ AVANS DEVRİ ═══

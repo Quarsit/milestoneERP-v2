@@ -43,6 +43,7 @@ import xml.etree.ElementTree as ET
 from models import db, Kullanici, BlokStok, PlakaStok, EbatliStok, StokCikis, Proforma, ProformaKalem, AuditLog
 from models import Siparis, SiparisKalem, Rezervasyon, Cari, CariHareket, Maliyet, Sevkiyat, DovizKur, Veriler, SatisKaydi, Fatura, Banka, Kasa, KasaHareket, Kesim, KesimDetay
 from models import Cek, CekHareket
+from models import KalemKarsilama          # F1: kalem kaynak kirilimi
 from models import CariErisim, CariKisi   # CRM-B: erisim ve kisiler
 from models import Bildirim              # BL1: sistem ici bildirimler
 from models import CariAktivite              # CRM-E: temas kaydi
@@ -3103,8 +3104,18 @@ def create_app():
         satis_matrah = f.ara_toplam or f.toplam or 0
         satis_toplam_usd = _usd(satis_matrah, f.doviz or 'USD')
 
-        if rezler:
-            # ── STOKLU FATURA: her stok icin ayri SatisKaydi ──
+        # F1: STOK DISI karsilama satirlari (uretim / dis alim).
+        # Karma siparislerde bunlarin maliyeti eskiden hic sayilmiyor,
+        # gelirleri stok satirlarina yaziliyordu. Tamami dis alimla
+        # karsilanan siparis de artik bu yoldan gecer.
+        _dis_satirlar = []
+        if f.siparis_id:
+            _dis_satirlar = KalemKarsilama.query.filter(
+                KalemKarsilama.siparis_id == f.siparis_id,
+                KalemKarsilama.kaynak_tip != 'STOK').all()
+
+        if rezler or _dis_satirlar:
+            # ── STOKLU / KARMA FATURA: her kaynak icin ayri SatisKaydi ──
             olusan = 0
             n = len(rezler)
 
@@ -3121,7 +3132,14 @@ def create_app():
             # faturanin matrahina esittir (iskonto ve yuvarlama farki
             # otomatik olceklenir). Deger bulunamazsa o stok icin ESIT
             # pay kullanilir — eski davranis, sessiz yanlis yerine.
+
             _f_agirlik = {}
+            for _ks in _dis_satirlar:
+                _kl = SiparisKalem.query.get(_ks.siparis_kalem_id)
+                _bf = float((_kl.birim_fiyat if _kl else 0) or 0)
+                _deger = _bf * float(_ks.miktar or 0)
+                if _deger > 0:
+                    _f_agirlik['KRS:' + _ks.id] = _deger
             for _rz in rezler:
                 _st = _stok_getir(_rz.stok_id, _rz.stok_tip)
                 if not _st:
@@ -3137,10 +3155,12 @@ def create_app():
                     _f_agirlik[_rz.id] = _deger
             _f_agirlik_top = sum(_f_agirlik.values())
 
-            def _pay_orani(rez_id):
-                if _f_agirlik_top > 0 and rez_id in _f_agirlik:
-                    return _f_agirlik[rez_id] / _f_agirlik_top
-                return (1.0 / n) if n else 0
+            _birim_sayisi = n + len(_dis_satirlar)
+
+            def _pay_orani(anahtar):
+                if _f_agirlik_top > 0 and anahtar in _f_agirlik:
+                    return _f_agirlik[anahtar] / _f_agirlik_top
+                return (1.0 / _birim_sayisi) if _birim_sayisi else 0
 
             for rz in rezler:
                 stok = _stok_getir(rz.stok_id, rz.stok_tip)
@@ -3234,6 +3254,47 @@ def create_app():
                 )
                 db.session.add(sk)
                 stok.durum = 'Teslim Edildi'
+                olusan += 1
+
+            # ── F1 · STOK DISI KAYNAKLAR (uretim / dis alim) ──
+            # Her karsilama satiri kendi geliri ve KENDI maliyetiyle
+            # ayri bir satis kaydi olur. Boylece karma sipariste dis
+            # alim maliyeti kaybolmaz, urun bazli kar dogru cikar.
+            for _ks in _dis_satirlar:
+                _kl = SiparisKalem.query.get(_ks.siparis_kalem_id)
+                _oran = _pay_orani('KRS:' + _ks.id)
+                _pay_usd = satis_toplam_usd * _oran
+                _pay_orj = (f.ara_toplam or f.toplam or 0) * _oran
+                _mik = float(_ks.miktar or 0)
+                _mal_usd = (_usd(float(_ks.birim_maliyet or 0) * _mik, _ks.doviz or 'USD')
+                            + ek_maliyet_usd * _oran)
+                _kar = _pay_usd - _mal_usd
+                db.session.add(SatisKaydi(
+                    id=_yeni_id('SAT'),
+                    stok_id=f'{_ks.kaynak_tip}-{fatura_id}-{_ks.id}',
+                    stok_tip=(_kl.urun_tip if _kl else None) or 'STOKSUZ',
+                    cins=(_kl.cins if _kl else None) or _ks.kaynak_ad,
+                    ozellik=(_kl.ozellik if _kl else None),
+                    siparis_id=f.siparis_id,
+                    siparis_kalem_id=_ks.siparis_kalem_id,
+                    proforma_id=f.proforma_id,
+                    fatura_id=fatura_id,
+                    kaynak='fatura',
+                    musteri=f.musteri, musteri_ulke=f.musteri_ulke,
+                    satis_tarihi=f.fatura_tarihi or date.today(),
+                    miktar=q2(_mik), birim=_ks.birim or (_kl.birim if _kl else 'm2'),
+                    birim_fiyat=q2(_pay_orj / _mik) if _mik else 0,
+                    doviz=(f.doviz or 'USD').upper(),
+                    tutar=q2(_pay_orj),
+                    kur_usd=q_kur(kur_usd), kur_eur=q_kur(kur_eur),
+                    tutar_usd=q2(_pay_usd),
+                    tutar_try=q2(_pay_usd * kur_usd if kur_usd else 0),
+                    maliyet_usd=q2(_mal_usd),
+                    maliyet_try=q2(_mal_usd * kur_usd if kur_usd else 0),
+                    kar_usd=q2(_kar),
+                    marj_yuzde=q_oran((_kar / _pay_usd * 100) if _pay_usd else 0),
+                    fatura_no=f.fatura_no, fatura_tarihi=f.fatura_tarihi,
+                    kullanici=session.get('kullanici')))
                 olusan += 1
             return olusan, None
         else:
@@ -10218,6 +10279,14 @@ def create_app():
             'birim_fiyat': k.birim_fiyat, 'toplam_fiyat': k.toplam_fiyat,
             'doviz': k.doviz,
             'stoktan_geldi': k.stoktan_geldi, 'stok_ids': stok_ids,
+            # F1: kalemin kaynak kirilimi (stok / uretim / dis alim)
+            'karsilama': [
+                {'id': x.id, 'kaynak_tip': x.kaynak_tip, 'kaynak_ad': x.kaynak_ad,
+                 'kaynak_ref': x.kaynak_ref, 'miktar': float(x.miktar or 0),
+                 'birim': x.birim, 'birim_maliyet': float(x.birim_maliyet or 0),
+                 'doviz': x.doviz or 'USD', 'durum': x.durum}
+                for x in KalemKarsilama.query.filter_by(siparis_kalem_id=k.id)
+                .order_by(KalemKarsilama.kaynak_tip, KalemKarsilama.olusturma).all()],
             'notlar': k.notlar
         }
 
@@ -10263,6 +10332,22 @@ def create_app():
                 kullanici=session.get('kullanici', 'sistem')
             )
             db.session.add(rez)
+            # F1 — KARSILAMA KIRILIMI: bu stok, kalemin ne kadarini
+            # karsiliyor? Uretim ve dis alim satirlari elle girilir;
+            # stok satirlari rezervasyonla birlikte otomatik olusur ki
+            # kirilim her zaman eksiksiz olsun.
+            db.session.add(KalemKarsilama(
+                id=_yeni_id('KRS'), siparis_id=siparis.id,
+                siparis_kalem_id=kalem.id, kaynak_tip='STOK',
+                kaynak_ref=sid, kaynak_ad=f'{stok.cins or ""} {sid}'.strip(),
+                rezervasyon_id=rez.id,
+                miktar=_stok_olcu(stok, (kalem.birim or '').lower() or
+                                  ('ton' if tip == 'BLOK' else 'm2')),
+                birim=(kalem.birim or ('ton' if tip == 'BLOK' else 'm2')),
+                birim_maliyet=getattr(stok, 'alis_fiyati', 0) or 0,
+                doviz=getattr(stok, 'doviz', None) or 'USD',
+                durum='Gerceklesti',
+                kullanici=session.get('kullanici', 'sistem')))
             stok.durum = hedef_stok_durum
             olusturulan += 1
         return olusturulan
@@ -10759,6 +10844,11 @@ def create_app():
                     {'siparis_kalem_id': None}, synchronize_session=False)
                 SatisKaydi.query.filter_by(siparis_kalem_id=k.id).update(
                     {'siparis_kalem_id': None}, synchronize_session=False)
+                # F1: karsilama satirlari kalemin COCUGU — kalem
+                # silinince silinirler (bag koparmak degil, cunku
+                # kalemsiz karsilamanin anlami yok).
+                KalemKarsilama.query.filter_by(siparis_kalem_id=k.id).delete(
+                    synchronize_session=False)
                 db.session.flush()
                 db.session.delete(k)
             db.session.flush()
@@ -11050,6 +11140,131 @@ def create_app():
     # bir siparise kalem eklemek icin. Ayni blok/cins/olcu/yuzey
     # stoklari TEK KALEMDE toplanir (proforma bundle bolmesi ve
     # ceki listesi bu sekilde dogru calisir).
+    # ══════════════════════════════════════════════════════════
+    #  F1 · KALEM KARŞILAMA — bir kalem hangi kaynaklardan geliyor
+    # ══════════════════════════════════════════════════════════
+    KARSILAMA_TIPLERI = ('STOK', 'URETIM', 'DIS_ALIM')
+    KARSILAMA_ADI = {'STOK': 'Stoktan', 'URETIM': 'Üretimden', 'DIS_ALIM': 'Dış alım'}
+
+    def _karsilama_json(k):
+        return {
+            'id': k.id, 'siparis_kalem_id': k.siparis_kalem_id,
+            'kaynak_tip': k.kaynak_tip, 'kaynak_ref': k.kaynak_ref,
+            'kaynak_ad': k.kaynak_ad or KARSILAMA_ADI.get(k.kaynak_tip, k.kaynak_tip),
+            'rezervasyon_id': k.rezervasyon_id,
+            'miktar': float(k.miktar or 0), 'birim': k.birim,
+            'birim_maliyet': float(k.birim_maliyet or 0), 'doviz': k.doviz or 'USD',
+            'durum': k.durum or 'Planlandi', 'aciklama': k.aciklama,
+        }
+
+    def _kalem_karsilama_ozet(kalem):
+        """Kalemin ne kadarı karşılandı, ne kadarı açık?"""
+        satirlar = KalemKarsilama.query.filter_by(siparis_kalem_id=kalem.id).all()
+        karsilanan = sum(float(k.miktar or 0) for k in satirlar)
+        hedef = float(kalem.miktar or 0)
+        return {
+            'satirlar': [_karsilama_json(k) for k in satirlar],
+            'karsilanan': q2(karsilanan), 'hedef': q2(hedef),
+            'acik': q2(max(hedef - karsilanan, 0)),
+            'kaynaklar': sorted({k.kaynak_tip for k in satirlar}),
+        }
+
+    @app.route('/api/siparis/<siparis_id>/kalem/<int:kalem_id>/karsilama',
+               methods=['GET'])
+    def api_kalem_karsilama_liste(siparis_id, kalem_id):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        kalem = SiparisKalem.query.get(kalem_id)
+        if not kalem or kalem.siparis_id != siparis_id:
+            return jsonify({'ok': False, 'mesaj': 'Kalem bulunamadı'}), 404
+        ozet = _kalem_karsilama_ozet(kalem)
+        ozet.update({'ok': True, 'kalem': {
+            'id': kalem.id, 'cins': kalem.cins, 'urun_tip': kalem.urun_tip,
+            'miktar': float(kalem.miktar or 0), 'birim': kalem.birim,
+            'birim_fiyat': float(kalem.birim_fiyat or 0), 'doviz': kalem.doviz}})
+        return jsonify(ozet)
+
+    @app.route('/api/siparis/<siparis_id>/kalem/<int:kalem_id>/karsilama',
+               methods=['POST'])
+    def api_kalem_karsilama_ekle(siparis_id, kalem_id):
+        """Kaleme bir KARŞILAMA satırı ekler (üretim ya da dış alım).
+
+        STOK satırları rezervasyonla birlikte otomatik oluşur; buradan
+        elle STOK eklenmez — iki yerden yazılırsa kırılım ikilenir.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        kalem = SiparisKalem.query.get(kalem_id)
+        if not kalem or kalem.siparis_id != siparis_id:
+            return jsonify({'ok': False, 'mesaj': 'Kalem bulunamadı'}), 404
+        data = request.get_json(silent=True) or {}
+        tip = (data.get('kaynak_tip') or '').upper().strip()
+        if tip not in ('URETIM', 'DIS_ALIM'):
+            return jsonify({'ok': False, 'mesaj':
+                'Kaynak tipi ÜRETİM ya da DIŞ ALIM olmalı. Stoktan karşılama, '
+                'stok seçilince kendiliğinden kaydedilir.'}), 400
+        try:
+            miktar = float(data.get('miktar') or 0)
+            birim_maliyet = float(data.get('birim_maliyet') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Miktar ve birim maliyet sayı olmalı'}), 400
+        if miktar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Miktar sıfırdan büyük olmalı'}), 400
+        if birim_maliyet < 0:
+            return jsonify({'ok': False, 'mesaj': 'Birim maliyet negatif olamaz'}), 400
+
+        ozet = _kalem_karsilama_ozet(kalem)
+        hedef = float(kalem.miktar or 0)
+        if hedef > 0 and ozet['karsilanan'] + miktar > hedef + 0.005:
+            return jsonify({'ok': False, 'error': 'miktar_asiyor', 'mesaj':
+                f'Kalem {hedef:,.2f} {kalem.birim or ""}; bu satırla toplam '
+                f'{ozet["karsilanan"] + miktar:,.2f} olur. Açık miktar: '
+                f'{ozet["acik"]:,.2f}.'}), 400
+
+        kaynak_ad = (data.get('kaynak_ad') or '').strip()
+        kaynak_ref = (data.get('kaynak_ref') or '').strip() or None
+        if tip == 'DIS_ALIM' and kaynak_ref and not kaynak_ad:
+            _c = Cari.query.get(kaynak_ref)
+            kaynak_ad = _c.unvan if _c else ''
+        ks = KalemKarsilama(
+            id=_yeni_id('KRS'), siparis_id=siparis_id, siparis_kalem_id=kalem.id,
+            kaynak_tip=tip, kaynak_ref=kaynak_ref,
+            kaynak_ad=kaynak_ad or KARSILAMA_ADI[tip],
+            miktar=q2(miktar), birim=(data.get('birim') or kalem.birim or 'm2'),
+            birim_maliyet=q2(birim_maliyet),
+            doviz=(data.get('doviz') or kalem.doviz or 'USD').upper(),
+            durum=(data.get('durum') or 'Planlandi'),
+            aciklama=data.get('aciklama'),
+            kullanici=session.get('kullanici', 'sistem'))
+        db.session.add(ks)
+        _log_audit('EKLE', 'kalem_karsilama', ks.id,
+                   yeni={'kalem': kalem.id, 'tip': tip, 'miktar': miktar,
+                         'birim_maliyet': birim_maliyet})
+        ok, hata = _safe_commit(f'Karsilama: {kalem.id} / {tip}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        yeni_ozet = _kalem_karsilama_ozet(kalem)
+        return jsonify({'ok': True, 'id': ks.id, 'ozet': yeni_ozet,
+                        'mesaj': f'{KARSILAMA_ADI[tip]} {miktar:,.2f} '
+                                 f'{ks.birim} karşılama eklendi'})
+
+    @app.route('/api/siparis/<siparis_id>/karsilama/<karsilama_id>',
+               methods=['DELETE'])
+    def api_kalem_karsilama_sil(siparis_id, karsilama_id):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        ks = KalemKarsilama.query.get(karsilama_id)
+        if not ks or ks.siparis_id != siparis_id:
+            return jsonify({'ok': False, 'mesaj': 'Karşılama kaydı bulunamadı'}), 404
+        if ks.kaynak_tip == 'STOK':
+            return jsonify({'ok': False, 'mesaj':
+                'Stoktan karşılama satırı buradan silinemez — ilgili stoğu '
+                'kalemden çıkarın, rezervasyonla birlikte kalkar.'}), 400
+        _log_audit('SIL', 'kalem_karsilama', ks.id,
+                   eski={'tip': ks.kaynak_tip, 'miktar': float(ks.miktar or 0)})
+        db.session.delete(ks)
+        ok, hata = _safe_commit(f'Karsilama sil: {karsilama_id}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({'ok': True, 'mesaj': 'Karşılama satırı silindi'})
+
     @app.route('/api/siparis/<siparis_id>/stok_ekle', methods=['POST'])
     def api_siparis_stok_ekle(siparis_id):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -11235,6 +11450,13 @@ def create_app():
         Maliyet.query.filter(
             Maliyet.baglanti_id == siparis_id,
             db.func.lower(Maliyet.baglanti_tip) == 'siparis').delete(synchronize_session=False)
+        # F1: karsilama satirlari kalemlere FK ile bagli; kalemler
+        # cascade ile silinmeden ONCE temizlenmeli (PostgreSQL FK).
+        KalemKarsilama.query.filter_by(siparis_id=siparis_id).delete(
+            synchronize_session=False)
+        for _kl in SiparisKalem.query.filter_by(siparis_id=siparis_id).all():
+            KalemKarsilama.query.filter_by(siparis_kalem_id=_kl.id).delete(
+                synchronize_session=False)
         db.session.flush()
 
         _log_audit('SIL', 'siparis', siparis_id, eski={
@@ -19230,7 +19452,16 @@ def create_app():
             # boylece hic sorulmuyordu.
             rez_var = Rezervasyon.query.filter_by(
                 siparis_id=p.siparis_id, iptal_nedeni=None).first()
-            fatura_tipi = 'stoklu' if rez_var else 'transit'
+            # F1: KARMA SIPARIS. Kalem kirilimi varsa tip ondan okunur:
+            # stok payi varsa 'stoklu' (dis alim payinin maliyeti artik
+            # karsilama satirindan geliyor, kaybolmuyor), yalnizca dis
+            # alim varsa 'transit'.
+            _krs = KalemKarsilama.query.filter_by(siparis_id=p.siparis_id).all()
+            if _krs:
+                _stok_payi = any(k.kaynak_tip == 'STOK' for k in _krs)
+                fatura_tipi = 'stoklu' if (_stok_payi or rez_var) else 'transit'
+            else:
+                fatura_tipi = 'stoklu' if rez_var else 'transit'
 
         fatura = Fatura(
             id=_yeni_id('FTR'),
@@ -20561,9 +20792,21 @@ def create_app():
 
             # TRANSIT FATURA: alis maliyeti ZORUNLU
             # TEKLIF FATURA: alis maliyeti opsiyonel (uyari verir ama izin verir)
-            if transit_mi and not (f.alis_maliyeti and f.alis_maliyeti > 0):
+            # F1: karsilama satirlarinda birim maliyet girilmisse alis
+            # maliyeti ZATEN bilinir — ayrica sormaya gerek yok.
+            _krs_maliyet = 0
+            if f.siparis_id:
+                _krs_maliyet = sum(
+                    float(k.miktar or 0) * float(k.birim_maliyet or 0)
+                    for k in KalemKarsilama.query.filter(
+                        KalemKarsilama.siparis_id == f.siparis_id,
+                        KalemKarsilama.kaynak_tip != 'STOK').all())
+            if transit_mi and not (f.alis_maliyeti and f.alis_maliyeti > 0) \
+                    and _krs_maliyet <= 0:
                 return jsonify({'ok': False,
-                    'mesaj': 'Bu transit/dis alim faturasi. Fatura kesmek icin once Alis Maliyeti girin.'}), 400
+                    'mesaj': 'Bu transit/dis alim faturasi. Fatura kesmek icin once '
+                             'Alis Maliyeti girin ya da kalem karsilama satirlarina '
+                             'birim maliyet yazin.'}), 400
 
             # Bu fatura için zaten borç işlenmiş mi? (çift kayıt koruması)
             mevcut_borc = CariHareket.query.filter_by(

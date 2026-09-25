@@ -949,3 +949,83 @@ def test_f3_iptal_rezervasyon_fatura_tipini_bozmaz():
     r = c.post('/api/proforma/PIF3/faturaya_donustur', headers=H, json={})
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()['fatura_tipi'] == 'transit'      # eskiden 'stoklu' idi
+
+
+def test_f1_karma_karsilama_gelir_ve_maliyet():
+    """F1: bir kalem stok + dış alım karışımıyla karşılanabilmeli.
+    Dış alım payının maliyeti kârlılığa girmeli, geliri kendi satırına
+    yazılmalı — eskiden maliyeti hiç sayılmıyor, geliri stok satırına
+    ekleniyordu."""
+    from models import (Fatura, Siparis, SiparisKalem, Rezervasyon,
+                        PlakaStok, SatisKaydi, KalemKarsilama, DovizKur)
+    with fa.app.app_context():
+        if not DovizKur.query.filter_by(doviz='USD', tarih=date(2026, 3, 2)).first():
+            db.session.add(DovizKur(doviz='USD', tarih=date(2026, 3, 2),
+                                    alis=30.0, satis=30.0, efektif=30.0))
+        db.session.add(Siparis(id='SIPF1', musteri='ACIK CARI', cari_id='C1', doviz='USD',
+                               toplam_tutar=15000, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 3, 1)))
+        db.session.add(PlakaStok(id='PLKF1', blok_no='B7', cins='TEST', metraj_m2=100,
+                                 alis_fiyati=60, alis_fiyat_birim='m2', doviz='USD',
+                                 durum='Serbest'))
+        db.session.flush()
+        k = SiparisKalem(siparis_id='SIPF1', sira=1, urun_tip='PLAKA', cins='TEST',
+                         miktar=150, birim='m2', birim_fiyat=100, toplam_fiyat=15000,
+                         doviz='USD', adet=1)
+        db.session.add(k)
+        db.session.flush()
+        kalem_id = k.id
+        # 100 m² stoktan (rezervasyon + otomatik karşılama satırı)
+        db.session.add(Rezervasyon(id='RZF1', stok_id='PLKF1', stok_tip='PLAKA',
+                                   siparis_id='SIPF1', siparis_kalem_id=k.id,
+                                   cari_id='C1', musteri='ACIK CARI', miktar=100))
+        db.session.add(KalemKarsilama(id='KRSF1S', siparis_id='SIPF1',
+                                      siparis_kalem_id=k.id, kaynak_tip='STOK',
+                                      kaynak_ref='PLKF1', rezervasyon_id='RZF1',
+                                      miktar=100, birim='m2', birim_maliyet=60,
+                                      doviz='USD', durum='Gerceklesti'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    # 50 m² dış alım — API üzerinden
+    r = c.post(f'/api/siparis/SIPF1/kalem/{kalem_id}/karsilama', headers=H, json={
+        'kaynak_tip': 'DIS_ALIM', 'kaynak_ad': 'TEDARİKÇİ A', 'miktar': 50,
+        'birim': 'm2', 'birim_maliyet': 70, 'doviz': 'USD'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()['ozet']['acik'] == 0        # 100 + 50 = 150
+
+    # Kalem miktarını aşan satır reddedilir
+    r = c.post(f'/api/siparis/SIPF1/kalem/{kalem_id}/karsilama', headers=H, json={
+        'kaynak_tip': 'URETIM', 'miktar': 10, 'birim': 'm2', 'birim_maliyet': 50})
+    assert r.status_code == 400 and r.get_json()['error'] == 'miktar_asiyor'
+
+    with fa.app.app_context():
+        db.session.add(Fatura(id='FF1', fatura_no='F-F1', musteri='ACIK CARI', cari_id='C1',
+                              siparis_id='SIPF1', toplam=15000, ara_toplam=15000,
+                              doviz='USD', durum='Taslak', yon='satis',
+                              satis_tipi='ihracat', fatura_tipi='stoklu',
+                              fatura_tarihi=date(2026, 3, 2)))
+        db.session.commit()
+    _r = c.post('/api/fatura/FF1/durum', headers=H, json={'durum': 'Kesildi'})
+    assert _r.status_code == 200, _r.get_data(as_text=True)
+
+    with fa.app.app_context():
+        kayitlar = SatisKaydi.query.filter_by(fatura_id='FF1').all()
+        assert len(kayitlar) == 2                     # stok + dış alım
+        stok_k = [s for s in kayitlar if s.stok_id == 'PLKF1'][0]
+        dis_k = [s for s in kayitlar if s.stok_id != 'PLKF1'][0]
+        # gelir 100/150 ve 50/150 oranında
+        assert abs(float(stok_k.tutar_usd) - 10000) < 1
+        assert abs(float(dis_k.tutar_usd) - 5000) < 1
+        # maliyetler kendi kaynaklarından: 100×60 ve 50×70
+        assert abs(float(stok_k.maliyet_usd) - 6000) < 1
+        assert abs(float(dis_k.maliyet_usd) - 3500) < 1
+        # toplam gelir faturaya eşit
+        assert abs(sum(float(s.tutar_usd) for s in kayitlar) - 15000) < 1
+
+    # Dış alım satırı silinebilir, stok satırı silinemez
+    with fa.app.app_context():
+        dis_id = KalemKarsilama.query.filter_by(
+            siparis_kalem_id=kalem_id, kaynak_tip='DIS_ALIM').first().id
+    assert c.delete(f'/api/siparis/SIPF1/karsilama/{dis_id}', headers=H).status_code == 200
+    assert c.delete('/api/siparis/SIPF1/karsilama/KRSF1S', headers=H).status_code == 400

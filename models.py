@@ -387,6 +387,46 @@ class SiparisKalem(db.Model):
     guncelleme      = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+# ── KALEM KARŞILAMA (F1 / BL-01) ──────────────────────────────────────
+# Bir sipariş kalemi TEK kaynaktan gelmek zorunda değil: 100 m² Emperador
+# kaleminin 40 m²'si depodaki stoktan, 40 m²'si kendi bloğumuzdan kesimle,
+# 20 m²'si dış alımla karşılanabilir.
+#
+# Eskiden kalem yalnızca `stoktan_geldi` (evet/hayır) + `stok_ids_json`
+# tutuyordu. Karma karşılamada:
+#   • fatura tipi tüm siparişe bakarak tek tipe çöküyordu (stoklu VEYA transit)
+#   • dış alım kaleminin maliyeti hiç sayılmıyordu
+#   • gelir yanlış kaleme yazılıyordu
+# Bu tablo karşılamayı KAYNAK KIRILIMIYLA tutar; kârlılık ve fatura tipi
+# buradan okunur.
+class KalemKarsilama(db.Model):
+    __tablename__ = 'kalem_karsilama'
+    id              = db.Column(db.String(20), primary_key=True)
+    siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'),
+                                index=True, nullable=True)
+    siparis_kalem_id = db.Column(db.Integer, db.ForeignKey('siparis_kalem.id'),
+                                 index=True, nullable=False)
+    # STOK | URETIM | DIS_ALIM
+    kaynak_tip      = db.Column(db.String(10), nullable=False)
+    # STOK → stok_id · URETIM → blok/kesim id · DIS_ALIM → tedarikçi cari_id
+    kaynak_ref      = db.Column(db.String(50))
+    kaynak_ad       = db.Column(db.String(200))   # ekranda görünen ad
+    # STOK satırı hangi rezervasyona denk geliyor (varsa)
+    rezervasyon_id  = db.Column(db.String(20), nullable=True, index=True)
+    miktar          = db.Column(Olcu)
+    birim           = db.Column(db.String(20))
+    # Kaynağın BİRİM maliyeti (stokta alış fiyatı, dış alımda anlaşılan fiyat)
+    birim_maliyet   = db.Column(Para, default=0)
+    doviz           = db.Column(db.String(5), default='USD')
+    # Planlandi | Gerceklesti  (üretim/dış alım stoklaşınca 'Gerceklesti')
+    durum           = db.Column(db.String(20), default='Planlandi')
+    gerceklesen_stok_ids = db.Column(db.Text)     # JSON dizi
+    aciklama        = db.Column(db.Text)
+    kullanici       = db.Column(db.String(50))
+    olusturma       = db.Column(db.DateTime, default=datetime.now)
+    guncelleme      = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 # ── REZERVASYON ───────────────────────────────────────────────────────
 # FAZ 16: siparis_kalem_id eklendi (hangi kaleme bağlı olduğu)
 class Rezervasyon(db.Model):
