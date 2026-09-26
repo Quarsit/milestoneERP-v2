@@ -1158,6 +1158,71 @@ async function secilenleriSil() {
   finally { if (btn) { btn.disabled = false; btn.textContent = 'Seçilenleri Sil'; } }
 }
 
+
+/* ═══ F6 · KAYNAK ZİNCİRİ (iz sürme) ═══
+   Sevk edilen plakadan geriye: satış → sipariş → kesim → kaynak blok
+   → alış (tedarikçi, fatura, maliyet). İhracatta müşteri "bu mal hangi
+   bloktan çıktı" diye sorduğunda cevap tek çağrıda hazır. */
+const IZ_IKON = { 'Satış': '↗', 'Sipariş': '▤', 'Üretim (kesim)': '✂', 'Alış': '↘' };
+
+async function izAc(stokId, tip) {
+  let d;
+  try { d = await api(`/api/iz/${encodeURIComponent(tip)}/${encodeURIComponent(stokId)}`); }
+  catch (e) { return; }
+  const s = d.stok || {};
+  const satir = (etiket, deger) => deger || deger === 0
+    ? `<div style="display:flex;gap:6px"><span style="color:var(--soluk);min-width:104px">${etiket}</span><span>${deger}</span></div>` : '';
+  const halkalar = (d.zincir || []).map(h => {
+    let ic = '';
+    if (h.asama === 'Satış') {
+      ic = satir('Müşteri', kacar(h.musteri || '—'))
+         + satir('Fatura', kacar(h.fatura_no || h.fatura_id || '—'))
+         + satir('Tutar', para2(h.tutar, h.doviz))
+         + satir('Kâr', para2(h.kar_usd, 'USD'));
+    } else if (h.asama === 'Sipariş') {
+      ic = satir('Sipariş', kacar(h.siparis_id || '—'))
+         + satir('Müşteri', kacar(h.musteri || '—'))
+         + satir('Durum', kacar(h.durum || '—'))
+         + (h.iptal ? satir('İptal', kacar(h.iptal)) : '');
+    } else if (h.asama === 'Üretim (kesim)') {
+      ic = satir('Kesim', kacar(h.kesim_id))
+         + satir('Kaynak', `${kacar(h.kaynak_no || h.kaynak_id || '')} (${kacar(h.kaynak_cins || '')})`)
+         + satir('Birim maliyet', para2(h.birim_maliyet, 'USD') + ' /m²')
+         + satir('Fire', (h.fire_orani || 0).toLocaleString('tr-TR') + ' %')
+         + (h.siparis_id ? satir('Sipariş için', kacar(h.siparis_id)) : '');
+    } else if (h.asama === 'Alış') {
+      ic = satir('Blok', kacar(h.blok_no || h.stok_id || '—'))
+         + satir('Menşe', kacar(h.mense || '—'))
+         + satir('Üretici', kacar(h.uretici || '—'))
+         + satir('Fatura', kacar(h.fatura_no || h.fatura_durumu || '—'))
+         + satir('Alış', para2(h.alis_fiyati, h.doviz) + ' /' + kacar(h.alis_fiyat_birim || ''));
+    }
+    return `<div style="border-left:2px solid var(--cizgi-koyu);padding:0 0 14px 14px;position:relative">
+      <div style="position:absolute;left:-9px;top:0;width:16px;height:16px;border-radius:50%;
+                  background:var(--yuzey);border:1px solid var(--cizgi-koyu);display:flex;
+                  align-items:center;justify-content:center;font-size:.6rem">${IZ_IKON[h.asama] || '•'}</div>
+      <div style="font-weight:700;font-size:.82rem">${kacar(h.asama)}${h.tarih ? ` <span style="color:var(--soluk);font-weight:400">· ${kacar(h.tarih)}</span>` : ''}</div>
+      <div style="font-size:.8rem;line-height:1.55;margin-top:2px">${ic}</div>
+    </div>`;
+  }).join('');
+  const mal = (d.maliyetler || []);
+  const govde = `
+    <div class="alan-grid" style="margin-bottom:14px">
+      <div class="alan"><label>Ürün</label><div>${kacar(s.cins || '—')}</div></div>
+      <div class="alan"><label>Blok / Kasa</label><div class="mono">${kacar(s.blok_no || '—')}</div></div>
+      <div class="alan"><label>Durum</label><div>${kacar(s.durum || '—')}</div></div>
+    </div>
+    ${halkalar || '<div class="bos" style="padding:12px">Bu stok için kayıtlı bir zincir yok.</div>'}
+    ${mal.length ? `<h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin:14px 0 6px">Bu stoğa işlenen maliyetler</h4>
+      ${mal.map(m => `<div class="kalem-satir"><span class="rozet rz-gri">${kacar(m.tip || '—')}</span>
+        <div><div>${kacar(m.fatura_no || 'belgesiz')}</div>
+        <div style="color:var(--soluk);font-size:.76rem">${kacar(m.tarih || '')}</div></div>
+        <span class="m">${para2(m.tutar, m.doviz)}</span></div>`).join('')}` : ''}`;
+  cekmeceAc(`Kaynak zinciri · ${kacar(s.id)}`, kacar(s.cins || ''), govde,
+            `<button class="blok-btn" onclick="detayAc('${kacar(s.id)}')">Stok detayına dön</button>
+             <button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+}
+
 async function detayAc(id) {
   const s = (SON.data || []).find(x => x.id === id);
   if (!s) return;
@@ -1211,6 +1276,8 @@ async function detayAc(id) {
     eylem.push(`<button class="blok-btn" onclick="maliyetAc('${kacar(s.id)}','${kacar(s.tip)}','${kacar(stokNo(s))}','${kacar(s.cins || '')}')">Maliyet ekle</button>`);
   if (s.durum === 'Serbest' && yazabilir('stok'))
     eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="stokSil('${kacar(s.id)}','${kacar(s.tip)}','${kacar(stokNo(s))}')">Sil</button>`);
+  // F6: bu ürün nereden geldi, nereye gitti — tek ekranda
+  eylem.push(`<button class="blok-btn" onclick="izAc('${kacar(s.id)}','${kacar(s.tip)}')">Kaynak zinciri</button>`);
   eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
 
   cekmeceAc(s.cins || stokNo(s), `${stokNo(s)} · ${s.tip}`, govde, eylem.join(''));

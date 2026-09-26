@@ -1029,3 +1029,65 @@ def test_f1_karma_karsilama_gelir_ve_maliyet():
             siparis_kalem_id=kalem_id, kaynak_tip='DIS_ALIM').first().id
     assert c.delete(f'/api/siparis/SIPF1/karsilama/{dis_id}', headers=H).status_code == 200
     assert c.delete('/api/siparis/SIPF1/karsilama/KRSF1S', headers=H).status_code == 400
+
+
+def test_f6_uretim_siparise_baglanir_ve_iz_surulur():
+    """F6: kesim bir siparişin ÜRETİM karşılamasına bağlanabilmeli;
+    üretilen ürünler o siparişe ayrılmalı, karşılama kapanmalı ve
+    sevk edilen üründen kaynak bloğa kadar iz sürülebilmeli."""
+    from models import (Siparis, SiparisKalem, KalemKarsilama, BlokStok,
+                        PlakaStok, Rezervasyon, Kesim, Cari)
+    with fa.app.app_context():
+        db.session.add(Siparis(id='SIPF6', musteri='ACIK CARI', cari_id='C1', doviz='USD',
+                               toplam_tutar=12000, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 3, 1)))
+        db.session.add(BlokStok(id='BLKF6', blok_no='T-99', cins='TEST', boy=300,
+                                yukseklik=150, en=120, hacim_m3=5.4, tonaj=14.5,
+                                alis_fiyati=400, alis_fiyat_birim='ton', doviz='USD',
+                                durum='Serbest', uretici='ALBSTONE', cari_id='C1',
+                                fatura_no='ALB-2026-7', mense='TURKIYE'))
+        db.session.flush()
+        k = SiparisKalem(siparis_id='SIPF6', sira=1, urun_tip='PLAKA', cins='TEST',
+                         miktar=40, birim='m2', birim_fiyat=300, toplam_fiyat=12000,
+                         doviz='USD', adet=8)
+        db.session.add(k)
+        db.session.flush()
+        db.session.add(KalemKarsilama(id='KRSF6', siparis_id='SIPF6', siparis_kalem_id=k.id,
+                                      kaynak_tip='URETIM', kaynak_ad='T-99 bloğundan',
+                                      miktar=40, birim='m2', birim_maliyet=150,
+                                      doviz='USD', durum='Planlandi'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': ['BLKF6'],
+        'karsilama_id': 'KRSF6', 'kesim_tarihi': '2026-03-05',
+        'uretim_blok_no': 'T-99-U1',
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 250,
+                      'yukseklik': 160, 'kalinlik': 2, 'adet': 8}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    assert d['uretim_rez_sayisi'] == 8 and 'SIPF6' in (d.get('mesaj') or '')
+    uretilen = [o['id'] for o in d['olusan_stoklar']]
+
+    with fa.app.app_context():
+        krs = KalemKarsilama.query.get('KRSF6')
+        assert krs.durum == 'Gerceklesti'
+        assert len(json.loads(krs.gerceklesen_stok_ids)) == 8
+        kesim = Kesim.query.get(d['kesim_id'])
+        assert kesim.siparis_id == 'SIPF6' and kesim.karsilama_id == 'KRSF6'
+        # üretilen plakalar siparişe rezerve
+        rez = Rezervasyon.query.filter_by(siparis_id='SIPF6').all()
+        assert len(rez) == 8 and all(x.rez_tip == 'Uretimden' for x in rez)
+        # karşılama ikilenmemiş: hâlâ tek satır, 40 m²
+        assert KalemKarsilama.query.filter_by(siparis_id='SIPF6').count() == 1
+
+    # ── İZ: üretilen plakadan kaynak bloğa ──
+    iz = c.get(f'/api/iz/PLAKA/{uretilen[0]}').get_json()
+    assert iz['ok']
+    asamalar = [h['asama'] for h in iz['zincir']]
+    assert 'Sipariş' in asamalar and 'Üretim (kesim)' in asamalar and 'Alış' in asamalar
+    uretim = [h for h in iz['zincir'] if h['asama'] == 'Üretim (kesim)'][0]
+    assert uretim['kaynak_no'] == 'T-99' and uretim['siparis_id'] == 'SIPF6'
+    alis = [h for h in iz['zincir'] if h['asama'] == 'Alış'][0]
+    assert alis['uretici'] == 'ALBSTONE' and alis['fatura_no'] == 'ALB-2026-7'

@@ -724,6 +724,8 @@ def create_app():
         ('/api/satis', 'satislar'),
         ('/api/kasa', 'kasa'),
         ('/api/kesim', 'kesim'),
+        # F6: iz surme stok kaydini okur -> stok yetkisi
+        ('/api/iz', 'stok'),
         ('/api/lookup', 'ayarlar'),
         ('/api/ayarlar', 'ayarlar'),
         ('/api/yedek', 'ayarlar'),
@@ -8000,6 +8002,119 @@ def create_app():
             'plakalar': [{'id': p.id, 'durum': repr(p.durum), 'blok_no': p.blok_no, 'm2': p.metraj_m2} for p in plakalar[:50]]
         })
 
+    # ══════════════════════════════════════════════════════════
+    #  F6 · İZ SÜRME — sevk edilen üründen kaynağa kadar
+    # ══════════════════════════════════════════════════════════
+    def _stok_kesim_zinciri(stok_tip, stok_id, derinlik=0):
+        """Bir stoğun üretim zincirini kaynağa kadar geriye izler.
+
+        PLAKA bir blokun kesiminden, EBATLI bir plakanın kesiminden
+        çıkmış olabilir; zincir birkaç kademe sürebilir. Bağ
+        KesimDetay.hedef_stok_id üzerinden kurulur — ayrı bir sütuna
+        gerek yok, veri zaten orada duruyordu, kimse okumuyordu.
+        """
+        if derinlik > 5 or not stok_id:
+            return []
+        detay = KesimDetay.query.filter_by(hedef_stok_id=stok_id).first()
+        if not detay:
+            return []
+        kesim = Kesim.query.get(detay.kesim_id)
+        if not kesim:
+            return []
+        halka = {
+            'asama': 'Üretim (kesim)',
+            'kesim_id': kesim.id,
+            'tarih': kesim.kesim_tarihi.isoformat() if kesim.kesim_tarihi else None,
+            'kaynak_tip': kesim.kaynak_tip, 'kaynak_id': kesim.kaynak_id,
+            'kaynak_no': kesim.kaynak_no, 'kaynak_cins': kesim.kaynak_cins,
+            'birim_maliyet': float(detay.birim_maliyet or 0),
+            'fire_orani': float(kesim.fire_orani or 0),
+            'siparis_id': getattr(kesim, 'siparis_id', None),
+            'kullanici': kesim.kullanici,
+        }
+        return [halka] + _stok_kesim_zinciri(kesim.kaynak_tip, kesim.kaynak_id, derinlik + 1)
+
+    @app.route('/api/iz/<stok_tip>/<stok_id>', methods=['GET'])
+    def api_stok_izi(stok_tip, stok_id):
+        """Bir stoğun tüm hikâyesi: alıştan satışa.
+
+        Zincir: satış/fatura → sipariş → rezervasyon → üretim (kesim)
+        → kaynak blok → alış (tedarikçi, fatura no, maliyet).
+        İhracatta müşteri "bu mal hangi ocaktan/blok'tan geldi" diye
+        sorduğunda cevabın tek ekranda bulunması için.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        tip = (stok_tip or '').upper()
+        stok = _stok_getir(stok_id, tip)
+        if not stok:
+            return jsonify({'ok': False, 'mesaj': 'Stok bulunamadi'}), 404
+
+        zincir = []
+        # 1) SATIŞ tarafı
+        sk = SatisKaydi.query.filter_by(stok_id=stok_id).order_by(
+            SatisKaydi.satis_tarihi.desc()).first()
+        if sk:
+            zincir.append({
+                'asama': 'Satış', 'musteri': sk.musteri,
+                'tarih': sk.satis_tarihi.isoformat() if sk.satis_tarihi else None,
+                'fatura_no': getattr(sk, 'fatura_no', None), 'fatura_id': sk.fatura_id,
+                'tutar': float(sk.tutar or 0), 'doviz': sk.doviz,
+                'maliyet_usd': float(sk.maliyet_usd or 0),
+                'kar_usd': float(sk.kar_usd or 0),
+                'sevkiyat_id': sk.sevkiyat_id, 'siparis_id': sk.siparis_id})
+        # 2) SİPARİŞ / REZERVASYON
+        rez = Rezervasyon.query.filter_by(stok_id=stok_id).order_by(
+            Rezervasyon.olusturma.desc()).first()
+        if rez:
+            _sip = Siparis.query.get(rez.siparis_id) if rez.siparis_id else None
+            zincir.append({
+                'asama': 'Sipariş', 'siparis_id': rez.siparis_id,
+                'musteri': rez.musteri or (_sip.musteri if _sip else None),
+                'durum': (_sip.durum if _sip else None),
+                'rez_tip': rez.rez_tip,
+                'tarih': (_sip.siparis_tarihi.isoformat()
+                          if _sip and _sip.siparis_tarihi else None),
+                'iptal': rez.iptal_nedeni})
+        # 3) ÜRETİM zinciri
+        zincir.extend(_stok_kesim_zinciri(tip, stok_id))
+        # 4) KAYNAK / ALIŞ — zincirin son halkasındaki kaynak stok
+        kok_tip, kok_id = tip, stok_id
+        for h in zincir:
+            if h.get('asama') == 'Üretim (kesim)':
+                kok_tip, kok_id = h.get('kaynak_tip'), h.get('kaynak_id')
+        kok = _stok_getir(kok_id, kok_tip) if kok_id else None
+        if kok is not None:
+            _cari = Cari.query.get(getattr(kok, 'cari_id', None)) if getattr(kok, 'cari_id', None) else None
+            zincir.append({
+                'asama': 'Alış', 'stok_id': kok_id, 'stok_tip': kok_tip,
+                'blok_no': getattr(kok, 'blok_no', None),
+                'cins': getattr(kok, 'cins', None),
+                'mense': getattr(kok, 'mense', None),
+                'uretici': getattr(kok, 'uretici', None) or (_cari.unvan if _cari else None),
+                'cari_id': getattr(kok, 'cari_id', None),
+                'fatura_no': getattr(kok, 'fatura_no', None),
+                'fatura_durumu': getattr(kok, 'fatura_durumu', None),
+                'tarih': (kok.alis_tarihi.isoformat() if getattr(kok, 'alis_tarihi', None)
+                          else (kok.giris_tarihi.isoformat()
+                                if getattr(kok, 'giris_tarihi', None) else None)),
+                'alis_fiyati': float(getattr(kok, 'alis_fiyati', 0) or 0),
+                'alis_fiyat_birim': getattr(kok, 'alis_fiyat_birim', None),
+                'doviz': getattr(kok, 'doviz', None)})
+        # 5) Bu stoğa işlenmiş ek maliyetler
+        maliyetler = [{
+            'tip': m.maliyet_tip, 'tutar': float(m.tutar or 0), 'doviz': m.doviz,
+            'tarih': m.maliyet_tarihi.isoformat() if m.maliyet_tarihi else None,
+            'fatura_no': m.fatura_no,
+        } for m in Maliyet.query.filter_by(baglanti_tip='stok', baglanti_id=stok_id).all()]
+
+        return jsonify({'ok': True, 'stok': {
+            'id': stok_id, 'tip': tip, 'cins': getattr(stok, 'cins', None),
+            'blok_no': getattr(stok, 'blok_no', None) or getattr(stok, 'kasa_no', None),
+            'durum': stok.durum,
+            'metraj_m2': float(getattr(stok, 'metraj_m2', 0) or 0),
+            'hacim_m3': float(getattr(stok, 'hacim_m3', 0) or 0)},
+            'zincir': zincir, 'maliyetler': maliyetler})
+
     @app.route('/api/kesim/kaynak_listesi', methods=['GET'])
     def api_kesim_kaynak_listesi():
         """Kesilebilir kaynakları listele (Serbest BLOK ve PLAKA)."""
@@ -8174,6 +8289,29 @@ def create_app():
             if not hedefler:
                 return jsonify({'ok': False, 'mesaj': 'En az bir hedef urun satiri eklenmelidir'}), 400
 
+            # ── F6 · BU KESIM HANGI SIPARIS ICIN? ──
+            # Istege bagli: karsilama_id verilirse (kalemin URETIM satiri)
+            # siparis ve kalem ondan okunur; uretilen stoklar o kaleme
+            # rezerve edilir ve karsilama satiri "Gerceklesti" olur.
+            _uretim_krs = None
+            _uretim_siparis_id = (data.get('siparis_id') or '').strip() or None
+            _uretim_kalem_id = data.get('siparis_kalem_id') or None
+            _krs_id = (data.get('karsilama_id') or '').strip() or None
+            if _krs_id:
+                _uretim_krs = KalemKarsilama.query.get(_krs_id)
+                if not _uretim_krs:
+                    return jsonify({'ok': False, 'mesaj': 'Karsilama satiri bulunamadi'}), 404
+                if (_uretim_krs.kaynak_tip or '') != 'URETIM':
+                    return jsonify({'ok': False, 'mesaj':
+                        'Kesim yalnizca URETIM karsilama satirina baglanir.'}), 400
+                _uretim_siparis_id = _uretim_krs.siparis_id
+                _uretim_kalem_id = _uretim_krs.siparis_kalem_id
+            if _uretim_kalem_id:
+                try:
+                    _uretim_kalem_id = int(_uretim_kalem_id)
+                except (TypeError, ValueError):
+                    return jsonify({'ok': False, 'mesaj': 'Kalem kimligi sayi olmali'}), 400
+
             # BLOK kaynaklar: tek BLOK olmali
             if kesim_yon in ('BLOK_PLAKA', 'BLOK_EBATLI'):
                 if len(kaynak_ids) != 1:
@@ -8330,6 +8468,10 @@ def create_app():
                 kaynak_toplam_maliyet=kaynak_toplam_maliyet,
                 kaynak_doviz=kaynak_doviz,
                 uretim_blok_no=uretim_blok_no,
+                # F6: uretim hangi siparis kalemi icin yapiliyor
+                siparis_id=_uretim_siparis_id,
+                siparis_kalem_id=_uretim_kalem_id,
+                karsilama_id=(_uretim_krs.id if _uretim_krs else None),
                 fire_orani=fire_orani_yuzde,
                 fire_miktar=fire_miktar_m2,
                 aciklama=data.get('aciklama'),
@@ -8527,6 +8669,45 @@ def create_app():
                         h_stok.durum = 'Satildi' if (kaynak_rez and kaynak_rez.siparis_id) else 'Rezerve'
                         hedef_rez_sayisi += 1
 
+            # ── F6 · URETIM KARSILAMASI GERCEKLESTI ──
+            # Uretilen stoklar karsilama satirina yazilir ve o kaleme
+            # rezerve edilir. Yeni bir STOK karsilama satiri ACILMAZ:
+            # URETIM satiri zaten o miktari temsil ediyor, ikisi birden
+            # yazilirsa kalem iki kez karsilanmis gorunurdu.
+            _uretim_rez = 0
+            if _uretim_krs:
+                _uretilen_idler = [o.get('id') for o in olusan_stoklar if o.get('id')]
+                _uretim_krs.gerceklesen_stok_ids = json.dumps(_uretilen_idler,
+                                                             ensure_ascii=False)
+                _uretim_krs.durum = 'Gerceklesti'
+                _sip = Siparis.query.get(_uretim_siparis_id) if _uretim_siparis_id else None
+                for _os in olusan_stoklar:
+                    _ht, _hid = _os.get('tip'), _os.get('id')
+                    if not _hid:
+                        continue
+                    _hs = (BlokStok if _ht == 'BLOK' else
+                           PlakaStok if _ht == 'PLAKA' else EbatliStok).query.get(_hid)
+                    if not _hs:
+                        continue
+                    if Rezervasyon.query.filter_by(stok_id=_hid).filter(
+                            Rezervasyon.iptal_nedeni.is_(None)).first():
+                        continue          # zaten rezerve (uretilen_rezerve yolu)
+                    db.session.add(Rezervasyon(
+                        id=_yeni_id('REZ'),
+                        musteri=(_sip.musteri if _sip else None),
+                        cari_id=(_sip.cari_id if _sip else None),
+                        siparis_id=_uretim_siparis_id,
+                        siparis_kalem_id=_uretim_kalem_id,
+                        stok_tip=_ht, cins=_hs.cins,
+                        ozellik=getattr(_hs, 'ozellik', None),
+                        stok_id=_hid,
+                        miktar=getattr(_hs, 'metraj_m2', None) or getattr(_hs, 'hacim_m3', None),
+                        rez_tip='Uretimden',
+                        aciklama=f'Kesim {kesim_id} ile bu siparis icin uretildi',
+                        kullanici=session.get('kullanici', 'sistem')))
+                    _hs.durum = 'Satildi' if (_sip and _sip.durum != 'Teklif Asam.') else 'Rezerve'
+                    _uretim_rez += 1
+
             _log_audit('KESIM', f'kesim/{kaynak_tip_db.lower()}', ana_kaynak.id,
                        yeni={'kesim_id': kesim_id, 'yon': kesim_yon,
                              'kaynak_adet': len(kaynaklar),
@@ -8547,8 +8728,12 @@ def create_app():
                 'fire_m2': q2(fire_miktar_m2),
                 'fire_orani': q_oran(fire_orani_yuzde),
                 'hedef_rez_sayisi': hedef_rez_sayisi,
+                'uretim_rez_sayisi': _uretim_rez,
+                'siparis_id': _uretim_siparis_id,
                 'mesaj': f'✅ Kesim tamam: {len(olusan_stoklar)} hedef stok olustu. Birim maliyet: {birim_m2_maliyet:.2f} {kaynak_doviz}/m²'
                          + (f' · {hedef_rez_sayisi} ürün müşteriye rezerve edildi.' if hedef_rez_sayisi else '')
+                         + (f' · {_uretim_rez} ürün {_uretim_siparis_id} siparişine ayrıldı '
+                            f'(karşılama tamamlandı).' if _uretim_rez else '')
             })
         except Exception as e:
             db.session.rollback()

@@ -135,8 +135,13 @@ BEKLENEN_GIZLI = {
                    'bas_kasa_no'},
     # kaynak_*: kesim anındaki durumu dondurup saklayan anlık görüntü
     # alanları; kullanıcı girmez, sistem kesim işleminde doldurur.
+    # siparis_id / siparis_kalem_id: F6 — kullanıcı kesim formunda
+    # SİPARİŞİ değil, kalemin ÜRETİM KARŞILAMA satırını seçer
+    # (fKarsilama). Sipariş ve kalem o satırdan türetilir; ayrıca
+    # sorulsaydı ikisi çelişebilirdi (yanlış kaleme bağlı üretim).
     'Kesim': {'kaynak_ids_json', 'kaynak_miktar_once', 'kaynak_miktar_sonra',
-              'kaynak_durum', 'kaynak_onceki_durum', 'kaynak_birim_maliyet'},
+              'kaynak_durum', 'kaynak_onceki_durum', 'kaynak_birim_maliyet',
+              'siparis_id', 'siparis_kalem_id'},
     # varsayilan: modelde tanımlı ama hiçbir mantık okumuyor. Anlamı
     # "tahsilat formunda ön seçili kasa" olurdu; bu davranış henüz
     # uygulanmadığı için forma kutu eklenmedi — çalışmayan bir kutu

@@ -103,6 +103,21 @@
         <div style="margin-top:8px;font-size:.8rem;color:var(--soluk)" id="kaynakOzet">Kaynak seçilmedi</div>
       </div>
 
+      <!-- F6 — ÜRETİM–SİPARİŞ BAĞI: bu kesim bir siparişin üretim
+           karşılaması için yapılıyorsa seçilir. Seçilirse üretilen
+           ürünler o siparişe ayrılır ve karşılama satırı kapanır;
+           sevk edilen plakadan bloğa kadar iz kurulur. -->
+      <div class="kutu" id="siparisKutu">
+        <h5>Bu kesim bir sipariş için mi?</h5>
+        <select id="fKarsilama" style="width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-size:.85rem">
+          <option value="">— hayır, serbest üretim —</option>
+        </select>
+        <div style="margin-top:6px;font-size:.75rem;color:var(--soluk)" id="karsilamaNot">
+          Listede siparişlerin <b>üretimden karşılanacak</b> kalemleri var.
+          Seçersen üretilen ürünler o siparişe ayrılır.
+        </div>
+      </div>
+
       <div class="kutu" id="uretimNoKutu">
         <h5>Üretim Blok No</h5>
         <div style="display:flex;gap:8px;align-items:center">
@@ -308,6 +323,7 @@ async function yeniAc() {
   document.getElementById('hKal').value = 2;
   hedefListeCiz();
   await yonDegisti();
+  bekleyenUretimleriYukle();   // F6: üretimden karşılanacak kalemler
 }
 function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
 
@@ -456,6 +472,48 @@ function ozetHesapla() {
     (maliyet > 0 && cikanM2 > 0) ? para2(maliyet / cikanM2) + ' /m²' : '—';
 }
 
+/* F6 — ÜRETİMDEN KARŞILANACAK KALEMLER
+   Siparişlerde "üretim" kaynağı girilmiş ve henüz gerçekleşmemiş
+   karşılama satırları kesim formunda seçilebilir olmalı; kesim
+   yapılınca o satır kapanır ve üretilen ürünler siparişe ayrılır. */
+async function bekleyenUretimleriYukle() {
+  const sec = document.getElementById('fKarsilama');
+  if (!sec) return;
+  sec.innerHTML = '<option value="">— hayır, serbest üretim —</option>';
+  let siparisler = [];
+  try {
+    const d = await api('/api/siparis');
+    siparisler = (Array.isArray(d) ? d : (d.data || []))
+      .filter(s => !['Teslim Edildi', 'Iptal Edildi'].includes(s.durum));
+  } catch (e) { return; }
+  // Her siparişin kalemlerini tek tek sormak yerine detaydan oku
+  const secenekler = [];
+  await Promise.all(siparisler.slice(0, 40).map(async s => {
+    try {
+      const d = await api(`/api/siparis/${encodeURIComponent(s.id)}`);
+      (d.kalemler || []).forEach(k => {
+        (k.karsilama || []).forEach(x => {
+          if (x.kaynak_tip === 'URETIM' && x.durum !== 'Gerceklesti') {
+            secenekler.push({
+              id: x.id,
+              metin: `${s.id} · ${k.cins || k.urun_tip || ''} · ${(x.miktar || 0).toLocaleString('tr-TR')} ${x.birim || ''} · ${s.musteri || ''}`
+            });
+          }
+        });
+      });
+    } catch (e) { /* bu sipariş atlanır */ }
+  }));
+  secenekler.sort((a, b) => a.metin.localeCompare(b.metin, 'tr'));
+  secenekler.forEach(o => {
+    const op = document.createElement('option');
+    op.value = o.id; op.textContent = o.metin;
+    sec.appendChild(op);
+  });
+  document.getElementById('karsilamaNot').innerHTML = secenekler.length
+    ? 'Listede siparişlerin <b>üretimden karşılanacak</b> kalemleri var. Seçersen üretilen ürünler o siparişe ayrılır.'
+    : 'Şu an üretimden karşılanmayı bekleyen sipariş kalemi yok.';
+}
+
 /* Üretim blok no önerisi: orijinal no + -U + yıl kısaltması + sıra */
 function uretimNoOner() {
   const k = KAYNAKLAR.find(x => x.id === SECILI_KAYNAK[0]);
@@ -484,6 +542,9 @@ async function kesimKaydet(rezerveOnay, uretilenRez) {
       })),
       kesim_tarihi: document.getElementById('fTarih').value || null
     };
+    // F6: seçilen üretim karşılaması (varsa) — sipariş ve kalem ondan okunur
+    const krsSec = document.getElementById('fKarsilama').value;
+    if (krsSec) govde.karsilama_id = krsSec;
     if (rezerveOnay) govde.rezerve_kesim_onay = true;
     if (uretilenRez) govde.uretilen_rezerve = true;
     const d = await api('/api/kesim', { method: 'POST', body: JSON.stringify(govde) });

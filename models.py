@@ -777,6 +777,14 @@ class Kesim(db.Model):
     # Hem orijinal blok no (kaynak_no) hem de bu yeni üretim blok no
     # üzerinden tüm takip (maliyet, karlılık, izleme) yapılabilir.
     uretim_blok_no  = db.Column(db.String(50))
+    # ── F6 / BL-08 · ÜRETİM–SİPARİŞ BAĞI ──
+    # "Bu bloğu şu siparişin şu kalemi için kesiyorum" bilgisi eskiden
+    # hiçbir yerde durmuyordu: üretilen plakadan siparişe giden iz ancak
+    # rezervasyon üzerinden DOLAYLI kuruluyor, kesim siparişsiz kalıyordu.
+    # Bu alanlar üretimi doğrudan kaleme ve karşılama satırına bağlar.
+    siparis_id       = db.Column(db.String(20), index=True, nullable=True)
+    siparis_kalem_id = db.Column(db.Integer, index=True, nullable=True)
+    karsilama_id     = db.Column(db.String(20), index=True, nullable=True)
     fire_orani      = db.Column(Olcu, default=0)
     fire_miktar     = db.Column(Olcu, default=0)
     aciklama        = db.Column(db.String(300))
