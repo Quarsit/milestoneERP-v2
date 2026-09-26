@@ -1208,8 +1208,10 @@ async function izAc(stokId, tip) {
   const mal = (d.maliyetler || []);
   const govde = `
     <div class="alan-grid" style="margin-bottom:14px">
-      <div class="alan"><label>Ürün</label><div>${kacar(s.cins || '—')}</div></div>
+      <div class="alan"><label>Ürün</label><div>${kacar(s.cins || '—')}${s.ozellik ? ' · ' + kacar(s.ozellik) : ''}</div></div>
       <div class="alan"><label>Blok / Kasa</label><div class="mono">${kacar(s.blok_no || '—')}</div></div>
+      ${s.slab_no ? `<div class="alan"><label>Plaka No</label><div class="mono">${kacar(String(s.slab_no))}</div></div>` : ''}
+      ${s.olcu ? `<div class="alan"><label>Ölçü</label><div class="mono">${kacar(s.olcu)} cm</div></div>` : ''}
       <div class="alan"><label>Durum</label><div>${kacar(s.durum || '—')}</div></div>
     </div>
     ${halkalar || '<div class="bos" style="padding:12px">Bu stok için kayıtlı bir zincir yok.</div>'}
@@ -1218,7 +1220,10 @@ async function izAc(stokId, tip) {
         <div><div>${kacar(m.fatura_no || 'belgesiz')}</div>
         <div style="color:var(--soluk);font-size:.76rem">${kacar(m.tarih || '')}</div></div>
         <span class="m">${para2(m.tutar, m.doviz)}</span></div>`).join('')}` : ''}`;
-  cekmeceAc(`Kaynak zinciri · ${kacar(s.id)}`, kacar(s.cins || ''), govde,
+  const basNo = s.slab_no ? `${kacar(s.blok_no || '')} · Plaka ${kacar(String(s.slab_no))}`
+                         : kacar(s.blok_no || s.id);
+  cekmeceAc(`Kaynak zinciri · ${basNo}`,
+            `${kacar(s.cins || '')}${s.olcu ? ' · ' + kacar(s.olcu) + ' cm' : ''} · ${kacar(s.id)}`, govde,
             `<button class="blok-btn" onclick="detayAc('${kacar(s.id)}')">Stok detayına dön</button>
              <button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
 }

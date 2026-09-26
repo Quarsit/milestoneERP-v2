@@ -8110,6 +8110,15 @@ def create_app():
         return jsonify({'ok': True, 'stok': {
             'id': stok_id, 'tip': tip, 'cins': getattr(stok, 'cins', None),
             'blok_no': getattr(stok, 'blok_no', None) or getattr(stok, 'kasa_no', None),
+            # Kullanicinin depoda okudugu numara: plakada slab no,
+            # ebatlida kasa no. Sistem kimligi (PLK-62947F) degil bu
+            # takip ediliyor; iz penceresinde de o gorunmeli.
+            'slab_no': getattr(stok, 'slab_no', None),
+            'kasa_no': getattr(stok, 'kasa_no', None),
+            'ozellik': getattr(stok, 'ozellik', None),
+            'olcu': ' × '.join(str(x) for x in [
+                getattr(stok, 'boy', None), getattr(stok, 'yukseklik', None),
+                getattr(stok, 'kalinlik', None) or getattr(stok, 'en', None)] if x),
             'durum': stok.durum,
             'metraj_m2': float(getattr(stok, 'metraj_m2', 0) or 0),
             'hacim_m3': float(getattr(stok, 'hacim_m3', 0) or 0)},
