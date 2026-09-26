@@ -568,8 +568,16 @@
           </label>
         </div>
         <div class="form-alan" style="margin-bottom:12px">
-          <label>Üretici Kısaltması</label>
-          <input id="cKisaltma" placeholder="AKD — stok kodlarında kullanılır">
+          <!-- RN1: kısaltma artık HER cari için kullanılıyor — belge
+               numaraları bundan üretiliyor (SIP-STN26-03). Boş bırakılırsa
+               unvandan türetilir ve buraya yazılır. -->
+          <label>Kısaltma (belge numaralarında kullanılır)</label>
+          <input id="cKisaltma" maxlength="3" style="text-transform:uppercase"
+                 placeholder="STN — boş bırakırsan unvandan türetilir">
+          <div style="font-size:.72rem;color:var(--soluk);margin-top:5px;line-height:1.4">
+            Sipariş, proforma, fatura ve sevkiyat numaraları bu kısaltmayla
+            oluşur: <span class="mono">SIP-STN26-03</span> · <span class="mono">PI-STN26-01</span>
+          </div>
         </div>
       </div>
     </div>
@@ -862,7 +870,7 @@ function ciz() {
     return `
     <tr style="border-left-color:var(${ray})" onclick="detayAc('${kacar(c.id)}')">
       <td><strong>${kacar(c.unvan)}</strong>
-        ${c.urun_tedarikcisi ? '<div class="ikincil">ürün tedarikçisi' + (c.uretici_kisaltma ? ' · ' + kacar(c.uretici_kisaltma) : '') + '</div>' : ''}</td>
+        ${c.urun_tedarikcisi || c.uretici_kisaltma ? '<div class="ikincil">' + (c.urun_tedarikcisi ? 'ürün tedarikçisi' : '') + (c.urun_tedarikcisi && c.uretici_kisaltma ? ' · ' : '') + (c.uretici_kisaltma ? kacar(c.uretici_kisaltma) : '') + '</div>' : ''}</td>
       <td>${(c.cari_tip || '—').split(',').map(r => {
         /* R1: her rol AYRI rozet. Eskiden düz eşitlik vardı ve
            "Müşteri,Tedarikçi" tek gri rozet olarak görünüyordu. */
@@ -1948,7 +1956,8 @@ async function cariKaydet() {
       gorunurluk: document.getElementById('cGorunurluk').value,
     } : {}),
     urun_tedarikcisi: (tip === 'Tedarikçi' || tip === 'Üretici') && document.getElementById('cUrunTed').checked,
-    uretici_kisaltma: (tip === 'Tedarikçi' || tip === 'Üretici') ? document.getElementById('cKisaltma').value : null
+    // RN1: kısaltma her cari için geçerli (belge numarası ondan üretilir)
+    uretici_kisaltma: (document.getElementById('cKisaltma').value || '').trim().toUpperCase() || null
   };
   try {
     if (DUZENLENEN) {

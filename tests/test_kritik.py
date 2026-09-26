@@ -1091,3 +1091,78 @@ def test_f6_uretim_siparise_baglanir_ve_iz_surulur():
     assert uretim['kaynak_no'] == 'T-99' and uretim['siparis_id'] == 'SIPF6'
     alis = [h for h in iz['zincir'] if h['asama'] == 'Alış'][0]
     assert alis['uretici'] == 'ALBSTONE' and alis['fatura_no'] == 'ALB-2026-7'
+
+
+def test_rn1_okunur_belge_numaralari():
+    """RN1: yeni kayıtlar okunur numara almalı (SIP-STN26-01), cari
+    kısaltması kartta durmalı, eski kayıtlar değişmemeli."""
+    from models import Cari, Siparis, Proforma, Fatura, CariHareket, PlakaStok
+    with fa.app.app_context():
+        db.session.add(Cari(id='CRN', unvan='STONELAND USA LLC', cari_tip='Müşteri',
+                            ulke='USA', para_birimi='USD', gorunurluk='ortak'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    # ── Sipariş: SIP-STN26-01, ikincisi -02 ──
+    r1 = c.post('/api/siparis', headers=H, json={
+        'musteri': 'STONELAND USA LLC', 'doviz': 'USD',
+        'siparis_tarihi': '2026-04-01', 'kalemler': [
+            {'urun_tip': 'PLAKA', 'cins': 'TEST', 'miktar': 10, 'birim': 'm2',
+             'birim_fiyat': 100, 'adet': 1}]})
+    assert r1.status_code == 200, r1.get_data(as_text=True)
+    sid1 = r1.get_json()['id']
+    assert sid1.startswith('SIP-STN'), sid1
+    assert sid1.endswith('-01'), sid1
+    r2 = c.post('/api/siparis', headers=H, json={
+        'musteri': 'STONELAND USA LLC', 'doviz': 'USD',
+        'siparis_tarihi': '2026-04-02', 'kalemler': [
+            {'urun_tip': 'PLAKA', 'cins': 'TEST', 'miktar': 5, 'birim': 'm2',
+             'birim_fiyat': 100, 'adet': 1}]})
+    assert r2.get_json()['id'].endswith('-02')
+
+    # Kısaltma karta yazıldı, sonraki numaralar onunla üretiliyor
+    with fa.app.app_context():
+        assert Cari.query.get('CRN').uretici_kisaltma == 'STN'
+
+    # ── Proforma aynı carinin kendi sayacını kullanır ──
+    rp = c.post('/api/proforma', headers=H, json={
+        'musteri': 'STONELAND USA LLC', 'doviz': 'USD', 'toplam': 1000})
+    assert rp.status_code == 200, rp.get_data(as_text=True)
+    assert rp.get_json()['id'].startswith('PI-STN'), rp.get_json()['id']
+
+    # ── Cari hareket: HR-STN26-0001 (tek yerden, dinleyiciyle) ──
+    with fa.app.app_context():
+        kasa_id = None
+        from models import Kasa
+        k = Kasa.query.filter_by(ad='RN Kasa').first()
+        if not k:
+            k = Kasa(ad='RN Kasa', doviz='USD', bakiye=0)
+            db.session.add(k)
+            db.session.commit()
+        kasa_id = k.id
+    rh = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'CRN', 'islem_tip': 'Tahsilat', 'alacak': 500, 'doviz': 'USD',
+        'vade_tarihi': '2026-04-05', 'hareket_tarihi': '2026-04-05',
+        'kasa_id': kasa_id, 'kur_uygulanan': 40,
+        'kur_gerekce': 'Test kuru'})
+    assert rh.status_code == 200, rh.get_data(as_text=True)
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(cari_id='CRN').first()
+        assert h.id.startswith('HR-STN26-'), h.id
+
+    # ── Stok: blok no ve plaka no kimlikte görünür ──
+    rs = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'BLOK', 'cins': 'TEST', 'blok_no': 'T-55', 'boy': 300,
+        'yukseklik': 150, 'en': 120, 'tonaj': 14, 'alis_fiyati': 400,
+        'alis_fiyat_birim': 'ton', 'doviz': 'USD'})
+    assert rs.status_code == 200, rs.get_data(as_text=True)
+    assert 'T-55' in (rs.get_json().get('id') or ''), rs.get_json()
+
+    # ── Elle verilen kimlikler korunur (içe aktarma, düzeltme betikleri) ──
+    with fa.app.app_context():
+        db.session.add(CariHareket(id='OZEL-1', cari_id='CRN', cari_unvan='STONELAND USA LLC',
+                                   islem_tip='Test', borc=1, alacak=0, doviz='USD',
+                                   kur_uygulanan=1, borc_try=1, alacak_try=0,
+                                   hareket_tarihi=date(2026, 4, 6)))
+        db.session.commit()
+        assert CariHareket.query.get('OZEL-1') is not None

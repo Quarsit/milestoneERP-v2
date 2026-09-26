@@ -33,6 +33,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask import g, has_request_context   # CRM-C2: kuresel erisim suzgeci
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import func
+from sqlalchemy import text as sa_text   # RN1: dinleyici icinde ham SQL
 from flask_migrate import Migrate
 import logging, uuid, os, json
 from datetime import datetime, date, timedelta
@@ -1578,7 +1579,7 @@ def create_app():
                     usd_k = kdv_tutar
 
             m = Maliyet(
-                id=_yeni_id('MYT'),
+                id=_okunur_id('MYT', Maliyet, basamak=4),   # RN1
                 maliyet_tip='Devreden KDV',
                 baglanti_tip='stok',
                 baglanti_id=stok_id,
@@ -1914,6 +1915,209 @@ def create_app():
         while len(sonuc) < 3:
             sonuc += 'X'
         return sonuc[:3]
+
+    # ══════════════════════════════════════════════════════════
+    #  RN1 · OKUNUR BELGE NUMARALARI
+    # ══════════════════════════════════════════════════════════
+    # Sistem kimlikleri rastgeleydi: SIP-900B62, FTR-F8B5ED, PLK-6BC208.
+    # Benzersizdi ama hiçbir şey anlatmıyordu; telefonda okunmuyor,
+    # listede aranmıyor, belgede anlam taşımıyordu.
+    #
+    # Yeni biçim:  ÖNEK-KISALTMA+YIL-SIRA      →  SIP-STN26-03
+    #   KISALTMA : carinin 3 harfli kısaltması (kartında durur)
+    #   YIL      : iki hane
+    #   SIRA     : o cari + o yıl + o belge tipi için sıra
+    #
+    # ESKİ KAYITLAR DEĞİŞMEZ. Kimlikler birincil anahtar ve müşteriye
+    # gitmiş belgelerde geçiyor; geçmişi yeniden numaralamak sistemle
+    # gönderilmiş belgeyi çelişkiye düşürürdü. Yalnızca YENİ kayıtlar
+    # okunur numara alır; iki biçim yan yana yaşar, arama ikisini de
+    # bulur.
+    TURKCE_ASCII = str.maketrans('ÇĞİIÖŞÜçğıiöşü', 'CGIIOSUCGIIOSU')
+
+    def _kisaltma_uret(unvan):
+        """Unvandan 3 harfli kısaltma: ilk kelimenin ilk harfi + sonraki
+        sessizler. PINAR MERMER → PNR · STONELAND USA → STN ·
+        NORTHSTONE → NRT. Sessiz yetmezse sesliyle tamamlanır."""
+        if not unvan:
+            return 'XXX'
+        s = str(unvan).translate(TURKCE_ASCII).upper().strip()
+        kelime = next((k for k in s.split() if k and k[0].isalpha()), '')
+        if not kelime:
+            return 'XXX'
+        harfler = [h for h in kelime if h.isalpha()]
+        if not harfler:
+            return 'XXX'
+        sonuc = harfler[0]
+        for h in harfler[1:]:
+            if h not in UNLU_HARFLER:
+                sonuc += h
+            if len(sonuc) == 3:
+                break
+        for h in harfler[1:]:          # hâlâ eksikse sesliyle tamamla
+            if len(sonuc) >= 3:
+                break
+            if h not in sonuc:
+                sonuc += h
+        return (sonuc + 'XXX')[:3]
+
+    def _cari_kisaltma(cari):
+        """Carinin kısaltması. Kartında yoksa üretilir, BENZERSİZ hale
+        getirilir ve karta YAZILIR — böylece numara üreten kural ile
+        kullanıcının gördüğü kısaltma hiç ayrışmaz."""
+        if cari is None:
+            return 'GEN'
+        if isinstance(cari, str):
+            cari = _cari_bul(cari) or Cari.query.filter_by(unvan=cari).first()
+            if cari is None:
+                return 'GEN'
+        mevcut = (getattr(cari, 'uretici_kisaltma', None) or '').strip().upper()
+        if mevcut:
+            return (mevcut + 'XXX')[:3]
+        aday = _kisaltma_uret(cari.unvan)
+        kullanilan = {(k or '').strip().upper() for (k,) in
+                      db.session.query(Cari.uretici_kisaltma).filter(
+                          Cari.uretici_kisaltma.isnot(None),
+                          Cari.id != cari.id).all()}
+        if aday in kullanilan:
+            # Çakışma: ilk üç harf, sonra rakamla ayır (STN → STO → ST2)
+            alternatif = (''.join(h for h in str(cari.unvan).translate(TURKCE_ASCII).upper()
+                                  if h.isalpha()) + 'XXX')[:3]
+            if alternatif not in kullanilan:
+                aday = alternatif
+            else:
+                for i in range(2, 10):
+                    deneme = aday[:2] + str(i)
+                    if deneme not in kullanilan:
+                        aday = deneme
+                        break
+        try:
+            cari.uretici_kisaltma = aday
+        except Exception:
+            pass
+        return aday
+
+    @db.event.listens_for(CariHareket, 'before_insert')
+    def _cari_hareket_okunur_id(esleme, baglanti, hareket):
+        """RN1 — cari hareket kimliğini okunur yapar: HR-STN26-0007.
+
+        Cari hareket 24 ayrı yerde oluşturuluyor (tahsilat, çek, avans,
+        virman, kur farkı, fatura kesimi…). Kimliği her birinde ayrı
+        ayrı üretmek yerine kayıt yazılmadan HEMEN ÖNCE burada bir kez
+        atanır — yeni bir hareket yolu eklendiğinde de kendiliğinden
+        okunur numara alır, kimse unutamaz.
+
+        Zaten okunur olan (iki tireli) kimliklere dokunulmaz; kimlik
+        üretilemezse hareket eski rastgele kimliğiyle yazılır.
+        """
+        try:
+            import re as _re_rn
+            mevcut = str(hareket.id or '')
+            # YALNIZCA otomatik üretilmiş rastgele kimlik (HR-7C5721)
+            # yeniden yazılır. Elle verilen kimlikler (içe aktarma,
+            # testler, düzeltme betikleri) OLDUĞU GİBİ korunur.
+            if not _re_rn.fullmatch(r'HR-[0-9A-F]{6}', mevcut):
+                return
+            kis = 'GEN'
+            if hareket.cari_id:
+                satir = baglanti.execute(sa_text(
+                    'SELECT uretici_kisaltma, unvan FROM cariler WHERE id = :i'),
+                    {'i': hareket.cari_id}).fetchone()
+                if satir:
+                    kis = (satir[0] or '').strip().upper() or _kisaltma_uret(satir[1])
+            elif hareket.cari_unvan:
+                kis = _kisaltma_uret(hareket.cari_unvan)
+            kis = (kis + 'XXX')[:3]
+            yil = (hareket.hareket_tarihi or date.today()).strftime('%y')
+            kok = f'HR-{kis}{yil}-'
+            satir = baglanti.execute(sa_text(
+                'SELECT id FROM cari_hareket WHERE id LIKE :k'), {'k': kok + '%'}).fetchall()
+            son = 0
+            for (mevcut_id,) in satir:
+                kuyruk = str(mevcut_id).rsplit('-', 1)[-1]
+                if kuyruk.isdigit():
+                    son = max(son, int(kuyruk))
+            # AYNI FLUSH içinde birden çok hareket olabilir (avans devri
+            # iki bacak yazar). Veritabanı sorgusu henüz yazılmamış
+            # kardeşleri göremez; bu yüzden bağlantı üzerinde küçük bir
+            # sayaç tutulur — yoksa ikisi de aynı numarayı alır ve
+            # benzersizlik kısıtı patlar.
+            sayac = baglanti.info.setdefault('rn1_hr_sayac', {})
+            son = max(son, sayac.get(kok, 0))
+            aday = f'{kok}{son + 1:04d}'
+            if len(aday) <= 20:
+                sayac[kok] = son + 1
+                hareket.id = aday
+        except Exception as e:
+            app.logger.warning(f'Cari hareket numarası üretilemedi: {e}')
+
+    def _stok_okunur_id(on_ek, model, kok, sira=None):
+        """RN1 — stok kimliği depoda okunan numaradan türer.
+
+          BLOK   : BLK-T77          (blok no)
+          PLAKA  : PLK-T77-03       (blok/üretim no + plaka no)
+          EBATLI : EBT-<kasa no>    (referans kodu zaten okunur)
+
+        Blok no yoksa ya da numara çakışırsa eski rastgele kimliğe
+        düşülür: kimlik üretilemedi diye stok kaydı kaybolmaz.
+        """
+        if not kok:
+            return _yeni_id(on_ek)
+        try:
+            temiz = ''.join(h for h in str(kok).translate(TURKCE_ASCII).upper()
+                            if h.isalnum() or h == '-').strip('-')
+            if not temiz:
+                return _yeni_id(on_ek)
+            aday = f'{on_ek}-{temiz}' + (f'-{int(sira):02d}' if sira not in (None, '') else '')
+            if len(aday) <= 20 and db.session.get(model, aday) is None:
+                return aday
+            # Çakışma ya da uzunluk: kökü kısalt, sonra sıra ekle
+            return _okunur_id(on_ek, model, orta=temiz,
+                              basamak=(2 if sira in (None, '') else 3))
+        except Exception:
+            return _yeni_id(on_ek)
+
+    def _okunur_id(on_ek, model, cari=None, tarih=None, orta=None, basamak=2):
+        """RN1 — okunur, benzersiz kimlik üretir.
+
+        cari verilirse:  SIP-STN26-03   (cari + yıl + sıra)
+        orta verilirse:  KSM-T77-01     (blok no gibi bir kök + sıra)
+        ikisi de yoksa:  MYT-26-0043    (yıl + sıra)
+
+        Kimlik sütunu 20 karakter; kök uzunsa ORTADAN kısaltılır, sıra
+        her zaman korunur. Numara doluysa ya da bir şey ters giderse
+        eski rastgele kimliğe düşer — kayıt asla kaybolmaz.
+        """
+        try:
+            yil = (tarih or date.today()).strftime('%y')
+            if orta:
+                kok_ic = ''.join(h for h in str(orta).translate(TURKCE_ASCII).upper()
+                                 if h.isalnum() or h == '-').strip('-')
+            elif cari is not None:
+                kok_ic = f'{_cari_kisaltma(cari)}{yil}'
+            else:
+                kok_ic = yil
+            kok = f'{on_ek}-{kok_ic}-'
+            # 20 karaktere sığdır: sıra için yer bırak
+            azami_kok = 20 - (basamak + 1)
+            if len(kok) > azami_kok:
+                kesilecek = len(kok) - azami_kok
+                kok = f'{on_ek}-{kok_ic[:max(1, len(kok_ic) - kesilecek)]}-'
+            son = 0
+            for (mevcut,) in db.session.query(model.id).filter(
+                    model.id.like(kok + '%')).all():
+                kuyruk = str(mevcut).rsplit('-', 1)[-1]
+                if kuyruk.isdigit():
+                    son = max(son, int(kuyruk))
+            for i in range(son + 1, son + 500):
+                aday = f'{kok}{i:0{basamak}d}'
+                if len(aday) > 20:
+                    return _yeni_id(on_ek)
+                if db.session.get(model, aday) is None:
+                    return aday
+        except Exception as e:
+            app.logger.warning(f'Okunur numara üretilemedi ({on_ek}): {e}')
+        return _yeni_id(on_ek)
 
     def _uretici_kisaltma(uretici_unvan):
         """Carideki uretici kisaltma alanindan oku.
@@ -2260,7 +2464,7 @@ def create_app():
             # C SIKKI: Eski Devreden kaydini PASIF yap, yeni Iade kaydi olustur
             m.aktif = False
             m.donusum_tarihi = bugun_donusum
-            yeni_id = _yeni_id('MYT')
+            yeni_id = _okunur_id('MYT', Maliyet, basamak=4)   # RN1
             iade_kayit = Maliyet(
                 id=yeni_id,
                 maliyet_tarihi=bugun_donusum,
@@ -5072,7 +5276,8 @@ def create_app():
                 miktar = _sayi('tonaj') if fiyat_birim == 'ton' else q2(m3)
                 matrah = q2(fiyat * miktar)
                 kdv_tutar = q2(matrah * kdv_oran / 100) if kdv_oran > 0 else 0
-                stok = BlokStok(id=_yeni_id('BLK'), uretici=data.get('uretici'), cins=data.get('cins'), blok_no=data.get('blok_no'),
+                stok = BlokStok(id=_stok_okunur_id('BLK', BlokStok, data.get('blok_no')),   # RN1
+                                uretici=data.get('uretici'), cins=data.get('cins'), blok_no=data.get('blok_no'),
                                 boy=boy, yukseklik=yuk, en=en, hacim_m3=q2(m3),
                                 tonaj=_sayi('tonaj'), alis_fiyati=fiyat,
                                 alis_fiyat_birim=fiyat_birim,
@@ -5137,7 +5342,8 @@ def create_app():
                 olusan_idler = []
                 for i in range(adet):
                     slab = bas_no + i
-                    stok = PlakaStok(id=_yeni_id('PLK'), uretici=data.get('uretici'), cins=data.get('cins'), blok_no=data.get('blok_no'),
+                    stok = PlakaStok(id=_stok_okunur_id('PLK', PlakaStok, data.get('blok_no'), slab),   # RN1
+                                     uretici=data.get('uretici'), cins=data.get('cins'), blok_no=data.get('blok_no'),
                                      boy=boy, yukseklik=yuk, kalinlik=_sayi('kalinlik'), ozellik=data.get('ozellik'),
                                      metraj_m2=q2(m2), metraj_sqft=q2(m2*10.764),
                                      slab_no=slab, alis_fiyati=fiyat,
@@ -5221,7 +5427,7 @@ def create_app():
                 olusturulan_ids = []
                 for ref_kod in referans_kodlari:
                     stok = EbatliStok(
-                        id=_yeni_id('EBT'),
+                        id=_stok_okunur_id('EBT', EbatliStok, ref_kod),   # RN1
                         uretici=uretici, cins=cins, kasa_no=ref_kod,
                         boy=boy, yukseklik=yuk, kalinlik=kal,
                         ozellik=data.get('ozellik'),
@@ -5801,7 +6007,9 @@ def create_app():
             metraj_m2 = (boy * yuk) / 10000
             metraj_sqft = metraj_m2 * 10.764
             aciklama = p.get('aciklama', '') or f"Toplu import - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            plaka = PlakaStok(id=_yeni_id('PLK'), uretici=p.get('uretici', ''), cins=p.get('cins', ''), blok_no=p.get('blok_no', ''),
+            plaka = PlakaStok(id=_stok_okunur_id('PLK', PlakaStok, p.get('blok_no', ''),   # RN1
+                                               p.get('slab_no')),
+                              uretici=p.get('uretici', ''), cins=p.get('cins', ''), blok_no=p.get('blok_no', ''),
                               boy=boy, yukseklik=yuk, kalinlik=p.get('kalinlik'), ozellik=p.get('ozellik', ''),
                               metraj_m2=q2(metraj_m2), metraj_sqft=q2(metraj_sqft), alis_fiyati=p.get('alis_fiyati',0),
                               doviz=p.get('doviz','USD'), konum=p.get('konum',''), durum='Serbest', aciklama=aciklama, kullanici=session['kullanici'])
@@ -6511,10 +6719,21 @@ def create_app():
         _tip_lower = (cari_tip_str or '').lower()
         is_uretici = ('uretici' in _tip_lower) or ('üretici' in _tip_lower) or \
                      ('tedarikci' in _tip_lower) or ('tedarikçi' in _tip_lower)
-        uretici_kis = data.get('uretici_kisaltma')
-        if is_uretici and not uretici_kis:
+        # RN1: kısaltma ARTIK HER CARİ İÇİN üretilir — sipariş, proforma,
+        # fatura ve sevkiyat numaraları bundan oluşuyor. Eskiden yalnızca
+        # üretici/tedarikçilerde doluyordu.
+        uretici_kis = (data.get('uretici_kisaltma') or '').strip().upper() or None
+        if not uretici_kis:
             try:
-                uretici_kis = _uretici_kisaltma(data['unvan'])
+                uretici_kis = _kisaltma_uret(data['unvan'])
+                _var = {(k or '').upper() for (k,) in db.session.query(
+                    Cari.uretici_kisaltma).filter(Cari.uretici_kisaltma.isnot(None)).all()}
+                if uretici_kis in _var:
+                    for _i in range(2, 10):
+                        _d = uretici_kis[:2] + str(_i)
+                        if _d not in _var:
+                            uretici_kis = _d
+                            break
             except Exception:
                 uretici_kis = (data['unvan'][:3] or 'XXX').upper()
 
@@ -6534,7 +6753,7 @@ def create_app():
             _log_audit('EKLE', 'cari', cari.id, yeni={'unvan': cari.unvan, 'tip': cari.cari_tip})
             db.session.commit()
             return jsonify({'ok': True, 'id': cari.id, 'mesaj': 'Cari kaydedildi',
-                            'uretici_kisaltma': uretici_kis if is_uretici else None})
+                            'uretici_kisaltma': uretici_kis})
         except Exception as e:
             db.session.rollback()
             return jsonify({'ok': False, 'mesaj': f'Kayit hatasi: {str(e)}'}), 500
@@ -8428,7 +8647,10 @@ def create_app():
 
             # Kesim kaydi (tek bir Kesim kaydi, birden fazla kaynak ise ilk kaynak referans)
             ana_kaynak = kaynaklar[0]
-            kesim_id = _yeni_id('KSM')
+            # RN1: kesim, kaynağın blok numarasıyla anılır (KSM-T77-01)
+            kesim_id = _okunur_id('KSM', Kesim,
+                                  orta=(getattr(ana_kaynak, 'blok_no', None) or
+                                        getattr(ana_kaynak, 'kasa_no', None)))
             # ÜRETİM BLOK NO: kesilen bloktan üretilen plakaların yeni blok no'su.
             # Kullanıcı modal'dan girer; verilmediyse otomatik üret veya orijinali kullan.
             uretim_blok_no = (data.get('uretim_blok_no') or '').strip()
@@ -8522,7 +8744,10 @@ def create_app():
                     for i in range(adet):
                         slab_int = _sonraki_slab()
                         etiket = f'{slab_int}/{adet}'
-                        plk_id = _yeni_id('PLK')
+                        # RN1: üretim blok no + plaka no (PLK-T77-U1-03)
+                        plk_id = _stok_okunur_id('PLK', PlakaStok,
+                                                 uretim_blok_no or ana_kaynak.blok_no,
+                                                 slab_int)
                         plk = PlakaStok(
                             id=plk_id, cins=cins, uretici=ana_kaynak.uretici,
                             boy=boy, yukseklik=yukseklik, kalinlik=kalinlik,
@@ -8591,7 +8816,8 @@ def create_app():
 
                         kasa_m2 = m2_birim * bu_kasa_parca
                         ebt = EbatliStok(
-                            id=_yeni_id('EBT'), cins=cins, uretici=ana_kaynak.uretici,
+                            id=_stok_okunur_id('EBT', EbatliStok, kasa_no),   # RN1
+                            cins=cins, uretici=ana_kaynak.uretici,
                             boy=boy, yukseklik=yukseklik, kalinlik=kalinlik,
                             metraj_m2=kasa_m2, kasa_no=kasa_no,
                             kasa_ici_adet=bu_kasa_parca,
@@ -9932,7 +10158,7 @@ def create_app():
                     fatura_tipi = 'stoklu'
 
             fatura = Fatura(
-                id=_yeni_id('FTR'),
+                id=_okunur_id('FTR', Fatura, cari=cari),          # RN1
                 fatura_no=evrak_no,
                 fatura_tarihi=date.today(),
                 vade_tarihi=vade,
@@ -10665,7 +10891,7 @@ def create_app():
 
         # Parent sipariş
         sip = Siparis(
-            id=_yeni_id('SIP'),
+            id=_okunur_id('SIP', Siparis, cari=data.get('musteri')),   # RN1
             musteri=data.get('musteri'),
             doviz=data.get('doviz', 'USD'),
             odeme_sekli=data.get('odeme_sekli'),
@@ -10768,7 +10994,7 @@ def create_app():
         try:
             # ── 1) SİPARİŞ (doğrudan Onaylandı) ──
             sip = Siparis(
-                id=_yeni_id('SIP'),
+                id=_okunur_id('SIP', Siparis, cari=musteri),               # RN1
                 musteri=musteri, doviz=doviz,
                 odeme_sekli=data.get('odeme_sekli') or 'Pesin',
                 teslim_sekli=data.get('teslim_sekli') or 'EXW',
@@ -10824,7 +11050,8 @@ def create_app():
             # ── 3) FATURA (doğrudan Kesildi) ──
             ftr_no = data.get('fatura_no') or f'SF-{bugun.strftime("%Y%m%d")}-{sip.id[-4:]}'
             fatura = Fatura(
-                id=_yeni_id('FTR'), fatura_no=ftr_no,
+                id=_okunur_id('FTR', Fatura, cari=musteri),      # RN1
+                fatura_no=ftr_no,
                 fatura_tarihi=bugun,
                 vade_tarihi=_parse_date(data.get('vade_tarihi')) or bugun,
                 siparis_id=sip.id, musteri=musteri,
@@ -13300,7 +13527,7 @@ def create_app():
             return _usd_cevrim(t, dv)          # F15: TCMB çapraz kuru
 
         # Ana maliyet kaydı
-        m = Maliyet(id=_yeni_id('MYT'), maliyet_tip=maliyet_tip,
+        m = Maliyet(id=_okunur_id('MYT', Maliyet, basamak=4), maliyet_tip=maliyet_tip,
                     baglanti_tip=baglanti_tip, baglanti_id=baglanti_id,
                     tutar=net_tutar, doviz=doviz, usd_karsilik=_usd(net_tutar, doviz),
                     fatura_no=fatura_no, kullanici=kullanici)
@@ -13309,7 +13536,7 @@ def create_app():
         # KDV maliyet kaydı
         kdv_m = None
         if kdv_tutar > 0:
-            kdv_m = Maliyet(id=_yeni_id('MYT'), maliyet_tip='Devreden KDV',
+            kdv_m = Maliyet(id=_okunur_id('MYT', Maliyet, basamak=4), maliyet_tip='Devreden KDV',
                             baglanti_tip=baglanti_tip, baglanti_id=baglanti_id,
                             tutar=kdv_tutar, doviz=doviz, usd_karsilik=_usd(kdv_tutar, doviz),
                             fatura_no=fatura_no,
@@ -13526,7 +13753,7 @@ def create_app():
             if net_pay <= 0:
                 continue
 
-            m = Maliyet(id=_yeni_id('MYT'), maliyet_tip=maliyet_tip,
+            m = Maliyet(id=_okunur_id('MYT', Maliyet, basamak=4), maliyet_tip=maliyet_tip,
                         baglanti_tip='stok', baglanti_id=stok.id,
                         tutar=net_pay, doviz=doviz, usd_karsilik=_usd(net_pay, doviz),
                         fatura_no=fatura_no,
@@ -13535,7 +13762,7 @@ def create_app():
             db.session.add(m)
 
             if kdv_pay > 0:
-                kdv_m = Maliyet(id=_yeni_id('MYT'), maliyet_tip='Devreden KDV',
+                kdv_m = Maliyet(id=_okunur_id('MYT', Maliyet, basamak=4), maliyet_tip='Devreden KDV',
                                 baglanti_tip='stok', baglanti_id=stok.id,
                                 tutar=kdv_pay, doviz=doviz, usd_karsilik=_usd(kdv_pay, doviz),
                                 fatura_no=fatura_no,
@@ -13639,7 +13866,8 @@ def create_app():
                     'ok': False,
                     'mesaj': f'Siparis "{sip.durum}" durumunda. Sevkiyat icin once Onaylandi/Uretimde/Hazir olmali.'
                 }), 400
-        s = Sevkiyat(id=_yeni_id('SEV'), sevk_tip=data['sevk_tip'], musteri=data['musteri'], siparis_id=data.get('siparis_id'),
+        s = Sevkiyat(id=_okunur_id('SEV', Sevkiyat, cari=data['musteri']),   # RN1
+                     sevk_tip=data['sevk_tip'], musteri=data['musteri'], siparis_id=data.get('siparis_id'),
                      cikis_noktasi=data.get('cikis_noktasi'), varis_noktasi=data.get('varis_noktasi'),
                      tah_yukleme=_parse_date(data.get('tah_yukleme')), tah_teslim=_parse_date(data.get('tah_teslim')),
                      nakliye_firma=data.get('nakliye_firma'), arac_plaka=data.get('arac_plaka'), konteyner_no=data.get('konteyner_no'),
@@ -15758,7 +15986,8 @@ def create_app():
         data = request.get_json(silent=True) or {}
         # siparis_id varsa - bu proforma mevcut bir siparise bagli
         siparis_id = data.get('siparis_id')
-        p = Proforma(id=_yeni_id('PI'), musteri=data['musteri'],
+        p = Proforma(id=_okunur_id('PI', Proforma, cari=data['musteri']),   # RN1
+                     musteri=data['musteri'],
                      # Teklifi HAZIRLAYAN oturumdan yazilir; istemciden
                      # almak baskasi adina teklif kaydedilmesine izin
                      # verirdi. GUNCELLEMEDE ezilmez — hazirlayan ile
@@ -17016,7 +17245,7 @@ def create_app():
         kdv_tutar = q2(tutar * kdv_oran / 100) if kdv_oran > 0 else 0
 
         fatura = Fatura(
-            id=_yeni_id('FTR'),
+            id=_okunur_id('FTR', Fatura, cari=musteri),          # RN1
             fatura_no=(data.get('fatura_no') or '').strip() or None,
             fatura_tarihi=_parse_date(data.get('fatura_tarihi')) or date.today(),
             vade_tarihi=_parse_date(data.get('vade_tarihi')),
@@ -19452,7 +19681,7 @@ def create_app():
 
         try:
             sip = Siparis(
-                id=_yeni_id('SIP'),
+                id=_okunur_id('SIP', Siparis, cari=p.musteri),             # RN1
                 musteri=p.musteri,
                 doviz=p.doviz or 'USD',
                 odeme_sekli=p.odeme_sekli,
@@ -19658,7 +19887,7 @@ def create_app():
                 fatura_tipi = 'stoklu' if rez_var else 'transit'
 
         fatura = Fatura(
-            id=_yeni_id('FTR'),
+            id=_okunur_id('FTR', Fatura, cari=p.musteri),        # RN1
             fatura_no=data.get('fatura_no') or '',
             fatura_tarihi=_parse_date(data.get('fatura_tarihi')) or date.today(),
             vade_tarihi=_parse_date(data.get('vade_tarihi')),
@@ -19796,7 +20025,7 @@ def create_app():
                 tevkifat_oran, tevkifat_tutar = '', 0
 
         fatura = Fatura(
-            id=_yeni_id('FTR'),
+            id=_okunur_id('FTR', Fatura, cari=musteri),          # RN1
             fatura_no=(data.get('fatura_no') or '').strip(),
             fatura_tarihi=_parse_date(data.get('fatura_tarihi')) or date.today(),
             vade_tarihi=_parse_date(data.get('vade_tarihi')),
