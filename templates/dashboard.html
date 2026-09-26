@@ -100,7 +100,14 @@ async function kpiYukle() {
       const d = await api('/api/rapor/stok_durum');
       const t = d.tip_ozet || {};
       const parca = Object.keys(t).map(k => t[k].adet + ' ' + k.toLowerCase()).join(' · ');
-      yaz(2, para(d.toplam_deger_usd || 0).replace(' $', '<small>$</small>'), parca || 'stok yok');
+      /* F5: pano göstergesi DEPODAKİ değeri yazar. Eskiden sevk edilmiş
+         ama varmamış mal da bu rakamın içindeydi; pano depoda olmayan
+         malı depoda sayıyordu. Yoldaki mal varsa alt satırda ayrı yazar. */
+      const depoDeger = (d.depo_deger_usd != null) ? d.depo_deger_usd : d.toplam_deger_usd;
+      const yolda = d.yolda_adedi || 0;
+      const altSatir = (parca || 'stok yok')
+        + (yolda ? ` · yolda ${para(d.yolda_deger_usd || 0)}` : '');
+      yaz(2, para(depoDeger || 0).replace(' $', '<small>$</small>'), altSatir);
     } catch (e) { yaz(2, '—', 'veri alınamadı'); }
   } else yaz(2, '—', 'yetki yok');
 }

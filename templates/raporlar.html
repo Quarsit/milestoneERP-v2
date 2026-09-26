@@ -346,8 +346,13 @@ async function stokYukle() {
   try {
     const d = await api('/api/rapor/stok_durum');
     const toplam = d.toplam_deger_usd || 0;
-    document.getElementById('kStok').innerHTML = para(toplam).replace(' $', '<small>$</small>');
-    document.getElementById('kStokEk').textContent = (d.toplam_stok_adedi || 0) + ' kalem stok';
+    /* F5: kutuda DEPODAKİ değer; dağılım oranları toplam üzerinden
+       hesaplanmaya devam eder (yoldaki mal dağılımda görünmeli). */
+    const depoDeger = (d.depo_deger_usd != null) ? d.depo_deger_usd : toplam;
+    document.getElementById('kStok').innerHTML = para(depoDeger).replace(' $', '<small>$</small>');
+    document.getElementById('kStokEk').textContent =
+      (d.depo_adedi != null ? d.depo_adedi : (d.toplam_stok_adedi || 0)) + ' kalem depoda'
+      + ((d.yolda_adedi || 0) ? ` · ${d.yolda_adedi} kalem yolda (${para(d.yolda_deger_usd || 0)})` : '');
     document.getElementById('stokTip').innerHTML = dagilim(d.tip_ozet, toplam);
     document.getElementById('stokDurum').innerHTML = dagilim(d.durum_ozet, toplam);
 

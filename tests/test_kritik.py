@@ -1568,3 +1568,130 @@ def test_bl17_depodaki_plaka_ikinci_kez_girilemez():
     assert r.status_code == 400, r.get_data(as_text=True)
     assert 'depoda zaten var' in r.get_json()['hatalar'][0]['hata']
 
+
+def test_f5_yoldaki_mal_depo_degerine_girmez():
+    """F5: sevk edilmiş ama varmamış mal (Sevkedildi) depo m² ve
+    değerine DAHİL OLMAMALI; kendi deposunda sayılmalı."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        for i, (sid, durum) in enumerate([
+                ('PLK-F5-D1', 'Serbest'), ('PLK-F5-D2', 'Satildi'),
+                ('PLK-F5-Y1', 'Sevkedildi'), ('PLK-F5-C1', 'Teslim Edildi')]):
+            if not PlakaStok.query.get(sid):
+                db.session.add(PlakaStok(
+                    id=sid, cins='F5 TEST', blok_no='T-F5', slab_no=i + 1,
+                    boy=200, yukseklik=100, kalinlik=2, metraj_m2=2.0,
+                    durum=durum, alis_fiyati=50, alis_fiyat_birim='m2',
+                    doviz='USD'))
+        db.session.commit()
+
+    def ozet(depo=None):
+        yol = '/api/stok?tip=PLAKA&cins=F5 TEST&per_page=100'
+        if depo:
+            yol += f'&depo={depo}'
+        r = c.get(yol, headers=H)
+        assert r.status_code == 200, r.get_data(as_text=True)
+        j = r.get_json()
+        return j.get('ozet') or {}, (j.get('data') or j.get('veri') or [])
+
+    tum, satirlar = ozet()
+    assert len(satirlar) == 4, [x['id'] for x in satirlar]
+    # Depo: Serbest + Satildi = 2 kayıt, 4 m², 100 USD
+    assert tum['depo_adet'] == 2, tum
+    assert float(tum['depo_m2']) == 4.0, tum
+    assert float(tum['depo_deger_usd']) == 200.0, tum   # 2 × (50 $/m² × 2 m²)
+    # Yolda: 1 kayıt, 2 m², 50 USD — depo rakamlarının DIŞINDA
+    assert tum['yolda_adet'] == 1, tum
+    assert float(tum['yolda_m2']) == 2.0, tum
+    assert float(tum['yolda_deger_usd']) == 100.0, tum
+    # Toplam eskisi gibi hepsini kapsar (geriye dönük uyumluluk)
+    assert float(tum['m2']) == 8.0, tum
+
+    # ── Depo süzgeci ──
+    _, depoda = ozet('depo')
+    assert {x['id'] for x in depoda} == {'PLK-F5-D1', 'PLK-F5-D2'}
+    _, yolda = ozet('yolda')
+    assert {x['id'] for x in yolda} == {'PLK-F5-Y1'}
+    assert yolda[0]['depo'] == 'yolda' and yolda[0]['depo_ad'] == 'Yolda'
+    _, cikti = ozet('cikti')
+    assert {x['id'] for x in cikti} == {'PLK-F5-C1'}
+
+
+def test_f5_rapor_depo_kirilimi_verir():
+    """F5: stok durum raporu depo / yolda ayrımını ve 'Sevkedildi'
+    kovasını vermeli (eskiden hiçbir kovaya düşmüyordu)."""
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/rapor/stok_durum', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    for alan in ('depo_adedi', 'depo_deger_usd', 'yolda_adedi',
+                 'yolda_deger_usd', 'cikti_adedi'):
+        assert alan in d, (alan, list(d))
+    assert d['depo_adedi'] + d['yolda_adedi'] + d['cikti_adedi'] \
+        == d['toplam_stok_adedi'], d
+    assert round(d['depo_deger_usd'] + d['yolda_deger_usd'], 2) <= \
+        round(d['toplam_deger_usd'], 2) + 0.01, d
+    f5 = [c2 for c2 in (d.get('cins_listesi') or [])
+          if c2.get('cins') == 'F5 TEST' and c2.get('tip') == 'PLAKA']
+    assert f5, [c2.get('cins') for c2 in (d.get('cins_listesi') or [])]
+    co = f5[0]
+    assert co['yolda_adet'] == 1, co
+    assert co['depo_adet'] == 2, co
+    assert co['toplam_adet'] == 4, co
+
+
+def test_f5_sevk_edilen_mal_fatura_secicisinde_kalir():
+    """F5 yan düzeltme: mal gemiye yüklenince fatura/cari hareket
+    seçicisinden kaybolmamalı — hâlâ bizim malımız."""
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/stok/gruplar', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    hepsi = str(j)
+    assert 'PLK-F5-Y1' in hepsi or 'T-F5' in hepsi, \
+        'sevk edilmis stok gruplarda gorunmuyor'
+
+
+def test_f5_sevkiyat_yolda_olunca_stok_yoldaya_gecer():
+    """F5: sevkiyat 'Yolda' olunca stok 'Sevkedildi' olur ve depo
+    toplamından düşer; sevkiyat silinince depoya geri döner."""
+    from models import Cari, PlakaStok, Siparis, Sevkiyat
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not Cari.query.get('CF5'):
+            db.session.add(Cari(id='CF5', unvan='YOLDA MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+        if not PlakaStok.query.get('PLK-F5-S1'):
+            db.session.add(PlakaStok(id='PLK-F5-S1', cins='F5 SEVK', blok_no='T-F6',
+                                     slab_no=1, boy=200, yukseklik=100, kalinlik=2,
+                                     metraj_m2=2.0, durum='Serbest',
+                                     alis_fiyati=50, alis_fiyat_birim='m2', doviz='USD'))
+        db.session.commit()
+    rs = c.post('/api/siparis', headers=H, json={
+        'musteri': 'YOLDA MERMER', 'doviz': 'USD', 'siparis_tarihi': '2026-07-01',
+        'durum': 'Onaylandi',
+        # DAP: varış takibi olan teslim şekli — Yolda adımı vardır
+        'teslim_sekli': 'DAP',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'F5 SEVK', 'miktar': 2,
+                      'birim': 'm2', 'birim_fiyat': 200, 'adet': 1,
+                      'stok_ids': ['PLK-F5-S1']}]})
+    assert rs.status_code == 200, rs.get_data(as_text=True)
+    sid = rs.get_json()['id']
+    rv = c.post('/api/sevkiyat', headers=H, json={
+        'siparis_id': sid, 'musteri': 'YOLDA MERMER', 'sevk_tarihi': '2026-07-05',
+        'sevk_tip': 'Deniz', 'teslim_sekli': 'DAP'})
+    assert rv.status_code == 200, rv.get_data(as_text=True)
+    sevk_id = rv.get_json().get('id')
+    r = c.post(f'/api/sevkiyat/{sevk_id}/durum', headers=H, json={'durum': 'Yolda'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        assert PlakaStok.query.get('PLK-F5-S1').durum == 'Sevkedildi'
+    rr = c.get('/api/stok?tip=PLAKA&cins=F5 SEVK&depo=depo&per_page=50', headers=H)
+    satirlar = rr.get_json().get('data') or rr.get_json().get('veri') or []
+    assert not any(x['id'] == 'PLK-F5-S1' for x in satirlar), \
+        'yoldaki mal hala fiziksel depoda listeleniyor'
+    rr = c.get('/api/stok?tip=PLAKA&cins=F5 SEVK&depo=yolda&per_page=50', headers=H)
+    satirlar = rr.get_json().get('data') or rr.get_json().get('veri') or []
+    assert any(x['id'] == 'PLK-F5-S1' for x in satirlar), satirlar
+

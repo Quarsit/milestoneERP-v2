@@ -101,9 +101,17 @@
 <!-- 5 kart YAN YANA (KS4). Satır içi `repeat(3,1fr)` iki
      satıra düşürüyordu. Dar ekranda 2 sütuna sarar. -->
 <div class="kpiler kpi-bes">
-  <div class="kpi"><label>Toplam Stok Değeri</label><div class="deger" id="kDeger">—</div><div class="ek" id="kDegerEk">yükleniyor</div></div>
+  <!-- F5: "Depodaki Stok Değeri" — sevk edilmiş ama varmamış mal bu
+       rakama GİRMEZ. Eskiden giriyordu: haftalar önce gemiye yüklenmiş
+       mal depo değerini şişiriyor, sayımda fark çıkıyordu. Yoldaki mal
+       kendi kutusunda, kaybolmuyor. -->
+  <div class="kpi"><label>Depodaki Stok Değeri</label><div class="deger" id="kDeger">—</div><div class="ek" id="kDegerEk">yükleniyor</div></div>
   <div class="kpi"><label>Serbest Stok</label><div class="deger" id="kSerbest">—</div><div class="ek" id="kSerbestEk">satışa hazır</div></div>
   <div class="kpi"><label>Rezerve Stok</label><div class="deger" id="kRezerve">—</div><div class="ek" id="kRezerveEk">siparişe ayrılmış</div></div>
+  <div class="kpi" id="kpiYolda" style="display:none;cursor:pointer"
+       onclick="depoSec('yolda')" title="Sevk edildi, varış bekliyor — tıkla, listele">
+    <label>Yolda (sanal depo)</label><div class="deger" id="kYolda">—</div>
+    <div class="ek" id="kYoldaEk">sevk edildi, varmadı</div></div>
   <!-- ADET ve MİKTAR (KS2). Süzgeç uygulandıkça güncellenir;
        süzgeç yoksa tüm stoğu gösterir. Değer kutuları sunucudan
        gelirken bunlar EKRANDAKİ listeden hesaplanır — süzgeç
@@ -117,6 +125,16 @@
     <button class="aktif" data-tip="BLOK">Blok</button>
     <button data-tip="PLAKA">Plaka</button>
     <button data-tip="EBATLI">Ebatlı</button>
+  </div>
+  <!-- F5 · DEPO SÜZGECİ
+       Depo (nerede) ile durum (ne halde) BAĞIMSIZ iki eksen: malın
+       "Satıldı" olması onu depodan çıkarmaz, sevk edilmesi çıkarır.
+       Bu yüzden ayrı bir düğme grubu. -->
+  <div class="parcali" id="depoSecim" title="Fiziksel depo / yoldaki mal ayrımı">
+    <button class="aktif" data-depo="">Tüm depolar</button>
+    <button data-depo="depo">Depoda</button>
+    <button data-depo="yolda">Yolda</button>
+    <button data-depo="cikti">Çıktı</button>
   </div>
   <button class="cip aktif" data-durum="">Tümü</button>
   <button class="cip" data-durum="Serbest">Serbest</button>
@@ -713,6 +731,9 @@ function nakliyeNotu() {
    Sunucuda serbest-metin araması yok; sayfadaki kayıtlar üzerinde anlık süzülür. */
 
 let TIP = 'BLOK', DURUM = '', FATURA_DURUM = '', SAYFA = 1, ARA = '';
+/* F5 · DEPO: '' tümü · 'depo' fiziksel · 'yolda' sevk edildi/varmadı ·
+   'cikti' sistemden çıktı. Durumdan BAĞIMSIZ bir eksen. */
+let DEPO = '';
 /* F1 — açılır süzgeçler. Metin aramasıyla AYNI katmanda (istemci)
    çalışırlar; ikisi birlikte uygulanır. */
 let F_URETICI = '', F_CINS = '', F_OZELLIK = '';
@@ -737,15 +758,18 @@ function alimBirim(x) {
   return (toplam - ek) / olcu;
 }
 
+/* F5: 'Sevkedildi' ile 'Satildi' AYNI renkteydi — kullanıcı depodaki
+   satılmış malı gemideki maldan ayırt edemiyordu. Yoldaki mal artık
+   mor/kehribar tonda, ayrı okunuyor. */
 const RAY = { 'Serbest':'ray-yesil', 'Rezerve':'ray-kehribar', 'Satildi':'ray-mavi',
-              'Satıldı':'ray-mavi', 'Sevkedildi':'ray-mavi', 'Teslim Edildi':'ray-gri',
+              'Satıldı':'ray-mavi', 'Sevkedildi':'ray-mor', 'Teslim Edildi':'ray-gri',
               'Teslim':'ray-gri', 'Tukendi':'ray-gri', 'Kesildi':'ray-mavi', 'Hasarlı':'ray-kirmizi' };
 const ROZET = { 'Serbest':'rz-yesil', 'Rezerve':'rz-kehribar', 'Satildi':'rz-mavi',
-                'Satıldı':'rz-mavi', 'Sevkedildi':'rz-mavi', 'Teslim Edildi':'rz-gri',
+                'Satıldı':'rz-mavi', 'Sevkedildi':'rz-mor', 'Teslim Edildi':'rz-gri',
                 'Teslim':'rz-gri', 'Tukendi':'rz-gri', 'Kesildi':'rz-mavi', 'Hasarlı':'rz-kirmizi' };
 // Durum → okunur etiket (Türkçe gösterim)
 const DURUM_AD = { 'Serbest':'Serbest', 'Rezerve':'Rezerve', 'Satildi':'Satıldı',
-                   'Sevkedildi':'Sevk edildi', 'Teslim Edildi':'Teslim edildi',
+                   'Sevkedildi':'Yolda (sevk edildi)', 'Teslim Edildi':'Teslim edildi',
                    'Tukendi':'Tükendi (kesildi)', 'Hasarlı':'Hasarlı' };
 /* Kullanıcıya gösterilecek anlamlı stok numarası.
    Sistem ID'leri (BLK-xxx) rastgele kombinasyonlardır, akılda tutulamaz —
@@ -758,6 +782,7 @@ function stokNo(x) {
   return x.blok_no || x.id;
 }
 const RENK = { 'ray-yesil':'--verde', 'ray-kehribar':'--kehribar', 'ray-mavi':'--mavi',
+               'ray-mor':'--mor',   /* F5: yoldaki mal */
                'ray-gri':'--cizgi-koyu', 'ray-kirmizi':'--kirmizi' };
 
 function olcu(s) {
@@ -870,12 +895,42 @@ function kpiSuzgecGuncelle(satirlar, ozet) {
     if (ozet.m3 > 0) p.push(`${s2(ozet.m3)} m³`);
     yaz('kAdet', (ozet.adet || 0).toLocaleString('tr-TR'));
     yaz('kMiktar', p.length ? p.join(' · ') : '—');
-    yaz('kMiktarEk', p.length > 1 ? 'blok m³ · plaka m²'
-        : (ozet.m3 > 0 ? 'blok hacmi' : 'yüzey alanı'));
-    yaz('kDeger', para(ozet.deger_usd || 0).replace(' $', '<small>$</small>'));
-    yaz('kDegerEk', `${ozet.adet || 0} kayıt`);
+    /* F5: miktar kutusu LİSTEDEKİ tüm malı sayar (satırlarla tutsun),
+       ama yoldaki payı alt satırda yazar — değer kutusu depo bazlı
+       olduğu için ikisi arasındaki fark böyle okunur kalır. */
+    const yoldaOlcu = [];
+    if (ozet.yolda_m2 > 0) yoldaOlcu.push(`${s2(ozet.yolda_m2)} m²`);
+    if (ozet.yolda_m3 > 0) yoldaOlcu.push(`${s2(ozet.yolda_m3)} m³`);
+    yaz('kMiktarEk', (p.length > 1 ? 'blok m³ · plaka m²'
+        : (ozet.m3 > 0 ? 'blok hacmi' : 'yüzey alanı'))
+        + (yoldaOlcu.length ? ` · ${yoldaOlcu.join(' · ')} yolda` : ''));
+    /* F5: değer kutusu DEPODAKİ malı yazar; yoldaki mal kendi
+       kutusunda. Sunucu depo kırılımı vermezse (eski sürüm) eski
+       davranışa düşer — kutu boş kalmaz. */
+    const dDeger = (ozet.depo_deger_usd != null) ? ozet.depo_deger_usd : ozet.deger_usd;
+    const dAdet = (ozet.depo_adet != null) ? ozet.depo_adet : ozet.adet;
+    yaz('kDeger', para(dDeger || 0).replace(' $', '<small>$</small>'));
+    yaz('kDegerEk', `${(dAdet || 0).toLocaleString('tr-TR')} kayıt depoda`);
     yaz('kSerbest', (ozet.serbest || 0).toLocaleString('tr-TR'));
     yaz('kRezerve', (ozet.rezerve || 0).toLocaleString('tr-TR'));
+    /* Alt satırlar kpiYukle()'den TÜM stoğun tutarını taşıyordu;
+       süzgeç uygulanınca "0 kayıt · 180 $" gibi kendi içinde çelişen
+       bir kutu çıkıyordu. Süzgeçliyken tutar yazılmaz. */
+    yaz('kSerbestEk', 'satışa hazır');
+    yaz('kRezerveEk', 'siparişe ayrılmış');
+    const yk = document.getElementById('kpiYolda');
+    if (yk) {
+      const ya = ozet.yolda_adet || 0;
+      yk.style.display = ya ? '' : 'none';
+      if (ya) {
+        yaz('kYolda', para(ozet.yolda_deger_usd || 0).replace(' $', '<small>$</small>'));
+        const ym = [];
+        if (ozet.yolda_m2 > 0) ym.push(`${s2(ozet.yolda_m2)} m²`);
+        if (ozet.yolda_m3 > 0) ym.push(`${s2(ozet.yolda_m3)} m³`);
+        yaz('kYoldaEk', `${ya} kayıt` + (ym.length ? ' · ' + ym.join(' · ') : '')
+            + ' · varış bekliyor');
+      }
+    }
     return;
   }
   const n = satirlar.length;
@@ -885,11 +940,15 @@ function kpiSuzgecGuncelle(satirlar, ozet) {
      Karışık listede ikisini de yazıyoruz; tek sayıya toplamak
      farklı birimleri karıştırmak olurdu. */
   let m2 = 0, m3 = 0, deger = 0, serbest = 0, rezerve = 0;
+  let yoldaAdet = 0, yoldaDeger = 0;
   for (const x of satirlar) {
     const t = (x.tip || '').toUpperCase();
     if (t === 'BLOK') m3 += Number(x.hacim_m3) || 0;
     else m2 += Number(x.m2 || x.metraj_m2) || 0;
-    deger += Number(x.toplam_maliyet_usd) || 0;
+    const sd = Number(x.toplam_maliyet_usd) || 0;
+    /* F5: yoldaki mal DEPO değerine girmez, kendi kutusunda sayılır. */
+    if ((x.depo || '') === 'yolda') { yoldaAdet++; yoldaDeger += sd; }
+    else deger += sd;
     if (x.durum === 'Serbest') serbest++;
     else if (x.durum === 'Rezerve') rezerve++;
   }
@@ -904,7 +963,15 @@ function kpiSuzgecGuncelle(satirlar, ozet) {
      sunucudan gelen TÜM stok değeri yazıyordu ve süzgeç
      uygulandığında kutu ile liste birbirini tutmuyordu. */
   yaz('kDeger', para(deger).replace(' $', '<small>$</small>'));
-  yaz('kDegerEk', n ? `${n} kayıt` : 'kayıt yok');
+  yaz('kDegerEk', n ? `${n - yoldaAdet} kayıt depoda` : 'kayıt yok');
+  const _yk = document.getElementById('kpiYolda');
+  if (_yk) {
+    _yk.style.display = yoldaAdet ? '' : 'none';
+    if (yoldaAdet) {
+      yaz('kYolda', para(yoldaDeger).replace(' $', '<small>$</small>'));
+      yaz('kYoldaEk', `${yoldaAdet} kayıt · sevk edildi, varmadı`);
+    }
+  }
   yaz('kSerbest', serbest.toLocaleString('tr-TR'));
   yaz('kRezerve', rezerve.toLocaleString('tr-TR'));
 }
@@ -923,6 +990,7 @@ async function listeyiCiz() {
     if (F_CINS)    q.set('cins', F_CINS);
     if (F_OZELLIK) q.set('ozellik', F_OZELLIK);
     if (DURUM) q.set('durum', DURUM);
+    if (DEPO) q.set('depo', DEPO);          // F5
     if (FATURA_DURUM) q.set('fatura_durumu', FATURA_DURUM);
     SON = await api('/api/stok?' + q);
   } catch (e) {
@@ -1011,9 +1079,27 @@ async function kpiYukle() {
   try {
     const d = await api('/api/rapor/stok_durum');
     const t = d.tip_ozet || {}, du = d.durum_ozet || {};
-    document.getElementById('kDeger').innerHTML = para(d.toplam_deger_usd || 0).replace(' $', '<small>$</small>');
+    /* F5: DEPO değeri gösterilir, toplam değil. `depo_deger_usd`
+       gelmezse (eski sürüm sunucu) toplama düşer — ekran boş kalmaz. */
+    const depoDeger = (d.depo_deger_usd != null) ? d.depo_deger_usd : d.toplam_deger_usd;
+    document.getElementById('kDeger').innerHTML = para(depoDeger || 0).replace(' $', '<small>$</small>');
     document.getElementById('kDegerEk').textContent =
-      Object.keys(t).map(k => t[k].adet + ' ' + k.toLowerCase()).join(' · ') || 'stok yok';
+      (d.depo_adedi != null ? d.depo_adedi + ' kayıt · ' : '')
+      + (Object.keys(t).map(k => t[k].adet + ' ' + k.toLowerCase()).join(' · ') || 'stok yok');
+
+    /* Yolda kutusu: mal varsa GÖRÜNÜR, yoksa hiç çıkmaz — boş bir
+       kutu her gün "0" göstermek ekranı kalabalıklaştırır. */
+    const yoldaKutu = document.getElementById('kpiYolda');
+    if (yoldaKutu) {
+      const ya = d.yolda_adedi || 0;
+      yoldaKutu.style.display = ya ? '' : 'none';
+      if (ya) {
+        document.getElementById('kYolda').innerHTML =
+          para(d.yolda_deger_usd || 0).replace(' $', '<small>$</small>');
+        document.getElementById('kYoldaEk').textContent =
+          `${ya} kayıt · sevk edildi, varmadı`;
+      }
+    }
     const ser = du['Serbest'] || { adet: 0, deger_usd: 0 };
     const rez = du['Rezerve'] || { adet: 0, deger_usd: 0 };
     document.getElementById('kSerbest').textContent = ser.adet;
@@ -1333,6 +1419,24 @@ document.querySelectorAll('#tipSecim button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tipSecim button').forEach(x => x.classList.remove('aktif'));
   b.classList.add('aktif'); TIP = b.dataset.tip; SAYFA = 1; listeyiCiz();
 });
+/* F5 · Depo seçimi. Depo değişince durum süzgeci TEMİZLENİR:
+   "Yolda + Serbest" gibi boş küme veren bir kombinasyon kullanıcıya
+   "stok yok" gösterir ve hatayı arar. */
+function depoSec(deger) {
+  DEPO = deger || '';
+  document.querySelectorAll('#depoSecim button').forEach(x =>
+    x.classList.toggle('aktif', (x.dataset.depo || '') === DEPO));
+  if (DEPO) {
+    DURUM = '';
+    document.querySelectorAll('.cip[data-durum]').forEach(x =>
+      x.classList.toggle('aktif', (x.dataset.durum || '') === ''));
+  }
+  SAYFA = 1;
+  listeyiCiz();
+}
+document.querySelectorAll('#depoSecim button').forEach(b => b.onclick = () =>
+  depoSec(b.dataset.depo || ''));
+
 document.querySelectorAll('.cip[data-durum]').forEach(b => b.onclick = () => {
   document.querySelectorAll('.cip[data-durum]').forEach(x => x.classList.remove('aktif'));
   b.classList.add('aktif'); DURUM = b.dataset.durum; SAYFA = 1; listeyiCiz();

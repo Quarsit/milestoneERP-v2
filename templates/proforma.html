@@ -255,6 +255,31 @@
           <div class="form-alan"><label>Birim Fiyat</label><input id="kFiyat" type="number" step="0.01" oninput="kalemFormHesapla()"></div>
           <div class="form-alan"><label>Kalem Toplamı</label><input id="kToplam" readonly style="font-family:var(--mono);font-weight:600"></div>
         </div>
+        <!-- F8 · KARŞILAMA PLANI
+             Fiyat müşteriye taahhüt edilmeden önce "bunu neyle karşılayacağım"
+             cevaplanmış olmalı. Stoktan seçilen kalemde plan zaten bellidir,
+             bu alan boş bırakılabilir. İç onay, planı belirsiz kalemi geçirmez. -->
+        <div class="form-satir f4">
+          <div class="form-alan">
+            <label>Karşılama Planı</label>
+            <select id="kPlan" onchange="planAlanlariGoster()">
+              <option value="">— seçilmedi —</option>
+              <option value="STOK">Depodaki stoktan</option>
+              <option value="URETIM">Kendi üretimimizden (kesim)</option>
+              <option value="DIS_ALIM">Dış alım (tedarikçiden)</option>
+              <option value="KARMA">Karma (birden çok kaynak)</option>
+            </select>
+          </div>
+          <div class="form-alan">
+            <label>Planlanan Birim Maliyet</label>
+            <input id="kPlanMaliyet" type="number" step="0.01"
+                   placeholder="kâr hesabı için" title="Bu kalemin birim maliyeti tahmininiz — onay ekranında marj buradan görünür">
+          </div>
+          <div class="form-alan" style="grid-column:span 2">
+            <label>Plan Notu</label>
+            <input id="kPlanNot" maxlength="200" placeholder="tedarikçi, blok no, kesim planı…">
+          </div>
+        </div>
         <button class="ekle-btn" id="kEkleBtn" onclick="kalemEkle()">+ Kalemi listeye ekle</button>
         <button class="ekle-btn" id="kStokBtn" onclick="stokSecAc()"
                 style="background:var(--yuzey);color:var(--verde);border:1px solid var(--verde)"
@@ -1616,9 +1641,45 @@ async function duzenleAc(id) {
     miktar: k.miktar || 0, birim: k.birim || (k.urun_tip === 'BLOK' ? 'ton' : 'm2'),
     m2: k.m2 || null, sqft: k.sqft || null, agirlik_kg: k.agirlik_kg || null,
     birim_fiyat: k.birim_fiyat || 0, toplam_fiyat: k.toplam_fiyat || 0,
-    net_fiyat: k.net_fiyat || k.toplam_fiyat || 0, doviz: k.doviz || d.doviz || 'USD'
+    net_fiyat: k.net_fiyat || k.toplam_fiyat || 0, doviz: k.doviz || d.doviz || 'USD',
+    /* F8 — plan ve stok bağı forma geri yüklenir.
+       `_stok_id` eskiden HİÇ yüklenmiyordu: kayıtlı bir proformayı açıp
+       kaydeden herkes kalemin stok bağını koparıyordu. */
+    karsilama_plan: k.karsilama_plan || '', plan_maliyet: k.plan_maliyet,
+    plan_notu: k.plan_notu || '', _stok_id: k.stok_id || null
   }));
   bundleHesapla(); kalemListeCiz();
+}
+
+/* ── F8 · KARŞILAMA PLANI ────────────────────────────────────────
+   Kalemin nereden karşılanacağı satırda görünür durmalı: onaya
+   gönderen de onaylayan da eksiği listeye bakarak görsün, hata
+   mesajını beklemesin. */
+const PLAN_AD = { STOK: 'Stoktan', URETIM: 'Üretimden', DIS_ALIM: 'Dış alım',
+                  KARMA: 'Karma' };
+
+function planRozeti(k) {
+  const p = k.karsilama_plan || (k._stok_id ? 'STOK' : '');
+  if (!p) {
+    return '<span style="color:var(--kirmizi)">⚠ karşılama planı yok — '
+         + 'onaya gönderilemez</span>';
+  }
+  const mal = (k.plan_maliyet != null && k.plan_maliyet !== '')
+    ? ' · maliyet ' + Number(k.plan_maliyet).toLocaleString('tr-TR') : '';
+  const not = k.plan_notu ? ' · ' + kacar(k.plan_notu) : '';
+  return '<span style="color:var(--verde)">✓ ' + (PLAN_AD[p] || p) + '</span>'
+       + '<span style="color:var(--soluk)">' + mal + not + '</span>';
+}
+
+/* Plan "stoktan" seçilirse maliyet alanı anlamsız: stok maliyeti zaten
+   kayıtta. Alanı gizlemek yerine soluklaştırıyoruz — kullanıcı yine
+   yazabilir (elle düzeltme hakkı elinden alınmaz). */
+function planAlanlariGoster() {
+  const p = (document.getElementById('kPlan').value || '');
+  const m = document.getElementById('kPlanMaliyet');
+  if (!m) return;
+  m.placeholder = (p === 'STOK') ? 'stok maliyeti kullanılır'
+                                 : 'kâr hesabı için';
 }
 
 function modalKapat() { document.getElementById('modal').classList.remove('acik'); if (typeof kalemFormTemizle === 'function') kalemFormTemizle(); }
@@ -2104,7 +2165,14 @@ function kalemEkle() {
     m2: h.m2 || (document.getElementById('kBirim').value === 'm2' ? miktar : null),
     sqft: h.sqft || null, agirlik_kg: h.agirlik_kg || null,
     birim_fiyat: fiyat, toplam_fiyat: q2(miktar * fiyat), net_fiyat: q2(miktar * fiyat),
-    doviz: dov
+    doviz: dov,
+    /* F8 — stoktan seçilen kalemde _stok_id dolu olur ve plan zaten STOK'tur;
+       elle eklenen kalemde kullanıcı seçer. Eski kalemin planı korunur. */
+    karsilama_plan: (document.getElementById('kPlan').value || '').trim()
+                    || (eski ? (eski.karsilama_plan || '') : ''),
+    plan_maliyet: parseFloat(document.getElementById('kPlanMaliyet').value) || null,
+    plan_notu: (document.getElementById('kPlanNot').value || '').trim(),
+    _stok_id: eski ? (eski._stok_id || null) : null
   };
 
   if (DUZENLE_KALEM !== null) {
@@ -2120,7 +2188,8 @@ function kalemEkle() {
 
 /* Kalem formunu temizle ve ekleme moduna dön */
 function kalemFormTemizle() {
-  ['kCins','kOzellik','kBlokNo','kMense','kBoy','kYuk','kMiktar','kFiyat','kToplam','kAgirlik','kSlabBas'].forEach(i => document.getElementById(i).value = '');
+  ['kCins','kOzellik','kBlokNo','kMense','kBoy','kYuk','kMiktar','kFiyat','kToplam','kAgirlik','kSlabBas',
+   'kPlan','kPlanMaliyet','kPlanNot'].forEach(i => { const e = document.getElementById(i); if (e) e.value = ''; });
   document.getElementById('kAdet').value = 1;
   document.getElementById('kKasaIci').value = 1;
   DUZENLE_KALEM = null;
@@ -2141,6 +2210,9 @@ function kalemDuzenle(i) {
   document.getElementById('kOzellik').value = k.ozellik || '';
   document.getElementById('kBlokNo').value = k.blok_no || '';
   document.getElementById('kMense').value = k.mense || '';
+  document.getElementById('kPlan').value = k.karsilama_plan || '';
+  document.getElementById('kPlanMaliyet').value = (k.plan_maliyet != null ? k.plan_maliyet : '');
+  document.getElementById('kPlanNot').value = k.plan_notu || '';
   document.getElementById('kBoy').value = k.boy || '';
   document.getElementById('kYuk').value = k.yukseklik || '';
   document.getElementById('kKal').value = (k.kalinlik != null ? k.kalinlik : '');
@@ -2193,6 +2265,7 @@ function kalemListeCiz() {
           ${k.bundle_no ? ' · <b>Bundle ' + kacar(String(k.bundle_no)) + '</b>' : ''}${k.slab_no ? ' · Slab ' + kacar(String(k.slab_no)) : ''}
           ${k.agirlik_kg ? ' · ' + Number(k.agirlik_kg).toLocaleString('tr-TR') + ' kg' : ''}
         </div>
+        <div style="font-size:.74rem;margin-top:2px">${planRozeti(k)}</div>
       </div>
       <span class="m">${para(k.net_fiyat || k.toplam_fiyat, k.doviz || dov)}</span>
       <button class="duzenle-btn" onclick="kalemDuzenle(${i})" title="Düzenle">✎</button>
@@ -2324,6 +2397,10 @@ async function proformaKaydet() {
       // Eskiden yalnizca tarayicida (_stok_id) kaliyordu; sunucu slab_no'yu
       // stok kimligi sanip rezervasyonu hic kuramiyordu.
       stok_id: k._stok_id || null,
+      // F8 — karsilama plani
+      karsilama_plan: k.karsilama_plan || null,
+      plan_maliyet: k.plan_maliyet != null ? k.plan_maliyet : null,
+      plan_notu: k.plan_notu || null,
       m2: k.m2, sqft: k.sqft, agirlik_kg: k.agirlik_kg
     }))
   };

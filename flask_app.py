@@ -4855,6 +4855,44 @@ def create_app():
         return jsonify({'USD': {'efektif': usd_efektif}, 'EUR': {'efektif': eur_efektif}, 'TRY': {'efektif': 1.0}})
 
     # ---------- API: STOK ----------
+    # ══════════════════════════════════════════════════════════
+    #  F5 · DEPO BOYUTU — FİZİKSEL STOK / YOLDAKİ MAL
+    #
+    #  Sorun: sevk edilmiş ama varmamış mal (`durum='Sevkedildi'`)
+    #  depo toplamlarına DAHİL ediliyordu. Stok ekranındaki m², m³ ve
+    #  değer kutuları ile pano "Stok Değeri" göstergesi, haftalar
+    #  önce gemiye yüklenmiş malı hâlâ depoda sayıyordu. Sayım
+    #  yapınca fark çıkıyor, ama nereden geldiği görünmüyordu.
+    #
+    #  Çözüm: `durum` zaten yeterli bilgiyi taşıyor — eksik olan onu
+    #  DEPO olarak okumak. Yeni bir kolon ya da ikinci bir doğruluk
+    #  kaynağı eklenmedi; iki yerde iki farklı "nerede" olmasın.
+    #
+    #    depo   → fiziksel depoda (Serbest, Rezerve, Satildi, Hasarlı)
+    #    yolda  → sevk edildi, varmadı (Sevkedildi)  ← SANAL DEPO
+    #    cikti  → sistemden çıktı (Teslim Edildi, Tukendi)
+    #
+    #  `Satildi` DEPODADIR: satıldı ama henüz yüklenmedi — sayımda
+    #  fiziksel olarak oradadır. Ayrımı yapan şey sevkiyattır.
+    # ══════════════════════════════════════════════════════════
+    DEPO_HARITASI = {
+        'Serbest': 'depo', 'Rezerve': 'depo', 'Satildi': 'depo',
+        'Hasarlı': 'depo', 'Hasarli': 'depo',
+        'Sevkedildi': 'yolda',
+        'Teslim Edildi': 'cikti', 'Tukendi': 'cikti',
+    }
+    DEPO_ADLARI = {'depo': 'Depoda', 'yolda': 'Yolda', 'cikti': 'Çıktı'}
+    # Her depo icin o depoya dusen durum degerleri (sorgu suzgeci)
+    DEPO_DURUMLARI = {}
+    for _d, _depo in DEPO_HARITASI.items():
+        DEPO_DURUMLARI.setdefault(_depo, []).append(_d)
+
+    def _stok_depo(durum):
+        """Bir stok durumunun hangi depoya düştüğü. Tanınmayan ya da
+        boş durum 'depo' sayılır — eski kayıtlarda durum boş olabilir
+        ve bilinmeyen malı yok saymak, fazla saymaktan kötüdür."""
+        return DEPO_HARITASI.get((durum or '').strip(), 'depo')
+
     @app.route('/api/stok', methods=['GET'])
     def api_stok_liste():
         """Stok listesi.
@@ -4912,6 +4950,24 @@ def create_app():
                     query = query.filter(EbatliStok.durum != 'Teslim Edildi')
             else:
                 query = query.filter_by(durum=durum)
+
+        # ── F5 · DEPO SÜZGECİ ──
+        # depo=depo  → yalnizca fiziksel depodaki mal (sayimla eslesir)
+        # depo=yolda → sevk edilmis, varmamis mal (sanal depo)
+        # depo=cikti → sistemden cikmis mal
+        _depo_suz = (request.args.get('depo') or '').strip().lower()
+        if _depo_suz in DEPO_DURUMLARI:
+            _sinif = BlokStok if tip == 'BLOK' else (
+                PlakaStok if tip == 'PLAKA' else EbatliStok)
+            _dgr = DEPO_DURUMLARI[_depo_suz]
+            if _depo_suz == 'depo':
+                # Durumu BOS/tanimsiz olan eski kayitlar da depoda
+                # sayilir — _stok_depo ile ayni kural.
+                query = query.filter(db.or_(
+                    _sinif.durum.in_(_dgr), _sinif.durum.is_(None),
+                    _sinif.durum == ''))
+            else:
+                query = query.filter(_sinif.durum.in_(_dgr))
         if cins: query = query.filter_by(cins=cins)
         if uretici: query = query.filter_by(uretici=uretici)
         if ozellik: query = query.filter_by(ozellik=ozellik)
@@ -4980,6 +5036,10 @@ def create_app():
         for s in paginated.items:
             item = {
                 'id': s.id, 'tip': tip, 'cins': s.cins, 'durum': s.durum, 'konum': s.konum,
+                # F5: depo boyutu — arayuz fiziksel/yolda ayrimini
+                # durum koduna bakmadan gosterebilsin.
+                'depo': _stok_depo(s.durum),
+                'depo_ad': DEPO_ADLARI.get(_stok_depo(s.durum), 'Depoda'),
                 'fatura_durumu': getattr(s, 'fatura_durumu', None) or 'faturali',
                 'uretici': getattr(s, 'uretici', None),
                 'aciklama': getattr(s, 'aciklama', None) or '',
@@ -5046,8 +5106,16 @@ def create_app():
         # Toplamlar SUZGECIN TAMAMI uzerinden, sayfalamadan ONCE
         # hesaplanir. `paginated.total` zaten oyle calisiyor;
         # miktar ve deger de ayni sorgudan geliyor.
+        # F5: toplamlar DEPO bazinda da ayrisir. `deger_usd` geriye
+        # donuk uyumluluk icin TUM suzgeclenmis kayitlarin toplami
+        # kalir; ekranlar artik `depo_deger_usd` kullanir — yoldaki mal
+        # depo degerini sismandirmaz.
         _ozet = {'adet': paginated.total, 'm2': 0.0, 'm3': 0.0,
-                 'deger_usd': 0.0, 'serbest': 0, 'rezerve': 0}
+                 'deger_usd': 0.0, 'serbest': 0, 'rezerve': 0,
+                 'depo_adet': 0, 'depo_m2': 0.0, 'depo_m3': 0.0,
+                 'depo_deger_usd': 0.0,
+                 'yolda_adet': 0, 'yolda_m2': 0.0, 'yolda_m3': 0.0,
+                 'yolda_deger_usd': 0.0}
         try:
             # DIKKAT: sorgu degiskeni `query` (ilk surumde `q` yazip
             # NameError almistim). Ve `ek_maliyet_map` YALNIZCA BU
@@ -5070,13 +5138,20 @@ def create_app():
                     _ozet['serbest'] += 1
                 elif _d == 'Rezerve':
                     _ozet['rezerve'] += 1
-                if tip == 'BLOK':
-                    _ozet['m3'] += float(getattr(_r, 'hacim_m3', 0) or 0)
-                else:
-                    _ozet['m2'] += float(getattr(_r, 'metraj_m2', 0) or 0)
+                # F5: bu satir hangi depoda?
+                _dp = _stok_depo(_d)
+                _on = 'depo_' if _dp == 'depo' else ('yolda_' if _dp == 'yolda' else None)
+                if _on:
+                    _ozet[_on + 'adet'] += 1
+                _olcu_ad = 'm3' if tip == 'BLOK' else 'm2'
+                _olcu_deger = float(getattr(
+                    _r, 'hacim_m3' if tip == 'BLOK' else 'metraj_m2', 0) or 0)
+                _ozet[_olcu_ad] += _olcu_deger
+                if _on:
+                    _ozet[_on + _olcu_ad] += _olcu_deger
                 # Deger = alis bedeli + ek maliyetler (stok listesiyle
                 # ayni tanim; iki yerde iki farkli "deger" olmasin).
-                _ozet['deger_usd'] += _tum_maliyet.get(_r.id, 0.0)
+                _satir_deger = _tum_maliyet.get(_r.id, 0.0)
                 _af = float(getattr(_r, 'alis_fiyati', 0) or 0)
                 if _af:
                     # SD1: fiyat HANGI BIRIMDE girildiyse o olcuyle
@@ -5088,9 +5163,14 @@ def create_app():
                     _fb = (getattr(_r, 'alis_fiyat_birim', None)
                            or ('ton' if tip == 'BLOK' else 'm2'))
                     _ob = float(_stok_olcu(_r, _fb) or 0)
-                    _ozet['deger_usd'] += _alim_usd(
+                    _satir_deger += _alim_usd(
                         _af * _ob, getattr(_r, 'doviz', 'USD') or 'USD')
-            for _k in ('m2', 'm3', 'deger_usd'):
+                _ozet['deger_usd'] += _satir_deger
+                if _on:
+                    _ozet[_on + 'deger_usd'] += _satir_deger
+            for _k in ('m2', 'm3', 'deger_usd', 'depo_m2', 'depo_m3',
+                       'depo_deger_usd', 'yolda_m2', 'yolda_m3',
+                       'yolda_deger_usd'):
                 _ozet[_k] = q2(_ozet[_k])
         except Exception as _e:
             app.logger.warning(f'[KS3] özet hesaplanamadı: {_e}')
@@ -8483,7 +8563,12 @@ def create_app():
             if anahtar not in cins_ozet:
                 cins_ozet[anahtar] = {
                     'tip': k['tip'], 'cins': k['cins'], 'birim': k['birim'],
-                    'serbest_adet': 0, 'rezerve_adet': 0, 'satildi_adet': 0, 'teslim_adet': 0,
+                    'serbest_adet': 0, 'rezerve_adet': 0, 'satildi_adet': 0,
+                    # F5: 'Sevkedildi' HICBIR kovaya dusmuyordu —
+                    # toplam adette gorunuyor, durum dagiliminda
+                    # kayboluyordu. Yoldaki mal artik kendi kovasinda.
+                    'yolda_adet': 0, 'teslim_adet': 0,
+                    'depo_adet': 0, 'depo_deger_usd': 0, 'yolda_deger_usd': 0,
                     'toplam_adet': 0, 'toplam_miktar': 0, 'deger_usd': 0
                 }
             co = cins_ozet[anahtar]
@@ -8497,8 +8582,16 @@ def create_app():
                 co['rezerve_adet'] += 1
             elif d == 'Satildi':
                 co['satildi_adet'] += 1
+            elif d == 'Sevkedildi':
+                co['yolda_adet'] += 1
             elif d == 'Teslim Edildi':
                 co['teslim_adet'] += 1
+            _dp = _stok_depo(d)
+            if _dp == 'depo':
+                co['depo_adet'] += 1
+                co['depo_deger_usd'] += k['deger_usd']
+            elif _dp == 'yolda':
+                co['yolda_deger_usd'] += k['deger_usd']
 
         # Yuvarlama
         for d in durum_ozet.values():
@@ -8510,6 +8603,8 @@ def create_app():
         for co in cins_ozet.values():
             co['toplam_miktar'] = q2(co['toplam_miktar'])
             co['deger_usd'] = q2(co['deger_usd'])
+            co['depo_deger_usd'] = q2(co['depo_deger_usd'])
+            co['yolda_deger_usd'] = q2(co['yolda_deger_usd'])
             cins_listesi.append(co)
         cins_listesi.sort(key=lambda x: -x['deger_usd'])
 
@@ -8519,6 +8614,20 @@ def create_app():
             'kur_eur': q_kur(kur_eur),
             'toplam_stok_adedi': len(kayitlar),
             'toplam_deger_usd': q2(sum(k['deger_usd'] for k in kayitlar)),
+            # ── F5 · DEPO KIRILIMI ──
+            # `toplam_deger_usd` geriye donuk uyumluluk icin TUM malin
+            # toplami kalir. Ekranlar artik `depo_deger_usd` gosterir:
+            # gemideki mal depo degerini sismandirmaz.
+            'depo_adedi': sum(1 for k in kayitlar
+                              if _stok_depo(k['durum']) == 'depo'),
+            'depo_deger_usd': q2(sum(k['deger_usd'] for k in kayitlar
+                                     if _stok_depo(k['durum']) == 'depo')),
+            'yolda_adedi': sum(1 for k in kayitlar
+                               if _stok_depo(k['durum']) == 'yolda'),
+            'yolda_deger_usd': q2(sum(k['deger_usd'] for k in kayitlar
+                                      if _stok_depo(k['durum']) == 'yolda')),
+            'cikti_adedi': sum(1 for k in kayitlar
+                               if _stok_depo(k['durum']) == 'cikti'),
             'durum_ozet': durum_ozet,
             'tip_ozet': tip_ozet,
             'cins_listesi': cins_listesi
@@ -12466,8 +12575,12 @@ def create_app():
         EBATLI: kasa_no veya referans'a gore grup
         """
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        # Sadece aktif stoklari (Teslim Edildi haric) goster
-        aktif_durumlar = ['Serbest', 'Rezerve', 'Satildi']
+        # Sadece aktif stoklari (Teslim Edildi haric) goster.
+        # F5 · DUZELTME: 'Sevkedildi' listede YOKTU. Mal gemiye
+        # yuklendigi an bu seciciden kayboluyordu; henuz faturasi
+        # kesilmemis bir sevkiyatin stogunu secmek imkansizdi.
+        # Yoldaki mal HALA BIZIM malimiz — listede kalir.
+        aktif_durumlar = ['Serbest', 'Rezerve', 'Satildi', 'Sevkedildi']
 
         gruplar = {'blok': [], 'plaka': [], 'ebatli': []}
 
@@ -23506,7 +23619,23 @@ def create_app():
 
         elif modul == 'stok':
             tip = (request.args.get('tip') or 'BLOK').upper()
-            baslik = f'{tip} Stok Listesi'
+            # F5: disa aktarma HER durumu yaziyordu; gemideki mal ile
+            # depodaki mal ayni listede ayirt edilemiyordu. Artik Depo
+            # kolonu var ve ?depo= ile suzulebilir.
+            _x_depo = (request.args.get('depo') or '').strip().lower()
+            _x_sinif = {'BLOK': BlokStok, 'PLAKA': PlakaStok}.get(tip, EbatliStok)
+
+            def _x_suz(sorgu):
+                if _x_depo not in DEPO_DURUMLARI:
+                    return sorgu
+                if _x_depo == 'depo':
+                    return sorgu.filter(db.or_(
+                        _x_sinif.durum.in_(DEPO_DURUMLARI['depo']),
+                        _x_sinif.durum.is_(None), _x_sinif.durum == ''))
+                return sorgu.filter(_x_sinif.durum.in_(DEPO_DURUMLARI[_x_depo]))
+
+            baslik = f'{tip} Stok Listesi' + (
+                f' — {DEPO_ADLARI[_x_depo]}' if _x_depo in DEPO_ADLARI else '')
             if tip == 'BLOK':
                 # NOT: BlokStok modelinde 'ozellik' alanı yok — bloklar
                 # yüzey işlemi görmediği için Özellik sütunu eklenmedi.
@@ -23514,31 +23643,35 @@ def create_app():
                 # disa aktarilan liste geri ICE AKTARILAMIYORDU (zorunlu
                 # alanlar dosyada yoktu).
                 headers = ['Blok No', 'Cins', 'Üretici', 'Boy (cm)', 'Yükseklik (cm)', 'En (cm)',
-                           'Hacim m³', 'Tonaj', 'Durum', 'Konum']
+                           'Hacim m³', 'Tonaj', 'Durum', 'Depo', 'Konum']
                 sayisal = [3, 4, 5, 6, 7]
-                for s in BlokStok.query.order_by(BlokStok.blok_no.asc(), BlokStok.id.asc()).all():
+                for s in _x_suz(BlokStok.query).order_by(
+                        BlokStok.blok_no.asc(), BlokStok.id.asc()).all():
                     rows.append([s.blok_no or '', s.cins or '', s.uretici or '',
                                  _f(s.boy, True), _f(s.yukseklik, True), _f(s.en, True),
-                                 _f(s.hacim_m3, True), _f(s.tonaj, True), s.durum or '', s.konum or ''])
+                                 _f(s.hacim_m3, True), _f(s.tonaj, True), s.durum or '',
+                                 DEPO_ADLARI.get(_stok_depo(s.durum), ''), s.konum or ''])
             elif tip == 'PLAKA':
                 headers = ['Blok-Slab', 'Cins', 'Özellik', 'Üretici', 'Boy (cm)', 'Yükseklik (cm)',
-                           'm²', 'Kalınlık', 'Durum', 'Konum']
+                           'm²', 'Kalınlık', 'Durum', 'Depo', 'Konum']
                 sayisal = [4, 5, 6, 7]
-                for s in PlakaStok.query.order_by(PlakaStok.blok_no.asc(),
-                                                  PlakaStok.slab_no.asc(),
-                                                  PlakaStok.id.asc()).all():
+                for s in _x_suz(PlakaStok.query).order_by(PlakaStok.blok_no.asc(),
+                                                          PlakaStok.slab_no.asc(),
+                                                          PlakaStok.id.asc()).all():
                     blok_slab = f"{s.blok_no or ''}#{s.slab_no or ''}" if s.blok_no else (s.slab_no or '')
                     rows.append([blok_slab, s.cins or '', s.ozellik or '', s.uretici or '',
                                  _f(s.boy, True), _f(s.yukseklik, True),
-                                 _f(s.metraj_m2, True), _f(s.kalinlik, True), s.durum or '', s.konum or ''])
+                                 _f(s.metraj_m2, True), _f(s.kalinlik, True), s.durum or '',
+                                 DEPO_ADLARI.get(_stok_depo(s.durum), ''), s.konum or ''])
             else:  # EBATLI
-                headers = ['Kasa No', 'Cins', 'Özellik', 'Üretici', 'm²', 'Durum', 'Konum']
+                headers = ['Kasa No', 'Cins', 'Özellik', 'Üretici', 'm²', 'Durum', 'Depo', 'Konum']
                 sayisal = [4]
-                for s in EbatliStok.query.order_by(EbatliStok.kasa_no.asc(),
-                                                   EbatliStok.id.asc()).all():
+                for s in _x_suz(EbatliStok.query).order_by(EbatliStok.kasa_no.asc(),
+                                                           EbatliStok.id.asc()).all():
                     rows.append([s.kasa_no or '', s.cins or '', s.ozellik or '', s.uretici or '',
-                                 _f(s.metraj_m2, True), s.durum or '', s.konum or ''])
-            dosya = f'stok_{tip.lower()}'
+                                 _f(s.metraj_m2, True), s.durum or '',
+                                 DEPO_ADLARI.get(_stok_depo(s.durum), ''), s.konum or ''])
+            dosya = f'stok_{tip.lower()}' + (f'_{_x_depo}' if _x_depo in DEPO_ADLARI else '')
 
         elif modul == 'proforma':
             baslik = 'Proforma Listesi'

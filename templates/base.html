@@ -31,6 +31,8 @@
   --kehribar:#A66B08; --kehribar-bg:#FBF2DF;
   --kirmizi:#B23A2E; --kirmizi-bg:#FAEAE7;
   --mavi:#2A5C8D; --mavi-bg:#E7EFF6;
+  /* F5: yoldaki mal (sanal depo) — satilmis ama depodaki maldan ayrilir */
+  --mor:#5B3F8C; --mor-bg:#EFEAF6;
   --notr-bg:#EFEFEA;
   --golge:0 1px 2px rgba(25,28,26,.05), 0 4px 14px rgba(25,28,26,.05);
   --golge-yukari:0 -8px 32px rgba(25,28,26,.14);
@@ -259,13 +261,14 @@ a{color:inherit;text-decoration:none}
 .rz-kirmizi{background:var(--kirmizi-bg);color:var(--kirmizi)}
 .rz-mavi{background:var(--mavi-bg);color:var(--mavi)}
 .rz-gri{background:var(--notr-bg);color:var(--soluk)}
-.rz-mor{background:#EFEAF6;color:#5B3F8C}   /* DV6: Acente rozeti — sınıf tanımsızdı, çıplak metin görünüyordu */
+.rz-mor{background:var(--mor-bg);color:var(--mor)}   /* DV6: Acente rozeti — sınıf tanımsızdı, çıplak metin görünüyordu */
 
 .ray-kirmizi{border-left-color:var(--kirmizi)!important}
 .ray-kehribar{border-left-color:var(--kehribar)!important}
 .ray-yesil{border-left-color:var(--verde)!important}
 .ray-mavi{border-left-color:var(--mavi)!important}
 .ray-gri{border-left-color:var(--cizgi-koyu)!important}
+.ray-mor{border-left-color:var(--mor)!important}
 
 .mini-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:6px;padding:5px 11px;font-size:.78rem;font-weight:600;color:var(--murekkep);white-space:nowrap;transition:border-color .15s}
 .mini-btn:hover{border-color:var(--verde);color:var(--verde)}
