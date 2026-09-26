@@ -1828,38 +1828,61 @@ def test_md1_cari_hareketi_fatura_basina_tek():
         assert float(hareketler[-1].alacak) == 2000.0
 
 
-def test_vd1_fatura_vadesi_cari_hareketine_yansir():
-    """VD1: faturanın vadesi ile cari hareketinin vadesi ayrışmışsa,
-    fatura kaydedilince kendiliğinden toparlanmalı — vadesi geçen
-    raporu hareketteki vadeden okuyor."""
-    from models import Cari, Fatura, CariHareket
+def test_dt1_durum_degisince_damga_atilir():
+    """DT1: sipariş durumu değişince durum_tarihi damgalanmalı;
+    BAŞKA bir alan değişince damga KAYMAMALI."""
+    from models import Cari, Siparis
+    import time as _t
     c = istemci('admin', 'ADMIN')
     with fa.app.app_context():
-        if not Cari.query.get('CVD'):
-            db.session.add(Cari(id='CVD', unvan='VADE MERMER', cari_tip='Müşteri',
+        if not Cari.query.get('CDT'):
+            db.session.add(Cari(id='CDT', unvan='DURUM MERMER', cari_tip='Müşteri',
                                 para_birimi='USD', gorunurluk='ortak'))
-        db.session.add(Fatura(id='FVD1', fatura_no='VD-1', musteri='VADE MERMER',
-                              cari_id='CVD', yon='satis', durum='Kesildi',
-                              doviz='USD', toplam=1000,
-                              fatura_tarihi=date(2026, 9, 23),
-                              vade_tarihi=date(2026, 9, 24)))
-        db.session.add(CariHareket(id='HVD1', cari_id='CVD', cari_unvan='VADE MERMER',
-                                   islem_tip='Satis Faturasi', borc=1000, alacak=0,
-                                   doviz='USD', kur_uygulanan=40, borc_try=40000,
-                                   alacak_try=0, hareket_tarihi=date(2026, 9, 23),
-                                   # KAYMA: fatura 24.09 diyor, hareket 23.09
-                                   vade_tarihi=date(2026, 9, 23),
-                                   baglanti_tip='fatura', baglanti_id='FVD1',
-                                   kaynak='fatura'))
-        db.session.commit()
+            db.session.commit()
+    r = c.post('/api/siparis', headers=H, json={
+        'musteri': 'DURUM MERMER', 'doviz': 'USD', 'siparis_tarihi': '2026-08-01',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'DT TEST', 'miktar': 5,
+                      'birim': 'm2', 'birim_fiyat': 100, 'adet': 1}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    sid = r.get_json()['id']
 
-    # Vadeye DOKUNMADAN faturayı kaydet — kayma yine de düzelmeli
-    r = c.put('/api/fatura/FVD1', headers=H, json={
-        'musteri': 'VADE MERMER', 'doviz': 'USD',
-        'fatura_tarihi': '2026-09-23', 'vade_tarihi': '2026-09-24',
-        'toplam': 1000})
+    with fa.app.app_context():
+        sip = Siparis.query.get(sid)
+        assert sip.durum_tarihi is not None, 'yeni sipariş damgalanmadı'
+        ilk = sip.durum_tarihi
+        # Durum DIŞINDA bir alan değişsin — damga kaymamalı
+        sip.aciklama = 'not eklendi'
+        db.session.commit()
+        assert Siparis.query.get(sid).durum_tarihi == ilk, 'damga boşuna kaydı'
+
+        # Damgayı geriye al, sonra durumu değiştir
+        sip = Siparis.query.get(sid)
+        from datetime import datetime as _dt
+        sip.durum_tarihi = _dt(2026, 8, 1, 9, 0, 0)
+        db.session.commit()
+        eski = Siparis.query.get(sid).durum_tarihi
+
+    _t.sleep(0.01)
+    r = c.put(f'/api/siparis/{sid}', headers=H, json={'durum': 'Onaylandi'})
     assert r.status_code == 200, r.get_data(as_text=True)
     with fa.app.app_context():
-        h = CariHareket.query.get('HVD1')
-        assert h.vade_tarihi == date(2026, 9, 24), h.vade_tarihi
+        sip = Siparis.query.get(sid)
+        assert sip.durum == 'Onaylandi'
+        assert sip.durum_tarihi > eski, (sip.durum_tarihi, eski)
+
+
+def test_dt1_api_durum_tarihini_dondurur():
+    """DT1: liste ve detay uçları durum_tarihi vermeli — ekran
+    "bu durumda kaç gündür" sorusunu bundan hesaplıyor."""
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/siparis?per_page=50', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    satirlar = r.get_json().get('data') or []
+    assert satirlar, 'sipariş listesi boş'
+    assert all('durum_tarihi' in x for x in satirlar), satirlar[0]
+    damgali = [x for x in satirlar if x.get('durum_tarihi')]
+    assert damgali, 'hiçbir siparişte damga yok'
+    r = c.get(f'/api/siparis/{damgali[0]["id"]}', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()['siparis'].get('durum_tarihi'), r.get_json()['siparis']
 

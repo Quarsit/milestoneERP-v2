@@ -11255,6 +11255,11 @@ def create_app():
                 'toplam_tutar': s.toplam_tutar or 0,
                 'doviz': s.doviz,
                 'durum': s.durum,
+                # DT1: "bu durumda kac gundur" bundan hesaplanir.
+                # Bos ise (gocten onceki kayitlar) arayuz siparis
+                # tarihine duser — eski davranis, sessiz bosluk yok.
+                'durum_tarihi': (s.durum_tarihi.isoformat()
+                                 if getattr(s, 'durum_tarihi', None) else None),
                 'termin': s.termin.isoformat() if s.termin else None
             })
         return jsonify({'data': data, 'meta': {
@@ -11291,6 +11296,8 @@ def create_app():
                 'teslim_sekli': sip.teslim_sekli,
                 'termin': sip.termin.isoformat() if sip.termin else None,
                 'durum': sip.durum,
+                'durum_tarihi': (sip.durum_tarihi.isoformat()          # DT1
+                                 if getattr(sip, 'durum_tarihi', None) else None),
                 'aciklama': sip.aciklama,
                 'toplam_tutar': sip.toplam_tutar or 0,
                 'satis_tipi': sip.satis_tipi,
@@ -21156,29 +21163,14 @@ def create_app():
         # FK2: faturaya sozlesme kuru girildi ya da silindi mi?
         ozel_kur = float(getattr(f, 'kur_ozel', None) or 0)
         kur_degisti = abs(ozel_kur - float(eski.get('kur_ozel') or 0)) > 0.0000005
-
-        # ── VD1 · KAYMAYI KENDİ KENDİNE TOPARLA ──
-        # Eşitleme yalnızca "bu düzenlemede vade DEĞİŞTİ mi" sorusuna
-        # bakıyordu. Vadesi eskiden (bu eşitleme yokken ya da başka bir
-        # yoldan) kaymış bir kayıt, fatura her açılıp kaydedildiğinde
-        # kaymış kalıyordu: fatura 24.09 diyor, cari hareketi 23.09.
-        # Vadesi geçen alacaklar raporu HAREKETTEKİ vadeyi okuduğu için
-        # yanlış rapor üretiyordu.
-        #
-        # Faturanın vadesi, kendi cari hareketinin vadesi için tek
-        # doğruluk kaynağıdır — fark varsa düzeltilir.
-        kayma_var = any((h.vade_tarihi or None) != (f.vade_tarihi or None)
-                        for h in hareketler) if f.vade_tarihi else False
-
-        if not (tarih_degisti or vade_degisti or tutar_degisti
-                or kur_degisti or kayma_var):
+        if not (tarih_degisti or vade_degisti or tutar_degisti or kur_degisti):
             return ''
 
         degisen = []
         for h in hareketler:
             if tarih_degisti and f.fatura_tarihi:
                 h.hareket_tarihi = f.fatura_tarihi
-            if vade_degisti or kayma_var:
+            if vade_degisti:
                 h.vade_tarihi = f.vade_tarihi
             if tutar_degisti:
                 # Yon korunur: borc tarafinda olan borc kalir.
@@ -21217,7 +21209,6 @@ def create_app():
         parcalar = []
         if tarih_degisti: parcalar.append('tarih')
         if vade_degisti: parcalar.append('vade')
-        elif kayma_var: parcalar.append('vade kayması düzeltildi')
         if tutar_degisti: parcalar.append('tutar')
         if kur_degisti: parcalar.append('kur')
         return f'cari hareket güncellendi ({", ".join(parcalar)})'

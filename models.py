@@ -317,6 +317,19 @@ class Siparis(db.Model):
     kullanici       = db.Column(db.String(50))
     guncelleme      = db.Column(db.DateTime, default=datetime.now)
 
+    # ── DT1 · DURUMA GİRİŞ TARİHİ ────────────────────────────────
+    # Ekranda "Bu durumda N gündür" yazıyordu ama ölçtüğü şey
+    # SİPARİŞİN YAŞIYDI: 23.09'da açılıp 26.09'da onaylanan bir
+    # sipariş "4 gündür onaylandı" görünüyordu. Takılma uyarısı da
+    # buradan besleniyor; durumu yeni değişmiş bir sipariş yalnızca
+    # eski olduğu için "takıldı" diye yanıyordu.
+    #
+    # Bu alan, durumun EN SON NE ZAMAN değiştiğini tutar. Durum on
+    # ayrı yerde değişiyor (onay, üretim, sevkiyat, teslim, iptal,
+    # proformadan dönüşüm…); her birine elle yazmak yerine aşağıdaki
+    # dinleyici damgalıyor — yeni bir yol eklendiğinde de kapsanır.
+    durum_tarihi    = db.Column(db.DateTime)
+
     # İlişkiler
     kalemler        = db.relationship('SiparisKalem', backref='siparis',
                                       lazy=True, cascade='all, delete-orphan',
@@ -1316,6 +1329,7 @@ class CariKisi(db.Model):
 #  Acikta kalanlari bulmak icin: crm_bag_denetim.py
 # ══════════════════════════════════════════════════════════════════
 from sqlalchemy import event as _event, text as _text
+from sqlalchemy import inspect as _inspect   # DT1: durum degisti mi?
 
 
 class ErisimHatasi(Exception):
@@ -1423,3 +1437,35 @@ def stok_cari_id_otomatik_doldur(mapper, connection, hedef):
 
 for _model in (BlokStok, PlakaStok, EbatliStok):
     _event.listen(_model, 'before_insert', stok_cari_id_otomatik_doldur)
+
+
+def siparis_durum_damgasi(mapper, connection, hedef):
+    """DT1 — sipariş durumu her değiştiğinde tarihi damgalar.
+
+    Neden dinleyici: durum 10'dan fazla yerde değişiyor (durum ucu,
+    sevkiyat, teslim, iptal, proformadan dönüşüm, kesim…). Her birine
+    ayrı satır yazmak, 11.'si eklendiğinde unutulur ve ekran sessizce
+    yanlış süre gösterirdi.
+    """
+    try:
+        gecmis = _inspect(hedef).attrs.durum.history
+    except Exception:
+        return
+    if gecmis.has_changes():
+        hedef.durum_tarihi = datetime.now()
+
+
+def siparis_durum_damgasi_yeni(mapper, connection, hedef):
+    """DT1 — yeni sipariş her zaman damgalanır."""
+    if getattr(hedef, 'durum_tarihi', None) is None:
+        hedef.durum_tarihi = datetime.now()
+
+
+# DIKKAT: guncellemede damga YALNIZCA durum degistiginde atilir.
+# "durum_tarihi bossa doldur" demek cazip ama YANLIS olurdu: gocten
+# once acilmis bir siparisin baska bir alani (aciklama, termin)
+# duzeltildiginde damga BUGUNE kayar ve sipariş "bugun durum
+# degistirdi" gibi gorunur. Eski kayitlarin damgasi goc betigiyle
+# dolar (durum_tarihi_goc.py), gundelik duzenlemeyle degil.
+_event.listen(Siparis, 'before_insert', siparis_durum_damgasi_yeni)
+_event.listen(Siparis, 'before_update', siparis_durum_damgasi)

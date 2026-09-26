@@ -481,12 +481,44 @@ const AD = { 'Teklif Asam.':'Teklif', 'Onaylandi':'Onaylandı', 'Uretimde':'Üre
 /* Bir siparişin bu durumda ne kadar beklemesi normal — aşarsa ⚠ */
 const SABIR = { 'Teklif Asam.': 14, 'Onaylandi': 7, 'Uretimde': 14, 'Hazir': 3, 'Teslim Edildi': 9999 };
 
+/* Süre rozetinin ne anlattığını açıkça yazar: ekranda tek sayı var,
+   ama iki farklı süre söz konusu. Belirsizlik bırakmıyoruz. */
+/* "0 gündür" kulağa yanlış geliyor — bugün değişmiş demektir. */
+function sureMetni(gun) {
+  return gun <= 0 ? 'bugün değişti' : gun + ' gündür';
+}
+
+function sureIpucu(s) {
+  const sinir = SABIR[s.durum];
+  const parcalar = [
+    `${AD[s.durum] || s.durum} durumunda ${sureMetni(s.durum_yas)}`,
+    `siparişin toplam yaşı ${s.yas} gün`
+  ];
+  if (sinir && sinir < 9999) parcalar.push(`bu durum için sabır sınırı ${sinir} gün`);
+  if (!s.durum_yas_kesin) parcalar.push('durum damgası yok — sipariş tarihinden sayıldı');
+  return parcalar.join(' · ');
+}
+
 let TUM = [], ARA = '', GORUNUM = 'hat';
 
 async function yukle() {
   try {
     const d = await api('/api/siparis?per_page=300');
-    TUM = (d.data || []).map(s => ({ ...s, yas: gunFarki(s.tarih) }));
+    /* DT1 · İKİ AYRI SÜRE
+       yas       : siparişin toplam yaşı (sipariş tarihinden bugüne)
+       durum_yas : ŞU ANKİ DURUMDA geçen süre
+       İkisi eskiden aynı sayıydı ve "Bu durumda N gündür" yanlış
+       okunuyordu: 23.09'da açılıp 26.09'da onaylanan sipariş
+       "4 gündür onaylandı" görünüyordu. Takılma uyarısı da buradan
+       besleniyor — artık doğru süreyi ölçüyor.
+       `durum_tarihi` boşsa (göçten önceki kayıtlar) sipariş tarihine
+       düşer: eski davranış, sessiz boşluk yok. */
+    TUM = (d.data || []).map(s => ({
+      ...s,
+      yas: gunFarki(s.tarih),
+      durum_yas: s.durum_tarihi ? gunFarkiZaman(s.durum_tarihi) : gunFarki(s.tarih),
+      durum_yas_kesin: !!s.durum_tarihi
+    }));
   } catch (e) {
     document.getElementById('hat').innerHTML = '<div class="kolon-bos">Sipariş verisi alınamadı.</div>';
     return;
@@ -521,7 +553,7 @@ function hatCiz(veri) {
     return `<div class="hat-kolon">
       <h4>${k.ad} <span class="adet">${kartlar.length}</span><span class="toplam">${toplam ? para(toplam) : ''}</span></h4>
       ${kartlar.length ? kartlar.map(s => {
-        const gec = s.yas > (SABIR[s.durum] || 9999);
+        const gec = s.durum_yas > (SABIR[s.durum] || 9999);
         return `
         <div class="kart" style="border-left-color:var(${k.renk})" onclick="detayAc('${kacar(s.id)}')">
           <div class="no">${kacar(s.id)}</div>
@@ -529,7 +561,7 @@ function hatCiz(veri) {
           <div class="kalem">${kacar(kalemOzet(s))}</div>
           <div class="alt">
             <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
-            <span class="yas ${gec ? 'uyari' : ''}">${gec ? '⚠ ' : ''}${s.yas} gün</span>
+            <span class="yas ${gec ? 'uyari' : ''}" title="${kacar(sureIpucu(s))}">${gec ? '⚠ ' : ''}${s.durum_yas} gün</span>
           </div>
         </div>`;
       }).join('') : '<div class="kolon-bos">—</div>'}
@@ -541,7 +573,7 @@ function listeCiz(veri) {
   const sirali = [...veri].sort((a, b) => b.yas - a.yas);
   document.getElementById('listeGovde').innerHTML = sirali.length ? sirali.map(s => {
     const k = KOLONLAR.find(x => x.d === s.durum) || { ray: 'ray-gri', renk: '--cizgi-koyu' };
-    const gec = s.yas > (SABIR[s.durum] || 9999);
+    const gec = s.durum_yas > (SABIR[s.durum] || 9999);
     const rz = { 'Teklif Asam.':'rz-gri', 'Onaylandi':'rz-yesil', 'Uretimde':'rz-mavi',
                  'Hazir':'rz-kehribar', 'Teslim Edildi':'rz-gri', 'Iptal Edildi':'rz-kirmizi' }[s.durum] || 'rz-gri';
     return `
@@ -551,7 +583,7 @@ function listeCiz(veri) {
       <td>${kacar(kalemOzet(s))}</td>
       <td><span class="rozet ${rz}">${kacar(AD[s.durum] || s.durum)}</span></td>
       <td class="sag mono" style="font-weight:600">${para(s.toplam_tutar, s.doviz)}</td>
-      <td class="sag mono ${gec ? '' : ''}" style="${gec ? 'color:var(--kehribar);font-weight:600' : 'color:var(--soluk)'}">${gec ? '⚠ ' : ''}${s.yas} gün</td>
+      <td class="sag mono" style="${gec ? 'color:var(--kehribar);font-weight:600' : 'color:var(--soluk)'}" title="${kacar(sureIpucu(s))}">${gec ? '⚠ ' : ''}${s.durum_yas} gün</td>
     </tr>`;
   }).join('') : '<tr><td colspan="6" class="bos">Sipariş yok.</td></tr>';
 }
@@ -573,7 +605,9 @@ async function detayAc(id) {
   const govde = `
     <div class="alan-grid">
       ${alan('Tutar', para(sip.toplam_tutar, sip.doviz), true)}
-      ${alan('Bu durumda', s.yas + ' gündür')}
+      ${alan('Bu durumda', sureMetni(s.durum_yas)
+             + (s.durum_yas_kesin ? '' : ' *'))}
+      ${alan('Sipariş yaşı', s.yas + ' gün')}
       ${alan('Sipariş tarihi', sip.siparis_tarihi || '—', true)}
       ${alan('Termin', sip.termin || '—', true)}
       ${alan('Ödeme', kacar(sip.odeme_sekli || '—'))}
@@ -610,7 +644,7 @@ async function detayAc(id) {
         const simdi = k.d === sip.durum;
         const gelecek = buIdx > suanIdx;
         return `<div class="zc-madde ${simdi ? 'simdi' : ''} ${gelecek ? 'gelecek' : ''}">
-          ${simdi ? '<div class="zc-tarih">şu an · ' + s.yas + ' gündür</div>' : ''}
+          ${simdi ? '<div class="zc-tarih">şu an · ' + sureMetni(s.durum_yas) + '</div>' : ''}
           <strong>${k.ad}</strong>
         </div>`;
       }).join('')}

@@ -1029,6 +1029,16 @@ function gunFarki(tarih) {
   const t = new Date(tarih + 'T00:00:00');
   return Math.round((Date.now() - t.getTime()) / 86400000);
 }
+/** '2026-07-03T14:22:05' → gün farkı (SAATLİ damgalar için).
+    gunFarki() tarihin sonuna 'T00:00:00' ekliyor; saatli bir damgada
+    bu geçersiz tarih üretir. Bugün içinde olan bir damga 0 gün döner —
+    "bugün değişti" doğru cevabıdır, 1'e yuvarlanmaz. */
+function gunFarkiZaman(damga) {
+  if (!damga) return 0;
+  const t = new Date(damga);
+  if (isNaN(t.getTime())) return gunFarki(String(damga).slice(0, 10));
+  return Math.max(0, Math.floor((Date.now() - t.getTime()) / 86400000));
+}
 function kacar(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 /* ══ BANKA/KASA ETİKETİ (BK4) ══

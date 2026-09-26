@@ -193,8 +193,14 @@ async function siparisYukle() {
   try {
     const d = await api('/api/siparis?per_page=300');
     // Takılı = Hazır ama sevk edilmemiş (3+ gün) veya Onaylandı'da bekleyen (7+ gün)
+    /* DT1: bekleme süresi ŞU ANKİ DURUMDA geçen süredir, siparişin
+       yaşı değil. Eskiden sipariş tarihinden sayılıyordu: dün üretime
+       alınmış eski bir sipariş "10 gündür ilerlemedi" diye yanıyordu,
+       gerçekte bir gün olmuştu. `durum_tarihi` boşsa eski davranışa
+       düşer (göçten önceki kayıtlar). */
     const takili = (d.data || [])
-      .map(s => ({ ...s, bekleme: gunFarki(s.tarih) }))
+      .map(s => ({ ...s, bekleme: s.durum_tarihi ? gunFarkiZaman(s.durum_tarihi)
+                                                 : gunFarki(s.tarih) }))
       .filter(s => (s.durum === 'Hazir' && s.bekleme >= 3) || (s.durum === 'Onaylandi' && s.bekleme >= 7)
                 || (s.durum === 'Uretimde' && s.bekleme >= 10))
       .sort((a, b) => b.bekleme - a.bekleme);
