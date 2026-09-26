@@ -1827,3 +1827,39 @@ def test_md1_cari_hareketi_fatura_basina_tek():
         assert len(hareketler) - once == 1, [h.aciklama for h in hareketler]
         assert float(hareketler[-1].alacak) == 2000.0
 
+
+def test_vd1_fatura_vadesi_cari_hareketine_yansir():
+    """VD1: faturanın vadesi ile cari hareketinin vadesi ayrışmışsa,
+    fatura kaydedilince kendiliğinden toparlanmalı — vadesi geçen
+    raporu hareketteki vadeden okuyor."""
+    from models import Cari, Fatura, CariHareket
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not Cari.query.get('CVD'):
+            db.session.add(Cari(id='CVD', unvan='VADE MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+        db.session.add(Fatura(id='FVD1', fatura_no='VD-1', musteri='VADE MERMER',
+                              cari_id='CVD', yon='satis', durum='Kesildi',
+                              doviz='USD', toplam=1000,
+                              fatura_tarihi=date(2026, 9, 23),
+                              vade_tarihi=date(2026, 9, 24)))
+        db.session.add(CariHareket(id='HVD1', cari_id='CVD', cari_unvan='VADE MERMER',
+                                   islem_tip='Satis Faturasi', borc=1000, alacak=0,
+                                   doviz='USD', kur_uygulanan=40, borc_try=40000,
+                                   alacak_try=0, hareket_tarihi=date(2026, 9, 23),
+                                   # KAYMA: fatura 24.09 diyor, hareket 23.09
+                                   vade_tarihi=date(2026, 9, 23),
+                                   baglanti_tip='fatura', baglanti_id='FVD1',
+                                   kaynak='fatura'))
+        db.session.commit()
+
+    # Vadeye DOKUNMADAN faturayı kaydet — kayma yine de düzelmeli
+    r = c.put('/api/fatura/FVD1', headers=H, json={
+        'musteri': 'VADE MERMER', 'doviz': 'USD',
+        'fatura_tarihi': '2026-09-23', 'vade_tarihi': '2026-09-24',
+        'toplam': 1000})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        h = CariHareket.query.get('HVD1')
+        assert h.vade_tarihi == date(2026, 9, 24), h.vade_tarihi
+

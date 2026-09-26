@@ -188,7 +188,18 @@ for h in hareketler:
         ftr_hareketleri[h.baglanti_id].append(h)
         if h.baglanti_id not in ftr_ile:
             yetim_hareket.append(h)
-    if tip in AVANS_TIPLERI:
+    # AVANS MAHSUBU DA AVANS HAREKETİDİR.
+    # Ölçüldü: avansı faturaya mahsup edilmiş bir sipariş için betik
+    # "avans hâlâ açık" uyarısı veriyordu — doğru çalışan bir işlemi
+    # hata gibi gösteriyordu. Mahsup İKİ BACAKLI yazılır:
+    #   • siparişe BORÇ  (avansı kapatır)   → siparis_id DOLU
+    #   • faturaya ALACAK (borcu kapatır)   → siparis_id BOŞ
+    # Yalnızca sipariş bacağı avans hesabına girer; fatura bacağı
+    # girseydi net sıfırlanır ve mahsup hiç görünmezdi. Ayrım
+    # islem_tip'ten değil KAYNAK'tan yapılır — islem_tip ileride
+    # değişse de bağ kopmaz.
+    _mahsup = (getattr(h, 'kaynak', '') or '').strip().lower() == 'avans_mahsup'
+    if tip in AVANS_TIPLERI or (_mahsup and h.siparis_id):
         avans_hrk[(ck, h.siparis_id or None)].append(h)
 
 sip_faturalari = defaultdict(list)
