@@ -1732,10 +1732,19 @@ def create_app():
             return None
         if not uretici_unvan or not toplam_tutar or toplam_tutar <= 0:
             return None
+        # BL-16: birebir ad → tedarikci isaretli, sonra isaretsiz, sonra
+        # bosluk/harf duyarsiz eslesme. Son basamak eskiden yoktu: adin
+        # sonunda fazla bosluk olan bir tedarikci icin BORC HIC
+        # OLUSMUYORDU — mal giriyor, cari bakiye degismiyordu.
         cari = Cari.query.filter_by(unvan=uretici_unvan, urun_tedarikcisi=True).first()
         if not cari:
             cari = Cari.query.filter_by(unvan=uretici_unvan).first()
         if not cari:
+            cari = _cari_bul(uretici_unvan)
+        if not cari:
+            app.logger.warning(
+                f'BL-16: tedarikci carisi bulunamadi, stok borcu olusmadi '
+                f'(stok={stok_id}, uretici="{uretici_unvan}")')
             return None
         try:
             # Borç tarihi = fatura/alış tarihi (mal giriş tarihinden farklı olabilir)
@@ -3034,6 +3043,82 @@ def create_app():
         for c2 in Cari.query.all():
             if _norm(c2.unvan) == hedef:
                 return c2
+        return None
+
+    # ══════════════════════════════════════════════════════════
+    #  BL-16 · CARİ BAĞLARI KİMLİK ÜZERİNDEN
+    #
+    #  Belgeler müşteriyi hem KİMLİKLE (cari_id) hem ADIYLA taşır.
+    #  Ad belgede basıldığı için gerekli; ama BAĞ adla kurulduğunda
+    #  ünvan değişikliği bağı sessizce koparıyordu.
+    #
+    #  Çözüm iki parçalı:
+    #    1) Ünvan değişince bağlı kayıtların görünen adı KİMLİK
+    #       üzerinden eşitlenir (aşağıdaki fonksiyon).
+    #    2) Adla eşleşen kritik sorgular "kimlik VEYA ad" haline
+    #       getirildi — kimliği boş eski kayıtlar da bulunur.
+    #
+    #  Eski kayıtların kimliğini doldurmak için: cari_bag_goc.py
+    # ══════════════════════════════════════════════════════════
+    # (model, ad_kolonu) — kimlikle eşleşen satırların görünen adı
+    CARI_AD_KOLONLARI = (
+        (Siparis, 'musteri'), (Proforma, 'musteri'), (Fatura, 'musteri'),
+        (SatisKaydi, 'musteri'), (Sevkiyat, 'musteri'),
+        (Rezervasyon, 'musteri'), (CariHareket, 'cari_unvan'),
+        (Cek, 'cari_unvan'),
+        (BlokStok, 'uretici'), (PlakaStok, 'uretici'), (EbatliStok, 'uretici'),
+    )
+
+    def _cari_unvan_yansit(cari, eski_unvan=None):
+        """Carinin yeni ünvanını, KİMLİĞİ bu cariye bağlı tüm kayıtlara
+        yazar. Kimliği boş olan eski kayıtlar için eski ada göre de
+        eşleşir — ama yalnızca eski ad verildiyse.
+
+        Döner: güncellenen satır sayısı. Commit ETMEZ; çağıran commit eder.
+        """
+        if not cari or not cari.unvan:
+            return 0
+        toplam = 0
+        for model, kolon in CARI_AD_KOLONLARI:
+            sutun = getattr(model, kolon, None)
+            if sutun is None or not hasattr(model, 'cari_id'):
+                continue
+            kosul = [model.cari_id == cari.id]
+            if eski_unvan:
+                # Kimligi bos kalmis eski satirlar: eski adla yakala.
+                kosul.append(db.and_(model.cari_id.is_(None),
+                                     sutun == eski_unvan))
+            try:
+                toplam += model.query.filter(db.or_(*kosul)).filter(
+                    sutun != cari.unvan).update(
+                    {sutun: cari.unvan}, synchronize_session=False)
+            except Exception as _e:
+                app.logger.warning(
+                    f'BL-16 ad esitleme atlandi ({model.__name__}.{kolon}): {_e}')
+        # Ciro edilen cek ayri kolon tasiyor
+        try:
+            toplam += Cek.query.filter(
+                Cek.ciro_cari_id == cari.id,
+                Cek.ciro_cari_unvan != cari.unvan).update(
+                {Cek.ciro_cari_unvan: cari.unvan}, synchronize_session=False)
+        except Exception as _e:
+            app.logger.warning(f'BL-16 ciro ad esitleme atlandi: {_e}')
+        return toplam
+
+    def _cari_kimlik_ver(kayit, unvan=None):
+        """Kaydın cari_id'si boşsa adından çözüp yazar. Kayıt üretilen
+        her yolda kimliğin dolması, adla eşleşmeye ihtiyacı zamanla
+        bitirir."""
+        if kayit is None or not hasattr(kayit, 'cari_id'):
+            return None
+        if getattr(kayit, 'cari_id', None):
+            return kayit.cari_id
+        ad = unvan or getattr(kayit, 'musteri', None) or \
+            getattr(kayit, 'cari_unvan', None) or getattr(kayit, 'uretici', None)
+        c = _cari_bul(ad) if ad else None
+        if c:
+            kayit.cari_id = c.id
+            return c.id
         return None
 
     def _cari_risk_durumu(cari, ek_tutar_doviz=0, ek_doviz=None):
@@ -6039,30 +6124,189 @@ def create_app():
                         'silinen_maliyet': toplam_maliyet,
                         'silinen_cari_hareket': toplam_ch, 'mesaj': mesaj})
 
+    # ══════════════════════════════════════════════════════════
+    #  BL-17 · TOPLU İÇE AKTARMADA VERİ BÜTÜNLÜĞÜ
+    #
+    #  Eski davranış: ölçüsü olmayan satır `continue` ile SESSİZCE
+    #  atlanıyordu. Cevap yalnızca `eklenen` sayısını döndürüyordu.
+    #  200 satırlık bir dosyadan 173 satır girdiğinde kimse farkı
+    #  görmüyordu; eksik plakalar aylar sonra sayımda ortaya
+    #  çıkıyordu. Cins, blok no, fiyat, döviz hiç denetlenmiyordu:
+    #  cinssiz plaka stoğa girip hiçbir listede doğru görünmüyordu.
+    #
+    #  Yeni davranış:
+    #    • Her satır tek tek denetlenir, HATASI GEREKÇESİYLE dönülür.
+    #    • Bir satır bile hatalıysa HİÇBİRİ yazılmaz (varsayılan).
+    #      Yarım aktarım, kullanıcının hangi satırın girdiğini
+    #      bilmediği bir stok demektir.
+    #    • Kullanıcı bilerek isterse `kismi: true` ile sağlam
+    #      satırlar yazılır; atlananlar gerekçesiyle raporlanır.
+    # ══════════════════════════════════════════════════════════
+    ICE_AKTAR_DOVIZLER = ('USD', 'EUR', 'TRY', 'GBP')
+
+    def _plaka_satir_denetle(p, sira, gorulen_anahtarlar):
+        """Tek satırı denetler. Döner: (temiz_sozluk, hata_metni)."""
+        def _sayi(ad, zorunlu=True, en_az=0.0, en_cok=None):
+            ham = p.get(ad)
+            if ham in (None, ''):
+                return (None, f'{ad} boş') if zorunlu else (None, None)
+            try:
+                d = float(str(ham).replace(',', '.'))
+            except (TypeError, ValueError):
+                return None, f'{ad} sayı değil: "{ham}"'
+            if d <= en_az:
+                return None, f'{ad} sıfır ya da negatif: {d}'
+            if en_cok is not None and d > en_cok:
+                return None, f'{ad} makul sınırın üstünde: {d}'
+            return d, None
+
+        cins = (p.get('cins') or '').strip()
+        if not cins:
+            return None, 'cins boş — cinssiz plaka hiçbir listede doğru görünmez'
+        blok_no = (p.get('blok_no') or '').strip()
+        if not blok_no:
+            return None, 'blok no boş — izi sürülemez, kaynağı bilinmez'
+
+        # Olcu sinirlari: 1000 cm = 10 m. Bundan buyugu veri hatasidir
+        # (santim yerine milimetre girilmis olabilir).
+        boy, h = _sayi('boy', en_cok=1000)
+        if h:
+            return None, h
+        yuk, h = _sayi('yukseklik', en_cok=1000)
+        if h:
+            return None, h
+        kalinlik, h = _sayi('kalinlik', zorunlu=False, en_cok=100)
+        if h:
+            return None, h
+        fiyat, h = _sayi('alis_fiyati', zorunlu=False)
+        if h and 'sıfır ya da negatif' not in h:
+            return None, h
+        if fiyat is None:
+            fiyat = 0.0
+
+        doviz = (p.get('doviz') or 'USD').strip().upper()
+        if doviz not in ICE_AKTAR_DOVIZLER:
+            return None, (f'döviz tanınmadı: "{doviz}" '
+                          f'(geçerli: {", ".join(ICE_AKTAR_DOVIZLER)})')
+
+        slab_no = p.get('slab_no')
+        try:
+            slab_no = int(slab_no) if slab_no not in (None, '') else None
+        except (TypeError, ValueError):
+            return None, f'plaka no sayı değil: "{p.get("slab_no")}"'
+
+        # Ayni blok + ayni plaka no iki kez gelemez: hem dosya
+        # icinde hem DEPODA kontrol edilir. Ayni plakayi iki kez
+        # stoga almak, ayni mali iki musteriye satmaya goturur.
+        if slab_no is not None:
+            anahtar = (blok_no.upper(), slab_no)
+            if anahtar in gorulen_anahtarlar:
+                return None, (f'aynı dosyada tekrar eden plaka: '
+                              f'{blok_no} #{slab_no}')
+            varolan = PlakaStok.query.filter(
+                db.func.upper(PlakaStok.blok_no) == blok_no.upper(),
+                PlakaStok.slab_no == slab_no).first()
+            if varolan:
+                return None, (f'bu plaka depoda zaten var: '
+                              f'{blok_no} #{slab_no} ({varolan.id})')
+            gorulen_anahtarlar.add(anahtar)
+
+        m2 = (boy * yuk) / 10000
+        return {
+            'cins': cins, 'blok_no': blok_no, 'boy': boy, 'yukseklik': yuk,
+            'kalinlik': kalinlik, 'slab_no': slab_no,
+            'uretici': (p.get('uretici') or '').strip(),
+            'ozellik': (p.get('ozellik') or '').strip(),
+            'konum': (p.get('konum') or '').strip(),
+            'alis_fiyati': q2(fiyat), 'doviz': doviz,
+            'metraj_m2': q2(m2), 'metraj_sqft': q2(m2 * 10.764),
+            'aciklama': (p.get('aciklama') or '').strip(),
+        }, None
+
     @app.route('/api/stok/toplu_import', methods=['POST'])
     def api_stok_toplu_import():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         data = request.get_json(silent=True) or {}
         plakalar = data.get('plakalar', [])
-        if not plakalar: return jsonify({'ok': False, 'mesaj': 'Plaka listesi boş'}), 400
-        eklenen = 0
-        for p in plakalar:
-            if not p.get('boy') or not p.get('yukseklik'): continue
-            boy, yuk = float(p['boy']), float(p['yukseklik'])
-            if boy <= 0 or yuk <= 0: continue
-            metraj_m2 = (boy * yuk) / 10000
-            metraj_sqft = metraj_m2 * 10.764
-            aciklama = p.get('aciklama', '') or f"Toplu import - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            plaka = PlakaStok(id=_stok_okunur_id('PLK', PlakaStok, p.get('blok_no', ''),   # RN1
-                                               p.get('slab_no')),
-                              uretici=p.get('uretici', ''), cins=p.get('cins', ''), blok_no=p.get('blok_no', ''),
-                              boy=boy, yukseklik=yuk, kalinlik=p.get('kalinlik'), ozellik=p.get('ozellik', ''),
-                              metraj_m2=q2(metraj_m2), metraj_sqft=q2(metraj_sqft), alis_fiyati=p.get('alis_fiyati',0),
-                              doviz=p.get('doviz','USD'), konum=p.get('konum',''), durum='Serbest', aciklama=aciklama, kullanici=session['kullanici'])
-            db.session.add(plaka)
-            eklenen += 1
-        db.session.commit()
-        return jsonify({'ok': True, 'eklenen': eklenen})
+        if not plakalar:
+            return jsonify({'ok': False, 'mesaj': 'Plaka listesi boş'}), 400
+        if not isinstance(plakalar, list):
+            return jsonify({'ok': False, 'mesaj': 'Plaka listesi dizi olmalı'}), 400
+        if len(plakalar) > 5000:
+            return jsonify({'ok': False,
+                'mesaj': f'Tek seferde en çok 5000 satır alınır '
+                         f'(gelen: {len(plakalar)}). Dosyayı bölün.'}), 400
+
+        kismi = bool(data.get('kismi'))
+        temizler, hatalar, gorulen = [], [], set()
+        for i, p in enumerate(plakalar, start=1):
+            if not isinstance(p, dict):
+                hatalar.append({'satir': i, 'hata': 'satır nesne değil'})
+                continue
+            temiz, hata = _plaka_satir_denetle(p, i, gorulen)
+            if hata:
+                hatalar.append({'satir': i, 'hata': hata,
+                                'blok_no': (p.get('blok_no') or ''),
+                                'slab_no': p.get('slab_no')})
+            else:
+                temizler.append((i, temiz))
+
+        # ── HEPSİ YA HİÇBİRİ (varsayılan) ──
+        if hatalar and not kismi:
+            return jsonify({
+                'ok': False, 'error': 'satir_hatalari',
+                'toplam': len(plakalar), 'gecerli': len(temizler),
+                'hatali': len(hatalar), 'hatalar': hatalar[:100],
+                'mesaj': f'{len(plakalar)} satırın {len(hatalar)} tanesi hatalı — '
+                         f'HİÇBİRİ eklenmedi. Hataları düzeltip tekrar '
+                         f'deneyin; sağlam satırları yine de almak '
+                         f'isterseniz "kısmi aktarım" seçeneğini kullanın.'}), 400
+
+        if not temizler:
+            return jsonify({'ok': False, 'error': 'gecerli_satir_yok',
+                'toplam': len(plakalar), 'hatali': len(hatalar),
+                'hatalar': hatalar[:100],
+                'mesaj': 'Hiçbir satır geçerli değil, ekleme yapılmadı.'}), 400
+
+        damga = datetime.now().strftime('%Y-%m-%d %H:%M')
+        kullanici = session.get('kullanici') or 'sistem'
+        eklenen, eklenen_idler = 0, []
+        try:
+            for _sira, t in temizler:
+                plaka = PlakaStok(
+                    id=_stok_okunur_id('PLK', PlakaStok, t['blok_no'],   # RN1
+                                       t['slab_no']),
+                    uretici=t['uretici'], cins=t['cins'], blok_no=t['blok_no'],
+                    slab_no=t['slab_no'],
+                    boy=t['boy'], yukseklik=t['yukseklik'], kalinlik=t['kalinlik'],
+                    ozellik=t['ozellik'],
+                    metraj_m2=t['metraj_m2'], metraj_sqft=t['metraj_sqft'],
+                    alis_fiyati=t['alis_fiyati'], doviz=t['doviz'],
+                    konum=t['konum'], durum='Serbest',
+                    aciklama=t['aciklama'] or f'Toplu import - {damga}',
+                    kullanici=kullanici)
+                db.session.add(plaka)
+                db.session.flush()
+                eklenen += 1
+                eklenen_idler.append(plaka.id)
+            _log_audit('EKLE', 'stok', f'toplu:{eklenen}',
+                       yeni={'eklenen': eklenen, 'atlanan': len(hatalar),
+                             'kismi': kismi},
+                       aciklama=f'Toplu plaka aktarimi ({damga})')
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            app.logger.exception('Toplu stok aktarimi basarisiz')
+            return jsonify({'ok': False, 'error': 'yazma_hatasi',
+                'mesaj': f'Kayit sirasinda hata, HICBIRI eklenmedi: {e}'}), 500
+
+        mesaj = f'{eklenen} plaka eklendi'
+        if hatalar:
+            mesaj += f' · {len(hatalar)} satır ATLANDI (gerekçeleri listede)'
+        return jsonify({'ok': True, 'eklenen': eklenen,
+                        'toplam': len(plakalar), 'atlanan': len(hatalar),
+                        'hatalar': hatalar[:100], 'idler': eklenen_idler[:50],
+                        'mesaj': mesaj})
 
     # ══════════════════════════════════════════════════════════
     #  MÜŞTERİ ERİŞİM SÜZGECİ  (CRM-C)
@@ -6834,6 +7078,8 @@ def create_app():
                                 'mesaj': f'Kullanıcı bulunamadı: {_s}'}), 400
             data['sorumlu'] = _s or None
 
+        _eski_unvan = c.unvan          # BL-16: yeniden adlandirma izi
+
         for alan in ('unvan', 'cari_tip', 'ulke', 'telefon', 'email', 'adres',
                      'para_birimi', 'vergi_dairesi', 'vergi_no', 'yetkili', 'iban',
                      'uretici_kisaltma', 'aciklama', 'odeme_vadesi_gun',
@@ -6841,6 +7087,19 @@ def create_app():
             if alan in data:
                 d = data.get(alan)
                 setattr(c, alan, (d.strip() if isinstance(d, str) else d) or None)
+
+        # ── BL-16 · ÜNVAN DEĞİŞİNCE BAĞLI KAYITLAR DA DEĞİŞİR ──
+        # Sipariş, proforma, fatura gibi kayıtlar müşteriyi ADIYLA da
+        # taşıyor (belgede basılan ad). Eskiden ünvan değişince bu adlar
+        # ESKİ HALDE kalıyordu ve adla eşleşen her sorgu boşa düşüyordu:
+        # açık faturalar listesi boşalıyor, silme koruması "bağlı kayıt
+        # yok" diyor, kârlılık aynı müşteriyi iki satıra bölüyordu.
+        #
+        # Eşitleme KİMLİK üzerinden yapılır (cari_id), eski ada göre
+        # DEĞİL — böylece adı yanlış yazılmış kayıtlar da düzelir.
+        _ad_yansimasi = 0
+        if 'unvan' in data and c.unvan and c.unvan != _eski_unvan:
+            _ad_yansimasi = _cari_unvan_yansit(c, _eski_unvan)
 
         if 'risk_limiti' in data:
             try:
@@ -6852,9 +7111,16 @@ def create_app():
 
         # Denetim izi commit'ten ÖNCE — _log_audit kendi commit'ini yapmaz
         _log_audit('GUNCELLE', 'cari', c.id, eski=_eski,
-                   yeni={'unvan': c.unvan, 'cari_tip': c.cari_tip, 'ulke': c.ulke})
+                   yeni={'unvan': c.unvan, 'cari_tip': c.cari_tip, 'ulke': c.ulke},
+                   aciklama=(f'Unvan degisti: "{_eski_unvan}" -> "{c.unvan}"; '
+                             f'{_ad_yansimasi} bagli kayitta ad esitlendi'
+                             if _ad_yansimasi else None))
         db.session.commit()
-        return jsonify({'ok': True, 'mesaj': 'Cari guncellendi'})
+        _m = 'Cari guncellendi'
+        if _ad_yansimasi:
+            _m += f' · {_ad_yansimasi} bagli kayitta ad guncellendi'
+        return jsonify({'ok': True, 'mesaj': _m,
+                        'ad_yansimasi': _ad_yansimasi})
 
     @app.route('/api/cari/<cari_id>/tahsilat_kontrol', methods=['GET'])
     def api_cari_tahsilat_kontrol(cari_id):
@@ -6875,8 +7141,11 @@ def create_app():
 
         # Bu cariye ait, kesilmiş ve iptal olmayan satış faturaları (aynı dövizde)
         # Toplam fatura tutarı - toplam tahsilat = açık bakiye
+        # BL-16: kimlik VEYA ad. Yalnizca adla eslesirken, unvani
+        # degismis carinin faturalari gorunmuyor ve "fazla tahsilat"
+        # uyarisi HIC calismiyordu.
         aktif_faturalar = Fatura.query.filter(
-            Fatura.musteri == cari.unvan,
+            db.or_(Fatura.cari_id == cari.id, Fatura.musteri == cari.unvan),
             Fatura.durum == 'Kesildi',
             Fatura.yon == 'satis',
             Fatura.doviz == yeni_doviz
@@ -7362,9 +7631,17 @@ def create_app():
         if not cari:
             return jsonify({'ok': False, 'mesaj': 'Cari bulunamadi'}), 404
         # Bagli kayit kontrolu
+        # BL-16: bagli kayit sayimi KIMLIK + ad ile birlikte yapilir.
+        # Yalnizca adla sayilirken, unvan degistirilmis bir carinin
+        # bagli kayitlari gorunmez oluyor ve cari SILINEBILIYORDU
+        # (siparisler sahipsiz kaliyordu).
         hareket_sayisi = CariHareket.query.filter_by(cari_id=cari_id).count()
-        siparis_sayisi = Siparis.query.filter_by(musteri=cari.unvan).count()
-        proforma_sayisi = Proforma.query.filter_by(musteri=cari.unvan).count()
+        siparis_sayisi = Siparis.query.filter(
+            db.or_(Siparis.cari_id == cari_id,
+                   Siparis.musteri == cari.unvan)).count()
+        proforma_sayisi = Proforma.query.filter(
+            db.or_(Proforma.cari_id == cari_id,
+                   Proforma.musteri == cari.unvan)).count()
 
         force = request.args.get('force', '0') == '1'
         if (hareket_sayisi or siparis_sayisi or proforma_sayisi) and not force:
@@ -14610,9 +14887,11 @@ def create_app():
                     'kaynak': 'stok_fatura',
                     'aciklama': h.aciklama or ''})
 
-        # Cari unvanına göre açık faturalar (Kesildi veya Kısmi Tahsil)
+        # BL-16: KIMLIK veya ad ile. Eskiden yalnizca ad esleniyordu;
+        # unvan degisen carinin acik faturalari listeden kayboluyor,
+        # tahsilat girilemiyordu.
         faturalar = Fatura.query.filter(
-            Fatura.musteri == cari.unvan,
+            db.or_(Fatura.cari_id == cari.id, Fatura.musteri == cari.unvan),
             Fatura.yon == yon,
             Fatura.durum.in_(['Kesildi', 'Kismi Tahsil'])
         ).order_by(Fatura.fatura_tarihi).all()
@@ -15912,6 +16191,62 @@ def create_app():
         db.session.commit()
         return jsonify({'ok': True})
 
+    # ══════════════════════════════════════════════════════════
+    #  F8 · KARŞILAMA PLANI
+    #
+    #  Fiyat müşteriye taahhüt edilirken maliyetin nereden geleceği
+    #  belli olmalı. Eskiden proforma hiçbir kaynak bilgisi olmadan
+    #  onaylanabiliyordu: kâr ancak teslimden aylar sonra, satış
+    #  kaydı yazıldığında ortaya çıkıyordu — o noktada fiyatı
+    #  düzeltmek için çok geç.
+    #
+    #  Kontrol İÇ ONAY adımında (Ic Onay → Onaylandi). Neden orada:
+    #  teklif hazırlanırken plan henüz oluşmamış olabilir (Taslak
+    #  serbest kalmalı), ama onaylayan kişi bunu görmeden onay
+    #  vermemeli. Onay zaten çift kontrol noktası.
+    #
+    #  GEÇMİŞE DOKUNMAZ: bugüne kadar onaylanmış proformalar
+    #  yeniden kontrolden geçmez; siparişe/faturaya dönüşümleri
+    #  engellenmez.
+    # ══════════════════════════════════════════════════════════
+    KARSILAMA_PLANLARI = ('STOK', 'URETIM', 'DIS_ALIM', 'KARMA')
+
+    def _plan_alanlari(k):
+        """İstemciden gelen kalem sözlüğünden plan alanlarını ayıklar.
+        Tanınmayan plan değeri sessizce DÜŞÜRÜLÜR — yarım doğru bir
+        plan, plan olmamasından daha tehlikelidir (onay geçer, kaynak
+        yoktur)."""
+        plan = (k.get('karsilama_plan') or '').strip().upper() or None
+        if plan not in KARSILAMA_PLANLARI:
+            plan = None
+        try:
+            maliyet = float(k.get('plan_maliyet')) if k.get('plan_maliyet') not in (None, '') else None
+        except (TypeError, ValueError):
+            maliyet = None
+        return {'karsilama_plan': plan,
+                'plan_maliyet': q2(maliyet) if maliyet is not None else None,
+                'plan_notu': (k.get('plan_notu') or '').strip()[:200] or None}
+
+    def _kalem_plan_belli_mi(k):
+        """Kalemin karşılaması belli mi? Stok seçilmişse plan ZATEN
+        STOK'tur — kullanıcıdan ikinci kez istemek gereksiz sürtünme."""
+        if (k.karsilama_plan or '').strip().upper() in KARSILAMA_PLANLARI:
+            return True
+        return bool((k.stok_id or '').strip())
+
+    def _proforma_plan_eksikleri(p):
+        """Planı belirsiz kalemlerin okunur listesi. Boş liste = temiz."""
+        eksik = []
+        for k in ProformaKalem.query.filter_by(proforma_id=p.id).order_by(
+                ProformaKalem.sira, ProformaKalem.id).all():
+            if _kalem_plan_belli_mi(k):
+                continue
+            ad = ' '.join(x for x in [(k.cins or ''), (k.olcu or '')] if x).strip()
+            eksik.append({'kalem_id': k.id, 'sira': (k.sira or 0) + 1,
+                          'ad': ad or (k.urun_tip or 'Kalem'),
+                          'urun_tip': k.urun_tip or ''})
+        return eksik
+
     # ---------- API: PROFORMA ----------
     @app.route('/api/proforma', methods=['GET'])
     def api_proforma_liste():
@@ -15976,6 +16311,11 @@ def create_app():
                             # K7: arayuz konteyner atamasi icin ikisine de
                             # ihtiyac duyuyor; serializer dondurmuyordu.
                             'id': k.id, 'konteyner_id': k.konteyner_id,
+                            # F8: karsilama plani — arayuz bunu satirda gosterir
+                            'karsilama_plan': k.karsilama_plan or '',
+                            'plan_maliyet': k.plan_maliyet,
+                            'plan_notu': k.plan_notu or '',
+                            'stok_id': k.stok_id or '',
                             'mense': k.mense or ''} for k in kalemler]})
 
     def _proforma_toplam_hesapla(p):
@@ -16102,7 +16442,8 @@ def create_app():
                                mense=_kalem_mense(k),   # MS1
                                # YAMA B1: stok_id kolonu modelde vardi ama hic yazilmiyordu.
                                # Rezervasyon slab_no'yu stok kimligi sanip calisamiyordu.
-                               stok_id=(k.get('stok_id') or None))
+                               stok_id=(k.get('stok_id') or None),
+                               **_plan_alanlari(k))   # F8
             db.session.add(pk)
         db.session.flush()
 
@@ -16265,7 +16606,14 @@ def create_app():
                     slab_no=k.get('slab_no'), bundle_no=k.get('bundle_no'),
                     m2_toplam=k.get('m2'), sqft_toplam=k.get('sqft'),
                     agirlik=k.get('agirlik_kg'), sira=idx,
-                    mense=_kalem_mense(k))   # MS1
+                    mense=_kalem_mense(k),   # MS1
+                    # F8 · DUZELTME: guncelleme kalemleri yeniden yaziyor ama
+                    # `stok_id` KOPYALANMIYORDU. Proformayi duzenleyen herkes
+                    # kalemin stok bagini sessizce koparıyordu: rezervasyon
+                    # kaliyor, kalem "stoksuz" gorunuyordu. Plan alanlariyla
+                    # birlikte artik tasiniyor.
+                    stok_id=(k.get('stok_id') or None),
+                    **_plan_alanlari(k))
                 db.session.add(pk)
             db.session.flush()
 
@@ -16363,7 +16711,12 @@ def create_app():
                 toplam_fiyat=k.toplam_fiyat, net_fiyat=k.net_fiyat, iskonto=k.iskonto,
                 iskonto_tip=k.iskonto_tip, m2_toplam=k.m2_toplam, sqft_toplam=k.sqft_toplam,
                 agirlik=k.agirlik, konteyner_no=k.konteyner_no, kap_no=k.kap_no,
-                kap_tip=k.kap_tip, sira=k.sira)
+                kap_tip=k.kap_tip, sira=k.sira,
+                # F8: yeni surum, onceki surumun karsilama planini ve stok
+                # bagini devralir — revize numarayi degistirir, plani degil.
+                stok_id=k.stok_id,
+                karsilama_plan=k.karsilama_plan, plan_maliyet=k.plan_maliyet,
+                plan_notu=k.plan_notu)
             db.session.add(yk)
 
         # ── Eski sürümü arşivle ──
@@ -16524,6 +16877,19 @@ def create_app():
                 return jsonify({'ok': False, 'error': 'ayni_kisi',
                     'mesaj': f'Bu proformayi onaya siz gonderdiniz ({aktif_kullanici}). Cift kontrol geregi '
                              f'BASKA bir yetkili onaylamali.'}), 403
+            # ── F8 · KARSILAMA PLANI ZORUNLU ──
+            # Onay, fiyatin taahhut edildigi an. Kaleminin nereden
+            # gelecegi bilinmiyorsa maliyet de bilinmiyor demektir.
+            _eksik = _proforma_plan_eksikleri(p)
+            if _eksik:
+                _satirlar = ', '.join(f"{e['sira']}. {e['ad']}" for e in _eksik[:5])
+                if len(_eksik) > 5:
+                    _satirlar += f' (+{len(_eksik) - 5} kalem daha)'
+                return jsonify({'ok': False, 'error': 'karsilama_plani_eksik',
+                    'eksik_kalemler': _eksik,
+                    'mesaj': f'{len(_eksik)} kalemin karsilama plani belirsiz: {_satirlar}. '
+                             f'Her kalem icin stok secin ya da karsilama planini '
+                             f'(stok / uretim / dis alim) isaretleyin.'}), 400
             p.onaylayan = aktif_kullanici
             p.onay_tarihi = _dt.now()
 
@@ -19787,11 +20153,57 @@ def create_app():
                         stok = _stok_getir(sid, pk.urun_tip or 'PLAKA')
                         if stok and stok.durum in ('Serbest', 'Rezerve'):
                             stok.durum = 'Satildi' if sip.durum != 'Teklif Asam.' else 'Rezerve'
+                        # F8 · DUZELTME: rezervasyon TASINDIGINDA karsilama
+                        # satiri hic olusmuyordu (yalnizca YENI rezervasyon
+                        # yolunda olusuyor). Proformadan gelen siparislerin
+                        # kirilimi bos kaliyor, karlilik stok maliyetini
+                        # goremiyordu.
+                        _tip = (pk.urun_tip or 'PLAKA').upper()
+                        _birim = (sk.birim or ('ton' if _tip == 'BLOK' else 'm2'))
+                        if not KalemKarsilama.query.filter_by(
+                                rezervasyon_id=mevcut.id).first():
+                            db.session.add(KalemKarsilama(
+                                id=_yeni_id('KRS'), siparis_id=sip.id,
+                                siparis_kalem_id=sk.id, kaynak_tip='STOK',
+                                kaynak_ref=sid,
+                                kaynak_ad=f'{(stok.cins if stok else "") or ""} {sid}'.strip(),
+                                rezervasyon_id=mevcut.id,
+                                miktar=(_stok_olcu(stok, _birim.lower()) if stok else None),
+                                birim=_birim,
+                                birim_maliyet=(getattr(stok, 'alis_fiyati', 0) or 0) if stok else 0,
+                                doviz=(getattr(stok, 'doviz', None) or 'USD') if stok else 'USD',
+                                durum='Gerceklesti',
+                                kullanici=session.get('kullanici', 'sistem')))
                         tasinan_rez += 1
                     else:
                         kalan.append(sid)
                 if kalan:
                     yeni_rez += _kalem_rezervasyonlari_olustur(sip, sk, kalan)
+
+                # ── F8: PROFORMADAKI PLAN -> SIPARISTE KARSILAMA SATIRI ──
+                # Onayda "bu kalem uretimden gelecek" denmisse o niyet
+                # siparise tasinir: durum 'Planlandi'. Uretim yapilinca
+                # ya da dis alim faturasi girilince 'Gerceklesti' olur.
+                # STOK plani ZATEN rezervasyon yolundan satir uretiyor,
+                # tekrar yazilmaz.
+                _plan = (pk.karsilama_plan or '').strip().upper()
+                if _plan in ('URETIM', 'DIS_ALIM', 'KARMA'):
+                    _kaynak = 'URETIM' if _plan == 'URETIM' else (
+                        'DIS_ALIM' if _plan == 'DIS_ALIM' else 'URETIM')
+                    db.session.add(KalemKarsilama(
+                        id=_yeni_id('KRS'), siparis_id=sip.id,
+                        siparis_kalem_id=sk.id, kaynak_tip=_kaynak,
+                        kaynak_ad=(pk.plan_notu or
+                                   ('Karma karsilama' if _plan == 'KARMA'
+                                    else f'{_kaynak.title()} plani')),
+                        miktar=(sk.miktar or 0), birim=sk.birim,
+                        birim_maliyet=pk.plan_maliyet,
+                        doviz=pk.doviz or sip.doviz,
+                        durum='Planlandi',
+                        aciklama=f'Proforma {p.id} onayindaki karsilama plani'
+                                 + (' (karma — kirilimi siparis ekranindan girin)'
+                                    if _plan == 'KARMA' else ''),
+                        kullanici=session.get('kullanici', 'sistem')))
 
             _siparis_toplam_guncelle(sip)
 
@@ -21798,7 +22210,11 @@ def create_app():
             cek_vade = _parse_date(cek_bilgi.get('vade_tarihi'))
             if not cek_vade:
                 return jsonify({'ok': False, 'mesaj': 'Çek için vade tarihi zorunlu'}), 400
-            cari = Cari.query.filter_by(unvan=f.musteri).first()
+            # BL-16: faturanin KIMLIGI once. Yalnizca adla aranirken,
+            # unvani degismis carinin cekі sahipsiz olusuyordu
+            # (cari_id bos → cari ekraninda gorunmuyor).
+            cari = (Cari.query.get(f.cari_id) if f.cari_id else None) \
+                or _cari_bul(f.musteri)
             cek = Cek(
                 id=_yeni_id('CEK'), yon='alinan', tip='cek',
                 cek_no=(cek_bilgi.get('cek_no') or '').strip() or None,

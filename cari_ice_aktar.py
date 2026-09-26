@@ -152,10 +152,18 @@ with flask_app.app.app_context():
         # ayni firmayi gosterebilir.
         mevcut[_norm(c.unvan)] = c.id
 
+    # BL-17: sessizce dusen satir kalmasin. Eskiden unvani bos satir
+    # ve tanınmayan doviz hic raporlanmiyordu: 200 satirlik dosyadan
+    # 180 cari girdiginde kimse 20 satirin nerede kaldigini bilmiyordu.
     yeni, atlanan, tipsiz = [], [], 0
-    for satir in sayfa.iter_rows(min_row=2, values_only=True):
+    unvansiz, bilinmeyen_doviz = [], {}
+    for _sira, satir in enumerate(sayfa.iter_rows(min_row=2, values_only=True),
+                                  start=2):
         unvan = metin(satir, S_UNVAN, 200)
         if not unvan:
+            # Tamamen bos satir dosya sonundaki bosluktur, sayilmaz.
+            if any(h not in (None, '') for h in (satir or ())):
+                unvansiz.append(_sira)
             continue
         if _norm(unvan) in mevcut:
             atlanan.append((unvan, mevcut[_norm(unvan)]))
@@ -176,6 +184,8 @@ with flask_app.app.app_context():
             tipler = ['Müşteri']
 
         _dv = metin(satir, S_DOVIZ).upper()
+        if _dv and _dv not in DOVIZ_HARITA and _dv not in ('USD', 'EUR', 'TRY', 'GBP'):
+            bilinmeyen_doviz[_dv] = bilinmeyen_doviz.get(_dv, 0) + 1
         yeni.append({
             'unvan': unvan,
             'cari_tip': ','.join(tipler),
@@ -190,6 +200,16 @@ with flask_app.app.app_context():
     print(f" Atlanan   : {len(atlanan)}  (ünvan zaten kayıtlı)")
     if tipsiz:
         print(f" ⚠ {tipsiz} kayıtta tip işaretli değil → 'Müşteri' varsayıldı")
+    if unvansiz:
+        _ornek = ', '.join(str(x) for x in unvansiz[:12])
+        print(f" ⚠ {len(unvansiz)} satırda ÜNVAN BOŞ, atlandı → Excel satırı: "
+              f"{_ornek}" + (' …' if len(unvansiz) > 12 else ''))
+        print("   (dolu görünen ama ünvansız satırlar — dosyada kontrol edin)")
+    if bilinmeyen_doviz:
+        print(f" ⚠ Tanınmayan döviz kodu 'USD' varsayıldı: " +
+              ', '.join(f'{k} ({v} kayıt)'
+                        for k, v in sorted(bilinmeyen_doviz.items(),
+                                           key=lambda x: -x[1])[:8]))
     print()
 
     if yeni:

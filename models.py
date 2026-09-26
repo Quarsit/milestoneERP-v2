@@ -957,6 +957,21 @@ class ProformaKalem(db.Model):
     m2_toplam       = db.Column(Olcu)
     sqft_toplam     = db.Column(Olcu)
 
+    # ── F8 · KARŞILAMA PLANI ──────────────────────────────────────
+    # Fiyat müşteriye taahhüt edilmeden önce "bunu neyle karşılayacağım"
+    # sorusu cevaplanmış olmalı. Yoksa maliyeti bilinmeyen bir fiyat
+    # verilir; kâr ancak teslimden sonra ortaya çıkar.
+    #
+    # İç onay (Ic Onay → Onaylandi) bu alan boş olan kalemi geçirmez.
+    # Stok seçilmiş kalemde plan ZATEN bellidir (STOK) — ayrıca
+    # doldurulması istenmez.
+    #
+    # Proforma siparişe dönüşünce bu plan `kalem_karsilama` satırına
+    # (durum='Planlandi') kopyalanır; F1 makinesi oradan devam eder.
+    karsilama_plan  = db.Column(db.String(10))    # STOK|URETIM|DIS_ALIM|KARMA
+    plan_maliyet    = db.Column(Para)             # planlanan BİRİM maliyet
+    plan_notu       = db.Column(db.String(200))   # tedarikçi, blok, kesim notu
+
 # ── SATIŞ KAYDI ────────────────────────────────────────────────────────
 # FAZ 16: siparis_kalem_id eklendi
 class SatisKaydi(db.Model):
@@ -1313,9 +1328,13 @@ def cari_id_otomatik_doldur(mapper, connection, target):
         unvan = (getattr(target, 'musteri', None) or '').strip()
         if unvan:
             try:
+                # BL-16: iki dinleyici ayni isi FARKLI kuralla yapiyordu
+                # (biri birebir, digeri UPPER). Ayni kayit bir yolda
+                # baglanip digerinde baglanmiyordu — kural birlestirildi.
                 r = connection.execute(
-                    _text('SELECT id FROM cariler WHERE unvan = :u LIMIT 1'),
-                    {'u': unvan}).fetchone()
+                    _text('SELECT id FROM cariler '
+                          'WHERE unvan = :u OR UPPER(unvan) = :U LIMIT 1'),
+                    {'u': unvan, 'U': unvan.upper()}).fetchone()
                 if r:
                     target.cari_id = r[0]
             except Exception:
@@ -1343,8 +1362,34 @@ def cari_id_otomatik_doldur(mapper, connection, target):
             'Müşteri size kapalı; sorumlusundan erişim isteyin.')
 
 
+def cari_id_guncellemede_tazele(mapper, connection, target):
+    """BL-16 — kaydın müşterisi DEĞİŞTİRİLDİYSE cari_id de değişmeli.
+
+    Dinleyiciler yalnızca `before_insert` idi: bir siparişin müşterisi
+    başka bir firmaya çevrildiğinde ad değişiyor ama cari_id ESKİ
+    firmada kalıyordu. Sipariş iki cariye birden bağlı görünüyor,
+    hangisinin hesabına yazılacağı sorguya göre değişiyordu.
+
+    Ad ile kimlik AYNI cariyi göstermiyorsa kimlik adı takip eder:
+    kullanıcının gördüğü ve belgeye basılan şey addır.
+    """
+    unvan = (getattr(target, 'musteri', None) or '').strip()
+    if not unvan:
+        return
+    try:
+        r = connection.execute(
+            _text('SELECT id FROM cariler '
+                  'WHERE unvan = :u OR UPPER(unvan) = :U LIMIT 1'),
+            {'u': unvan, 'U': unvan.upper()}).fetchone()
+    except Exception:
+        return
+    if r and getattr(target, 'cari_id', None) != r[0]:
+        target.cari_id = r[0]
+
+
 for _model in (Proforma, Fatura, SatisKaydi, Sevkiyat, Rezervasyon, Siparis):
     _event.listen(_model, 'before_insert', cari_id_otomatik_doldur)
+    _event.listen(_model, 'before_update', cari_id_guncellemede_tazele)
 
 
 def stok_cari_id_otomatik_doldur(mapper, connection, hedef):

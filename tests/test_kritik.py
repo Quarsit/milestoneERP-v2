@@ -1234,3 +1234,337 @@ def test_rn2_belge_numarasi_ayri_kisaltmayi_kullanir():
     # ikisi de -01 ile bitiyor ama kısaltmaları farklı
     assert all(n.endswith('-01') for n in numaralar), numaralar
     assert numaralar[0][4:7] != numaralar[1][4:7], numaralar
+
+
+def test_f8_karsilama_plani_onayda_zorunlu():
+    """F8: planı belirsiz kalemi olan proforma iç onaydan geçmemeli;
+    stok seçilmiş kalemde plan ZATEN belli sayılmalı."""
+    from models import Cari, Proforma, ProformaKalem
+    with fa.app.app_context():
+        if not Cari.query.get('CF8'):
+            db.session.add(Cari(id='CF8', unvan='PLANTEST MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+            db.session.commit()
+    haz = istemci('hazirlayan', 'ADMIN')
+    ony = istemci('onaylayan', 'ADMIN')
+
+    def proforma_kur(kalem):
+        r = haz.post('/api/proforma', headers=H, json={
+            'musteri': 'PLANTEST MERMER', 'doviz': 'USD', 'tur': 'ihracat',
+            'toplam': 1000, 'kalemler': [kalem]})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        pid = r.get_json()['id']
+        assert haz.post(f'/api/proforma/{pid}/durum', headers=H,
+                        json={'durum': 'Ic Onay'}).status_code == 200
+        return pid
+
+    temel = {'urun_tip': 'PLAKA', 'cins': 'PLAN TEST', 'miktar': 10,
+             'birim': 'm2', 'birim_fiyat': 100, 'adet': 1,
+             'toplam_fiyat': 1000, 'net_fiyat': 1000}
+
+    # ── 1) PLANSIZ kalem: onay REDDEDİLİR ──
+    pid = proforma_kur(dict(temel))
+    r = ony.post(f'/api/proforma/{pid}/durum', headers=H, json={'durum': 'Onaylandi'})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j.get('error') == 'karsilama_plani_eksik', j
+    assert j.get('eksik_kalemler') and j['eksik_kalemler'][0]['sira'] == 1, j
+    with fa.app.app_context():
+        assert Proforma.query.get(pid).durum == 'Ic Onay'   # durum değişmedi
+
+    # ── 2) Plan işaretlenince onay GEÇER ──
+    pid2 = proforma_kur(dict(temel, karsilama_plan='URETIM', plan_maliyet=55,
+                             plan_notu='T-91 bloğundan kesim'))
+    r = ony.post(f'/api/proforma/{pid2}/durum', headers=H, json={'durum': 'Onaylandi'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        pk = ProformaKalem.query.filter_by(proforma_id=pid2).first()
+        assert pk.karsilama_plan == 'URETIM'
+        assert float(pk.plan_maliyet) == 55.0
+        assert pk.plan_notu == 'T-91 bloğundan kesim'
+
+    # ── 3) Tanınmayan plan değeri DÜŞÜRÜLÜR (yarım doğru plan olmaz) ──
+    pid3 = proforma_kur(dict(temel, karsilama_plan='HAVADAN'))
+    r = ony.post(f'/api/proforma/{pid3}/durum', headers=H, json={'durum': 'Onaylandi'})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert r.get_json().get('error') == 'karsilama_plani_eksik'
+
+
+def test_f8_stok_secilmis_kalem_plan_istemez():
+    """F8: stok seçilmiş kalemde karşılama zaten bellidir — plan alanı
+    boş olsa da onay geçmeli."""
+    from models import Cari, PlakaStok, ProformaKalem
+    with fa.app.app_context():
+        if not Cari.query.get('CF9'):
+            db.session.add(Cari(id='CF9', unvan='STOKPLAN MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+        if not PlakaStok.query.get('PLK-F8-1'):
+            db.session.add(PlakaStok(id='PLK-F8-1', cins='PLAN TEST', blok_no='T-F8',
+                                     slab_no=1, boy=300, yukseklik=150, kalinlik=2,
+                                     metraj_m2=4.5, durum='Serbest',
+                                     alis_fiyati=30, doviz='USD'))
+        db.session.commit()
+    haz = istemci('hazirlayan', 'ADMIN')
+    ony = istemci('onaylayan', 'ADMIN')
+    r = haz.post('/api/proforma', headers=H, json={
+        'musteri': 'STOKPLAN MERMER', 'doviz': 'USD', 'tur': 'ihracat', 'toplam': 450,
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'PLAN TEST', 'miktar': 4.5,
+                      'birim': 'm2', 'birim_fiyat': 100, 'adet': 1,
+                      'toplam_fiyat': 450, 'net_fiyat': 450,
+                      'stok_id': 'PLK-F8-1'}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    pid = r.get_json()['id']
+    with fa.app.app_context():
+        assert ProformaKalem.query.filter_by(proforma_id=pid).first().stok_id == 'PLK-F8-1'
+    assert haz.post(f'/api/proforma/{pid}/durum', headers=H,
+                    json={'durum': 'Ic Onay'}).status_code == 200
+    r = ony.post(f'/api/proforma/{pid}/durum', headers=H, json={'durum': 'Onaylandi'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_f8_plan_siparise_karsilama_olarak_gecer():
+    """F8: proformadaki plan, siparişe dönüşünce kalem_karsilama
+    satırına (durum='Planlandi') kopyalanmalı."""
+    from models import Cari, KalemKarsilama
+    with fa.app.app_context():
+        if not Cari.query.get('CFA'):
+            db.session.add(Cari(id='CFA', unvan='PLANGEC MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+            db.session.commit()
+    haz = istemci('hazirlayan', 'ADMIN')
+    ony = istemci('onaylayan', 'ADMIN')
+    r = haz.post('/api/proforma', headers=H, json={
+        'musteri': 'PLANGEC MERMER', 'doviz': 'USD', 'tur': 'ihracat', 'toplam': 2000,
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'GEC TEST', 'miktar': 20,
+                      'birim': 'm2', 'birim_fiyat': 100, 'adet': 1,
+                      'toplam_fiyat': 2000, 'net_fiyat': 2000,
+                      'karsilama_plan': 'DIS_ALIM', 'plan_maliyet': 62,
+                      'plan_notu': 'Akdeniz Mermer'}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    pid = r.get_json()['id']
+    assert haz.post(f'/api/proforma/{pid}/durum', headers=H,
+                    json={'durum': 'Ic Onay'}).status_code == 200
+    assert ony.post(f'/api/proforma/{pid}/durum', headers=H,
+                    json={'durum': 'Onaylandi'}).status_code == 200
+    r = ony.post(f'/api/proforma/{pid}/siparise_donustur', headers=H, json={})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    sid = r.get_json()['siparis_id']
+    with fa.app.app_context():
+        krs = KalemKarsilama.query.filter_by(siparis_id=sid).all()
+        assert len(krs) == 1, [k.kaynak_tip for k in krs]
+        k = krs[0]
+        assert k.kaynak_tip == 'DIS_ALIM', k.kaynak_tip
+        assert k.durum == 'Planlandi', k.durum
+        assert float(k.birim_maliyet) == 62.0
+        assert 'Akdeniz' in (k.kaynak_ad or '')
+
+
+def test_f8_proforma_guncelleme_stok_bagini_koparmaz():
+    """F8 yan düzeltme: proformayı güncellemek kalemin stok bağını ve
+    planını silmemeli (eskiden PUT bu iki alanı hiç kopyalamıyordu)."""
+    from models import Cari, PlakaStok, ProformaKalem
+    with fa.app.app_context():
+        if not Cari.query.get('CFB'):
+            db.session.add(Cari(id='CFB', unvan='PUTPLAN MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+        if not PlakaStok.query.get('PLK-F8-2'):
+            db.session.add(PlakaStok(id='PLK-F8-2', cins='PUT TEST', blok_no='T-F9',
+                                     slab_no=1, boy=300, yukseklik=150, kalinlik=2,
+                                     metraj_m2=4.5, durum='Serbest',
+                                     alis_fiyati=30, doviz='USD'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    kalem = {'urun_tip': 'PLAKA', 'cins': 'PUT TEST', 'miktar': 4.5, 'birim': 'm2',
+             'birim_fiyat': 100, 'adet': 1, 'toplam_fiyat': 450, 'net_fiyat': 450,
+             'stok_id': 'PLK-F8-2', 'karsilama_plan': 'STOK', 'plan_notu': 'depo'}
+    r = c.post('/api/proforma', headers=H, json={
+        'musteri': 'PUTPLAN MERMER', 'doviz': 'USD', 'tur': 'ihracat',
+        'toplam': 450, 'kalemler': [kalem]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    pid = r.get_json()['id']
+    # Fiyatı değiştirip kaydet — stok bağı ve plan korunmalı
+    r = c.put(f'/api/proforma/{pid}', headers=H, json={
+        'musteri': 'PUTPLAN MERMER', 'doviz': 'USD', 'tur': 'ihracat',
+        'toplam': 500, 'kalemler': [dict(kalem, birim_fiyat=111,
+                                         toplam_fiyat=500, net_fiyat=500)]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        pk = ProformaKalem.query.filter_by(proforma_id=pid).first()
+        assert pk.stok_id == 'PLK-F8-2', pk.stok_id
+        assert pk.karsilama_plan == 'STOK', pk.karsilama_plan
+        assert pk.plan_notu == 'depo'
+
+
+def test_bl16_unvan_degisince_bagli_kayitlar_esitlenir():
+    """BL-16: cari ünvanı değişince sipariş/proforma/fatura/hareket
+    kayıtlarının görünen adı da güncellenmeli; adla eşleşen sorgular
+    boşa düşmemeli."""
+    from models import Cari, Siparis, Proforma, Fatura, CariHareket
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/cari', headers=H, json={
+        'unvan': 'ESKIAD MERMER', 'cari_tip': 'Musteri', 'para_birimi': 'USD',
+        'ulke': 'USA'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    cid = r.get_json()['id']
+
+    rs = c.post('/api/siparis', headers=H, json={
+        'musteri': 'ESKIAD MERMER', 'doviz': 'USD', 'siparis_tarihi': '2026-06-01',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'AD TEST', 'miktar': 10,
+                      'birim': 'm2', 'birim_fiyat': 100, 'adet': 1}]})
+    assert rs.status_code == 200, rs.get_data(as_text=True)
+    sid = rs.get_json()['id']
+    rp = c.post('/api/proforma', headers=H, json={
+        'musteri': 'ESKIAD MERMER', 'doviz': 'USD', 'toplam': 1000})
+    assert rp.status_code == 200, rp.get_data(as_text=True)
+    pid = rp.get_json()['id']
+
+    with fa.app.app_context():
+        # kimlik bağı dinleyiciyle kurulmuş olmalı
+        assert Siparis.query.get(sid).cari_id == cid
+        assert Proforma.query.get(pid).cari_id == cid
+        db.session.add(Fatura(id='FBL16', fatura_no='BL16-1', musteri='ESKIAD MERMER',
+                              cari_id=cid, yon='satis', durum='Kesildi', doviz='USD',
+                              toplam=1000, fatura_tarihi=date(2026, 6, 2)))
+        db.session.add(CariHareket(id='HBL16', cari_id=cid, cari_unvan='ESKIAD MERMER',
+                                   islem_tip='Satış Faturası', borc=1000, alacak=0,
+                                   doviz='USD', kur_uygulanan=40, borc_try=40000,
+                                   alacak_try=0, hareket_tarihi=date(2026, 6, 2)))
+        db.session.commit()
+
+    # ── ÜNVAN DEĞİŞTİR ──
+    r = c.put(f'/api/cari/{cid}', headers=H, json={'unvan': 'YENIAD MERMER LTD'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json().get('ad_yansimasi', 0) >= 4, r.get_json()
+
+    with fa.app.app_context():
+        assert Siparis.query.get(sid).musteri == 'YENIAD MERMER LTD'
+        assert Proforma.query.get(pid).musteri == 'YENIAD MERMER LTD'
+        assert Fatura.query.get('FBL16').musteri == 'YENIAD MERMER LTD'
+        assert CariHareket.query.get('HBL16').cari_unvan == 'YENIAD MERMER LTD'
+
+    # ── Açık faturalar listesi ÜNVAN DEĞİŞİMİNDEN SONRA da dolu ──
+    r = c.get(f'/api/cari/{cid}/acik_faturalar?yon=satis', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    kayitlar = j if isinstance(j, list) else (j.get('faturalar') or j.get('veri') or [])
+    assert any('BL16' in str(x) for x in kayitlar), j
+
+
+def test_bl16_bagli_kayitli_cari_silinemez():
+    """BL-16: ünvan değişmiş olsa bile bağlı kayıtlar görünmeli —
+    eskiden adla sayıldığı için cari silinebiliyordu."""
+    from models import Cari, Siparis
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/cari', headers=H, json={
+        'unvan': 'SILINMEZ MERMER', 'cari_tip': 'Musteri', 'para_birimi': 'USD'})
+    cid = r.get_json()['id']
+    rs = c.post('/api/siparis', headers=H, json={
+        'musteri': 'SILINMEZ MERMER', 'doviz': 'USD', 'siparis_tarihi': '2026-06-03',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'SIL TEST', 'miktar': 3,
+                      'birim': 'm2', 'birim_fiyat': 100, 'adet': 1}]})
+    assert rs.status_code == 200, rs.get_data(as_text=True)
+
+    # Siparişin adını elle boz (eski kayıtların yaşadığı durum),
+    # kimlik bağı dursun
+    with fa.app.app_context():
+        sip = Siparis.query.get(rs.get_json()['id'])
+        sip.musteri = 'BASKA YAZILMIS AD'
+        db.session.commit()
+        assert Siparis.query.get(rs.get_json()['id']).cari_id == cid
+
+    r = c.delete(f'/api/cari/{cid}', headers=H)
+    assert r.status_code in (400, 409), r.get_data(as_text=True)
+    j = r.get_json()
+    assert j.get('baglantili') is True, j
+    assert (j.get('detay') or {}).get('siparis', 0) >= 1, j
+    with fa.app.app_context():
+        assert Cari.query.get(cid) is not None
+
+
+def test_bl16_musteri_degisince_kimlik_de_degisir():
+    """BL-16: bir siparişin müşterisi başka firmaya çevrildiğinde
+    cari_id eski firmada KALMAMALI (before_update dinleyicisi)."""
+    from models import Cari, Siparis
+    c = istemci('admin', 'ADMIN')
+    a = c.post('/api/cari', headers=H, json={
+        'unvan': 'TASIYAN A MERMER', 'cari_tip': 'Musteri', 'para_birimi': 'USD'}).get_json()['id']
+    b = c.post('/api/cari', headers=H, json={
+        'unvan': 'TASIYAN B MERMER', 'cari_tip': 'Musteri', 'para_birimi': 'USD'}).get_json()['id']
+    rs = c.post('/api/siparis', headers=H, json={
+        'musteri': 'TASIYAN A MERMER', 'doviz': 'USD', 'siparis_tarihi': '2026-06-04',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'TAS TEST', 'miktar': 2,
+                      'birim': 'm2', 'birim_fiyat': 100, 'adet': 1}]})
+    sid = rs.get_json()['id']
+    with fa.app.app_context():
+        assert Siparis.query.get(sid).cari_id == a
+        Siparis.query.get(sid).musteri = 'TASIYAN B MERMER'
+        db.session.commit()
+        assert Siparis.query.get(sid).cari_id == b, 'kimlik adı takip etmedi'
+
+
+def test_bl17_toplu_import_hatali_satiri_sessizce_atlamaz():
+    """BL-17: hatalı satır varsa HİÇBİRİ yazılmamalı ve her hata
+    gerekçesiyle dönmeli (eskiden sessizce atlanıyordu)."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        once = PlakaStok.query.count()
+    r = c.post('/api/stok/toplu_import', headers=H, json={'plakalar': [
+        {'cins': 'BL17 TEST', 'blok_no': 'B17', 'slab_no': 1, 'boy': 300,
+         'yukseklik': 150, 'kalinlik': 2, 'alis_fiyati': 40, 'doviz': 'USD'},
+        {'cins': 'BL17 TEST', 'blok_no': 'B17', 'slab_no': 2, 'boy': 0,
+         'yukseklik': 150},                                   # ölçü hatası
+        {'cins': '', 'blok_no': 'B17', 'slab_no': 3, 'boy': 300,
+         'yukseklik': 150},                                   # cins boş
+        {'cins': 'BL17 TEST', 'blok_no': '', 'slab_no': 4, 'boy': 300,
+         'yukseklik': 150},                                   # blok boş
+        {'cins': 'BL17 TEST', 'blok_no': 'B17', 'slab_no': 5, 'boy': 300,
+         'yukseklik': 150, 'doviz': 'XYZ'},                   # döviz tanınmaz
+        {'cins': 'BL17 TEST', 'blok_no': 'B17', 'slab_no': 1, 'boy': 300,
+         'yukseklik': 150},                                   # dosyada tekrar
+    ]})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j.get('error') == 'satir_hatalari', j
+    assert j['hatali'] == 5 and j['gecerli'] == 1, j
+    gerekceler = ' | '.join(h['hata'] for h in j['hatalar'])
+    for beklenen in ('boy', 'cins', 'blok no', 'döviz', 'tekrar'):
+        assert beklenen in gerekceler, (beklenen, gerekceler)
+    with fa.app.app_context():
+        assert PlakaStok.query.count() == once, 'hatalı dosyadan kayıt yazıldı'
+
+
+def test_bl17_kismi_aktarim_acikca_istenir():
+    """BL-17: `kismi` verilirse sağlam satırlar yazılır, atlananlar
+    gerekçesiyle raporlanır."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/stok/toplu_import', headers=H, json={'kismi': True, 'plakalar': [
+        {'cins': 'BL17 KISMI', 'blok_no': 'B18', 'slab_no': 1, 'boy': 300,
+         'yukseklik': 150, 'kalinlik': 2, 'alis_fiyati': 40, 'doviz': 'USD'},
+        {'cins': 'BL17 KISMI', 'blok_no': 'B18', 'slab_no': 2, 'boy': 'abc',
+         'yukseklik': 150},
+    ]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j['eklenen'] == 1 and j['atlanan'] == 1, j
+    assert 'sayı değil' in j['hatalar'][0]['hata'], j
+    with fa.app.app_context():
+        p = PlakaStok.query.filter_by(blok_no='B18').all()
+        assert len(p) == 1
+        assert p[0].slab_no == 1                 # plaka no kaydedildi
+        assert float(p[0].metraj_m2) == 4.5      # 300×150/10000
+
+
+def test_bl17_depodaki_plaka_ikinci_kez_girilemez():
+    """BL-17: aynı blok + aynı plaka no ikinci kez stoğa alınamaz —
+    aynı malı iki kez satmaya götürür."""
+    c = istemci('admin', 'ADMIN')
+    kalem = {'cins': 'BL17 TEK', 'blok_no': 'B19', 'slab_no': 7, 'boy': 300,
+             'yukseklik': 150, 'kalinlik': 2, 'alis_fiyati': 40, 'doviz': 'USD'}
+    assert c.post('/api/stok/toplu_import', headers=H,
+                  json={'plakalar': [dict(kalem)]}).status_code == 200
+    r = c.post('/api/stok/toplu_import', headers=H, json={'plakalar': [dict(kalem)]})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert 'depoda zaten var' in r.get_json()['hatalar'][0]['hata']
+
