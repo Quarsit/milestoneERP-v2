@@ -14,8 +14,11 @@
 #        PINAR MERMER    → PNR
 #        STONELAND USA   → STN
 #        NORTHSTONE      → NRT
-#    Çakışma olursa unvanın ilk üç harfi, o da doluysa rakamla ayrılır
-#    (STN → STO → ST2). Kartta görünür; istediğin zaman değiştirirsin.
+#    Çakışma olursa RAKAM DEĞİL, unvanın sıradaki sessiz harfleri
+#    denenir; sessiz kalmazsa sesliler:
+#        STONELAND USA → STN · STONELAND MIAMI → STL · CANADA → STD
+#        ALIMOĞLU → ALM · ALIMKAR → ALK · ALIM TAŞ → ALT
+#    Kartta görünür; istediğin zaman değiştirirsin.
 #
 #  ── GÜVENLİ ──
 #    • Dolu kısaltmalara DOKUNMAZ.
@@ -57,28 +60,63 @@ TR = str.maketrans('ÇĞİIÖŞÜçğıiöşü', 'CGIIOSUCGIIOSU')
 UNLU = set('AEIOU')
 
 
-def kisaltma_uret(unvan):
-    """flask_app._kisaltma_uret ile AYNI kural (o fonksiyon uygulama
+ABC = 'BCDFGHJKLMNPRSTVYZXQWAEIOU'   # once sessizler, sonra sesliler
+
+
+def adaylar(unvan):
+    """flask_app._kisaltma_adaylari ile AYNI kural (o fonksiyon uygulama
     fabrikasının içinde olduğu için burada birebir tekrarlanır)."""
-    if not unvan:
-        return 'XXX'
-    s = str(unvan).translate(TR).upper().strip()
-    kelime = next((k for k in s.split() if k and k[0].isalpha()), '')
-    harfler = [h for h in kelime if h.isalpha()]
-    if not harfler:
-        return 'XXX'
-    sonuc = harfler[0]
-    for h in harfler[1:]:
-        if h not in UNLU:
-            sonuc += h
-        if len(sonuc) == 3:
-            break
-    for h in harfler[1:]:
-        if len(sonuc) >= 3:
-            break
-        if h not in sonuc:
-            sonuc += h
-    return (sonuc + 'XXX')[:3]
+    s = str(unvan or '').translate(TR).upper()
+    kelimeler = [''.join(h for h in k if h.isalpha()) for k in s.split()]
+    kelimeler = [k for k in kelimeler if k]
+    if not kelimeler:
+        yield 'XXX'
+        return
+    ilk = kelimeler[0][0]
+    kalan = list(kelimeler[0][1:]) + [h for k in kelimeler[1:] for h in k]
+    havuz = [h for h in kalan if h not in UNLU] + \
+            [h for h in kalan if h in UNLU]
+    gorulen = set()
+
+    def ver(a):
+        if len(a) == 3 and a not in gorulen:
+            gorulen.add(a)
+            return a
+        return None
+
+    ikinci = havuz[0] if havuz else 'X'
+    for u in havuz[1:]:
+        a = ver(ilk + ikinci + u)
+        if a:
+            yield a
+    for i in range(len(havuz)):
+        for j in range(len(havuz)):
+            if i == j:
+                continue
+            a = ver(ilk + havuz[i] + havuz[j])
+            if a:
+                yield a
+    for u in ABC:
+        a = ver(ilk + ikinci + u)
+        if a:
+            yield a
+    for v in ABC:
+        for u in ABC:
+            a = ver(ilk + v + u)
+            if a:
+                yield a
+
+
+def bos_bul(unvan, kullanilan):
+    for a in adaylar(unvan):
+        if a not in kullanilan:
+            return a
+    on = (str(unvan or 'X').translate(TR).upper() + 'XX')[:1]
+    for i in range(2, 100):
+        a = f'{on}{i:02d}'
+        if a not in kullanilan:
+            return a
+    return 'XXX'
 
 
 print('═' * 74)
@@ -99,18 +137,7 @@ with flask_app.app.app_context():
 
     plan = []
     for c in bos:
-        aday = kisaltma_uret(c.unvan)
-        if aday in kullanilan:
-            harfler = ''.join(h for h in str(c.unvan).translate(TR).upper() if h.isalpha())
-            alternatif = (harfler + 'XXX')[:3]
-            if alternatif not in kullanilan:
-                aday = alternatif
-            else:
-                for i in range(2, 10):
-                    deneme = aday[:2] + str(i)
-                    if deneme not in kullanilan:
-                        aday = deneme
-                        break
+        aday = bos_bul(c.unvan, kullanilan)
         kullanilan.add(aday)
         plan.append((c, aday))
 

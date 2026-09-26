@@ -1166,3 +1166,71 @@ def test_rn1_okunur_belge_numaralari():
                                    hareket_tarihi=date(2026, 4, 6)))
         db.session.commit()
         assert CariHareket.query.get('OZEL-1') is not None
+
+
+def test_rn2_kisaltma_carpismasi_harfle_ayrilir():
+    """RN2: aynı harflerle başlayan cariler RAKAMLA değil, unvanın
+    sıradaki sessiz (sonra sesli) harfleriyle ayrılmalı.
+
+    STONELAND USA → STN · STONELAND MIAMI → STL · CANADA → STD
+    ALIMOĞLU → ALM · ALIMKAR → ALK · ALIM TAŞ → ALT
+    """
+    from models import Cari
+    c = istemci('admin', 'ADMIN')
+    # NOT: STONELAND ailesi baska testte kullaniliyor (STN orada alindi),
+    # bu yuzden burada baska bir aile ile ayni kural dogrulanir.
+    beklenen = [
+        ('XANTHOS USA', 'XNT'),
+        ('XANTHOS MIAMI', 'XNH'),
+        ('XANTHOS CANADA', 'XNS'),
+        ('XANTHO WORKS', 'XNW'),
+        ('ALIMOĞLU MERMER', 'ALM'),
+        ('ALIMKAR MERMER', 'ALK'),
+        ('ALIM TAŞ', 'ALT'),
+    ]
+    for unvan, kis in beklenen:
+        r = c.post('/api/cari', headers=H, json={
+            'unvan': unvan, 'cari_tip': 'Musteri', 'para_birimi': 'USD',
+            'ulke': 'USA'})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        assert r.get_json().get('uretici_kisaltma') == kis, (unvan, r.get_json())
+
+    # Hiçbir kısaltmada rakam olmamalı ve hepsi benzersiz olmalı
+    with fa.app.app_context():
+        kisaltmalar = [c2.uretici_kisaltma for c2 in Cari.query.filter(
+            Cari.unvan.in_([u for u, _ in beklenen])).all()]
+        assert len(kisaltmalar) == len(set(kisaltmalar)), kisaltmalar
+        assert all(k and k.isalpha() for k in kisaltmalar), kisaltmalar
+        # Ilk iki harf sabit kalir — okunurlugu tasiyan kisim bu
+        xan = sorted(k for k in kisaltmalar if k.startswith('X'))
+        assert len(xan) == 4 and all(k.startswith('XN') for k in xan), xan
+        alm = sorted(k for k in kisaltmalar if k.startswith('A'))
+        assert len(alm) == 3 and all(k.startswith('AL') for k in alm), alm
+
+    # Elle girilen kısaltma aynen korunur (kullanıcı kararı bozulmaz)
+    r = c.post('/api/cari', headers=H, json={
+        'unvan': 'OZEL KISALTMA AS', 'cari_tip': 'Musteri',
+        'uretici_kisaltma': 'ozk', 'para_birimi': 'USD'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json().get('uretici_kisaltma') == 'OZK'
+
+
+def test_rn2_belge_numarasi_ayri_kisaltmayi_kullanir():
+    """RN2: aynı isimli iki cari farklı kısaltma aldığı için sipariş
+    numaraları da birbirine karışmaz."""
+    c = istemci('admin', 'ADMIN')
+    numaralar = []
+    for unvan in ('GRANITEX USA', 'GRANITEX EUROPE'):
+        rc = c.post('/api/cari', headers=H, json={
+            'unvan': unvan, 'cari_tip': 'Musteri', 'para_birimi': 'USD'})
+        assert rc.status_code == 200, rc.get_data(as_text=True)
+        rs = c.post('/api/siparis', headers=H, json={
+            'musteri': unvan, 'doviz': 'USD', 'siparis_tarihi': '2026-05-01',
+            'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'TEST', 'miktar': 4,
+                          'birim': 'm2', 'birim_fiyat': 100, 'adet': 1}]})
+        assert rs.status_code == 200, rs.get_data(as_text=True)
+        numaralar.append(rs.get_json()['id'])
+    assert numaralar[0] != numaralar[1], numaralar
+    # ikisi de -01 ile bitiyor ama kısaltmaları farklı
+    assert all(n.endswith('-01') for n in numaralar), numaralar
+    assert numaralar[0][4:7] != numaralar[1][4:7], numaralar

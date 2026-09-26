@@ -1939,27 +1939,71 @@ def create_app():
         """Unvandan 3 harfli kısaltma: ilk kelimenin ilk harfi + sonraki
         sessizler. PINAR MERMER → PNR · STONELAND USA → STN ·
         NORTHSTONE → NRT. Sessiz yetmezse sesliyle tamamlanır."""
-        if not unvan:
-            return 'XXX'
-        s = str(unvan).translate(TURKCE_ASCII).upper().strip()
-        kelime = next((k for k in s.split() if k and k[0].isalpha()), '')
-        if not kelime:
-            return 'XXX'
-        harfler = [h for h in kelime if h.isalpha()]
-        if not harfler:
-            return 'XXX'
-        sonuc = harfler[0]
-        for h in harfler[1:]:
-            if h not in UNLU_HARFLER:
-                sonuc += h
-            if len(sonuc) == 3:
-                break
-        for h in harfler[1:]:          # hâlâ eksikse sesliyle tamamla
-            if len(sonuc) >= 3:
-                break
-            if h not in sonuc:
-                sonuc += h
-        return (sonuc + 'XXX')[:3]
+        for aday in _kisaltma_adaylari(unvan):
+            return aday
+        return 'XXX'
+
+    # Carpismada denenecek harf sirasi: once sessizler, sonra sesliler.
+    # Unvanda harf kalmadiginda bu alfabeye dusulur — RAKAM KULLANILMAZ.
+    _KIS_ALFABE = 'BCDFGHJKLMNPRSTVYZXQWAEIOU'
+
+    def _kisaltma_adaylari(unvan):
+        """Unvan için kısaltma adaylarını SIRAYLA üretir (en anlamlısı
+        önce). Çağıran ilk BOŞ adayı alır.
+
+        Sıra:
+          1) İlk harf + ilk sessiz SABİT, üçüncü harf unvandan sırayla
+             — önce kalan sessizler, sonra sesliler:
+             STONELAND → STN, STL, STD, STM, STO, STE, STA
+             ALIMKAR   → ALM, ALK, ALR, ALI, ALA, ALE
+             İlk iki harf sabit kaldığı için kısaltma hep okunur kalır.
+          2) Unvan tükenirse ikinci harf de unvandan değişir (AML, AMK…).
+          3) O da tükenirse alfabeden — yine sessizler önce.
+
+        RAKAM YOK: ST2 gibi numaralar okunmuyordu; aynı isimli cariler
+        artık ismin kendi harfleriyle ayrılır.
+        """
+        s = str(unvan or '').translate(TURKCE_ASCII).upper()
+        kelimeler = [''.join(h for h in k if h.isalpha()) for k in s.split()]
+        kelimeler = [k for k in kelimeler if k]
+        if not kelimeler:
+            yield 'XXX'
+            return
+        ilk = kelimeler[0][0]
+        # Ilk kelimenin geri kalani, sonra diger kelimeler: "STONE WORKS"
+        # icin ST + N tutulmussa STW'ye ulasilabilsin.
+        kalan = list(kelimeler[0][1:]) + [h for k in kelimeler[1:] for h in k]
+        havuz = [h for h in kalan if h not in UNLU_HARFLER] + \
+                [h for h in kalan if h in UNLU_HARFLER]
+        gorulen = set()
+
+        def _ver(a):
+            if len(a) == 3 and a not in gorulen:
+                gorulen.add(a)
+                return a
+            return None
+
+        ikinci = havuz[0] if havuz else 'X'
+        for u in havuz[1:]:                      # 1) ucuncu harf degisir
+            a = _ver(ilk + ikinci + u)
+            if a:
+                yield a
+        for i in range(len(havuz)):               # 2) ikinci harf de degisir
+            for j in range(len(havuz)):
+                if i == j:
+                    continue
+                a = _ver(ilk + havuz[i] + havuz[j])
+                if a:
+                    yield a
+        for u in _KIS_ALFABE:                     # 3) alfabeye dusus
+            a = _ver(ilk + ikinci + u)
+            if a:
+                yield a
+        for v in _KIS_ALFABE:
+            for u in _KIS_ALFABE:
+                a = _ver(ilk + v + u)
+                if a:
+                    yield a
 
     def _cari_kisaltma(cari):
         """Carinin kısaltması. Kartında yoksa üretilir, BENZERSİZ hale
@@ -1974,28 +2018,30 @@ def create_app():
         mevcut = (getattr(cari, 'uretici_kisaltma', None) or '').strip().upper()
         if mevcut:
             return (mevcut + 'XXX')[:3]
-        aday = _kisaltma_uret(cari.unvan)
         kullanilan = {(k or '').strip().upper() for (k,) in
                       db.session.query(Cari.uretici_kisaltma).filter(
                           Cari.uretici_kisaltma.isnot(None),
                           Cari.id != cari.id).all()}
-        if aday in kullanilan:
-            # Çakışma: ilk üç harf, sonra rakamla ayır (STN → STO → ST2)
-            alternatif = (''.join(h for h in str(cari.unvan).translate(TURKCE_ASCII).upper()
-                                  if h.isalpha()) + 'XXX')[:3]
-            if alternatif not in kullanilan:
-                aday = alternatif
-            else:
-                for i in range(2, 10):
-                    deneme = aday[:2] + str(i)
-                    if deneme not in kullanilan:
-                        aday = deneme
-                        break
+        aday = _kisaltma_bos_bul(cari.unvan, kullanilan)
         try:
             cari.uretici_kisaltma = aday
         except Exception:
             pass
         return aday
+
+    def _kisaltma_bos_bul(unvan, kullanilan):
+        """Adaylar arasından kullanılmayan ilkini seçer. Hepsi doluysa
+        (170'ten fazla aynı harfle başlayan cari) son çıkış olarak
+        rakamlı bir kimlik döner — pratikte ulaşılmaz."""
+        for aday in _kisaltma_adaylari(unvan):
+            if aday not in kullanilan:
+                return aday
+        on = (str(unvan or 'X').translate(TURKCE_ASCII).upper() + 'XX')[:1]
+        for i in range(2, 100):
+            aday = f'{on}{i:02d}'
+            if aday not in kullanilan:
+                return aday
+        return 'XXX'
 
     @db.event.listens_for(CariHareket, 'before_insert')
     def _cari_hareket_okunur_id(esleme, baglanti, hareket):
@@ -6725,15 +6771,11 @@ def create_app():
         uretici_kis = (data.get('uretici_kisaltma') or '').strip().upper() or None
         if not uretici_kis:
             try:
-                uretici_kis = _kisaltma_uret(data['unvan'])
                 _var = {(k or '').upper() for (k,) in db.session.query(
                     Cari.uretici_kisaltma).filter(Cari.uretici_kisaltma.isnot(None)).all()}
-                if uretici_kis in _var:
-                    for _i in range(2, 10):
-                        _d = uretici_kis[:2] + str(_i)
-                        if _d not in _var:
-                            uretici_kis = _d
-                            break
+                # Carpismada RAKAM DEGIL, unvanin siradaki sessiz (sonra
+                # sesli) harfleri denenir: ALM dolu ise ALK, sonra ALR…
+                uretici_kis = _kisaltma_bos_bul(data['unvan'], _var)
             except Exception:
                 uretici_kis = (data['unvan'][:3] or 'XXX').upper()
 
