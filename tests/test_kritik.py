@@ -1695,3 +1695,135 @@ def test_f5_sevkiyat_yolda_olunca_stok_yoldaya_gecer():
     satirlar = rr.get_json().get('data') or rr.get_json().get('veri') or []
     assert any(x['id'] == 'PLK-F5-S1' for x in satirlar), satirlar
 
+
+def test_md1_maliyet_olcuye_gore_orantili_dagitilir():
+    """MD1: çok kayda dağıtılan maliyet, kayıt sayısına değil ÖLÇÜYE
+    göre bölünmeli — aynı faturayla alınan bloklar aynı $/ton olmalı."""
+    from models import BlokStok, Maliyet
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        for bid, ton in [('BLK-MD-1', 18.06), ('BLK-MD-2', 6.42),
+                         ('BLK-MD-3', 18.33), ('BLK-MD-4', 6.69)]:
+            if not BlokStok.query.get(bid):
+                db.session.add(BlokStok(
+                    id=bid, cins='CEPPO TEST', blok_no=bid[-4:], tonaj=ton,
+                    hacim_m3=ton / 2.7, boy=300, yukseklik=180, en=125,
+                    durum='Serbest', alis_fiyati=200, alis_fiyat_birim='ton',
+                    doviz='EUR'))
+        db.session.commit()
+    hedefler = ['BLK-MD-1', 'BLK-MD-2', 'BLK-MD-3', 'BLK-MD-4']
+    tonlar = {'BLK-MD-1': 18.06, 'BLK-MD-2': 6.42,
+              'BLK-MD-3': 18.33, 'BLK-MD-4': 6.69}
+    toplam_ton = sum(tonlar.values())
+    TUTAR = 5480.0
+
+    # ── ÖN İZLEME: paylar tonajla orantılı ──
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'onizleme': True, 'hedefler': hedefler, 'maliyet_tip': 'Nakliye',
+        'baglanti_tip': 'stok', 'tutar': TUTAR, 'doviz': 'USD',
+        'kdv_oran': 0, 'dagitim': 'oransal'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j['dagitim'] == 'oransal', j
+    assert 'tonaj' in j['olcu_notu'], j
+    paylar = {x['id']: float(x['net_pay']) for x in j['satirlar']}
+    for hid, ton in tonlar.items():
+        beklenen = TUTAR * ton / toplam_ton
+        assert abs(paylar[hid] - beklenen) < 0.05, (hid, paylar[hid], beklenen)
+    assert abs(sum(paylar.values()) - TUTAR) < 0.01, paylar   # kuruş kaybı yok
+
+    # ── KAYDET ──
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'hedefler': hedefler, 'maliyet_tip': 'Nakliye', 'baglanti_tip': 'stok',
+        'tutar': TUTAR, 'doviz': 'USD', 'kdv_oran': 0, 'dagitim': 'oransal',
+        'fatura_no': 'MD1-TEST'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()['adet'] == 4
+
+    # ── SONUÇ: dört blokta da AYNI $/ton ──
+    with fa.app.app_context():
+        tonbasi = []
+        for hid, ton in tonlar.items():
+            ek = sum(float(m.tutar or 0) for m in Maliyet.query.filter_by(
+                baglanti_tip='stok', baglanti_id=hid, fatura_no='MD1-TEST').all())
+            alim = 200 * ton                      # 200 EUR/ton
+            tonbasi.append((alim + ek) / ton)
+        assert max(tonbasi) - min(tonbasi) < 0.5, tonbasi
+        # Hepsi tek grupta
+        gruplar = {m.grup_id for m in Maliyet.query.filter_by(
+            fatura_no='MD1-TEST').all()}
+        assert len(gruplar) == 1 and None not in gruplar, gruplar
+
+
+def test_md1_esit_secenegi_korunur():
+    """MD1: parça başı giderler için 'eşit' seçeneği çalışmalı."""
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'onizleme': True,
+        'hedefler': ['BLK-MD-1', 'BLK-MD-2', 'BLK-MD-3', 'BLK-MD-4'],
+        'maliyet_tip': 'Sertifika', 'baglanti_tip': 'stok',
+        'tutar': 400, 'doviz': 'USD', 'kdv_oran': 0, 'dagitim': 'esit'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j['dagitim'] == 'esit'
+    assert all(abs(float(x['net_pay']) - 100.0) < 0.01 for x in j['satirlar']), j
+
+
+def test_md1_oranlanamayinca_acikca_soyler():
+    """MD1: ton ile m² oranlanamaz — sessizce eşite düşmemeli,
+    nedenini söylemeli."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not PlakaStok.query.get('PLK-MD-1'):
+            db.session.add(PlakaStok(id='PLK-MD-1', cins='CEPPO TEST',
+                                     blok_no='MD-1', slab_no=1, boy=300,
+                                     yukseklik=150, kalinlik=2, metraj_m2=4.5,
+                                     durum='Serbest', alis_fiyati=30, doviz='USD'))
+            db.session.commit()
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'onizleme': True, 'hedefler': ['BLK-MD-1', 'PLK-MD-1'],
+        'maliyet_tip': 'Nakliye', 'baglanti_tip': 'stok',
+        'tutar': 1000, 'doviz': 'USD', 'kdv_oran': 0, 'dagitim': 'oransal'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j['dagitim'] == 'esit', j
+    assert 'oranlanamaz' in j['olcu_notu'] or 'eşit' in j['olcu_notu'], j
+
+
+def test_md1_hatali_hedefte_hicbiri_yazilmaz():
+    """MD1: bulunamayan kayıt varsa hiçbiri yazılmamalı (yarım maliyet
+    girilmesin)."""
+    from models import Maliyet
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        once = Maliyet.query.count()
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'hedefler': ['BLK-MD-1', 'YOK-BOYLE-BIR-STOK'], 'maliyet_tip': 'Nakliye',
+        'baglanti_tip': 'stok', 'tutar': 500, 'doviz': 'USD', 'kdv_oran': 0})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert r.get_json().get('error') == 'stok_bulunamadi'
+    with fa.app.app_context():
+        assert Maliyet.query.count() == once
+
+
+def test_md1_cari_hareketi_fatura_basina_tek():
+    """MD1: tek tedarikçi faturası cari ekranında N satıra bölünmemeli."""
+    from models import Cari, CariHareket
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not Cari.query.get('CMD'):
+            db.session.add(Cari(id='CMD', unvan='NAKLIYECI AS', cari_tip='Tedarikçi',
+                                para_birimi='USD', gorunurluk='ortak'))
+            db.session.commit()
+        once = CariHareket.query.filter_by(cari_id='CMD').count()
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'hedefler': ['BLK-MD-1', 'BLK-MD-2', 'BLK-MD-3', 'BLK-MD-4'],
+        'maliyet_tip': 'Nakliye', 'baglanti_tip': 'stok', 'tutar': 2000,
+        'doviz': 'USD', 'kdv_oran': 0, 'cari_id': 'CMD', 'fatura_no': 'NKL-9'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        hareketler = CariHareket.query.filter_by(cari_id='CMD').all()
+        assert len(hareketler) - once == 1, [h.aciklama for h in hareketler]
+        assert float(hareketler[-1].alacak) == 2000.0
+

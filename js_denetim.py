@@ -308,6 +308,36 @@ else:
     print("   ✓ temiz — tüm onaylar sistem penceresinden geçiyor")
 
 print()
+print("─" * 70)
+print(" J5 · AYNI ADLA İKİ FONKSİYON   [SESSİZCE BAŞKA İŞ YAPAR]")
+print("─" * 70)
+# ÖLÇÜLDÜ: maliyet.html'e `dagitimOnizle` adında ikinci bir fonksiyon
+# eklendi. JavaScript ses çıkarmadı — SONRAKİ tanım öncekini ezdi ve
+# butonlar yanlış fonksiyonu çağırmaya başladı. Ekran "çalışıyor"
+# görünüyor, sadece hiçbir şey yapmıyordu. Tarayıcı bunu hata saymaz;
+# burada sayıyoruz.
+_j5 = 0
+for p5 in sorted(SABLON.glob('*.html')):
+    ham5 = p5.read_text(encoding='utf-8', errors='replace')
+    js5 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham5, re.S))
+    js5 = re.sub(r'/\*.*?\*/', ' ', js5, flags=re.S)
+    js5 = re.sub(r'(?m)//.*$', ' ', js5)
+    adlar = {}
+    for m5 in re.finditer(r'(?m)^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(', js5):
+        adlar[m5.group(1)] = adlar.get(m5.group(1), 0) + 1
+    tekrar = {a: n for a, n in adlar.items() if n > 1}
+    if tekrar:
+        _j5 += len(tekrar)
+        print(f"   ✗ {p5.name}: " + ', '.join(f'{a} ({n}×)' for a, n in sorted(tekrar.items())))
+if _j5:
+    print()
+    print("   → Aynı dosyada bir ad bir kez tanımlanmalı. Yenisine ayırt")
+    print("     edici bir ad verin; ikinci tanım öncekini sessizce ezer.")
+    bulgu += _j5
+else:
+    print("   ✓ temiz — her fonksiyon adı dosyasında bir kez tanımlı")
+
+print()
 print("═" * 70)
 if bulgu:
     print(f" ✗ {bulgu} şablonda JavaScript hatası ({betikli} şablon tarandı)")

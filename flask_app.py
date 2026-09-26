@@ -14009,6 +14009,254 @@ def create_app():
                         'net_tutar': net_tutar, 'kdv_tutar': kdv_tutar,
                         'satis_kaydi_guncel': sk_guncel, 'mesaj': msg})
 
+    # ══════════════════════════════════════════════════════════
+    #  MD1 · MALİYETİ ÇOK KAYDA ORANTILI DAĞITMA
+    #
+    #  Eskiden ekran, seçilen kayıtlara tutarı KAYIT SAYISINA
+    #  bölüyordu (tutar / adet) ve her pay için ayrı ayrı
+    #  /api/maliyet çağırıyordu. Ölçülen sonuç: aynı faturayla,
+    #  aynı fiyatla alınmış dört blokta
+    #
+    #      18,06 ton →  303,72 $/ton        6,42 ton →  441,24 $/ton
+    #      18,33 ton →  302,60 $/ton        6,69 ton →  432,63 $/ton
+    #
+    #  Navlun, gümrük, liman gideri AĞIRLIKLA ölçeklenir; eşit
+    #  bölünce küçük blok büyük bloğun navlununu sırtlıyor, ton
+    #  başına maliyet %45 sapıyordu. Kârlılık bu rakamdan besleniyor.
+    #
+    #  Sistemde DOĞRU dağıtım zaten vardı (`/api/maliyet/blok_dagilim`,
+    #  tonaj/m² oranıyla) — ama yalnızca TEK bloğun içindeki kayıtlar
+    #  için. Elle çoklu seçim o yoldan geçmiyordu; iki yol birbiriyle
+    #  çelişiyordu. Bu uç ikisini aynı kurala bağlar.
+    #
+    #  'esit' seçeneği KALDI: bazı giderler gerçekten parça başıdır
+    #  (blok başı sertifika, numune, analiz). Seçim kullanıcının,
+    #  ama varsayılan ORANTILI.
+    #
+    #  Ayrıca: eski yol her pay için AYRI cari hareket yazıyordu —
+    #  tek tedarikçi faturası cari ekranında N satıra bölünüyordu.
+    #  Burada cari hareketi BİR kez, faturanın tamamı için yazılır.
+    # ══════════════════════════════════════════════════════════
+    def _maliyet_dagitim_olcusu(hedefler):
+        """Seçilen stokların ortak dağıtım ölçüsünü bulur.
+
+        Döner: (olcu_f, olcu_notu, kayitlar) — kayitlar [(id, stok, tip)].
+        olcu_f None ise orantılı dağıtım YAPILAMAZ (çağıran eşite düşer).
+        """
+        kayitlar = []
+        for hid in hedefler:
+            for tip in ('BLOK', 'PLAKA', 'EBATLI'):
+                st = _stok_getir(hid, tip)
+                if st is not None:
+                    kayitlar.append((hid, st, tip))
+                    break
+            else:
+                kayitlar.append((hid, None, None))
+
+        bulunanlar = [k for k in kayitlar if k[1] is not None]
+        if not bulunanlar:
+            return None, 'stok kaydı bulunamadı', kayitlar
+        tipler = {k[2] for k in bulunanlar}
+
+        if tipler == {'BLOK'}:
+            # Blok TONLA alınır, tonla satılır. Tonajı olmayan blok
+            # varsa m³'e düşülür ve bu AÇIKÇA söylenir (F4 ile aynı kural).
+            if all((getattr(k[1], 'tonaj', 0) or 0) > 0 for k in bulunanlar):
+                return (lambda st: float(getattr(st, 'tonaj', 0) or 0)), 'tonaj (ton)', kayitlar
+            if all((getattr(k[1], 'hacim_m3', 0) or 0) > 0 for k in bulunanlar):
+                return ((lambda st: float(getattr(st, 'hacim_m3', 0) or 0)),
+                        'hacim (m³) — bloklardan bazılarında tonaj yok, '
+                        'tonaj girilirse dağıtım daha doğru olur', kayitlar)
+            return None, 'blokların ölçüsü (tonaj/m³) girilmemiş', kayitlar
+
+        if tipler <= {'PLAKA', 'EBATLI'}:
+            if all((getattr(k[1], 'metraj_m2', 0) or 0) > 0 for k in bulunanlar):
+                return (lambda st: float(getattr(st, 'metraj_m2', 0) or 0)), 'metraj (m²)', kayitlar
+            return None, 'kayıtların m² ölçüsü girilmemiş', kayitlar
+
+        # BLOK ile PLAKA ayni secimde: ton ile m2 kiyaslanamaz.
+        return None, 'seçimde hem blok hem plaka var — ton ile m² oranlanamaz', kayitlar
+
+    def _maliyet_dagitim_plani(hedefler, toplam_net, toplam_kdv, dagitim):
+        """Payları hesaplar. Döner: (satirlar, olcu_notu, kullanilan_dagitim).
+
+        Kuruş kalıntısı EN BÜYÜK paya eklenir — kaybolmaz ve oransal
+        olarak en az bozan yere gider.
+        """
+        olcu_f, olcu_notu, kayitlar = _maliyet_dagitim_olcusu(hedefler)
+        kullanilan = dagitim
+        if dagitim == 'oransal' and olcu_f is None:
+            kullanilan = 'esit'
+            olcu_notu = f'orantılı dağıtılamadı ({olcu_notu}) — eşit bölündü'
+
+        n = len(hedefler)
+        if kullanilan == 'esit' or olcu_f is None:
+            oranlar = [1.0 / n] * n
+            if kullanilan == 'esit' and dagitim == 'esit':
+                olcu_notu = 'eşit bölündü (kayıt başına)'
+            miktarlar = [None] * n
+        else:
+            miktarlar = [(olcu_f(k[1]) if k[1] is not None else 0.0) for k in kayitlar]
+            toplam_olcu = sum(miktarlar)
+            if toplam_olcu <= 0:
+                oranlar = [1.0 / n] * n
+                kullanilan = 'esit'
+                olcu_notu = 'ölçü toplamı sıfır — eşit bölündü'
+            else:
+                oranlar = [m / toplam_olcu for m in miktarlar]
+
+        satirlar = []
+        for (hid, st, tip), oran, miktar in zip(kayitlar, oranlar, miktarlar):
+            satirlar.append({
+                'id': hid, 'tip': tip or '?',
+                'ad': (f'{getattr(st, "cins", "") or ""} '
+                       f'{getattr(st, "blok_no", None) or getattr(st, "kasa_no", "") or ""}'
+                       ).strip() or hid,
+                'miktar': q2(miktar) if miktar is not None else None,
+                'oran': q_oran(oran * 100),
+                'net_pay': q2(toplam_net * oran),
+                'kdv_pay': q2(toplam_kdv * oran) if toplam_kdv > 0 else 0.0,
+                'bulunamadi': st is None,
+            })
+        # Kurus kalintisi
+        for alan, toplam in (('net_pay', toplam_net), ('kdv_pay', toplam_kdv)):
+            fark = q2(toplam - sum(x[alan] for x in satirlar))
+            if abs(fark) >= 0.01 and satirlar:
+                en_buyuk = max(satirlar, key=lambda x: x[alan])
+                en_buyuk[alan] = q2(en_buyuk[alan] + fark)
+        return satirlar, olcu_notu, kullanilan
+
+    @app.route('/api/maliyet/dagit', methods=['POST'])
+    def api_maliyet_dagit():
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        data = request.get_json(silent=True) or {}
+        hedefler = [str(h).strip() for h in (data.get('hedefler') or []) if str(h).strip()]
+        maliyet_tip = data.get('maliyet_tip')
+        baglanti_tip = (data.get('baglanti_tip') or 'stok').strip().lower()
+        doviz = data.get('doviz', 'USD')
+        dagitim = 'esit' if (data.get('dagitim') == 'esit') else 'oransal'
+        onizleme = bool(data.get('onizleme'))
+        fatura_no = (data.get('fatura_no') or '').strip()
+        cari_id = data.get('cari_id') or None
+        kdv_dahil_mi = bool(data.get('kdv_dahil_mi', False))
+        kdv_oran = float(data.get('kdv_oran', 0) or 0)
+        try:
+            tutar_ham = float(data.get('tutar', 0) or 0)
+        except (TypeError, ValueError):
+            tutar_ham = 0.0
+
+        if not hedefler:
+            return jsonify({'ok': False, 'mesaj': 'En az bir kayıt seçilmeli'}), 400
+        if not maliyet_tip:
+            return jsonify({'ok': False, 'mesaj': 'Maliyet tipi zorunlu'}), 400
+        if tutar_ham <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Geçerli bir tutar girin'}), 400
+        if len(hedefler) > 500:
+            return jsonify({'ok': False,
+                'mesaj': f'Tek seferde en çok 500 kayda dağıtılır (seçilen: {len(hedefler)})'}), 400
+
+        if kdv_dahil_mi and kdv_oran > 0:
+            toplam_net = q2(tutar_ham / (1 + kdv_oran / 100))
+            toplam_kdv = q2(tutar_ham - toplam_net)
+        elif not kdv_dahil_mi and kdv_oran > 0:
+            toplam_net = tutar_ham
+            toplam_kdv = q2(tutar_ham * kdv_oran / 100)
+        else:
+            toplam_net = tutar_ham
+            toplam_kdv = 0.0
+
+        satirlar, olcu_notu, kullanilan = _maliyet_dagitim_plani(
+            hedefler, toplam_net, toplam_kdv, dagitim)
+
+        if onizleme:
+            return jsonify({'ok': True, 'onizleme': True, 'satirlar': satirlar,
+                            'dagitim': kullanilan, 'olcu_notu': olcu_notu,
+                            'toplam_net': toplam_net, 'toplam_kdv': toplam_kdv})
+
+        eksik = [x['id'] for x in satirlar if x['bulunamadi']]
+        if eksik and baglanti_tip == 'stok':
+            return jsonify({'ok': False, 'error': 'stok_bulunamadi',
+                'mesaj': f'{len(eksik)} kayıt bulunamadı ({", ".join(eksik[:5])}). '
+                         f'Hiçbiri yazılmadı.'}), 400
+
+        kullanici = session.get('kullanici') or 'sistem'
+        grup_id = _yeni_id('MGR')
+        try:
+            ilk_id = None
+            for x in satirlar:
+                if x['net_pay'] <= 0 and x['kdv_pay'] <= 0:
+                    continue
+                aciklama = (f'{maliyet_tip} — {len(satirlar)} kayda '
+                            + ('orantılı' if kullanilan == 'oransal' else 'eşit')
+                            + f' dağıtıldı ({olcu_notu})')
+                m = Maliyet(id=_okunur_id('MYT', Maliyet, basamak=4),
+                            maliyet_tip=maliyet_tip, baglanti_tip=baglanti_tip,
+                            baglanti_id=x['id'], tutar=x['net_pay'], doviz=doviz,
+                            usd_karsilik=_usd_cevrim(x['net_pay'], doviz),
+                            fatura_no=fatura_no, aciklama=aciklama,
+                            grup_id=grup_id,
+                            toplam_miktar=x['miktar'], kullanici=kullanici)
+                db.session.add(m)
+                db.session.flush()
+                if ilk_id is None:
+                    ilk_id = m.id
+                if x['kdv_pay'] > 0:
+                    db.session.add(Maliyet(
+                        id=_okunur_id('MYT', Maliyet, basamak=4),
+                        maliyet_tip='Devreden KDV', baglanti_tip=baglanti_tip,
+                        baglanti_id=x['id'], tutar=x['kdv_pay'], doviz=doviz,
+                        usd_karsilik=_usd_cevrim(x['kdv_pay'], doviz),
+                        fatura_no=fatura_no, grup_id=grup_id,
+                        aciklama=f'KDV %{kdv_oran} — {maliyet_tip} '
+                                 f'({fatura_no or "belgesiz"})',
+                        kullanici=kullanici))
+
+            # ── CARİ HAREKET: FATURA BAŞINA BİR KEZ ──
+            # Eski yol her pay icin ayri hareket yaziyordu; tek
+            # tedarikci faturasi cari ekraninda N satira boluniyordu.
+            if cari_id:
+                cari = Cari.query.get(cari_id)
+                if cari:
+                    toplam_fatura = q2(toplam_net + toplam_kdv)
+                    _kur = DovizKur.query.filter_by(doviz='USD').order_by(
+                        DovizKur.tarih.desc()).first()
+                    db.session.add(CariHareket(
+                        id=_yeni_id('HR'), hareket_tarihi=date.today(),
+                        cari_id=cari_id, cari_unvan=cari.unvan,
+                        islem_tip='Nakliye/Gider Faturası',
+                        aciklama=f'{maliyet_tip} — {len(satirlar)} kayda dağıtıldı '
+                                 f'({fatura_no or "belgesiz"})',
+                        borc=0, alacak=toplam_fatura,
+                        alacak_try=(_usd_cevrim(toplam_fatura, doviz)
+                                    * (float(_kur.efektif) if (_kur and doviz != 'TRY') else 1)),
+                        doviz=doviz, kur_uygulanan=1.0, evrak_no=fatura_no,
+                        baglanti_tip='maliyet', baglanti_id=ilk_id,
+                        kaynak='maliyet', kullanici=kullanici))
+
+            sk_guncel = _satis_kaydi_maliyet_guncelle([x['id'] for x in satirlar])
+            for x in satirlar:
+                if str(x['id']).startswith('BLK'):
+                    _kesilmis_blok_maliyet_yeniden_dagit(x['id'])
+            _log_audit('EKLE', 'maliyet', grup_id, yeni={
+                'maliyet_tip': maliyet_tip, 'tutar': tutar_ham, 'doviz': doviz,
+                'hedef_sayisi': len(satirlar), 'dagitim': kullanilan},
+                aciklama=f'{len(satirlar)} kayda {kullanilan} dağıtım ({olcu_notu})')
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            app.logger.exception('Maliyet dagitimi basarisiz')
+            return jsonify({'ok': False, 'error': 'yazma_hatasi',
+                'mesaj': f'Kayıt sırasında hata, HİÇBİRİ yazılmadı: {e}'}), 500
+
+        return jsonify({'ok': True, 'grup_id': grup_id, 'adet': len(satirlar),
+                        'dagitim': kullanilan, 'olcu_notu': olcu_notu,
+                        'toplam_net': toplam_net, 'toplam_kdv': toplam_kdv,
+                        'satis_kaydi_guncel': sk_guncel,
+                        'mesaj': f'{len(satirlar)} kayda '
+                                 + ('orantılı' if kullanilan == 'oransal' else 'eşit')
+                                 + f' dağıtıldı ({olcu_notu})'
+                                 + (' — cari alacak kaydı oluşturuldu' if cari_id else '')})
+
     @app.route('/api/maliyet/<maliyet_id>', methods=['PUT'])
     def api_maliyet_guncelle(maliyet_id):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
