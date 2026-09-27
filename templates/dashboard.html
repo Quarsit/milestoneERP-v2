@@ -1,6 +1,62 @@
 {% extends "base.html" %}
 {% block title %}Bugün{% endblock %}
 
+{% block head %}
+<style>
+  /* ═══ BG1 · BUGÜN SAYFASI ═══
+     Üç kademe: büyük kutular kararı, küçükler durumu, şerit
+     önümüzdeki parayı gösterir. Boyut farkı bilinçli — eşit
+     boyda on bir kutu göze bakacak yer bırakmıyor. */
+  .bg-buyuk{grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+  .bg-buyuk .deger{font-size:1.72rem}
+  .bg-kucuk{grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px}
+  .bg-kucuk .kpi{padding:10px 13px}
+  .bg-kucuk label{font-size:.63rem;letter-spacing:.04em}
+  .bg-kucuk .deger{font-size:1.16rem;line-height:1.15}
+  .bg-kucuk .deger small{font-size:.7em}
+  .bg-kucuk .ek{font-size:.68rem;margin-top:2px}
+  .kpi[data-git]{transition:border-color .15s,transform .15s}
+  .kpi[data-git]:hover{border-color:var(--verde)}
+
+  .bg-serit{display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:22px}
+  .bg-kutu{background:var(--yuzey);border:1px solid var(--cizgi);
+    border-radius:var(--r);padding:14px 16px}
+  .bg-kutu-bas{display:flex;align-items:baseline;gap:9px;margin-bottom:10px}
+  .bg-kutu-bas h3{font-size:.92rem;margin:0}
+  .bg-kutu-bas .ozet{margin-left:auto;font-size:.74rem;color:var(--soluk)}
+
+  .merdiven-satir{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+  .md-etiket{font-size:.76rem;color:var(--soluk);width:48px;flex:none}
+  .md-cubuklar{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .md-cubuk{height:7px;border-radius:4px;min-width:2px}
+  .md-giren{background:var(--verde)}
+  .md-cikan{background:var(--kehribar)}
+  .md-net{font-family:var(--mono);font-size:.78rem;font-weight:600;
+    width:96px;text-align:right;flex:none}
+  .md-net.iyi{color:var(--verde)} .md-net.kotu{color:var(--kirmizi)}
+  .md-aciklama{display:flex;align-items:center;gap:5px;margin-top:9px;
+    font-size:.72rem;color:var(--soluk)}
+  .md-nokta{width:9px;height:9px;border-radius:3px;display:inline-block}
+  .md-aciklama .md-nokta:nth-of-type(2){margin-left:10px}
+
+  .avans-buyuk{font-family:var(--baslik);font-weight:800;font-size:1.5rem;
+    letter-spacing:-.02em}
+  .avans-alt{font-size:.76rem;color:var(--soluk);margin-top:2px}
+  .avans-uyari{margin-top:8px;font-size:.76rem;color:var(--kehribar);font-weight:600}
+
+  /* Dar ekran: önce şerit tek sütuna, sonra kutular 2'şerli.
+     1180 altında dört küçük kutu yan yana okunmuyordu. */
+  @media(max-width:1180px){
+    .bg-serit{grid-template-columns:1fr}
+    .bg-kucuk{grid-template-columns:repeat(3,1fr)}
+  }
+  @media(max-width:900px){
+    .bg-buyuk{grid-template-columns:repeat(2,1fr)}
+    .bg-kucuk{grid-template-columns:repeat(2,1fr)}
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1 class="g-baslik" id="selam">Merhaba</h1>
 <p class="g-alt" id="ozetSatir">Gün özeti hazırlanıyor…</p>
@@ -9,11 +65,61 @@
   <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
 </svg>
 
-<div class="kpiler" id="kpiler">
-  <div class="kpi"><label>Bu Ay Ciro</label><div class="deger"><span class="iskelet" style="display:block;width:100px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
-  <div class="kpi"><label>Açık Sipariş</label><div class="deger"><span class="iskelet" style="display:block;width:60px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
-  <div class="kpi"><label>Stok Değeri</label><div class="deger"><span class="iskelet" style="display:block;width:100px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
-  <div class="kpi"><label>Vadesi Geçen</label><div class="deger"><span class="iskelet" style="display:block;width:100px;height:22px"></span></div><div class="ek">yükleniyor</div></div>
+<!-- ═══ BG1 · ÜÇ KADEME ═══
+     Üstte karar değiştiren 4 büyük kutu, altında 8 küçük durum
+     kutusu, en altta aksiyon listeleri. On bir kutuyu eşit boyda
+     dizmek göze bakacak yer bırakmıyordu: her şey aynı ağırlıkta
+     olunca hiçbiri öne çıkmaz. -->
+<div class="kpiler bg-buyuk" id="kpiBuyuk">
+  <div class="kpi" data-git="/satislar">
+    <label>Yıllık Satış Cirosu</label>
+    <div class="deger" id="bYilCiro"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
+    <div class="ek" id="bYilCiroEk">yükleniyor</div>
+  </div>
+  <div class="kpi" data-git="/siparis">
+    <label>Açık Siparişler</label>
+    <div class="deger" id="bAcik"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
+    <div class="ek" id="bAcikEk">yükleniyor</div>
+  </div>
+  <div class="kpi" data-git="/cari">
+    <label>Vadesi Geçen Alacaklar</label>
+    <div class="deger" id="bGecen"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
+    <div class="ek" id="bGecenEk">yükleniyor</div>
+  </div>
+  <div class="kpi" data-git="/nakit">
+    <!-- 30 GÜN, "bu ay" DEĞİL.
+         Ayın son haftasında "bu ay" penceresi neredeyse boş kalıyor
+         ve büyük kutu her ay birkaç gün 0 gösteriyordu — ölü kutu.
+         30 günlük pencere her gün anlamlı. "Bu ay" rakamları
+         aşağıdaki iki küçük kutuda duruyor. -->
+    <label>30 Günlük Net Nakit</label>
+    <div class="deger" id="bNakit"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
+    <div class="ek" id="bNakitEk">yükleniyor</div>
+  </div>
+</div>
+
+<div class="kpiler bg-kucuk" id="kpiKucuk">
+  <div class="kpi" data-git="/satislar"><label>Bu Ayki Ciro</label><div class="deger" id="bAyCiro">—</div><div class="ek" id="bAyCiroEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/sevkiyat"><label>Yüklenen Sipariş</label><div class="deger" id="bYuklenen">—</div><div class="ek" id="bYuklenenEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/stok"><label>Toplam Stok</label><div class="deger" id="bStok">—</div><div class="ek" id="bStokEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/cari"><label>Toplam Alacaklar</label><div class="deger" id="bAlacak">—</div><div class="ek" id="bAlacakEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/cari"><label>Toplam Borçlar</label><div class="deger" id="bBorc">—</div><div class="ek" id="bBorcEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/nakit"><label>Bu Ay Beklenen Tahsilat</label><div class="deger" id="bTahsilat">—</div><div class="ek" id="bTahsilatEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/nakit"><label>Bu Ay Ödenecek</label><div class="deger" id="bOdenecek">—</div><div class="ek" id="bOdenecekEk">yükleniyor</div></div>
+  <div class="kpi" data-git="/cek"><label>Vadesi Yaklaşan Çekler</label><div class="deger" id="bCek">—</div><div class="ek" id="bCekEk">yükleniyor</div></div>
+</div>
+
+<!-- Açık avanslar + nakit merdiveni: ikisi de "önümüzdeki para"
+     sorusuna bakıyor, yan yana duruyorlar. -->
+<div class="bg-serit" id="bgSerit">
+  <div class="bg-kutu" id="bgMerdivenKutu">
+    <div class="bg-kutu-bas"><h3>Nakit merdiveni</h3><span class="ozet">önümüzdeki 90 gün</span></div>
+    <div id="bgMerdiven"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+  <div class="bg-kutu" id="bgAvansKutu">
+    <div class="bg-kutu-bas"><h3>Açık avanslar</h3><span class="ozet" id="ozAvans">—</span></div>
+    <div id="bgAvans"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
 </div>
 
 <div class="dikkat-izgara">
@@ -60,66 +166,165 @@ function selamla() {
   document.getElementById('selam').textContent = g + (k ? ', ' + k : '');
 }
 
-/* ── KPI şeridi ── */
-async function kpiYukle() {
-  const kutular = document.querySelectorAll('#kpiler .kpi');
-  const yaz = (i, deger, ek, sinif = '') => {
-    kutular[i].querySelector('.deger').innerHTML = deger;
-    const e = kutular[i].querySelector('.ek');
-    e.textContent = ek; e.className = 'ek ' + sinif;
-  };
-  // Ciro + kâr
-  if (gorunur('karlilik') || gorunur('satislar')) {
-    try {
-      const d = await api('/api/dashboard/satis_istatistik');
-      const ay = d.bu_ay || {};
-      const aylik = d.aylik || [];
-      const oncekiAy = aylik.length > 1 ? aylik[aylik.length - 2].satis_usd : 0;
-      const fark = oncekiAy > 0 ? Math.round(((ay.satis || 0) - oncekiAy) / oncekiAy * 100) : null;
-      yaz(0, para(ay.satis || 0).replace(' $', '<small>$</small>'),
-          (ay.adet || 0) + ' satış · kâr ' + para(ay.kar || 0),
-          fark === null ? '' : (fark >= 0 ? 'iyi' : 'kotu'));
-      if (fark !== null) kutular[0].querySelector('.ek').textContent =
-        (fark >= 0 ? '▲ %' : '▼ %') + Math.abs(fark) + ' geçen aya göre · kâr ' + para(ay.kar || 0);
-    } catch (e) { yaz(0, '—', 'veri alınamadı'); }
-  } else yaz(0, '—', 'yetki yok');
+/* ── BG1 · TEK ÇAĞRI, ÜÇ KADEME ──
+   Sayfa eskiden altı ayrı uca istek atıp rakamları burada topluyordu;
+   aynı rakam (stok, ciro) iki ekranda iki farklı formülle çıkıyordu.
+   Artık tek uç: /api/dashboard/ozet. Yetkisi olmayan bölüm cevapta
+   HİÇ GELMEZ; kutu "yetki yok" der, sayfa çökmez. */
+let OZET = null;
 
-  // Açık sipariş
-  if (gorunur('siparis')) {
-    try {
-      const d = await api('/api/siparis?per_page=300');
-      const acik = (d.data || []).filter(s => !['Teslim Edildi', 'Iptal Edildi'].includes(s.durum));
-      const toplam = acik.reduce((a, s) => a + (s.toplam_tutar || 0), 0);
-      yaz(1, String(acik.length), para(toplam) + ' tutarında');
-    } catch (e) { yaz(1, '—', 'veri alınamadı'); }
-  } else yaz(1, '—', 'yetki yok');
+const yazKutu = (id, deger, ek, sinif = '') => {
+  const d = document.getElementById(id);
+  if (d) d.innerHTML = deger;
+  const e = document.getElementById(id + 'Ek');
+  if (e) { e.textContent = ek; e.className = 'ek ' + sinif; }
+};
 
-  // Stok değeri
-  if (gorunur('stok') || gorunur('raporlar')) {
-    try {
-      const d = await api('/api/rapor/stok_durum');
-      const t = d.tip_ozet || {};
-      const parca = Object.keys(t).map(k => t[k].adet + ' ' + k.toLowerCase()).join(' · ');
-      /* F5: pano göstergesi DEPODAKİ değeri yazar. Eskiden sevk edilmiş
-         ama varmamış mal da bu rakamın içindeydi; pano depoda olmayan
-         malı depoda sayıyordu. Yoldaki mal varsa alt satırda ayrı yazar. */
-      const depoDeger = (d.depo_deger_usd != null) ? d.depo_deger_usd : d.toplam_deger_usd;
-      const yolda = d.yolda_adedi || 0;
-      const altSatir = (parca || 'stok yok')
-        + (yolda ? ` · yolda ${para(d.yolda_deger_usd || 0)}` : '');
-      yaz(2, para(depoDeger || 0).replace(' $', '<small>$</small>'), altSatir);
-    } catch (e) { yaz(2, '—', 'veri alınamadı'); }
-  } else yaz(2, '—', 'yetki yok');
+/* Kutunun altına döviz kırılımı: "₺ 166.896 · € 15.000".
+   Tek USD rakamı, TL borcu olan bir carinin gerçeğini gizliyordu. */
+function kirilimMetni(k) {
+  if (!k) return '';
+  const kodlar = Object.keys(k);
+  /* Her şey zaten USD ise kırılım yazmak ana rakamı tekrar etmektir.
+     Kırılım yalnızca BİRDEN ÇOK döviz varsa ya da tek döviz USD
+     DEĞİLSE anlamlı. */
+  if (!kodlar.length || (kodlar.length === 1 && kodlar[0] === 'USD')) return '';
+  const sira = ['USD', 'EUR', 'TRY'];
+  return kodlar.sort((a, b) => sira.indexOf(a) - sira.indexOf(b))
+    .map(x => para2(k[x], x)).join(' · ');
+}
+
+const parayaCevir = v => para(v || 0).replace(' $', '<small>$</small>');
+
+async function ozetYukle() {
+  try {
+    OZET = await api('/api/dashboard/ozet');
+  } catch (e) {
+    ['bYilCiro','bAcik','bGecen','bNakit'].forEach(x => yazKutu(x, '—', 'veri alınamadı'));
+    return;
+  }
+  const d = OZET;
+
+  /* ── 1. KADEME: karar değiştiren dört kutu ── */
+  if (d.ciro) {
+    const c = d.ciro;
+    yazKutu('bYilCiro', parayaCevir(c.yillik),
+      `${c.yil} · kâr ${para(c.yillik_kar)} · marj %${(c.yillik_marj || 0).toLocaleString('tr-TR', {maximumFractionDigits: 1})}`,
+      (c.yillik_kar || 0) >= 0 ? 'iyi' : 'kotu');
+    /* Geçen yılın aynı dönemiyle kıyas: tek rakam bir şey söylemiyor,
+       kıyas söylüyor. Geçen yıl veri yoksa satır hiç yazılmaz. */
+    if (c.gecen_yila_gore != null) {
+      const y = c.gecen_yila_gore;
+      const e = document.getElementById('bYilCiroEk');
+      if (e) e.textContent += ` · geçen yıl ${y > 0 ? '↑' : '↓'}%${Math.abs(y).toLocaleString('tr-TR', {maximumFractionDigits: 0})}`;
+    }
+    yazKutu('bAyCiro', parayaCevir(c.aylik), `bu ay · kâr ${para(c.aylik_kar)}`);
+  } else {
+    yazKutu('bYilCiro', '—', 'yetki yok');
+    yazKutu('bAyCiro', '—', 'yetki yok');
+  }
+
+  if (d.acik_siparis) {
+    yazKutu('bAcik', parayaCevir(d.acik_siparis.tutar),
+      `${d.acik_siparis.adet} sipariş` + (kirilimMetni(d.acik_siparis.kirilim) ? ' · ' + kirilimMetni(d.acik_siparis.kirilim) : ''));
+    yazKutu('bYuklenen', parayaCevir(d.yuklenen.tutar),
+      `${d.ciro ? d.ciro.yil : 'bu yıl'} · ${d.yuklenen.adet} sipariş`);
+  } else {
+    yazKutu('bAcik', '—', 'yetki yok');
+    yazKutu('bYuklenen', '—', 'yetki yok');
+  }
+
+  if (d.vadesi_gecen) {
+    const g = d.vadesi_gecen;
+    yazKutu('bGecen', parayaCevir(g.tutar),
+      g.adet ? `${g.adet} kayıt` + (kirilimMetni(g.kirilim) ? ' · ' + kirilimMetni(g.kirilim) : '')
+             : 'gecikme yok', g.tutar > 0 ? 'kotu' : 'iyi');
+    /* Bu ay net nakit = beklenen tahsilat − ödenecek. İki ayrı sayıyı
+       kafada çıkarmak zorunda kalmayalım; asıl soru "ay sonunda
+       elimde para kalıyor mu". */
+    const otuz = (d.nakit_merdiveni || [])[0] || { giren: 0, cikan: 0, net: 0 };
+    yazKutu('bNakit', (otuz.net >= 0 ? '' : '−') + parayaCevir(Math.abs(otuz.net)),
+      `girecek ${para(otuz.giren)} · çıkacak ${para(otuz.cikan)}`,
+      otuz.net >= 0 ? 'iyi' : 'kotu');
+    yazKutu('bAlacak', parayaCevir(d.alacak.tutar), kirilimMetni(d.alacak.kirilim) || 'müşteri borçları');
+    yazKutu('bBorc', parayaCevir(d.borc.tutar), kirilimMetni(d.borc.kirilim) || 'tedarikçi borçları');
+    yazKutu('bTahsilat', parayaCevir(d.bu_ay_tahsilat.tutar), `${d.bu_ay_tahsilat.adet} kayıt · ay sonuna kadar`);
+    yazKutu('bOdenecek', parayaCevir(d.bu_ay_odenecek.tutar), `${d.bu_ay_odenecek.adet} kayıt · ay sonuna kadar`);
+  } else {
+    ['bGecen','bNakit','bAlacak','bBorc','bTahsilat','bOdenecek']
+      .forEach(x => yazKutu(x, '—', 'yetki yok'));
+  }
+
+  if (d.stok) {
+    yazKutu('bStok', parayaCevir(d.stok.tutar),
+      `${d.stok.adet} kayıt depoda` + (d.stok.yolda_adet ? ` · yolda ${para(d.stok.yolda)}` : ''));
+  } else yazKutu('bStok', '—', 'yetki yok');
+
+  if (d.yaklasan_cek) {
+    yazKutu('bCek', parayaCevir(d.yaklasan_cek.tutar),
+      d.yaklasan_cek.adet ? `${d.yaklasan_cek.adet} çek · 30 gün içinde` : 'yaklaşan çek yok');
+  } else yazKutu('bCek', '—', 'yetki yok');
+
+  merdiveniCiz();
+  avansCiz();
+}
+
+/* ── Nakit merdiveni: 30 / 60 / 90 gün ── */
+function merdiveniCiz() {
+  const kok = document.getElementById('bgMerdiven');
+  const kutu = document.getElementById('bgMerdivenKutu');
+  if (!kok) return;
+  const m = OZET && OZET.nakit_merdiveni;
+  if (!m) { if (kutu) kutu.style.display = 'none'; return; }
+  /* Çubuk genişliği en büyük harekete göre ölçeklenir; sütunlar
+     birbiriyle kıyaslanabilir olsun diye giren ve çıkan AYNI
+     ölçeği paylaşır. */
+  const enBuyuk = Math.max(1, ...m.map(x => Math.max(x.giren || 0, x.cikan || 0)));
+  kok.innerHTML = m.map(x => `
+    <div class="merdiven-satir">
+      <span class="md-etiket">${kacar(x.etiket)}</span>
+      <div class="md-cubuklar">
+        <div class="md-cubuk md-giren" style="width:${Math.round((x.giren || 0) / enBuyuk * 100)}%"></div>
+        <div class="md-cubuk md-cikan" style="width:${Math.round((x.cikan || 0) / enBuyuk * 100)}%"></div>
+      </div>
+      <span class="md-net ${x.net >= 0 ? 'iyi' : 'kotu'}">${x.net >= 0 ? '+' : '−'}${para(Math.abs(x.net))}</span>
+    </div>`).join('')
+    + '<div class="md-aciklama"><span class="md-nokta md-giren"></span> girecek'
+    + '<span class="md-nokta md-cikan"></span> çıkacak</div>';
+}
+
+/* ── Açık avanslar ── */
+function avansCiz() {
+  const kok = document.getElementById('bgAvans');
+  const kutu = document.getElementById('bgAvansKutu');
+  const oz = document.getElementById('ozAvans');
+  if (!kok) return;
+  const a = OZET && OZET.acik_avans;
+  if (!a) { if (kutu) kutu.style.display = 'none'; return; }
+  if (oz) oz.textContent = a.adet ? `${a.adet} kayıt` : '';
+  if (!a.adet) { kok.innerHTML = bosMesaj('Açık avans yok.'); return; }
+  /* Siparişe bağlanmamış avans ayrıca vurgulanır: sipariş bazlı
+     takip ve devir o bağdan çalışıyor, bağsız avans görünmez
+     bir yükümlülük olarak kalıyor. */
+  kok.innerHTML = `
+    <div class="avans-buyuk">${parayaCevir(a.tutar)}</div>
+    <div class="avans-alt">${kacar(kirilimMetni(a.kirilim) || '')}</div>`
+    + (a.siparissiz
+        ? `<div class="avans-uyari">⚠ ${a.siparissiz} avans hiçbir siparişe bağlı değil</div>`
+        : '<div class="avans-alt">hepsi bir siparişe bağlı</div>');
 }
 
 /* ── Vadesi geçen alacaklar ── */
 async function alacakYukle() {
   const kok = document.getElementById('lAlacak');
   const ozet = document.getElementById('ozAlacak');
-  const kpi = document.querySelectorAll('#kpiler .kpi')[3];
+  /* BG1: "Vadesi geçen" kutusunu artık ozetYukle() yazıyor.
+     Burada da yazılıyordu — aynı rakamın İKİ kaynağı vardı ve bu
+     fonksiyon `#kpiler` şeridini arıyordu. Şerit yeniden
+     adlandırılınca sessizce hata veriyor, liste "veri alınamadı"
+     diyordu. Tek yazan kaldı. */
   if (!gorunur('raporlar') && !gorunur('cari')) {
     kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = '';
-    kpi.querySelector('.deger').textContent = '—'; kpi.querySelector('.ek').textContent = 'yetki yok';
     return;
   }
   try {
@@ -140,9 +345,10 @@ async function alacakYukle() {
       .sort((a, b) => b.gecen_usd - a.gecen_usd);
 
     const toplam = gecikmis.reduce((a, c) => a + c.gecen_usd, 0);
-    kpi.querySelector('.deger').innerHTML = para(toplam).replace(' $', '<small>$</small>');
-    kpi.querySelector('.ek').textContent = gecikmis.length + ' cari gecikmede';
-    kpi.querySelector('.ek').className = 'ek ' + (toplam > 0 ? 'kotu' : '');
+    /* Kutu ozetYukle()'den geliyor; buradaki sayı YALNIZCA liste
+       başlığındaki özet için kullanılır. */
+    const gecEk = document.getElementById('bGecenEk');
+    if (gecEk && gecikmis.length) gecEk.textContent = gecikmis.length + ' cari gecikmede';
     ozet.textContent = gecikmis.length + ' cari · ' + para(toplam);
 
     if (!gecikmis.length) { kok.innerHTML = bosMesaj('Vadesi geçen alacak yok. Tahsilatlar güncel.'); return; }
@@ -256,7 +462,19 @@ function ozetYaz() {
     : 'Bekleyen iş yok — her şey güncel. İyi bir gün.';
 }
 
+/* KUTULAR TIKLANIR. Rakamı görüp "peki detayı nerede" diye
+   menüde aramak gereksiz bir adımdı; kutu zaten o ekranı işaret
+   ediyor. Yetkisi olmayan kutu tıklanmaz. */
+document.querySelectorAll('.kpi[data-git]').forEach(k => {
+  const yol = k.dataset.git;
+  const modul = yol.replace('/', '');
+  if (!gorunur(modul === 'cek' ? 'kasa' : modul)) return;
+  k.style.cursor = 'pointer';
+  k.title = 'Aç: ' + yol.replace('/', '');
+  k.onclick = () => { window.location.href = yol; };
+});
+
 selamla();
-Promise.all([kpiYukle(), alacakYukle(), cekYukle(), siparisYukle(), sevkYukle()]).then(ozetYaz);
+Promise.all([ozetYukle(), alacakYukle(), cekYukle(), siparisYukle(), sevkYukle()]).then(ozetYaz);
 </script>
 {% endblock %}

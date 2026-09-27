@@ -18214,6 +18214,278 @@ def create_app():
         })
 
 
+    # ══════════════════════════════════════════════════════════
+    #  BUGÜN SAYFASI ÖZETİ  (BG1)
+    #
+    #  Sayfa eskiden altı ayrı uca istek atıp rakamları tarayıcıda
+    #  topluyordu. İki sorunu vardı: her ekran açılışında altı sorgu,
+    #  ve aynı rakam (stok değeri, ciro) iki ekranda iki farklı
+    #  formülle hesaplanıyordu. Artık tek uç, tek hesap.
+    #
+    #  TÜM TUTARLAR USD. On bir kutu aynı birimde olmazsa toplanamaz;
+    #  yanında döviz kırılımı da döner (TL borç ile USD alacağı aynı
+    #  satırda göstermek yanıltıcı olurdu).
+    #
+    #  CİRO KAYNAĞI: SatisKaydi. Hem teslimde hem faturada oluşur,
+    #  maliyeti ve kârı taşır — kârlılık modülüyle aynı rakamı verir.
+    #  Fatura bazlı saymak, henüz faturalanmamış teslimatları yok
+    #  sayardı.
+    # ══════════════════════════════════════════════════════════
+    def _bg_kur_tablosu():
+        """Bugün sayfası için kurları BİR KEZ okur.
+
+        Ölçüldü: `_usd_cevrim` her çağrıda kur sorgusu atıyor. 280
+        stok + 30 hareket = 300+ sorgu ve sayfa 1,8 saniyede açılıyordu.
+        Kur gün içinde değişmediğine göre bir kez okunup elde tutulur;
+        aynı istek içindeki her çevrim aynı kuru kullanır — hem hızlı
+        hem TUTARLI (satır satır farklı kur kullanılması, toplamların
+        parçalarıyla uyuşmamasına yol açardı).
+        """
+        tablo = {'USD': 1.0}
+        usd = float(_kur_getir('USD') or 0) or float(_en_yakin_kur('USD') or 0)
+        if usd <= 0:
+            app.logger.warning('[BG1] USD kuru yok — tutarlar çevrilmeden toplanıyor')
+            return None
+        tablo['TRY'] = 1.0 / usd
+        for dv in ('EUR', 'GBP'):
+            k = float(_kur_getir(dv) or 0) or float(_en_yakin_kur(dv) or 0)
+            if k > 0:
+                tablo[dv] = k / usd
+        return tablo
+
+    def _bg_doviz_kirilim(satirlar):
+        """[(tutar, doviz)] → {'USD': x, 'EUR': y, 'TRY': z} (boşlar atılır)"""
+        kirilim = {}
+        for tutar, dv in satirlar:
+            t = float(tutar or 0)
+            if not t:
+                continue
+            k = (dv or 'USD').upper()
+            kirilim[k] = kirilim.get(k, 0.0) + t
+        return {k: q2(v) for k, v in kirilim.items() if abs(v) >= 0.01}
+
+    @app.route('/api/dashboard/ozet', methods=['GET'])
+    def api_dashboard_ozet():
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        bugun = date.today()
+        yil_bas = date(bugun.year, 1, 1)
+        ay_bas = date(bugun.year, bugun.month, 1)
+        gecen_yil_bas = date(bugun.year - 1, 1, 1)
+        gecen_yil_ayni = date(bugun.year - 1, bugun.month, bugun.day) \
+            if not (bugun.month == 2 and bugun.day == 29) else date(bugun.year - 1, 2, 28)
+        ay_son = (date(bugun.year + (bugun.month == 12), (bugun.month % 12) + 1, 1)
+                  - timedelta(days=1))
+
+        def yetki(m):
+            return _yetki_var_mi(m, 'okuma')
+
+        _kur_tab = _bg_kur_tablosu()
+
+        def _bg_usd(tutar, doviz):
+            """Onbellekli USD cevrimi. Kur tablosu kurulamadiysa
+            tutar OLDUGU GIBI doner — sifir yazmak rakami yok ederdi."""
+            t = float(tutar or 0)
+            if not t:
+                return 0.0
+            if not _kur_tab:
+                return t
+            return t * _kur_tab.get((doviz or 'USD').upper(), 1.0)
+
+        cevap = {'ok': True, 'tarih': bugun.isoformat()}
+
+        # ── 1) CİRO · KÂR · MARJ (satış kayıtlarından) ──
+        if yetki('karlilik') or yetki('satislar'):
+            def _satis_topla(bas, bit):
+                sorgu = SatisKaydi.query.filter(
+                    SatisKaydi.satis_tarihi >= bas, SatisKaydi.satis_tarihi <= bit)
+                ciro = mal = 0.0
+                for sk in sorgu.all():
+                    ciro += float(sk.tutar_usd or 0)
+                    mal += float(sk.maliyet_usd or 0)
+                return q2(ciro), q2(mal), q2(ciro - mal)
+
+            y_ciro, y_mal, y_kar = _satis_topla(yil_bas, bugun)
+            a_ciro, _a_mal, a_kar = _satis_topla(ay_bas, bugun)
+            g_ciro, _g_mal, _g_kar = _satis_topla(gecen_yil_bas, gecen_yil_ayni)
+            cevap['ciro'] = {
+                'yillik': y_ciro, 'yillik_kar': y_kar,
+                'yillik_marj': q_oran((y_kar / y_ciro * 100) if y_ciro else 0),
+                'gecen_yil_ayni_donem': g_ciro,
+                'gecen_yila_gore': (q_oran((y_ciro - g_ciro) / g_ciro * 100)
+                                    if g_ciro else None),
+                'aylik': a_ciro, 'aylik_kar': a_kar,
+                'yil': bugun.year,
+            }
+
+        # ── 2) SİPARİŞLER: yüklenen (bu yıl) + açık ──
+        if yetki('siparis'):
+            # "Yuklenen" = sevkiyati cikmis siparis. Sevkiyat kaydinin
+            # tarihi esas alinir; siparis tarihi degil — mal ne zaman
+            # yola cikti sorusunun cevabi budur.
+            sevk_durumlar = ('Sevk Edildi', 'Yolda', 'Gumrukte', 'Teslim Edildi')
+            yuklenen_sip = {}
+            for sv in Sevkiyat.query.filter(
+                    Sevkiyat.durum.in_(sevk_durumlar),
+                    Sevkiyat.sevk_tarihi >= yil_bas,
+                    Sevkiyat.sevk_tarihi <= bugun).all():
+                if sv.siparis_id and sv.siparis_id not in yuklenen_sip:
+                    yuklenen_sip[sv.siparis_id] = sv
+            y_tutar, y_satir = 0.0, []
+            for sid in yuklenen_sip:
+                sp = Siparis.query.get(sid)
+                if not sp or (sp.durum or '') == 'Iptal Edildi':
+                    continue
+                y_tutar += _bg_usd(sp.toplam_tutar or 0, sp.doviz or 'USD')
+                y_satir.append((sp.toplam_tutar or 0, sp.doviz))
+            cevap['yuklenen'] = {'tutar': q2(y_tutar), 'adet': len(y_satir),
+                                 'kirilim': _bg_doviz_kirilim(y_satir)}
+
+            acik_durumlar = ('Teklif Asam.', 'Onaylandi', 'Uretimde', 'Hazir')
+            a_tutar, a_satir = 0.0, []
+            for sp in Siparis.query.filter(Siparis.durum.in_(acik_durumlar)).all():
+                a_tutar += _bg_usd(sp.toplam_tutar or 0, sp.doviz or 'USD')
+                a_satir.append((sp.toplam_tutar or 0, sp.doviz))
+            cevap['acik_siparis'] = {'tutar': q2(a_tutar), 'adet': len(a_satir),
+                                     'kirilim': _bg_doviz_kirilim(a_satir)}
+
+        # ── 3) STOK: DEPODAKİ değer (yoldaki ayrı) ──
+        if yetki('stok'):
+            depo_usd = yolda_usd = 0.0
+            depo_adet = yolda_adet = 0
+            _mal_map = {}
+            for _mid, _mt in db.session.query(
+                    Maliyet.baglanti_id, db.func.sum(Maliyet.usd_karsilik)).filter(
+                    db.func.lower(Maliyet.baglanti_tip) == 'stok',
+                    Maliyet.aktif.is_(True)).group_by(Maliyet.baglanti_id).all():
+                _mal_map[_mid] = float(_mt or 0)
+            for sinif, tip in ((BlokStok, 'BLOK'), (PlakaStok, 'PLAKA'),
+                               (EbatliStok, 'EBATLI')):
+                for st in sinif.query.all():
+                    depo = _stok_depo(st.durum)
+                    if depo == 'cikti':
+                        continue
+                    _fb = (getattr(st, 'alis_fiyat_birim', None)
+                           or ('ton' if tip == 'BLOK' else 'm2'))
+                    _deger = _bg_usd(
+                        float(getattr(st, 'alis_fiyati', 0) or 0)
+                        * float(_stok_olcu(st, _fb) or 0),
+                        getattr(st, 'doviz', None) or 'USD')
+                    _deger += _mal_map.get(st.id, 0.0)
+                    if depo == 'yolda':
+                        yolda_usd += _deger
+                        yolda_adet += 1
+                    else:
+                        depo_usd += _deger
+                        depo_adet += 1
+            cevap['stok'] = {'tutar': q2(depo_usd), 'adet': depo_adet,
+                             'yolda': q2(yolda_usd), 'yolda_adet': yolda_adet}
+
+        # ── 4) CARİ: brüt borç / alacak, vade kovaları, açık avans ──
+        if yetki('cari'):
+            # Cari BAZINDA net bakiye. Ayni cari hem musteri hem
+            # tedarikci olabiliyor; hareket hareket toplamak ayni
+            # cariyi iki tarafa birden yazardi. NETLEME CARI ICINDE,
+            # cariler ARASINDA degil — brut borc ve brut alacak ayri.
+            bakiye = {}
+            for h in CariHareket.query.all():
+                anahtar = (h.cari_id or h.cari_unvan or '?', (h.doviz or 'USD').upper())
+                net = float(h.borc or 0) - float(h.alacak or 0)
+                bakiye[anahtar] = bakiye.get(anahtar, 0.0) + net
+            alacak_usd = borc_usd = 0.0
+            alacak_satir, borc_satir = [], []
+            for (_cid, dv), net in bakiye.items():
+                if abs(net) < 0.01:
+                    continue
+                if net > 0:                      # musteri bize borclu
+                    alacak_usd += _bg_usd(net, dv)
+                    alacak_satir.append((net, dv))
+                else:                            # biz borcluyuz
+                    borc_usd += _bg_usd(-net, dv)
+                    borc_satir.append((-net, dv))
+            cevap['alacak'] = {'tutar': q2(alacak_usd),
+                               'kirilim': _bg_doviz_kirilim(alacak_satir)}
+            cevap['borc'] = {'tutar': q2(borc_usd),
+                             'kirilim': _bg_doviz_kirilim(borc_satir)}
+
+            # Vadeye gore: bu ay odenecek / bu ay tahsilat / vadesi gecen
+            def _vade_topla(yon, bas, bit):
+                sutun = CariHareket.borc if yon == 'tahsil' else CariHareket.alacak
+                sorgu = CariHareket.query.filter(sutun > 0,
+                                                 CariHareket.vade_tarihi.isnot(None))
+                if bas:
+                    sorgu = sorgu.filter(CariHareket.vade_tarihi >= bas)
+                if bit:
+                    sorgu = sorgu.filter(CariHareket.vade_tarihi <= bit)
+                usd, satir = 0.0, []
+                for h in sorgu.all():
+                    t = float((h.borc if yon == 'tahsil' else h.alacak) or 0)
+                    usd += _bg_usd(t, h.doviz)
+                    satir.append((t, h.doviz))
+                return q2(usd), satir
+
+            t_usd, t_sat = _vade_topla('tahsil', bugun, ay_son)
+            cevap['bu_ay_tahsilat'] = {'tutar': t_usd, 'adet': len(t_sat),
+                                       'kirilim': _bg_doviz_kirilim(t_sat)}
+            o_usd, o_sat = _vade_topla('ode', bugun, ay_son)
+            cevap['bu_ay_odenecek'] = {'tutar': o_usd, 'adet': len(o_sat),
+                                       'kirilim': _bg_doviz_kirilim(o_sat)}
+            g_usd, g_sat = _vade_topla('tahsil', None, bugun - timedelta(days=1))
+            cevap['vadesi_gecen'] = {'tutar': g_usd, 'adet': len(g_sat),
+                                     'kirilim': _bg_doviz_kirilim(g_sat)}
+
+            # ── 30 / 60 / 90 NAKİT MERDİVENİ ──
+            merdiven = []
+            for etiket, gun_bas, gun_bit in (('30 gün', 0, 30), ('60 gün', 31, 60),
+                                             ('90 gün', 61, 90)):
+                b = bugun + timedelta(days=gun_bas)
+                e = bugun + timedelta(days=gun_bit)
+                giren, _gs = _vade_topla('tahsil', b, e)
+                cikan, _cs = _vade_topla('ode', b, e)
+                merdiven.append({'etiket': etiket, 'giren': giren, 'cikan': cikan,
+                                 'net': q2(giren - cikan)})
+            cevap['nakit_merdiveni'] = merdiven
+
+            # ── AÇIK AVANSLAR ──
+            # Mahsup edilmemis avans bir YUKUMLULUKTUR: para alinmis,
+            # mal/hizmet verilmemis. Mahsup iki bacakli yazilir; sadece
+            # siparis bacagi sayilir (fatura bacagi net'i sifirlardi).
+            av_bakiye = {}
+            for h in CariHareket.query.filter(
+                    db.or_(CariHareket.islem_tip.ilike('%avans%'),
+                           CariHareket.kaynak == 'avans_mahsup')).all():
+                if (h.kaynak or '') == 'avans_mahsup' and not h.siparis_id:
+                    continue
+                k = (h.cari_unvan or h.cari_id or '?', h.siparis_id or None,
+                     (h.doviz or 'USD').upper())
+                av_bakiye[k] = av_bakiye.get(k, 0.0) \
+                    + float(h.alacak or 0) - float(h.borc or 0)
+            av_usd, av_sat, av_bagsiz = 0.0, [], 0
+            for (_c, sip, dv), net in av_bakiye.items():
+                if net < 0.01:
+                    continue
+                av_usd += _bg_usd(net, dv)
+                av_sat.append((net, dv))
+                if not sip:
+                    av_bagsiz += 1
+            cevap['acik_avans'] = {'tutar': q2(av_usd), 'adet': len(av_sat),
+                                   'siparissiz': av_bagsiz,
+                                   'kirilim': _bg_doviz_kirilim(av_sat)}
+
+        # ── 5) VADESİ YAKLAŞAN ÇEKLER ──
+        if yetki('kasa') or yetki('cari'):
+            otuz = bugun + timedelta(days=30)
+            c_usd, c_sat = 0.0, []
+            for ck in Cek.query.filter(
+                    Cek.yon == 'alinan',
+                    Cek.durum.in_(['Portfoyde', 'Bankada', 'Tahsilde']),
+                    Cek.vade_tarihi >= bugun, Cek.vade_tarihi <= otuz).all():
+                c_usd += _bg_usd(ck.tutar or 0, ck.doviz)
+                c_sat.append((ck.tutar or 0, ck.doviz))
+            cevap['yaklasan_cek'] = {'tutar': q2(c_usd), 'adet': len(c_sat),
+                                     'kirilim': _bg_doviz_kirilim(c_sat)}
+
+        return jsonify(cevap)
+
     # ════════════════════════════════════════════════════════
     # DASHBOARD SATIŞ İSTATİSTİKLERİ
     # ════════════════════════════════════════════════════════

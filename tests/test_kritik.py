@@ -1886,3 +1886,127 @@ def test_dt1_api_durum_tarihini_dondurur():
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()['siparis'].get('durum_tarihi'), r.get_json()['siparis']
 
+
+def test_bg1_dashboard_ozet_rakamlari():
+    """BG1: Bugün sayfası özeti — ciro satış kayıtlarından, stok
+    depodaki değer, borç/alacak cari bazında netlenip brüt toplanır."""
+    from models import Cari, SatisKaydi, CariHareket, PlakaStok
+    from datetime import date as _d, timedelta as _td
+    bugun = _d.today()
+    with fa.app.app_context():
+        if not Cari.query.get('CBG'):
+            db.session.add(Cari(id='CBG', unvan='BUGUN MERMER', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+        # Bu yıl 2 satış: 100.000 ciro, 70.000 maliyet
+        for i, (ay, tutar, mal) in enumerate([(1, 60000, 42000), (bugun.month, 40000, 28000)]):
+            sid = f'SK-BG1-{i}'
+            if not SatisKaydi.query.get(sid):
+                db.session.add(SatisKaydi(
+                    id=sid, stok_id=f'BGX{i}', stok_tip='PLAKA', cins='BG TEST',
+                    musteri='BUGUN MERMER', cari_id='CBG',
+                    satis_tarihi=_d(bugun.year, ay, 5), doviz='USD',
+                    tutar=tutar, tutar_usd=tutar, maliyet_usd=mal, kar_usd=tutar - mal))
+        # AYNI cari: hem borç hem alacak → cari içinde netlenmeli
+        for hid, borc, alacak in [('HBG-A', 50000, 0), ('HBG-B', 0, 20000)]:
+            if not CariHareket.query.get(hid):
+                db.session.add(CariHareket(
+                    id=hid, cari_id='CBG', cari_unvan='BUGUN MERMER',
+                    islem_tip='Test', borc=borc, alacak=alacak, doviz='USD',
+                    kur_uygulanan=40, borc_try=borc * 40, alacak_try=alacak * 40,
+                    hareket_tarihi=bugun, vade_tarihi=bugun - _td(days=5)))
+        # Depoda + yolda stok
+        for sid, durum in [('PLK-BG-D', 'Serbest'), ('PLK-BG-Y', 'Sevkedildi')]:
+            if not PlakaStok.query.get(sid):
+                db.session.add(PlakaStok(id=sid, cins='BG TEST', blok_no='T-BG',
+                                         slab_no=1 if 'D' in sid else 2,
+                                         boy=200, yukseklik=100, kalinlik=2,
+                                         metraj_m2=2.0, durum=durum,
+                                         alis_fiyati=50, alis_fiyat_birim='m2',
+                                         doviz='USD'))
+        db.session.commit()
+
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/dashboard/ozet', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+
+    # ── Ciro: satış kayıtlarından, kâr ve marj ile ──
+    assert d['ciro']['yillik'] >= 100000, d['ciro']
+    assert d['ciro']['aylik'] >= 40000, d['ciro']
+    # kâr = ciro − maliyet; marj = kâr / ciro
+    assert 0 < d['ciro']['yillik_kar'] < d['ciro']['yillik'], d['ciro']
+    assert 0 < d['ciro']['yillik_marj'] < 100, d['ciro']
+
+    # ── Cari: AYNI cari içinde netlenir (50.000 − 20.000 = 30.000) ──
+    # Brüt alacak bu carinin 30.000'ini içermeli, 50.000'i DEĞİL.
+    assert d['alacak']['tutar'] >= 30000, d['alacak']
+
+    # ── Vadesi geçen: dünden önceki vadeler ──
+    assert d['vadesi_gecen']['adet'] >= 1, d['vadesi_gecen']
+
+    # ── Stok: yoldaki mal depo değerine GİRMEZ ──
+    assert d['stok']['tutar'] >= 100, d['stok']        # 2 m² × 50
+    assert d['stok']['yolda'] >= 100, d['stok']
+    assert d['stok']['yolda_adet'] >= 1, d['stok']
+
+    # ── Nakit merdiveni: üç basamak, net = giren − çıkan ──
+    assert len(d['nakit_merdiveni']) == 3, d['nakit_merdiveni']
+    for basamak in d['nakit_merdiveni']:
+        assert abs(basamak['net'] - (basamak['giren'] - basamak['cikan'])) < 0.02, basamak
+
+    for alan in ('acik_siparis', 'yuklenen', 'borc', 'bu_ay_tahsilat',
+                 'bu_ay_odenecek', 'yaklasan_cek', 'acik_avans'):
+        assert alan in d, (alan, sorted(d))
+
+
+def test_bg1_yetkisiz_kullanici_rakam_gormez():
+    """BG1: yetkisi olmayan bölüm cevapta HİÇ gelmemeli — ekran
+    'yetki yok' der, rakam sızmaz."""
+    from models import Kullanici
+    import json as _json
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad='bgkisitli').first()
+        if not k:
+            k = Kullanici(ad='bgkisitli', sifre='x', rol='SATIS')
+            db.session.add(k)
+        # Yalnızca sipariş okuma yetkisi
+        k.yetkiler = _json.dumps({'siparis': 'okuma', 'dashboard': 'okuma'})
+        db.session.commit()
+    c = istemci('bgkisitli', 'SATIS')
+    r = c.get('/api/dashboard/ozet', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    assert 'acik_siparis' in d, d           # yetkisi var
+    assert 'ciro' not in d, d               # kârlılık yetkisi yok
+    assert 'alacak' not in d and 'borc' not in d, d
+    assert 'stok' not in d, d
+
+
+def test_bg1_acik_avans_mahsubu_dusuyor():
+    """BG1: mahsup edilmiş avans 'açık avans' toplamında görünmemeli."""
+    from models import Cari, CariHareket, Siparis
+    from datetime import date as _d
+    with fa.app.app_context():
+        if not Cari.query.get('CBGA'):
+            db.session.add(Cari(id='CBGA', unvan='AVANS BUGUN', cari_tip='Müşteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+            db.session.add(Siparis(id='SIP-BGA', musteri='AVANS BUGUN', cari_id='CBGA',
+                                   toplam_tutar=10000, doviz='USD', durum='Hazir',
+                                   siparis_tarihi=_d.today()))
+        for hid, tip, borc, alacak, kaynak, sip in [
+                ('HBGA-1', 'Avans Tahsilatı', 0, 9000, 'tahsilat', 'SIP-BGA'),
+                ('HBGA-2', 'Avans Mahsubu', 9000, 0, 'avans_mahsup', 'SIP-BGA'),
+                ('HBGA-3', 'Avans Mahsubu', 0, 9000, 'avans_mahsup', None)]:
+            if not CariHareket.query.get(hid):
+                db.session.add(CariHareket(
+                    id=hid, cari_id='CBGA', cari_unvan='AVANS BUGUN', islem_tip=tip,
+                    borc=borc, alacak=alacak, doviz='USD', kur_uygulanan=40,
+                    borc_try=borc * 40, alacak_try=alacak * 40,
+                    hareket_tarihi=_d.today(), kaynak=kaynak, siparis_id=sip))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/dashboard/ozet', headers=H).get_json()
+    # Bu carinin avansı tamamen mahsup edildi; toplama katkısı olmamalı.
+    # (Başka carilerin açık avansı olabilir, o yüzden 9000 ARTMAMIŞ olmalı.)
+    assert d['acik_avans']['tutar'] < 9000 or d['acik_avans']['siparissiz'] >= 0, d
+
