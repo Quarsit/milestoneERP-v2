@@ -15,8 +15,32 @@
   .bg-kucuk .deger{font-size:1.16rem;line-height:1.15}
   .bg-kucuk .deger small{font-size:.7em}
   .bg-kucuk .ek{font-size:.68rem;margin-top:2px}
-  .kpi[data-git]{transition:border-color .15s,transform .15s}
-  .kpi[data-git]:hover{border-color:var(--verde)}
+  .kpi[data-detay],.bg-kutu[data-detay]{transition:border-color .15s}
+  .kpi[data-detay]:hover,.bg-kutu[data-detay]:hover{border-color:var(--verde)}
+
+  /* Çekmecedeki detay listesi */
+  .bg-detay-ust{display:flex;align-items:baseline;justify-content:space-between;
+    padding:0 0 9px;border-bottom:1px solid var(--cizgi);margin-bottom:4px;
+    font-size:.8rem;color:var(--soluk)}
+  .bg-detay-ust strong{font-family:var(--mono);font-size:.92rem;color:var(--murekkep)}
+  .bg-satir{display:flex;align-items:center;gap:10px;padding:9px 10px 9px 11px;
+    border-bottom:1px solid var(--cizgi);cursor:pointer;
+    border-left:3px solid transparent;border-radius:0 6px 6px 0}
+  .bg-satir:hover{background:var(--notr-bg)}
+  .bg-satir.bs-kirmizi{border-left-color:var(--kirmizi)}
+  .bg-satir.bs-kehribar{border-left-color:var(--kehribar)}
+  .bg-satir.bs-yesil{border-left-color:var(--verde)}
+  /* Satırın tıklanabilir olduğunu gösteren ok; hover'da belirir. */
+  .bg-satir-ok{color:var(--cizgi-koyu);font-size:1.1rem;flex:none;
+    opacity:.45;transition:opacity .15s,color .15s}
+  .bg-satir:hover .bg-satir-ok{opacity:1;color:var(--verde)}
+  .bg-satir-ad{flex:1;min-width:0}
+  .bg-satir-ad>div:first-child{font-weight:600;font-size:.86rem}
+  .bg-satir-alt{font-size:.74rem;color:var(--soluk);margin-top:1px}
+  .bg-satir-tutar{text-align:right;font-family:var(--mono);font-size:.86rem;
+    font-weight:600;white-space:nowrap}
+  .bg-satir-tutar .eksi{color:var(--kirmizi)}
+
 
   .bg-serit{display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:22px}
   .bg-kutu{background:var(--yuzey);border:1px solid var(--cizgi);
@@ -71,22 +95,22 @@
      dizmek göze bakacak yer bırakmıyordu: her şey aynı ağırlıkta
      olunca hiçbiri öne çıkmaz. -->
 <div class="kpiler bg-buyuk" id="kpiBuyuk">
-  <div class="kpi" data-git="/satislar">
+  <div class="kpi" data-detay="ciro_yillik">
     <label>Yıllık Satış Cirosu</label>
     <div class="deger" id="bYilCiro"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
     <div class="ek" id="bYilCiroEk">yükleniyor</div>
   </div>
-  <div class="kpi" data-git="/siparis">
+  <div class="kpi" data-detay="acik_siparis">
     <label>Açık Siparişler</label>
     <div class="deger" id="bAcik"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
     <div class="ek" id="bAcikEk">yükleniyor</div>
   </div>
-  <div class="kpi" data-git="/cari">
+  <div class="kpi" data-detay="vadesi_gecen">
     <label>Vadesi Geçen Alacaklar</label>
     <div class="deger" id="bGecen"><span class="iskelet" style="display:block;width:120px;height:26px"></span></div>
     <div class="ek" id="bGecenEk">yükleniyor</div>
   </div>
-  <div class="kpi" data-git="/nakit">
+  <div class="kpi" data-detay="nakit_30">
     <!-- 30 GÜN, "bu ay" DEĞİL.
          Ayın son haftasında "bu ay" penceresi neredeyse boş kalıyor
          ve büyük kutu her ay birkaç gün 0 gösteriyordu — ölü kutu.
@@ -99,14 +123,14 @@
 </div>
 
 <div class="kpiler bg-kucuk" id="kpiKucuk">
-  <div class="kpi" data-git="/satislar"><label>Bu Ayki Ciro</label><div class="deger" id="bAyCiro">—</div><div class="ek" id="bAyCiroEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/sevkiyat"><label>Yüklenen Sipariş</label><div class="deger" id="bYuklenen">—</div><div class="ek" id="bYuklenenEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/stok"><label>Toplam Stok</label><div class="deger" id="bStok">—</div><div class="ek" id="bStokEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/cari"><label>Toplam Alacaklar</label><div class="deger" id="bAlacak">—</div><div class="ek" id="bAlacakEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/cari"><label>Toplam Borçlar</label><div class="deger" id="bBorc">—</div><div class="ek" id="bBorcEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/nakit"><label>Bu Ay Beklenen Tahsilat</label><div class="deger" id="bTahsilat">—</div><div class="ek" id="bTahsilatEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/nakit"><label>Bu Ay Ödenecek</label><div class="deger" id="bOdenecek">—</div><div class="ek" id="bOdenecekEk">yükleniyor</div></div>
-  <div class="kpi" data-git="/cek"><label>Vadesi Yaklaşan Çekler</label><div class="deger" id="bCek">—</div><div class="ek" id="bCekEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="ciro_aylik"><label>Bu Ayki Ciro</label><div class="deger" id="bAyCiro">—</div><div class="ek" id="bAyCiroEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="yuklenen"><label>Yüklenen Sipariş</label><div class="deger" id="bYuklenen">—</div><div class="ek" id="bYuklenenEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="stok"><label>Toplam Stok</label><div class="deger" id="bStok">—</div><div class="ek" id="bStokEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="alacak"><label>Toplam Alacaklar</label><div class="deger" id="bAlacak">—</div><div class="ek" id="bAlacakEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="borc"><label>Toplam Borçlar</label><div class="deger" id="bBorc">—</div><div class="ek" id="bBorcEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="bu_ay_tahsilat"><label>Bu Ay Beklenen Tahsilat</label><div class="deger" id="bTahsilat">—</div><div class="ek" id="bTahsilatEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="bu_ay_odenecek"><label>Bu Ay Ödenecek</label><div class="deger" id="bOdenecek">—</div><div class="ek" id="bOdenecekEk">yükleniyor</div></div>
+  <div class="kpi" data-detay="yaklasan_cek"><label>Vadesi Yaklaşan Çekler</label><div class="deger" id="bCek">—</div><div class="ek" id="bCekEk">yükleniyor</div></div>
 </div>
 
 <!-- Açık avanslar + nakit merdiveni: ikisi de "önümüzdeki para"
@@ -116,7 +140,7 @@
     <div class="bg-kutu-bas"><h3>Nakit merdiveni</h3><span class="ozet">önümüzdeki 90 gün</span></div>
     <div id="bgMerdiven"><div class="yukleniyor">Yükleniyor…</div></div>
   </div>
-  <div class="bg-kutu" id="bgAvansKutu">
+  <div class="bg-kutu" id="bgAvansKutu" data-detay="acik_avans">
     <div class="bg-kutu-bas"><h3>Açık avanslar</h3><span class="ozet" id="ozAvans">—</span></div>
     <div id="bgAvans"><div class="yukleniyor">Yükleniyor…</div></div>
   </div>
@@ -462,16 +486,70 @@ function ozetYaz() {
     : 'Bekleyen iş yok — her şey güncel. İyi bir gün.';
 }
 
-/* KUTULAR TIKLANIR. Rakamı görüp "peki detayı nerede" diye
-   menüde aramak gereksiz bir adımdı; kutu zaten o ekranı işaret
-   ediyor. Yetkisi olmayan kutu tıklanmaz. */
-document.querySelectorAll('.kpi[data-git]').forEach(k => {
-  const yol = k.dataset.git;
-  const modul = yol.replace('/', '');
-  if (!gorunur(modul === 'cek' ? 'kasa' : modul)) return;
+/* ── BG2 · KUTUYA TIKLAYINCA DETAY ──
+   İlk sürümde kutu doğrudan modül sayfasına gidiyordu: kullanıcı
+   "vadesi geçen 60.000" görüp cari listesine düşüyor, aynı süzmeyi
+   orada kendi yapmak zorunda kalıyordu. Artık önce O RAKAMI
+   OLUŞTURAN KAYITLAR açılır; satıra tıklayınca ilgili kayda gidilir.
+   Yetkisi olmayan kutu tıklanmaz — zaten "yetki yok" yazıyor. */
+const DETAY_MODUL = {
+  ciro_yillik: 'karlilik', ciro_aylik: 'karlilik',
+  acik_siparis: 'siparis', yuklenen: 'siparis',
+  vadesi_gecen: 'cari', alacak: 'cari', borc: 'cari',
+  bu_ay_tahsilat: 'cari', bu_ay_odenecek: 'cari',
+  nakit_30: 'cari', acik_avans: 'cari',
+  stok: 'stok', yaklasan_cek: 'kasa'
+};
+
+async function detayAc(anahtar) {
+  const modul = DETAY_MODUL[anahtar];
+  cekmeceAc('Yükleniyor…', '', '<div class="yukleniyor">Kayıtlar getiriliyor…</div>');
+  let d;
+  try {
+    d = await api('/api/dashboard/detay?k=' + encodeURIComponent(anahtar));
+  } catch (e) {
+    cekmeceAc('Detay açılamadı', '', bosMesaj('Kayıtlar getirilemedi.'));
+    return;
+  }
+  if (!d.satirlar || !d.satirlar.length) {
+    cekmeceAc(d.baslik || 'Detay', d.aciklama || '', bosMesaj('Bu başlıkta kayıt yok.'));
+    return;
+  }
+  /* Renk SOL ŞERİTTE — uygulamanın diğer listeleri de böyle
+     (sipariş kartları, vadesi geçen alacaklar). Sağda ince bir
+     çubuk satırdan kopuk duruyordu. */
+  const seritSinif = { kirmizi: 'bs-kirmizi', kehribar: 'bs-kehribar',
+                       yesil: 'bs-yesil', gri: '' };
+  /* Satırın kendi dövizi gösterilir; USD karşılığı yalnızca döviz
+     USD DEĞİLSE ikinci satırda. Tek para birimindeyse tekrar olurdu. */
+  const govde = d.satirlar.map(x => `
+    <div class="bg-satir ${seritSinif[x.rozet] || ''}"
+         onclick="location.href='${kacar(x.git)}'" title="Aç">
+      <div class="bg-satir-ad">
+        <div>${kacar(x.ad)}</div>
+        <div class="bg-satir-alt">${kacar(x.alt || '')}</div>
+      </div>
+      <div class="bg-satir-tutar">
+        <div class="${(x.tutar || 0) < 0 ? 'eksi' : ''}">${para2(x.tutar, x.doviz)}</div>
+        ${x.doviz !== 'USD' ? `<div class="bg-satir-alt">${para(x.usd)}</div>` : ''}
+      </div>
+      <span class="bg-satir-ok">›</span>
+    </div>`).join('');
+  const ustBilgi = `<div class="bg-detay-ust">
+      <span>${d.adet} kayıt</span>
+      <strong>${para(d.toplam_usd)}</strong>
+    </div>`;
+  cekmeceAc(d.baslik || 'Detay', d.aciklama || '', ustBilgi + govde,
+    modul ? `<button class="blok-btn" onclick="location.href='/${modul === 'kasa' ? 'cek' : modul}'">Modülü aç</button>` : '');
+}
+
+document.querySelectorAll('[data-detay]').forEach(k => {
+  const anahtar = k.dataset.detay;
+  const modul = DETAY_MODUL[anahtar];
+  if (modul && !gorunur(modul)) return;
   k.style.cursor = 'pointer';
-  k.title = 'Aç: ' + yol.replace('/', '');
-  k.onclick = () => { window.location.href = yol; };
+  k.title = 'Detayı gör';
+  k.onclick = () => detayAc(anahtar);
 });
 
 selamla();

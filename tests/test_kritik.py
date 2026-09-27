@@ -2010,3 +2010,72 @@ def test_bg1_acik_avans_mahsubu_dusuyor():
     # (Başka carilerin açık avansı olabilir, o yüzden 9000 ARTMAMIŞ olmalı.)
     assert d['acik_avans']['tutar'] < 9000 or d['acik_avans']['siparissiz'] >= 0, d
 
+
+def test_bg2_kutu_detayi_kayitlari_dondurur():
+    """BG2: kutuya tıklayınca o rakamı oluşturan kayıtlar dönmeli ve
+    her satır gidilecek bir adres taşımalı."""
+    c = istemci('admin', 'ADMIN')
+    for anahtar in ('vadesi_gecen', 'alacak', 'borc', 'acik_siparis',
+                    'yuklenen', 'ciro_yillik', 'ciro_aylik', 'stok',
+                    'yaklasan_cek', 'acik_avans', 'nakit_30',
+                    'bu_ay_tahsilat', 'bu_ay_odenecek'):
+        r = c.get(f'/api/dashboard/detay?k={anahtar}', headers=H)
+        assert r.status_code == 200, (anahtar, r.get_data(as_text=True))
+        d = r.get_json()
+        assert d['ok'] and d['baslik'], (anahtar, d)
+        assert d['adet'] == len(d['satirlar']) or d['adet'] > 200, (anahtar, d['adet'])
+        for x in d['satirlar']:
+            assert x.get('ad'), (anahtar, x)
+            assert x.get('git', '').startswith('/'), (anahtar, x)
+            assert 'tutar' in x and 'doviz' in x, (anahtar, x)
+        # Satirlar tutara gore BUYUKTEN kucuge
+        usdler = [abs(x.get('usd') or 0) for x in d['satirlar']]
+        assert usdler == sorted(usdler, reverse=True), (anahtar, usdler[:6])
+
+
+def test_bg2_detay_toplami_kutuyla_tutar():
+    """BG2: detay listesinin toplamı kutudaki rakamla aynı olmalı —
+    iki ayrı yerde iki farklı gerçek olmaz."""
+    c = istemci('admin', 'ADMIN')
+    ozet = c.get('/api/dashboard/ozet', headers=H).get_json()
+    eslesme = [('vadesi_gecen', ozet['vadesi_gecen']['tutar']),
+               ('alacak', ozet['alacak']['tutar']),
+               ('borc', ozet['borc']['tutar']),
+               ('acik_siparis', ozet['acik_siparis']['tutar']),
+               ('yuklenen', ozet['yuklenen']['tutar']),
+               ('bu_ay_tahsilat', ozet['bu_ay_tahsilat']['tutar']),
+               ('bu_ay_odenecek', ozet['bu_ay_odenecek']['tutar']),
+               ('acik_avans', ozet['acik_avans']['tutar']),
+               ('ciro_yillik', ozet['ciro']['yillik'])]
+    for anahtar, beklenen in eslesme:
+        d = c.get(f'/api/dashboard/detay?k={anahtar}', headers=H).get_json()
+        assert abs(d['toplam_usd'] - beklenen) < 1.0, \
+            (anahtar, d['toplam_usd'], beklenen)
+
+
+def test_bg2_detay_yetki_kontrolu():
+    """BG2: yetkisi olmayan kullanıcı detayı da görememeli —
+    kutu gizliyken uç açık kalırsa rakam sızar."""
+    from models import Kullanici
+    import json as _json
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad='bg2kisitli').first()
+        if not k:
+            k = Kullanici(ad='bg2kisitli', sifre='x', rol='SATIS')
+            db.session.add(k)
+        k.yetkiler = _json.dumps({'siparis': 'okuma', 'dashboard': 'okuma'})
+        db.session.commit()
+    c = istemci('bg2kisitli', 'SATIS')
+    assert c.get('/api/dashboard/detay?k=acik_siparis', headers=H).status_code == 200
+    for anahtar in ('vadesi_gecen', 'alacak', 'borc', 'stok', 'ciro_yillik'):
+        r = c.get(f'/api/dashboard/detay?k={anahtar}', headers=H)
+        assert r.status_code == 403, (anahtar, r.status_code)
+        assert r.get_json().get('error') == 'yetki_yok', anahtar
+
+
+def test_bg2_bilinmeyen_anahtar_reddedilir():
+    """BG2: tanınmayan anahtar 400 dönmeli, boş liste değil."""
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/dashboard/detay?k=olmayan_sey', headers=H)
+    assert r.status_code == 400, r.get_data(as_text=True)
+
