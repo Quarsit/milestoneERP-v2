@@ -2079,3 +2079,85 @@ def test_bg2_bilinmeyen_anahtar_reddedilir():
     r = c.get('/api/dashboard/detay?k=olmayan_sey', headers=H)
     assert r.status_code == 400, r.get_data(as_text=True)
 
+
+def test_bg3_kapali_hesap_vadesi_gecende_gorunmez():
+    """BG3: borcu ödenmiş cari 'vadesi geçen alacak' listesinde
+    ÇIKMAMALI. Ölçüldü: 9.900 € alış faturası + 9.900 € ödeme ile
+    hesap kapalıyken ödeme satırı alacak gibi listeleniyordu."""
+    from models import Cari, CariHareket
+    from datetime import date as _d
+    with fa.app.app_context():
+        if not Cari.query.get('CKAP'):
+            db.session.add(Cari(id='CKAP', unvan='KAPALI HESAP AS',
+                                cari_tip='Tedarikçi', para_birimi='EUR',
+                                gorunurluk='ortak'))
+        for hid, borc, alacak in [('HKAP-F', 0, 9900), ('HKAP-O', 9900, 0)]:
+            if not CariHareket.query.get(hid):
+                db.session.add(CariHareket(
+                    id=hid, cari_id='CKAP', cari_unvan='KAPALI HESAP AS',
+                    islem_tip='Alış Faturası' if alacak else 'Odeme',
+                    borc=borc, alacak=alacak, doviz='EUR', kur_uygulanan=56,
+                    borc_try=borc * 56, alacak_try=alacak * 56,
+                    hareket_tarihi=_d(2026, 9, 7),
+                    vade_tarihi=_d(2026, 9, 7)))     # vadesi GEÇMİŞ
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    for anahtar in ('vadesi_gecen', 'bu_ay_odenecek', 'bu_ay_tahsilat',
+                    'nakit_30', 'alacak', 'borc'):
+        d = c.get(f'/api/dashboard/detay?k={anahtar}', headers=H).get_json()
+        kapali = [x for x in d['satirlar'] if x['ad'] == 'KAPALI HESAP AS']
+        assert not kapali, (anahtar, kapali)
+
+
+def test_bg3_kismi_odenen_fatura_kalani_gorunur():
+    """BG3: 10.000 borcun 6.000'i ödenmişse listede 4.000 görünmeli —
+    ne 10.000 (ödemeyi yok saymak) ne 0 (borcu yok saymak)."""
+    from models import Cari, CariHareket
+    from datetime import date as _d
+    with fa.app.app_context():
+        if not Cari.query.get('CKIS'):
+            db.session.add(Cari(id='CKIS', unvan='KISMI ODEME AS',
+                                cari_tip='Müşteri', para_birimi='USD',
+                                gorunurluk='ortak'))
+        for hid, borc, alacak in [('HKIS-F', 10000, 0), ('HKIS-T', 0, 6000)]:
+            if not CariHareket.query.get(hid):
+                db.session.add(CariHareket(
+                    id=hid, cari_id='CKIS', cari_unvan='KISMI ODEME AS',
+                    islem_tip='Satış Faturası' if borc else 'Tahsilat',
+                    borc=borc, alacak=alacak, doviz='USD', kur_uygulanan=40,
+                    borc_try=borc * 40, alacak_try=alacak * 40,
+                    hareket_tarihi=_d(2026, 9, 1),
+                    vade_tarihi=_d(2026, 9, 10)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/dashboard/detay?k=vadesi_gecen', headers=H).get_json()
+    satir = [x for x in d['satirlar'] if x['ad'] == 'KISMI ODEME AS']
+    assert len(satir) == 1, satir
+    assert abs(satir[0]['tutar'] - 4000) < 0.01, satir[0]
+    assert 'kısmi' in (satir[0]['alt'] or ''), satir[0]
+
+
+def test_bg3_unvani_bos_harekette_cari_adi_bulunur():
+    """BG3: cari_unvan boş bırakılmış harekette listede kimlik kodu
+    ("CR-XXXX") değil CARİ ADI görünmeli."""
+    from models import Cari, CariHareket
+    from datetime import date as _d
+    with fa.app.app_context():
+        if not Cari.query.get('CADSIZ'):
+            db.session.add(Cari(id='CADSIZ', unvan='ADI BULUNAN AS',
+                                cari_tip='Müşteri', para_birimi='USD',
+                                gorunurluk='ortak'))
+        if not CariHareket.query.get('HADSIZ'):
+            db.session.add(CariHareket(
+                id='HADSIZ', cari_id='CADSIZ', cari_unvan=None,
+                islem_tip='Satış Faturası', borc=7000, alacak=0, doviz='USD',
+                kur_uygulanan=40, borc_try=280000, alacak_try=0,
+                hareket_tarihi=_d(2026, 9, 1), vade_tarihi=_d(2026, 9, 5)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/dashboard/detay?k=vadesi_gecen', headers=H).get_json()
+    satir = [x for x in d['satirlar'] if abs(x['tutar'] - 7000) < 0.01]
+    assert satir, [x['ad'] for x in d['satirlar']]
+    assert satir[0]['ad'] == 'ADI BULUNAN AS', satir[0]
+    assert satir[0]['git'] == '/cari?ac=CADSIZ', satir[0]
+

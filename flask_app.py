@@ -18278,6 +18278,69 @@ def create_app():
         return [(k if k != (adlar.get(k) or k) else None, adlar.get(k, k), dv, net)
                 for (k, dv), net in toplam.items()]
 
+    def _bg_acik_kalemler():
+        """Cari bazında KAPANMAMIŞ hareketler (açık kalem).
+
+        ── NEDEN GEREKLİ ──
+        İlk sürüm "vadesi geçen alacak" için vadesi dolmuş HER BORÇ
+        satırını topluyordu. Ölçüldü: ALBSTONE1 SHPK'nın hesabı
+        kapalıyken (9.900 € alış faturası, 9.900 € ödeme, net 0)
+        ödeme satırı "vadesi geçen alacak" listesinde çıkıyordu.
+        Ödenmiş bir borç alacak değildir.
+
+        Yaşlandırma raporu bunu doğru yapıyor: kapalı cariyi atlıyor
+        ve NET bakıyor. Aynı kural burada da geçerli olmalı — aynı
+        sayfada iki farklı gerçek olmasın.
+
+        ── YÖNTEM: FIFO ──
+        Cari + döviz bazında net bakiye bulunur. Net sıfırsa o hesap
+        KAPALIDIR, hiçbir satırı açık değildir. Net varsa, eski borç
+        önce kapanır varsayımıyla (ticari teamül) kalan tutar EN YENİ
+        satırlardan geriye doğru dağıtılır: açık kalan, en yeni
+        belgelerdir.
+
+        Döner: [{cari_id, unvan, doviz, tutar, vade_tarihi, evrak,
+                 islem_tip, yon}]  ·  yon: 'tahsil' (bize borçlu)
+                                         'ode'    (biz borçluyuz)
+        """
+        grup, adlar = {}, {}
+        for h in CariHareket.query.all():
+            kimlik = h.cari_id or h.cari_unvan or '?'
+            grup.setdefault((kimlik, (h.doviz or 'USD').upper()), []).append(h)
+            if h.cari_unvan and kimlik not in adlar:
+                adlar[kimlik] = h.cari_unvan
+        # Unvani bos kalan hareketler icin cari tablosundan tamamla:
+        # ekranda kimlik kodu ("CR-C207A2") gorunuyordu, ad degil.
+        eksik = [k for k in grup if k[0] not in adlar]
+        if eksik:
+            for c in Cari.query.filter(Cari.id.in_([k[0] for k in eksik])).all():
+                adlar[c.id] = c.unvan
+
+        sonuc = []
+        for (kimlik, dv), hrk in grup.items():
+            net = sum(float(h.borc or 0) - float(h.alacak or 0) for h in hrk)
+            if abs(net) < 0.01:
+                continue                      # hesap kapalı
+            yon = 'tahsil' if net > 0 else 'ode'
+            kalan = abs(net)
+            acik_taraf = [h for h in hrk
+                          if float((h.borc if yon == 'tahsil' else h.alacak) or 0) > 0]
+            acik_taraf.sort(key=lambda h: (h.vade_tarihi or h.hareket_tarihi or date.min,
+                                           h.id or ''))
+            for h in reversed(acik_taraf):    # en yeni satır açık kalır
+                if kalan < 0.01:
+                    break
+                tutar = float((h.borc if yon == 'tahsil' else h.alacak) or 0)
+                pay = min(tutar, kalan)
+                kalan -= pay
+                sonuc.append({
+                    'cari_id': h.cari_id, 'unvan': adlar.get(kimlik, kimlik),
+                    'doviz': dv, 'tutar': q2(pay),
+                    'vade_tarihi': h.vade_tarihi, 'evrak': h.evrak_no,
+                    'islem_tip': h.islem_tip, 'yon': yon,
+                    'kismi': pay < tutar - 0.01})
+        return sonuc
+
     def _bg_doviz_kirilim(satirlar):
         """[(tutar, doviz)] → {'USD': x, 'EUR': y, 'TRY': z} (boşlar atılır)"""
         kirilim = {}
@@ -18427,20 +18490,23 @@ def create_app():
             cevap['borc'] = {'tutar': q2(borc_usd),
                              'kirilim': _bg_doviz_kirilim(borc_satir)}
 
-            # Vadeye gore: bu ay odenecek / bu ay tahsilat / vadesi gecen
+            # ── VADE BAZLI TOPLAMLAR: AÇIK KALEMLERDEN ──
+            # Eskiden vadesi dolmuş HER borç satırı sayılıyordu; ödenmiş
+            # bir fatura da "vadesi geçen alacak" görünüyordu. Artık
+            # kapanmamış tutarlar esas alınıyor (_bg_acik_kalemler).
+            _acik = _bg_acik_kalemler()
+
             def _vade_topla(yon, bas, bit):
-                sutun = CariHareket.borc if yon == 'tahsil' else CariHareket.alacak
-                sorgu = CariHareket.query.filter(sutun > 0,
-                                                 CariHareket.vade_tarihi.isnot(None))
-                if bas:
-                    sorgu = sorgu.filter(CariHareket.vade_tarihi >= bas)
-                if bit:
-                    sorgu = sorgu.filter(CariHareket.vade_tarihi <= bit)
                 usd, satir = 0.0, []
-                for h in sorgu.all():
-                    t = float((h.borc if yon == 'tahsil' else h.alacak) or 0)
-                    usd += _bg_usd(t, h.doviz)
-                    satir.append((t, h.doviz))
+                for k in _acik:
+                    if k['yon'] != yon or not k['vade_tarihi']:
+                        continue
+                    if bas and k['vade_tarihi'] < bas:
+                        continue
+                    if bit and k['vade_tarihi'] > bit:
+                        continue
+                    usd += _bg_usd(k['tutar'], k['doviz'])
+                    satir.append((k['tutar'], k['doviz']))
                 return q2(usd), satir
 
             t_usd, t_sat = _vade_topla('tahsil', bugun, ay_son)
@@ -18573,31 +18639,34 @@ def create_app():
             if not _yetki_var_mi('cari', 'okuma'):
                 return _yetki_yok('Cari')
             tahsil = anahtar != 'bu_ay_odenecek'
-            sutun = CariHareket.borc if tahsil else CariHareket.alacak
-            sorgu = CariHareket.query.filter(sutun > 0,
-                                             CariHareket.vade_tarihi.isnot(None))
+            yon = 'tahsil' if tahsil else 'ode'
             if anahtar == 'vadesi_gecen':
-                sorgu = sorgu.filter(CariHareket.vade_tarihi < bugun)
-                baslik, aciklama = 'Vadesi geçen alacaklar', 'Vadesi dolmuş, tahsil edilmemiş'
+                baslik = 'Vadesi geçen alacaklar'
+                aciklama = 'Vadesi dolmuş, kapanmamış tutarlar'
             else:
-                sorgu = sorgu.filter(CariHareket.vade_tarihi >= bugun,
-                                     CariHareket.vade_tarihi <= ay_son)
                 baslik = 'Bu ay beklenen tahsilat' if tahsil else 'Bu ay ödenecek'
                 aciklama = f'{bugun.strftime("%d.%m")} – {ay_son.strftime("%d.%m.%Y")}'
-            for h in sorgu.order_by(CariHareket.vade_tarihi).all():
-                tutar = float((h.borc if tahsil else h.alacak) or 0)
-                gecikme = (bugun - h.vade_tarihi).days if h.vade_tarihi else 0
+            for k in _bg_acik_kalemler():
+                if k['yon'] != yon or not k['vade_tarihi']:
+                    continue
+                if anahtar == 'vadesi_gecen':
+                    if k['vade_tarihi'] >= bugun:
+                        continue
+                elif not (bugun <= k['vade_tarihi'] <= ay_son):
+                    continue
+                gecikme = (bugun - k['vade_tarihi']).days
                 satirlar.append({
-                    'ad': h.cari_unvan or h.cari_id or '—',
+                    'ad': k['unvan'] or '—',
                     'alt': ' · '.join(x for x in [
-                        h.vade_tarihi.strftime('%d.%m.%Y') if h.vade_tarihi else '',
+                        k['vade_tarihi'].strftime('%d.%m.%Y'),
                         (f'{gecikme} gün gecikmiş' if gecikme > 0 else
                          (f'{-gecikme} gün kaldı' if gecikme < 0 else 'bugün')),
-                        (h.evrak_no or h.islem_tip or '')] if x),
-                    'tutar': q2(tutar), 'doviz': h.doviz or 'USD',
-                    'usd': q2(_usd(tutar, h.doviz)),
+                        (k['evrak'] or k['islem_tip'] or ''),
+                        ('kısmi ödenmiş' if k['kismi'] else '')] if x),
+                    'tutar': q2(k['tutar']), 'doviz': k['doviz'],
+                    'usd': q2(_usd(k['tutar'], k['doviz'])),
                     'rozet': 'kirmizi' if gecikme > 30 else ('kehribar' if gecikme > 0 else 'gri'),
-                    'git': _bg_cari_git(h.cari_id, h.cari_unvan)})
+                    'git': _bg_cari_git(k['cari_id'], k['unvan'])})
 
         elif anahtar in ('alacak', 'borc'):
             if not _yetki_var_mi('cari', 'okuma'):
@@ -18767,21 +18836,20 @@ def create_app():
             son = bugun + timedelta(days=30)
             baslik = '30 günlük nakit hareketi'
             aciklama = f'{bugun.strftime("%d.%m")} – {son.strftime("%d.%m.%Y")}'
-            for h in CariHareket.query.filter(
-                    CariHareket.vade_tarihi >= bugun, CariHareket.vade_tarihi <= son,
-                    db.or_(CariHareket.borc > 0, CariHareket.alacak > 0)
-                    ).order_by(CariHareket.vade_tarihi).all():
-                giren = float(h.borc or 0) > 0
-                tutar = float((h.borc if giren else h.alacak) or 0)
+            for k in _bg_acik_kalemler():
+                if not k['vade_tarihi'] or not (bugun <= k['vade_tarihi'] <= son):
+                    continue
+                giren = k['yon'] == 'tahsil'
                 satirlar.append({
-                    'ad': h.cari_unvan or h.cari_id or '—',
-                    'alt': ' · '.join(x for x in [h.vade_tarihi.strftime('%d.%m.%Y'),
+                    'ad': k['unvan'] or '—',
+                    'alt': ' · '.join(x for x in [k['vade_tarihi'].strftime('%d.%m.%Y'),
                                                   'girecek' if giren else 'çıkacak',
-                                                  h.evrak_no or h.islem_tip or ''] if x),
-                    'tutar': q2(tutar if giren else -tutar), 'doviz': h.doviz or 'USD',
-                    'usd': q2(_usd(tutar, h.doviz) * (1 if giren else -1)),
+                                                  k['evrak'] or k['islem_tip'] or ''] if x),
+                    'tutar': q2(k['tutar'] if giren else -k['tutar']),
+                    'doviz': k['doviz'],
+                    'usd': q2(_usd(k['tutar'], k['doviz']) * (1 if giren else -1)),
                     'rozet': 'yesil' if giren else 'kehribar',
-                    'git': _bg_cari_git(h.cari_id, h.cari_unvan)})
+                    'git': _bg_cari_git(k['cari_id'], k['unvan'])})
         else:
             return jsonify({'ok': False, 'mesaj': f'Bilinmeyen detay: {anahtar}'}), 400
 
