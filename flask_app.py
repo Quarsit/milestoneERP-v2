@@ -18253,6 +18253,77 @@ def create_app():
                 tablo[dv] = k / usd
         return tablo
 
+    def _bg_cari_ad_tablosu():
+        """{cari_id: unvan} — istek başına BİR kez okunur.
+
+        ── NEDEN GEREKLİ ──
+        Hareket satırındaki `cari_unvan` her zaman dolu değil:
+        BL-16 öncesi yazılan kayıtlarda, avans mahsup bacaklarında
+        ve dışarıdan aktarılan satırlarda boş kalabiliyor. Ölçüldü:
+        "Açık avanslar" listesinin 5 satırından 4'ü ad yerine "?"
+        gösteriyordu, cari kartında unvan yerinde dururken.
+
+        Ad, hareket satırına değil CARİ tablosuna ait bir bilgi;
+        kimlik varsa oradan okunur. Böylece unvan değişince eski
+        listeler de yeni adı gösterir ve hiçbir ekran kimlik kodu
+        ("CR-C207A2") basmaz.
+        """
+        # İstek bağlamı yoksa (betik/arka plan) önbelleksiz çalışır —
+        # doğru sonuç verir, sadece sorguyu tekrarlar.
+        elde = has_request_context() and getattr(g, '_bg_cari_ad', None)
+        if elde:
+            return elde
+        tablo = {c.id: c.unvan for c
+                 in Cari.query.with_entities(Cari.id, Cari.unvan).all()}
+        if has_request_context():
+            g._bg_cari_ad = tablo
+        return tablo
+
+    def _bg_cari_ad(cari_id, unvan=None):
+        """Ekranda görünecek cari adı. Sıra: cari tablosu → hareket → kimlik."""
+        if cari_id:
+            ad = (_bg_cari_ad_tablosu().get(cari_id) or '').strip()
+            if ad:
+                return ad
+        return (unvan or '').strip() or cari_id or '?'
+
+    def _bg_acik_avanslar():
+        """Mahsup edilmemiş avanslar. Döner: [{cari_id, unvan, siparis_id,
+        doviz, tutar}]
+
+        ── NEDEN PAYLAŞILAN ──
+        Kutudaki adet ile çekmecedeki satır sayısı aynı olmalı.
+        İlk sürümde iki uç kendi gruplamasını yapıyordu ve
+        anahtarları farklıydı (biri unvana, diğeri kimlik+unvana
+        göre): kimliği olan ve olmayan hareketleri karışık olan bir
+        cari kutuda 1, listede 2 satır olarak çıkabiliyordu.
+
+        Mahsup İKİ bacaklı yazılır; sadece sipariş bacağı sayılır,
+        fatura bacağı net'i sıfırlardı.
+        """
+        bakiye = {}
+        for h in CariHareket.query.filter(
+                db.or_(CariHareket.islem_tip.ilike('%avans%'),
+                       CariHareket.kaynak == 'avans_mahsup')).all():
+            if (h.kaynak or '') == 'avans_mahsup' and not h.siparis_id:
+                continue
+            k = (h.cari_id or '', h.siparis_id or None,
+                 (h.doviz or 'USD').upper())
+            kayit = bakiye.setdefault(k, {'net': 0.0, 'unvan': None})
+            kayit['net'] += float(h.alacak or 0) - float(h.borc or 0)
+            if h.cari_unvan and not kayit['unvan']:
+                kayit['unvan'] = h.cari_unvan
+        sonuc = []
+        for (cid, sip, dv), kayit in bakiye.items():
+            if kayit['net'] < 0.01:
+                continue                      # mahsup edilmiş
+            sonuc.append({'cari_id': cid or None,
+                          'unvan': _bg_cari_ad(cid, kayit['unvan']),
+                          'siparis_id': sip, 'doviz': dv,
+                          'tutar': q2(kayit['net'])})
+        sonuc.sort(key=lambda r: -float(r['tutar']))
+        return sonuc
+
     def _bg_cari_bakiyeleri():
         """Cari + döviz bazında NET bakiye. Döner: [(cari_id, unvan, doviz, net)]
 
@@ -18267,15 +18338,19 @@ def create_app():
         düşer. Netleme cari İÇİNDE yapılır (aynı cari hem müşteri
         hem tedarikçi olabiliyor), cariler ARASINDA değil.
         """
-        toplam, adlar = {}, {}
+        toplam, adlar, kimlikli = {}, {}, set()
         for h in CariHareket.query.all():
             kimlik = h.cari_id or (h.cari_unvan or '?')
             dv = (h.doviz or 'USD').upper()
             toplam[(kimlik, dv)] = toplam.get((kimlik, dv), 0.0) \
                 + float(h.borc or 0) - float(h.alacak or 0)
+            if h.cari_id:
+                kimlikli.add(kimlik)
             if h.cari_unvan:
                 adlar.setdefault(kimlik, h.cari_unvan)
-        return [(k if k != (adlar.get(k) or k) else None, adlar.get(k, k), dv, net)
+        return [(k if k in kimlikli else None,
+                 _bg_cari_ad(k if k in kimlikli else None, adlar.get(k, k)),
+                 dv, net)
                 for (k, dv), net in toplam.items()]
 
     def _bg_acik_kalemler():
@@ -18309,12 +18384,6 @@ def create_app():
             grup.setdefault((kimlik, (h.doviz or 'USD').upper()), []).append(h)
             if h.cari_unvan and kimlik not in adlar:
                 adlar[kimlik] = h.cari_unvan
-        # Unvani bos kalan hareketler icin cari tablosundan tamamla:
-        # ekranda kimlik kodu ("CR-C207A2") gorunuyordu, ad degil.
-        eksik = [k for k in grup if k[0] not in adlar]
-        if eksik:
-            for c in Cari.query.filter(Cari.id.in_([k[0] for k in eksik])).all():
-                adlar[c.id] = c.unvan
 
         sonuc = []
         for (kimlik, dv), hrk in grup.items():
@@ -18334,7 +18403,8 @@ def create_app():
                 pay = min(tutar, kalan)
                 kalan -= pay
                 sonuc.append({
-                    'cari_id': h.cari_id, 'unvan': adlar.get(kimlik, kimlik),
+                    'cari_id': h.cari_id,
+                    'unvan': _bg_cari_ad(h.cari_id, adlar.get(kimlik, kimlik)),
                     'doviz': dv, 'tutar': q2(pay),
                     'vade_tarihi': h.vade_tarihi, 'evrak': h.evrak_no,
                     'islem_tip': h.islem_tip, 'yon': yon,
@@ -18535,23 +18605,11 @@ def create_app():
             # Mahsup edilmemis avans bir YUKUMLULUKTUR: para alinmis,
             # mal/hizmet verilmemis. Mahsup iki bacakli yazilir; sadece
             # siparis bacagi sayilir (fatura bacagi net'i sifirlardi).
-            av_bakiye = {}
-            for h in CariHareket.query.filter(
-                    db.or_(CariHareket.islem_tip.ilike('%avans%'),
-                           CariHareket.kaynak == 'avans_mahsup')).all():
-                if (h.kaynak or '') == 'avans_mahsup' and not h.siparis_id:
-                    continue
-                k = (h.cari_unvan or h.cari_id or '?', h.siparis_id or None,
-                     (h.doviz or 'USD').upper())
-                av_bakiye[k] = av_bakiye.get(k, 0.0) \
-                    + float(h.alacak or 0) - float(h.borc or 0)
             av_usd, av_sat, av_bagsiz = 0.0, [], 0
-            for (_c, sip, dv), net in av_bakiye.items():
-                if net < 0.01:
-                    continue
-                av_usd += _bg_usd(net, dv)
-                av_sat.append((net, dv))
-                if not sip:
+            for av in _bg_acik_avanslar():
+                av_usd += _bg_usd(av['tutar'], av['doviz'])
+                av_sat.append((av['tutar'], av['doviz']))
+                if not av['siparis_id']:
                     av_bagsiz += 1
             cevap['acik_avans'] = {'tutar': q2(av_usd), 'adet': len(av_sat),
                                    'siparissiz': av_bagsiz,
@@ -18678,9 +18736,10 @@ def create_app():
                 if abs(net) < 0.01 or ((anahtar == 'alacak') != (net > 0)):
                     continue
                 t = abs(net)
-                satirlar.append({'ad': unvan, 'alt': dv + ' bakiye',
+                _ad = _bg_cari_ad(cid, unvan)
+                satirlar.append({'ad': _ad, 'alt': dv + ' bakiye',
                                  'tutar': q2(t), 'doviz': dv, 'usd': q2(_usd(t, dv)),
-                                 'git': _bg_cari_git(cid, unvan)})
+                                 'git': _bg_cari_git(cid, _ad)})
 
         elif anahtar in ('acik_siparis', 'yuklenen'):
             if not _yetki_var_mi('siparis', 'okuma'):
@@ -18737,19 +18796,20 @@ def create_app():
             for sk in SatisKaydi.query.filter(
                     SatisKaydi.satis_tarihi >= bas,
                     SatisKaydi.satis_tarihi <= bugun).all():
-                g = grup.setdefault((sk.cari_id or '', sk.musteri or '—'),
-                                    {'ciro': 0.0, 'kar': 0.0, 'adet': 0})
-                g['ciro'] += float(sk.tutar_usd or 0)
-                g['kar'] += float(sk.kar_usd or 0)
-                g['adet'] += 1
-            for (cid, unvan), g in grup.items():
-                marj = (g['kar'] / g['ciro'] * 100) if g['ciro'] else 0
+                # `g` degil `gr`: flask.g golgelenmesin (ad tablosu ondan okuyor).
+                gr = grup.setdefault((sk.cari_id or '', sk.musteri or ''),
+                                     {'ciro': 0.0, 'kar': 0.0, 'adet': 0})
+                gr['ciro'] += float(sk.tutar_usd or 0)
+                gr['kar'] += float(sk.kar_usd or 0)
+                gr['adet'] += 1
+            for (cid, unvan), gr in grup.items():
+                marj = (gr['kar'] / gr['ciro'] * 100) if gr['ciro'] else 0
                 satirlar.append({
-                    'ad': unvan,
-                    'alt': (f'{g["adet"]} satış · kâr {_bg_sayi(g["kar"])} $'
+                    'ad': _bg_cari_ad(cid, unvan),
+                    'alt': (f'{gr["adet"]} satış · kâr {_bg_sayi(gr["kar"])} $'
                             f' · marj %{_bg_sayi(marj, 1)}'),
-                    'tutar': q2(g['ciro']), 'doviz': 'USD', 'usd': q2(g['ciro']),
-                    'git': _bg_cari_git(cid, unvan)})
+                    'tutar': q2(gr['ciro']), 'doviz': 'USD', 'usd': q2(gr['ciro']),
+                    'git': _bg_cari_git(cid, _bg_cari_ad(cid, unvan))})
 
         elif anahtar == 'stok':
             if not _yetki_var_mi('stok', 'okuma'):
@@ -18809,26 +18869,16 @@ def create_app():
             if not _yetki_var_mi('cari', 'okuma'):
                 return _yetki_yok('Cari')
             baslik, aciklama = 'Açık avanslar', 'Mahsup edilmemiş avanslar'
-            bak = {}
-            for h in CariHareket.query.filter(
-                    db.or_(CariHareket.islem_tip.ilike('%avans%'),
-                           CariHareket.kaynak == 'avans_mahsup')).all():
-                if (h.kaynak or '') == 'avans_mahsup' and not h.siparis_id:
-                    continue
-                k = (h.cari_id or '', h.cari_unvan or '?', h.siparis_id or None,
-                     (h.doviz or 'USD').upper())
-                bak[k] = bak.get(k, 0.0) + float(h.alacak or 0) - float(h.borc or 0)
-            for (cid, unvan, sip, dv), net in bak.items():
-                if net < 0.01:
-                    continue
+            for av in _bg_acik_avanslar():
+                sip, net, dv = av['siparis_id'], av['tutar'], av['doviz']
                 satirlar.append({
-                    'ad': unvan,
+                    'ad': av['unvan'],
                     'alt': (f'{sip} siparişine bağlı' if sip
                             else '⚠ hiçbir siparişe bağlı değil'),
                     'tutar': q2(net), 'doviz': dv, 'usd': q2(_usd(net, dv)),
                     'rozet': 'gri' if sip else 'kehribar',
                     'git': (f'/siparis?ara={_bg_url_kacar(sip)}' if sip
-                            else _bg_cari_git(cid, unvan))})
+                            else _bg_cari_git(av['cari_id'], av['unvan']))})
 
         elif anahtar == 'nakit_30':
             if not _yetki_var_mi('cari', 'okuma'):
@@ -18860,8 +18910,8 @@ def create_app():
                         'toplam_usd': q2(sum(x.get('usd') or 0 for x in satirlar)),
                         'satirlar': satirlar[:200]})
 
-    # ════════════════════════════════════════════════════════
-    # DASHBOARD SATIŞ İSTATİSTİKLERİ
+    # ════════════════════════════════════════════════════════
+    # DASHBOARD SATIŞ İSTATİSTİKLERİ
     # ════════════════════════════════════════════════════════
     @app.route('/api/dashboard/satis_istatistik', methods=['GET'])
     def api_dashboard_satis():

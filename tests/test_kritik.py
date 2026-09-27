@@ -2161,3 +2161,55 @@ def test_bg3_unvani_bos_harekette_cari_adi_bulunur():
     assert satir[0]['ad'] == 'ADI BULUNAN AS', satir[0]
     assert satir[0]['git'] == '/cari?ac=CADSIZ', satir[0]
 
+
+def test_bg4_avans_listesinde_cari_adi_gorunur():
+    """BG4: avans hareketinde cari_unvan bossa liste "?" degil ADI yazar.
+
+    Olculdu: acik avans cekmecesinin 5 satirindan 4'u "?" gosteriyordu;
+    cari kartinda unvan yerinde duruyordu. Ad artik CARI tablosundan."""
+    from models import Cari, CariHareket
+    from datetime import date as _d
+    with fa.app.app_context():
+        if not Cari.query.get('CBG4AV'):
+            db.session.add(Cari(id='CBG4AV', unvan='AVANSLI MERMER LTD',
+                                cari_tip='Musteri', para_birimi='USD',
+                                gorunurluk='ortak'))
+        if not CariHareket.query.get('HBG4AV'):
+            db.session.add(CariHareket(
+                id='HBG4AV', cari_id='CBG4AV', cari_unvan=None,
+                islem_tip='Avans Tahsilati', borc=0, alacak=12500, doviz='USD',
+                kur_uygulanan=40, borc_try=0, alacak_try=500000,
+                hareket_tarihi=_d(2026, 9, 2)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/dashboard/detay?k=acik_avans', headers=H).get_json()
+    satir = [x for x in d['satirlar'] if abs(x['tutar'] - 12500) < 0.01]
+    assert satir, [(x['ad'], x['tutar']) for x in d['satirlar']]
+    assert satir[0]['ad'] == 'AVANSLI MERMER LTD', satir[0]
+    assert satir[0]['git'] == '/cari?ac=CBG4AV', satir[0]
+    assert '?' not in [x['ad'] for x in d['satirlar']], d['satirlar']
+
+
+def test_bg4_avans_kutusu_ile_liste_tutar():
+    """BG4: kutudaki adet/tutar ile çekmecedeki satırlar aynı kaynaktan.
+
+    İki uç kendi gruplamasını yapıyordu; kimlikli ve kimliksiz hareketi
+    karışık olan cari kutuda 1, listede 2 satır olabiliyordu."""
+    c = istemci('admin', 'ADMIN')
+    o = c.get('/api/dashboard/ozet', headers=H).get_json()['acik_avans']
+    d = c.get('/api/dashboard/detay?k=acik_avans', headers=H).get_json()
+    assert o['adet'] == len(d['satirlar']), (o, len(d['satirlar']))
+    toplam = sum(float(x['usd']) for x in d['satirlar'])
+    assert abs(float(o['tutar']) - toplam) < 0.02, (o['tutar'], toplam)
+
+
+def test_bg4_ciro_kirilimi_flask_g_golgelemez():
+    """BG4: ciro kırılımı döngüsündeki yerel `g` flask.g'yi gölgeliyordu;
+    ad tablosu flask.g üzerinde durduğu için çağrı patlıyordu."""
+    c = istemci('admin', 'ADMIN')
+    for k in ('ciro_yillik', 'ciro_aylik'):
+        r = c.get('/api/dashboard/detay?k=' + k, headers=H)
+        assert r.status_code in (200, 403), (k, r.status_code)
+        if r.status_code == 200:
+            for x in r.get_json()['satirlar']:
+                assert x['ad'] and x['ad'] != '?', x
