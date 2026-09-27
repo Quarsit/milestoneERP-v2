@@ -11311,7 +11311,9 @@ def create_app():
                 'komisyon_tutar': sip.komisyon_tutar,
                 'komisyon_doviz': sip.komisyon_doviz,
                 'komisyon_aciklama': sip.komisyon_aciklama,
-                'kullanici': sip.kullanici
+                'kullanici': sip.kullanici,
+                'avans': _siparis_avans_ozeti(sip),      # AV1
+                'tarihce': _siparis_tarihce(sip)        # TR1
             },
             'kalemler': [_kalem_to_dict(k) for k in sip.kalemler]
         })
@@ -19180,6 +19182,191 @@ def create_app():
             else:
                 toplam += float(h.alacak or 0)
         return q2(max(toplam, 0))
+
+    def _siparis_tarihce(sip):
+        """TR1 — siparişin olay günlüğü: ne zaman ne oldu.
+
+        ── NEDEN ──
+        "Bu durumda 4 gündür" siparişin hikâyesini anlatmıyor. Avans ne
+        zaman geldi, proforma ne zaman kesildi, mal ne zaman çıktı —
+        bunlar ayrı ekranlarda duruyordu; sipariş açılınca tek yerde
+        görünsün.
+
+        ── KESİN / TÜRETİLMİŞ ──
+        Durum değişimleri denetim günlüğünden (audit_log) okunur. Orada
+        kaydı olmayan eski siparişlerde yalnızca ŞU ANKİ durumun damgası
+        (DT1) vardır; o satır `kesin=False` döner ve ekranda işaretlenir.
+        Olmayan bir kesinlik iddia edilmesin.
+
+        ── SAAT NEDEN YOK ──
+        `AuditLog.tarih` UTC yazılıyor (datetime.utcnow), diğer tablolar
+        yerel saat. İkisini yan yana saatli basmak üç saatlik yapay fark
+        üretirdi; günlük GÜN bazında.
+
+        ── AD VE PARA BİÇİMİ BURADA DEĞİL ──
+        Durum adları (`AD`) ve para biçimi şablonda tanımlı; ikinci bir
+        kopya çıkarsa ikisi zamanla ayrışır. Uç ham `durum`, `tutar` ve
+        `doviz` döndürür, metni şablon kurar.
+
+        Döner: [{tarih, olay, ek, tip, kesin, durum?, tutar?, doviz?}]
+        `tip`: siparis | durum | belge | para | sevk | plan
+        """
+        import json as _json
+        olaylar = []
+
+        def ekle(tarih, olay, ek='', tip='durum', kesin=True, **fazla):
+            if not tarih:
+                return
+            if isinstance(tarih, datetime):
+                tarih = tarih.date()
+            kayit = {'tarih': tarih, 'olay': olay, 'ek': ek or '',
+                     'tip': tip, 'kesin': kesin,
+                     # Aynı GÜNDEKİ olayların sırası: sipariş önce,
+                     # termin en sonda; arası ekleniş sırasını korur
+                     # (gün içi saat bilgisi yok, uydurulmasın).
+                     '_s': (0 if tip == 'siparis' else 9 if tip == 'plan' else 5),
+                     '_i': len(olaylar)}
+            kayit.update(fazla)
+            olaylar.append(kayit)
+
+        # ── 1) SİPARİŞ ──
+        ilk_kayit = AuditLog.query.filter_by(
+            tablo_adi='siparis', kayit_id=sip.id, islem_tipi='EKLE'
+        ).order_by(AuditLog.tarih.asc()).first()
+        # Tarih SİPARİŞ TARİHİ, kayıt tarihi değil: geçmişe dönük
+        # girilen bir sipariş "bugün alındı" görünürdü. Denetim
+        # kaydından yalnızca KİMİN girdiği alınır.
+        ekle(sip.siparis_tarihi or (ilk_kayit.tarih if ilk_kayit else None),
+             'siparis_alindi', (ilk_kayit.kullanici or '') if ilk_kayit else '',
+             'siparis')
+
+        # ── 2) DURUM DEĞİŞİMLERİ ──
+        gorulen = set()
+        for a in AuditLog.query.filter_by(
+                tablo_adi='siparis', kayit_id=sip.id, islem_tipi='DURUM'
+        ).order_by(AuditLog.tarih.asc()).all():
+            try:
+                yeni = (_json.loads(a.yeni_veri or '{}') or {}).get('durum')
+            except Exception:
+                yeni = None
+            if not yeni:
+                continue
+            gorulen.add(yeni)
+            ekle(a.tarih, 'durum', a.kullanici or '', 'durum', durum=yeni)
+        if sip.durum not in gorulen and getattr(sip, 'durum_tarihi', None):
+            ekle(sip.durum_tarihi, 'durum', '', 'durum',
+                 kesin=False, durum=sip.durum)
+
+        cari = (Cari.query.get(sip.cari_id) if getattr(sip, 'cari_id', None)
+                else None) or _cari_bul(sip.musteri)
+
+        # ── 3) BELGELER ──
+        for p in Proforma.query.filter_by(siparis_id=sip.id).all():
+            ekle(p.olusturma, 'proforma', p.id, 'belge')
+        for f in Fatura.query.filter_by(siparis_id=sip.id).all():
+            iptal = (f.durum or '') == 'Iptal'
+            ekle(f.fatura_tarihi, 'fatura_iptal' if iptal else 'fatura',
+                 f.fatura_no or f.id, 'belge',
+                 tutar=(None if iptal else q2(f.toplam or 0)), doviz=f.doviz)
+
+        # ── 4) PARA ──
+        AVANS_GIRIS = ('Avans Tahsilati', 'Avans Tahsilatı', 'Avans Odemesi')
+        if cari:
+            for h in CariHareket.query.filter_by(
+                    cari_id=cari.id, siparis_id=sip.id).all():
+                ad = (h.islem_tip or '')
+                tutar = q2(float(h.alacak or 0) or float(h.borc or 0))
+                ortak = {'tutar': tutar, 'doviz': h.doviz}
+                if ad in AVANS_GIRIS:
+                    ekle(h.hareket_tarihi, 'avans_alindi', h.evrak_no or '',
+                         'para', **ortak)
+                elif ad == 'Avans Devri (Giriş)':
+                    # Yeni para değil, başka siparişten AKTARILMIŞ avans.
+                    # "Avans alındı" yazsaydı ikinci kez tahsilat sanılırdı.
+                    ekle(h.hareket_tarihi, 'avans_devir_giris', '',
+                         'para', **ortak)
+                elif ad == 'Avans Devri (Çıkış)':
+                    ekle(h.hareket_tarihi, 'avans_devir', '', 'para', **ortak)
+                elif ad == 'Avans Mahsubu' and float(h.borc or 0) > 0:
+                    ekle(h.hareket_tarihi, 'avans_mahsup', h.evrak_no or '',
+                         'para', **ortak)
+                elif ad in ('Tahsilat', 'Odeme', 'Ödeme'):
+                    ekle(h.hareket_tarihi, 'tahsilat', h.evrak_no or '',
+                         'para', **ortak)
+
+        # ── 5) SEVKİYAT ──
+        for sv in Sevkiyat.query.filter_by(siparis_id=sip.id).all():
+            arac = sv.konteyner_no or sv.arac_plaka or sv.id
+            ekle(sv.hazirlama_tarihi, 'yukleme_hazir', arac, 'sevk')
+            ekle(sv.cikis_tarihi, 'cikis', arac, 'sevk')
+            ekle(sv.gumruk_tarihi, 'gumruk', sv.beyanname_no or arac, 'sevk')
+            ekle(sv.teslim_tarihi or sv.gercek_teslim, 'teslim',
+                 sv.varis_noktasi or arac, 'sevk')
+            ekle(sv.iptal_tarihi, 'sevk_iptal', arac, 'sevk')
+
+        olaylar.sort(key=lambda o: (o['tarih'], o['_s'], o['_i']))
+
+        # ── 6) GELECEK: TERMİN ──
+        # Geçmiş olaylardan SONRA ve ayrı tiple: geçmiş ile gelecek
+        # aynı listede karışmasın.
+        if sip.termin and sip.durum not in ('Teslim Edildi', 'Iptal Edildi'):
+            ekle(sip.termin, 'termin', '', 'plan',
+                 gun=(sip.termin - date.today()).days)
+
+        # Termin en sonda dursun diye sıralama yeniden (ekle sonrası).
+        olaylar.sort(key=lambda o: (o['_s'] == 9, o['tarih'], o['_s'], o['_i']))
+        for o in olaylar:
+            o['tarih'] = o['tarih'].isoformat()
+            o.pop('_s', None); o.pop('_i', None)
+        return olaylar
+
+    def _siparis_avans_ozeti(sip):
+        """AV1 — sipariş kartında gösterilecek avans özeti.
+
+        ── AYNI RAKAM, TEK KURAL ──
+        `_siparis_alinan_avans` ile AYNI kuralı kullanır: devir
+        çıkışı düşülür, faturaya mahsup DÜŞÜLMEZ. Proformada yazan
+        "alınan avans" ile kartta yazan rakam farklı olursa hangisinin
+        doğru olduğu sorusu doğar; olmasın.
+
+        ── FARKLI DÖVİZ SESSİZCE KAYBOLMASIN ──
+        Belge tek dövizli olduğu için `_siparis_alinan_avans` sipariş
+        dövizinden farklı avansları saymaz. Kart bir belge değil;
+        orada alınmış paranın yok olması kabul edilemez. Farklı
+        dövizdeki avanslar `diger` altında AYRI gösterilir — yaklaşık
+        kurla toplanmaz.
+
+        Döner: {alinan, mahsup, kalan, doviz, diger:[{doviz,tutar}]}
+        """
+        dv = (sip.doviz or 'USD').upper()
+        toplam = float(sip.toplam_tutar or 0)
+        bos = {'alinan': 0, 'mahsup': 0, 'kalan': q2(toplam), 'fazla': 0,
+               'doviz': dv, 'diger': []}
+        cari = (Cari.query.get(sip.cari_id) if getattr(sip, 'cari_id', None)
+                else None) or _cari_bul(sip.musteri)
+        if not cari:
+            return bos
+        alinan = float(_siparis_alinan_avans(sip.id, cari.id, dv) or 0)
+        mahsup, diger = 0.0, {}
+        for h in CariHareket.query.filter_by(
+                cari_id=cari.id, siparis_id=sip.id).all():
+            tip, hdv = (h.islem_tip or ''), (h.doviz or dv).upper()
+            if hdv == dv:
+                if tip == 'Avans Mahsubu':
+                    # Mahsup İKİ bacaklı; siparişe bağlı olan BORÇ bacağı.
+                    mahsup += float(h.borc or 0)
+            elif tip in ('Avans Tahsilati', 'Avans Tahsilatı',
+                         'Avans Devri (Giriş)'):
+                diger[hdv] = diger.get(hdv, 0.0) + float(h.alacak or 0)
+            elif tip == 'Avans Devri (Çıkış)':
+                diger[hdv] = diger.get(hdv, 0.0) - float(h.borc or 0)
+        return {'alinan': q2(alinan), 'mahsup': q2(mahsup),
+                'kalan': q2(max(toplam - alinan, 0)),
+                # Avans sipariş tutarını AŞIYORSA "tamamı alındı" demek
+                # yanıltıcı olur: ortada dağıtılmamış para vardır.
+                'fazla': q2(max(alinan - toplam, 0)), 'doviz': dv,
+                'diger': [{'doviz': k, 'tutar': q2(v)}
+                          for k, v in sorted(diger.items()) if v > 0.005]}
 
     def _belge_alinan_avans(proforma):
         """AM2 — proformada gösterilecek avans bilgisi.

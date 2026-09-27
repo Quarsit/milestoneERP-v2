@@ -2213,3 +2213,126 @@ def test_bg4_ciro_kirilimi_flask_g_golgelemez():
         if r.status_code == 200:
             for x in r.get_json()['satirlar']:
                 assert x['ad'] and x['ad'] != '?', x
+
+def _av1_siparis(c, musteri='AVANS MERMER', cari_id='CAV1', tutar=100, adet=1):
+    """AV1/TR1 testleri icin cari + siparis kurar, siparis id doner."""
+    from models import Cari
+    with fa.app.app_context():
+        if not Cari.query.get(cari_id):
+            db.session.add(Cari(id=cari_id, unvan=musteri, cari_tip='Musteri',
+                                para_birimi='USD', gorunurluk='ortak'))
+            db.session.commit()
+    r = c.post('/api/siparis', headers=H, json={
+        'musteri': musteri, 'doviz': 'USD',
+        'kalemler': [{'urun_tip': 'PLAKA', 'cins': 'AV TEST', 'miktar': adet,
+                      'birim': 'm2', 'birim_fiyat': tutar, 'adet': adet}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    sid = r.get_json()['id']
+    # Siparis tarihi ucta ayarlanmiyor (form alani da yok) — dogrudan
+    # damgala ki tarihce siralamasi olculebilsin.
+    from models import Siparis
+    from datetime import date as _d
+    with fa.app.app_context():
+        sp = Siparis.query.get(sid)
+        sp.siparis_tarihi = _d(2026, 8, 1)
+        db.session.commit()
+    return sid
+
+
+def _av1_avans(cari_id, siparis_id, tutar, tip='Avans Tahsilati', dv='USD'):
+    from models import CariHareket
+    from datetime import date as _d
+    with fa.app.app_context():
+        h = CariHareket(
+            id=_yeni_test_id(), cari_id=cari_id, cari_unvan=None,
+            islem_tip=tip, borc=0, alacak=tutar, doviz=dv,
+            kur_uygulanan=40, borc_try=0, alacak_try=tutar * 40,
+            hareket_tarihi=_d(2026, 8, 5), siparis_id=siparis_id)
+        db.session.add(h)
+        db.session.commit()
+        return h.id
+
+
+_AV1_SAYAC = [0]
+
+
+def _yeni_test_id():
+    _AV1_SAYAC[0] += 1
+    return 'HAV1-%03d' % _AV1_SAYAC[0]
+
+
+def test_av1_siparis_kartinda_alinan_avans():
+    """AV1: sipariş ucu alınan avansı ve kalanı döndürmeli."""
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, tutar=10000)
+    _av1_avans('CAV1', sid, 4000)
+    d = c.get('/api/siparis/' + sid, headers=H).get_json()['siparis']
+    av = d['avans']
+    assert abs(float(av['alinan']) - 4000) < 0.01, av
+    assert abs(float(av['kalan']) - 6000) < 0.01, av
+    assert float(av['fazla']) == 0, av
+    assert av['doviz'] == 'USD', av
+
+
+def test_av1_siparis_tutarini_asan_avans_isaretlenir():
+    """AV1: avans sipariş tutarını aşarsa `fazla` dolmalı — "tamamı
+    alındı" demek dağıtılmamış parayı gizlerdi."""
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='FAZLA AVANS AS', cari_id='CAV2', tutar=1000)
+    _av1_avans('CAV2', sid, 3000)
+    av = c.get('/api/siparis/' + sid, headers=H).get_json()['siparis']['avans']
+    assert abs(float(av['fazla']) - 2000) < 0.01, av
+    assert float(av['kalan']) == 0, av
+
+
+def test_av1_farkli_dovizdeki_avans_kaybolmaz():
+    """AV1: sipariş dövizinden farklı avans toplanmaz ama `diger`
+    altında GÖRÜNÜR — eskiden sessizce 0 sayılıyordu."""
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='EURO AVANS AS', cari_id='CAV3', tutar=5000)
+    _av1_avans('CAV3', sid, 2000, dv='EUR')
+    av = c.get('/api/siparis/' + sid, headers=H).get_json()['siparis']['avans']
+    assert float(av['alinan']) == 0, av
+    assert av['diger'] and av['diger'][0]['doviz'] == 'EUR', av
+    assert abs(float(av['diger'][0]['tutar']) - 2000) < 0.01, av
+
+
+def test_tr1_tarihce_olaylari_siralanir():
+    """TR1: tarihçe sipariş + avans olaylarını tarih sırasıyla vermeli."""
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='TARIHCE AS', cari_id='CTR1', tutar=8000)
+    _av1_avans('CTR1', sid, 3000)
+    th = c.get('/api/siparis/' + sid, headers=H).get_json()['siparis']['tarihce']
+    assert th, th
+    olaylar = [o['olay'] for o in th]
+    assert olaylar[0] == 'siparis_alindi', olaylar
+    assert 'avans_alindi' in olaylar, olaylar
+    tarihler = [o['tarih'] for o in th if o['olay'] != 'termin']
+    assert tarihler == sorted(tarihler), tarihler
+
+
+def test_tr1_durum_degisimi_tarihceye_dusuyor():
+    """TR1: durum değişince tarihçede o durum KESİN olarak görünmeli
+    (denetim günlüğünden okunuyor, türetilmiyor)."""
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='DURUM TARIHCE AS', cari_id='CTR2')
+    r = c.put('/api/siparis/' + sid, headers=H, json={'durum': 'Onaylandi'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    th = c.get('/api/siparis/' + sid, headers=H).get_json()['siparis']['tarihce']
+    onay = [o for o in th if o.get('durum') == 'Onaylandi']
+    assert onay, th
+    assert onay[0]['kesin'] is True, onay[0]
+
+
+def test_tr1_tarihce_metni_ucta_kurulmuyor():
+    """TR1: durum adı ve para biçimi ŞABLONDA; uç ham veri dönmeli.
+    İki yerde metin kurulursa zamanla ayrışırlar."""
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='HAM VERI AS', cari_id='CTR3', tutar=2500)
+    _av1_avans('CTR3', sid, 1500)
+    th = c.get('/api/siparis/' + sid, headers=H).get_json()['siparis']['tarihce']
+    for o in th:
+        assert 'baslik' not in o, o
+        assert not any(ch in str(o.get('ek', '')) for ch in ('$', '\u20ac')), o
+    para = [o for o in th if o['olay'] == 'avans_alindi']
+    assert para and abs(float(para[0]['tutar']) - 1500) < 0.01, para

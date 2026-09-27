@@ -45,13 +45,49 @@
   .gorunum-sec{display:flex;background:var(--notr-bg);border-radius:var(--r-kucuk);padding:3px}
   .gorunum-sec button{border:0;background:transparent;padding:7px 15px;border-radius:6px;font-weight:600;font-size:.84rem;color:var(--soluk)}
   .gorunum-sec button.aktif{background:var(--yuzey);color:var(--murekkep);box-shadow:0 1px 3px rgba(0,0,0,.08)}
-  .zaman-cizgi{border-left:2px solid var(--cizgi);margin:6px 0 0 5px;padding-left:16px}
-  .zc-madde{position:relative;padding-bottom:13px;font-size:.84rem}
-  .zc-madde::before{content:'';position:absolute;left:-21.5px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--cizgi-koyu)}
-  .zc-madde.simdi::before{background:var(--verde)}
-  .zc-madde.simdi strong{color:var(--verde)}
-  .zc-madde.gelecek{opacity:.45}
-  .zc-madde .zc-tarih{font-size:.72rem;color:var(--soluk);font-family:var(--mono)}
+  /* ── SÜREÇ BARI (SB1) ──
+     Dikey zaman çizgisi çekmecenin yarısını yiyordu ve beş kelime
+     için 230 piksel harcıyordu. Aynı bilgi tek satırda: geçilen
+     adımlar dolu, şu anki vurgulu, kalanlar soluk. */
+  .surec-bar{display:flex;align-items:stretch;gap:3px;margin:2px 0 4px}
+  .sb-adim{flex:1;min-width:0;text-align:center;padding:7px 4px 6px;
+    border-radius:7px;background:var(--taban);font-size:.74rem;font-weight:600;
+    color:var(--soluk);border:1px solid transparent;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .sb-adim.gecti{background:var(--verde-acik);color:var(--verde-koyu)}
+  .sb-adim.simdi{background:var(--verde);color:#fff;border-color:var(--verde-koyu)}
+  .sb-adim.gelecek{opacity:.5}
+  .sb-adim.iptal{background:var(--kirmizi-bg);color:var(--kirmizi)}
+  .sb-not{font-size:.76rem;color:var(--soluk);margin-top:2px}
+  .surec-kutu{margin:16px 0 18px;padding-top:14px;border-top:1px solid var(--cizgi)}
+  /* Geniş ekranda özet bir KART; kartın kendi alt boşluğu yeterli. */
+  @media (min-width:761px){ .cek-ozet .surec-kutu{margin-bottom:0} }
+  .sb-baslik{font-size:.7rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:8px}
+
+  /* ── TARİHÇE (TR1) ── olay günlüğü: tarih | olay | ek */
+  .tarihce{display:grid;grid-template-columns:auto 1fr;gap:0 14px;font-size:.84rem}
+  .th-satir{display:contents}
+  .th-tarih{font-family:var(--mono);font-size:.78rem;color:var(--soluk);
+    white-space:nowrap;padding:5px 0;border-top:1px solid var(--cizgi)}
+  .th-govde{padding:5px 0;border-top:1px solid var(--cizgi);min-width:0}
+  .th-satir:first-child .th-tarih,.th-satir:first-child .th-govde{border-top:0}
+  .th-govde .th-ek{color:var(--soluk);font-size:.76rem}
+  .th-nokta{display:inline-block;width:7px;height:7px;border-radius:50%;
+    margin-right:7px;vertical-align:1px;background:var(--cizgi-koyu)}
+  .th-siparis .th-nokta{background:var(--murekkep)}
+  .th-durum   .th-nokta{background:var(--verde)}
+  .th-belge   .th-nokta{background:var(--mor)}
+  .th-para    .th-nokta{background:var(--kehribar)}
+  .th-sevk    .th-nokta{background:var(--mavi)}
+  .th-plan    .th-nokta{background:transparent;border:2px solid var(--cizgi-koyu);
+    width:5px;height:5px}
+  .th-plan .th-govde,.th-plan .th-tarih{opacity:.7}
+  .th-tahmin{color:var(--soluk);font-size:.72rem;font-style:italic}
+
+  /* Özet kutusunda ikinci satır (AV1: avansın kalanı) */
+  .alan .alan-alt{font-size:.74rem!important;font-weight:500!important;
+    color:var(--soluk);margin-top:1px!important}
   .kalem-satir{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
   .kalem-satir:last-child{border-bottom:0}
   .kalem-satir .m{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
@@ -588,6 +624,74 @@ function listeCiz(veri) {
   }).join('') : '<tr><td colspan="6" class="bos">Sipariş yok.</td></tr>';
 }
 
+/* ── SÜREÇ BARI (SB1) ──
+   İptal ayrı bir ray: akışın içinde değil, akışın DIŞINA çıkış. */
+function surecBari(sip, s) {
+  if (sip.durum === 'Iptal Edildi')
+    return `<div class="surec-bar"><div class="sb-adim iptal">İptal edildi</div></div>`;
+  const suan = KOLONLAR.findIndex(x => x.d === sip.durum);
+  const adimlar = KOLONLAR.map((k, i) => {
+    const sinif = i < suan ? 'gecti' : (i === suan ? 'simdi' : 'gelecek');
+    return `<div class="sb-adim ${sinif}">${k.ad}</div>`;
+  }).join('');
+  const not = suan < 0 ? '' :
+    `<div class="sb-not">${AD[sip.durum] || sip.durum} · ${sureMetni(s.durum_yas)}`
+    + `${s.durum_yas_kesin ? '' : ' *'}</div>`;
+  return `<div class="surec-bar">${adimlar}</div>${not}`;
+}
+
+/* ── TARİHÇE (TR1) ──
+   Metinler BURADA kuruluyor: durum adları (AD) ve para biçimi (para)
+   zaten burada tanımlı, uçta ikinci bir kopya tutulursa ikisi zamanla
+   ayrışır. Uç ham `durum` / `tutar` / `doviz` gönderir. */
+const TH_OLAY = {
+  siparis_alindi: 'Sipariş alındı',
+  proforma      : 'Proforma kesildi',
+  fatura        : 'Fatura kesildi',
+  fatura_iptal  : 'Fatura iptal edildi',
+  avans_alindi  : 'Avans alındı',
+  avans_devir   : 'Avans devredildi',
+  avans_devir_giris: 'Avans devrinden geldi',
+  avans_mahsup  : 'Avans faturaya mahsup edildi',
+  tahsilat      : 'Tahsilat',
+  yukleme_hazir : 'Yükleme hazırlandı',
+  cikis         : 'Mal çıkışı yapıldı',
+  gumruk        : 'Gümrükten geçti',
+  teslim        : 'Teslim edildi',
+  sevk_iptal    : 'Sevkiyat iptal edildi',
+  termin        : 'Termin',
+};
+function thTarih(iso) {
+  const [y, a, g] = (iso || '').split('-');
+  return g ? `${g}.${a}.${y}` : (iso || '—');
+}
+function thBaslik(o) {
+  if (o.olay === 'durum') return (AD[o.durum] || o.durum) + ' oldu';
+  return TH_OLAY[o.olay] || o.olay;
+}
+function thEk(o) {
+  const p = [];
+  if (o.tutar != null) p.push(para(o.tutar, o.doviz));
+  if (o.olay === 'termin')
+    p.push(o.gun > 0 ? o.gun + ' gün kaldı'
+         : (o.gun === 0 ? 'bugün' : Math.abs(o.gun) + ' gün geçti'));
+  if (o.ek) p.push(kacar(o.ek));
+  return p.join(' · ');
+}
+function tarihceCiz(olaylar) {
+  if (!olaylar || !olaylar.length)
+    return '<div class="bos" style="padding:12px">Kayıtlı olay yok.</div>';
+  return '<div class="tarihce">' + olaylar.map(o => `
+    <div class="th-satir th-${o.tip}">
+      <div class="th-tarih">${thTarih(o.tarih)}</div>
+      <div class="th-govde">
+        <span class="th-nokta"></span><strong>${thBaslik(o)}</strong>
+        ${thEk(o) ? ' <span class="th-ek">' + thEk(o) + '</span>' : ''}
+        ${o.kesin ? '' : ' <span class="th-tahmin">· tarih türetildi</span>'}
+      </div>
+    </div>`).join('') + '</div>';
+}
+
 /* ── Çekmece: detay + kalemler + süreç + işlemler ── */
 async function detayAc(id) {
   const s = TUM.find(x => x.id === id);
@@ -601,7 +705,22 @@ async function detayAc(id) {
   const sip = d.siparis || {};
   const kalemler = d.kalemler || [];
 
-  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+  const alan = (l, v, mono, alt) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div>${alt ? `<div class="alan-alt">${alt}</div>` : ''}</div>`;
+
+  /* AV1 — bu siparişe MÜŞTERİDEN gelen avans. Proformadaki
+     "alınan avans" ile aynı kural: devir çıkışı düşülür, faturaya
+     mahsup düşülmez (müşteri o parayı yine bu iş için ödedi).
+     Sipariş dövizinden farklı avanslar toplanmaz, ayrıca yazılır. */
+  const av = sip.avans || {};
+  const avDiger = (av.diger || []).map(x => para(x.tutar, x.doviz)).join(" · ");
+  const avDeger = av.alinan > 0 ? para(av.alinan, av.doviz)
+                : (avDiger ? avDiger : "—");
+  const avAlt = av.alinan > 0
+    ? [av.fazla > 0 ? "⚠ sipariş tutarını " + para(av.fazla, av.doviz) + " aşıyor"
+         : (av.kalan > 0 ? "kalan " + para(av.kalan, av.doviz) : "tamamı alındı"),
+       av.mahsup > 0 ? para(av.mahsup, av.doviz) + " mahsup edildi" : "",
+       avDiger ? "ayrıca " + avDiger : ""].filter(Boolean).join(" · ")
+    : (avDiger ? "sipariş dövizinden farklı" : "");
   const govde = `
     <div class="alan-grid">
       ${alan('Tutar', para(sip.toplam_tutar, sip.doviz), true)}
@@ -612,6 +731,17 @@ async function detayAc(id) {
       ${alan('Termin', sip.termin || '—', true)}
       ${alan('Ödeme', kacar(sip.odeme_sekli || '—'))}
       ${alan('Teslim', kacar(sip.teslim_sekli || '—'))}
+      ${alan('Alınan avans', avDeger, true, avAlt)}
+    </div>
+
+    <!-- SB1 — süreç barı ÖZET KARTININ İÇİNDE, alanların hemen altında:
+         Kalemler ve Tarihçe kutularının üstünde tam genişlikte durur.
+         Hazır bir "cek-bolum" olarak verilmiyor; verilseydi _cekBolumle
+         özeti artık ilk bölüm saymaz ve özet kartı yarım sütuna düşerdi.
+         Başlık H4 DEĞİL: H4 görünce _cekBolumle yeni bölüm açar. -->
+    <div class="surec-kutu">
+      <div class="sb-baslik">Süreç</div>
+      ${surecBari(sip, s)}
     </div>
 
     <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">
@@ -636,19 +766,8 @@ async function detayAc(id) {
       : '<div class="bos" style="padding:12px">Kalem kaydı yok.</div>'}
     </div>
 
-    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px">Süreç</h4>
-    <div class="zaman-cizgi">
-      ${KOLONLAR.map(k => {
-        const suanIdx = KOLONLAR.findIndex(x => x.d === sip.durum);
-        const buIdx = KOLONLAR.findIndex(x => x.d === k.d);
-        const simdi = k.d === sip.durum;
-        const gelecek = buIdx > suanIdx;
-        return `<div class="zc-madde ${simdi ? 'simdi' : ''} ${gelecek ? 'gelecek' : ''}">
-          ${simdi ? '<div class="zc-tarih">şu an · ' + sureMetni(s.durum_yas) + '</div>' : ''}
-          <strong>${k.ad}</strong>
-        </div>`;
-      }).join('')}
-    </div>`;
+    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px">Tarihçe</h4>
+    ${tarihceCiz(sip.tarihce)}`;
 
   // İşlemler: sadece backend'in izin verdiği geçişler
   const izinli = GECIS[sip.durum] || [];
