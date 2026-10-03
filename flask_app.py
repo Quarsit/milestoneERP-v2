@@ -13934,6 +13934,35 @@ def create_app():
 
         return jsonify(sonuc)
 
+    # Onarim betikleri (gider_try_duzelt.py) ayni hesabi kullansin diye
+    # disari aciliyor: ikinci bir kopya zamanla asil koddan ayrisirdi.
+    app.try_karsilik = _try_karsilik
+
+    def _gider_cari_alanlari(tutar, doviz, tarih=None):
+        """GT1 — gider/nakliye faturasının cari hareket alanları.
+
+        ── NEDEN ──
+        Aynı hesabı üç ayrı yerde üç farklı şekilde yapıyorduk:
+          · tekil maliyet  : `_usd(tutar, doviz) * (USD kuru | 1)`
+          · dağıtım        : aynı formül, `_usd_cevrim` ile
+          · blok dağılımı  : `alacak_try` HİÇ yazılmıyordu
+
+        İlk ikisi TRY faturada tutarın USD KARŞILIĞINI `alacak_try`
+        alanına yazıyordu (`_usd` TRY'yi de çevirir, `* 1` bunu
+        geri almaz). Ölçüldü: 166.895,62 ₺ tutarındaki gümrük
+        hareketleri cari ekstresinin "Net Özet" kutusunda 3.413,48
+        TRY görünüyordu — satırlar ve bakiye sütunu doğruydu,
+        çünkü onlar ham tutarı kullanıyor. İki rakam aynı belgede
+        birbirini tutmuyordu.
+
+        `kur_uygulanan` de her üçünde sabit 1.0 yazılıyordu; EUR
+        faturada ekstre "1 EUR = 1,0000 ₺" basıyordu.
+
+        Hesap artık `_try_karsilik`'ta — kur arşivi boşluklarını
+        da o yönetiyor. Döner: (alacak_try, kur_uygulanan)
+        """
+        try_tutar, kur = _try_karsilik(tutar, doviz, tarih=tarih)
+        return q2(try_tutar), q_kur(kur)
     @app.route('/api/maliyet', methods=['POST'])
     def api_maliyet_ekle():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -13990,6 +14019,7 @@ def create_app():
             cari = Cari.query.get(cari_id)
             if cari:
                 toplam_fatura = net_tutar + kdv_tutar
+                _a_try, _a_kur = _gider_cari_alanlari(toplam_fatura, doviz)
                 ch = CariHareket(
                     id=_yeni_id('HR'),
                     hareket_tarihi=date.today(),
@@ -13997,8 +14027,8 @@ def create_app():
                     islem_tip='Nakliye/Gider Faturası',
                     aciklama=f'{maliyet_tip} — {_baglanti_okunabilir(baglanti_tip, baglanti_id)} — {fatura_no or "belgesiz"}',
                     borc=0, alacak=toplam_fatura,
-                    alacak_try=_usd(toplam_fatura, doviz) * (DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first().efektif if doviz != 'TRY' else 1),
-                    doviz=doviz, kur_uygulanan=1.0,
+                    alacak_try=_a_try,
+                    doviz=doviz, kur_uygulanan=_a_kur,
                     evrak_no=fatura_no, baglanti_tip='maliyet', baglanti_id=m.id,
                     kaynak='maliyet', kullanici=kullanici)
                 db.session.add(ch)
@@ -14227,8 +14257,7 @@ def create_app():
                 cari = Cari.query.get(cari_id)
                 if cari:
                     toplam_fatura = q2(toplam_net + toplam_kdv)
-                    _kur = DovizKur.query.filter_by(doviz='USD').order_by(
-                        DovizKur.tarih.desc()).first()
+                    _a_try, _a_kur = _gider_cari_alanlari(toplam_fatura, doviz)
                     db.session.add(CariHareket(
                         id=_yeni_id('HR'), hareket_tarihi=date.today(),
                         cari_id=cari_id, cari_unvan=cari.unvan,
@@ -14236,9 +14265,8 @@ def create_app():
                         aciklama=f'{maliyet_tip} — {len(satirlar)} kayda dağıtıldı '
                                  f'({fatura_no or "belgesiz"})',
                         borc=0, alacak=toplam_fatura,
-                        alacak_try=(_usd_cevrim(toplam_fatura, doviz)
-                                    * (float(_kur.efektif) if (_kur and doviz != 'TRY') else 1)),
-                        doviz=doviz, kur_uygulanan=1.0, evrak_no=fatura_no,
+                        alacak_try=_a_try,
+                        doviz=doviz, kur_uygulanan=_a_kur, evrak_no=fatura_no,
                         baglanti_tip='maliyet', baglanti_id=ilk_id,
                         kaynak='maliyet', kullanici=kullanici))
 
@@ -14465,6 +14493,7 @@ def create_app():
             cari = Cari.query.get(cari_id)
             if cari:
                 toplam_fatura = toplam_net + toplam_kdv
+                _a_try, _a_kur = _gider_cari_alanlari(toplam_fatura, doviz)
                 ch = CariHareket(
                     id=_yeni_id('HR'),
                     hareket_tarihi=date.today(),
@@ -14472,7 +14501,8 @@ def create_app():
                     islem_tip='Nakliye/Gider Faturası',
                     aciklama=f'{maliyet_tip} — Blok {blok_no} ({eklenen} stok) — {fatura_no or "belgesiz"}',
                     borc=0, alacak=toplam_fatura,
-                    doviz=doviz, kur_uygulanan=1.0,
+                    alacak_try=_a_try,
+                    doviz=doviz, kur_uygulanan=_a_kur,
                     evrak_no=fatura_no, baglanti_tip='maliyet',
                     kaynak='maliyet', kullanici=kullanici)
                 db.session.add(ch)

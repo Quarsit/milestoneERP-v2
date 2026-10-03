@@ -2379,3 +2379,107 @@ def test_tg1_teslim_edilen_siparis_gecikme_sayilmaz():
     d = c.get('/api/siparis?per_page=300', headers=H).get_json()
     satir = [x for x in d['data'] if x['id'] == sid][0]
     assert satir['durum'] == 'Teslim Edildi', satir
+
+# ═══ GT1 · GİDER FATURASI TRY KARŞILIĞI ═══════════════════════════════
+def _gt1_blok():
+    """Maliyet bağlanacak bir blok döndürür (yoksa oluşturur)."""
+    from models import BlokStok
+    with fa.app.app_context():
+        b = BlokStok.query.filter_by(id='BLK-GT1').first()
+        if not b:
+            db.session.add(BlokStok(
+                id='BLK-GT1', blok_no='GT1', cins='GT TEST', uretici='GT',
+                boy=300, yukseklik=180, en=125, tonaj=10, durum='Serbest',
+                alis_fiyati=100, alis_fiyat_birim='ton', doviz='USD'))
+            db.session.commit()
+    return 'BLK-GT1'
+
+
+def _gt1_gider(c, cari_id, tutar, doviz, fatura_no):
+    r = c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Nakliye', 'baglanti_tip': 'blok',
+        'baglanti_id': _gt1_blok(), 'tutar': tutar, 'doviz': doviz,
+        'cari_id': cari_id, 'fatura_no': fatura_no})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_gt1_try_gider_faturasi_try_karsiligi_dogru():
+    """GT1: TRY gider faturasında `alacak_try` TUTARIN KENDİSİ olmalı.
+
+    Ölçüldü: 5.235,00 ₺ fatura `alacak_try = 107,16` yazıyordu — yani
+    USD karşılığı. Cari ekstresinin özeti bu alandan beslendiği için
+    166.895,62 ₺'lik hesap özet kutusunda 3.413,48 TRY görünüyordu."""
+    from models import Cari, CariHareket
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not Cari.query.get('CGT1'):
+            db.session.add(Cari(id='CGT1', unvan='GUMRUK MUSAVIRI LTD',
+                                cari_tip='Tedarikci', para_birimi='TRY',
+                                gorunurluk='ortak'))
+            db.session.commit()
+    _gt1_gider(c, 'CGT1', 5235, 'TRY', 'GT1-TRY')
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(cari_id='CGT1').filter(
+            CariHareket.evrak_no == 'GT1-TRY').first()
+        assert h is not None, 'cari hareket yazılmadı'
+        assert abs(float(h.alacak or 0) - 5235) < 0.01, h.alacak
+        assert abs(float(h.alacak_try or 0) - 5235) < 0.01, (
+            'TRY faturada alacak_try tutarın kendisi olmalı', h.alacak_try)
+        assert abs(float(h.kur_uygulanan or 0) - 1) < 0.000001, h.kur_uygulanan
+
+
+def test_gt1_dovizli_gider_faturasinda_kur_yazilir():
+    """GT1: yabancı dövizli gider faturasında `kur_uygulanan` 1.0
+    kalıyordu; ekstre "1 EUR = 1,0000 ₺" basıyordu."""
+    from models import Cari, CariHareket
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not Cari.query.get('CGT2'):
+            db.session.add(Cari(id='CGT2', unvan='NAKLIYE AS', cari_tip='Tedarikci',
+                                para_birimi='USD', gorunurluk='ortak'))
+            db.session.commit()
+    _gt1_gider(c, 'CGT2', 1000, 'USD', 'GT1-USD')
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(cari_id='CGT2').filter(
+            CariHareket.evrak_no == 'GT1-USD').first()
+        assert h is not None
+        kur = float(h.kur_uygulanan or 0)
+        assert kur > 1.5, ('yabancı dövizde kur 1.0 kalmamalı', kur)
+        # TRY karşılığı kurla tutarlı olmalı
+        assert abs(float(h.alacak_try or 0) - 1000 * kur) < 0.05, (
+            h.alacak_try, kur)
+
+
+def test_gt1_ekstre_ozeti_satirlarla_tutar():
+    """GT1: ekstrenin "Net Özet" kutusu SATIRLARLA aynı rakamı vermeli.
+
+    Aynı belgede iki farklı toplam, hangisinin doğru olduğu sorusunu
+    doğurur. Özet `alacak_try`den, satırlar ham tutardan besleniyor;
+    TRY ekstresinde ikisi birebir aynı olmalı."""
+    import re
+    from models import Cari, CariHareket
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not Cari.query.get('CGT3'):
+            db.session.add(Cari(id='CGT3', unvan='EKSTRE GUMRUK LTD',
+                                cari_tip='Tedarikci', para_birimi='TRY',
+                                ulke='TUR', gorunurluk='ortak'))
+            db.session.commit()
+    for i, tutar in enumerate([5235, 1650, 34838.91]):
+        _gt1_gider(c, 'CGT3', tutar, 'TRY', f'GT3-{i}')
+    beklenen = 5235 + 1650 + 34838.91
+    with fa.app.app_context():
+        ham = sum(float(h.alacak or 0) for h in
+                  CariHareket.query.filter_by(cari_id='CGT3').all())
+        assert abs(ham - beklenen) < 0.05, ham
+    r = c.get('/api/cari/CGT3/ekstre_pdf?doviz=TRY&kur_modu=islem', headers=H)
+    assert r.status_code == 200, r.status_code
+    gov = r.get_data(as_text=True)
+    sayilar = re.findall(r'([\d.]+,\d\d)\s*TRY', gov)
+    assert sayilar, 'özet kutusunda TRY tutarı bulunamadı'
+
+    def coz(x):
+        return float(x.replace('.', '').replace(',', '.'))
+    # Özetteki en büyük rakam toplam alacak olmalı
+    assert abs(max(coz(x) for x in sayilar) - beklenen) < 0.05, (
+        'özet ile satırlar tutmuyor', sayilar, beklenen)
