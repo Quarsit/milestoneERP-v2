@@ -512,8 +512,8 @@ const GECIS = {
   'Teslim Edildi': ['Hazir'],
   'Iptal Edildi':  ['Teklif Asam.'],
 };
-const AD = { 'Teklif Asam.':'Teklif', 'Onaylandi':'Onaylandı', 'Uretimde':'Üretimde',
-             'Hazir':'Hazır', 'Teslim Edildi':'Teslim Edildi', 'Iptal Edildi':'İptal' };
+/* Adlar base.html'deki SIPARIS_ADI'da — iki kopya zamanla ayrışır. */
+const AD = SIPARIS_ADI;
 /* Bir siparişin bu durumda ne kadar beklemesi normal — aşarsa ⚠ */
 const SABIR = { 'Teklif Asam.': 14, 'Onaylandi': 7, 'Uretimde': 14, 'Hazir': 3, 'Teslim Edildi': 9999 };
 
@@ -661,10 +661,8 @@ const TH_OLAY = {
   sevk_iptal    : 'Sevkiyat iptal edildi',
   termin        : 'Termin',
 };
-function thTarih(iso) {
-  const [y, a, g] = (iso || '').split('-');
-  return g ? `${g}.${a}.${y}` : (iso || '—');
-}
+/* Biçim base.html'deki tarihTR'de — iki kopya zamanla ayrışır. */
+const thTarih = tarihTR;
 function thBaslik(o) {
   if (o.olay === 'durum') return (AD[o.durum] || o.durum) + ' oldu';
   return TH_OLAY[o.olay] || o.olay;

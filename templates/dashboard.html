@@ -163,8 +163,8 @@
   </div>
 
   <div class="dikkat">
-    <div class="dikkat-bas"><span class="nokta" style="background:var(--verde)"></span><h3>Yolda olan sevkiyatlar</h3><span class="ozet" id="ozSevk">—</span></div>
-    <div id="lSevk"><div class="yukleniyor">Yükleniyor…</div></div>
+    <div class="dikkat-bas"><span class="nokta" style="background:var(--kirmizi)"></span><h3>Termini geçen siparişler</h3><span class="ozet" id="ozTermin">—</span></div>
+    <div id="lTermin"><div class="yukleniyor">Yükleniyor…</div></div>
   </div>
 </div>
 {% endblock %}
@@ -177,7 +177,7 @@
      Alacaklar    → /api/rapor/yaslandirilmis_cari  (yaşlandırma kovaları, TRY → kur_usd ile USD)
      Çekler       → /api/cek/ozet                    (yaklasan_alinan, USD)
      Siparişler   → /api/siparis                     (durumda bekleme süresi hesaplanır)
-     Sevkiyatlar  → /api/sevkiyat                    (Yolda / Gumrukte)
+     Termin       → /api/siparis                     (termin < bugün, açık sipariş)
    Her kart, yetkisi yoksa sessizce "erişim yok" der; sayfa çökmez. */
 
 const gorunur = m => window.ADMIN || (window.YETKI[m] || 'gizli') !== 'gizli';
@@ -440,7 +440,7 @@ async function siparisYukle() {
       <div class="d-satir ray-mavi">
         <div>
           <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || '')}</div>
-          <div class="detay">${s.bekleme} gündür “${kacar(s.durum)}” — ${s.durum === 'Hazir' ? 'sevkiyat bekliyor' : 'ilerlemedi'}</div>
+          <div class="detay">${s.bekleme} gündür “${kacar(durumAdi(s.durum))}” — ${s.durum === 'Hazir' ? 'sevkiyat bekliyor' : 'ilerlemedi'}</div>
         </div>
         <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
 
@@ -448,36 +448,50 @@ async function siparisYukle() {
   } catch (e) { kok.innerHTML = bosMesaj('Sipariş verisi alınamadı.'); }
 }
 
-/* ── Yolda olan sevkiyatlar ── */
-async function sevkYukle() {
-  const kok = document.getElementById('lSevk'), ozet = document.getElementById('ozSevk');
-  if (!gorunur('sevkiyat')) { kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = ''; return; }
+/* ── Termini geçen siparişler (TG1) ──
+   Kapalı sipariş sayılmaz: teslim edilmiş ya da iptal edilmiş bir
+   siparişin geçmiş termini TARİHTİR, bekleyen iş değil. Yanan satır
+   sayısı gerçekten yapılacak işi göstersin.
+
+   Termini HİÇ girilmemiş açık siparişler listeye girmez (gecikme
+   ölçülemez) ama sayıları alta yazılır: "0 gecikme" ile "tarih
+   koymadığımız için ölçemiyoruz" aynı şey değil. */
+const TERMIN_KAPALI = ['Teslim Edildi', 'Iptal Edildi'];
+async function terminYukle() {
+  const kok = document.getElementById('lTermin'), ozet = document.getElementById('ozTermin');
+  if (!gorunur('siparis')) { kok.innerHTML = bosMesaj('Bu bilgiyi görme yetkin yok.'); ozet.textContent = ''; return; }
   try {
-    const d = await api('/api/sevkiyat');
-    const liste = Array.isArray(d) ? d : (d.data || []);
-    const yolda = liste
-      .filter(s => ['Yolda', 'Gumrukte', 'Hazirlaniyor'].includes(s.durum))
-      .map(s => ({ ...s, bekleme: gunFarki(s.cikis_tarihi || s.tarih) }))
-      .sort((a, b) => b.bekleme - a.bekleme);
-    ozet.textContent = yolda.length ? yolda.length + ' sevkiyat açık' : '';
-    if (!yolda.length) { kok.innerHTML = bosMesaj('Yolda sevkiyat yok.'); return; }
-    kok.innerHTML = yolda.slice(0, 6).map(s => {
-      const gec = s.bekleme >= 21;
-      return `
-      <div class="d-satir ${gec ? 'ray-kehribar' : 'ray-yesil'}">
+    const d = await api('/api/siparis?per_page=300');
+    const acik = (d.data || []).filter(s => !TERMIN_KAPALI.includes(s.durum));
+    const gecen = acik
+      .filter(s => s.termin)
+      .map(s => ({ ...s, gecikme: gunFarki(s.termin) }))
+      .filter(s => s.gecikme > 0)
+      .sort((a, b) => b.gecikme - a.gecikme);
+    const terminsiz = acik.filter(s => !s.termin).length;
+    ozet.textContent = gecen.length ? gecen.length + ' sipariş gecikti' : '';
+
+    const dipnot = terminsiz
+      ? `<div class="d-dipnot">${terminsiz} açık siparişte termin tarihi yok — gecikme ölçülemiyor.</div>`
+      : '';
+    if (!gecen.length) {
+      kok.innerHTML = bosMesaj('Termini geçen sipariş yok.') + dipnot;
+      return;
+    }
+    kok.innerHTML = gecen.slice(0, 6).map(s => `
+      <div class="d-satir ${s.gecikme >= 7 ? 'ray-kirmizi' : 'ray-kehribar'}">
         <div>
-          <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || s.varis_noktasi || '')}</div>
-          <div class="detay">${kacar(s.durum)}${s.bekleme ? ' · ' + s.bekleme + ' gündür' : ''}${s.konteyner_no ? ' · ' + kacar(s.konteyner_no) : ''}</div>
+          <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || '')}</div>
+          <div class="detay">${s.gecikme} gün gecikti · termin ${tarihTR(s.termin)} · “${kacar(durumAdi(s.durum))}”</div>
         </div>
-        <a class="mini-btn ${gec ? 'dolu' : ''}" href="/sevkiyat">${gec ? 'Durum güncelle' : 'Aç'}</a>
-      </div>`;
-    }).join('');
-  } catch (e) { kok.innerHTML = bosMesaj('Sevkiyat verisi alınamadı.'); }
+        <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
+      </div>`).join('') + dipnot;
+  } catch (e) { kok.innerHTML = bosMesaj('Sipariş verisi alınamadı.'); }
 }
 
 /* ── Gün özeti satırı ── */
 function ozetYaz() {
-  const sayilar = ['lAlacak', 'lCek', 'lSiparis', 'lSevk']
+  const sayilar = ['lAlacak', 'lCek', 'lSiparis', 'lTermin']
     .map(id => document.getElementById(id).querySelectorAll('.d-satir').length);
   const toplam = sayilar.reduce((a, b) => a + b, 0);
   const el = document.getElementById('ozetSatir');
@@ -553,6 +567,6 @@ document.querySelectorAll('[data-detay]').forEach(k => {
 });
 
 selamla();
-Promise.all([ozetYukle(), alacakYukle(), cekYukle(), siparisYukle(), sevkYukle()]).then(ozetYaz);
+Promise.all([ozetYukle(), alacakYukle(), cekYukle(), siparisYukle(), terminYukle()]).then(ozetYaz);
 </script>
 {% endblock %}

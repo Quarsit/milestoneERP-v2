@@ -1029,10 +1029,10 @@ async function listeyiCiz() {
       const r = RAY[x.durum] || 'ray-gri';
       return `
       <tr class="${r}" style="border-left-color:var(${RENK[r]})" onclick="${SECIM_KIPI ? `secDegistir('${kacar(x.id)}')` : `detayAc('${kacar(x.id)}')`}">
-        <td style="${SECIM_KIPI ? '' : 'display:none'}"><input type="checkbox" class="sec-kutu"
+        ${SECIM_KIPI ? `<td><input type="checkbox" class="sec-kutu"
              data-id="${kacar(x.id)}" ${SECILENLER.has(x.id) ? 'checked' : ''}
              onclick="event.stopPropagation();secDegistir('${kacar(x.id)}')"
-             style="width:15px;height:15px;cursor:pointer"></td>
+             style="width:15px;height:15px;cursor:pointer"></td>` : ''}
         <td><span class="mono">${kacar(stokNo(x))}</span>${
               x.konum ? '<div class="ikincil">' + kacar(x.konum) + '</div>' : ''}</td>
         <td>${kacar(x.cins || '—')}<div class="ikincil">${kacar(x.ozellik || x.uretici || '')}</div></td>

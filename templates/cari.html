@@ -187,9 +187,7 @@
            Boş bırakılırsa TÜMÜ gelir — varsayılan davranış değişmez. -->
       <div class="form-alan" style="margin-top:12px">
         <label>İşlem Türü (boş = tümü)</label>
-        <div id="eksTipler" style="display:grid;grid-template-columns:1fr 1fr;
-             gap:4px 10px;max-height:190px;overflow:auto;border:1px solid var(--cizgi);
-             border-radius:var(--r-kucuk);padding:9px 11px"></div>
+        <div id="eksTipler" class="sec-izgara"></div>
         <div style="display:flex;gap:8px;margin-top:6px">
           <button type="button" class="mini-btn" onclick="eksTipHepsi(true)">Tümünü seç</button>
           <button type="button" class="mini-btn" onclick="eksTipHepsi(false)">Temizle</button>
@@ -915,7 +913,7 @@ function ekstreSecenek(id) {
      Sabit liste yazsaydım yeni bir işlem türü eklendiğinde
      süzgeçte görünmezdi. */
   document.getElementById('eksTipler').innerHTML =
-    '<span style="color:var(--soluk);font-size:.8rem">yükleniyor…</span>';
+    '<span class="sec-bos">yükleniyor…</span>';
   api(`/api/cari/${encodeURIComponent(id)}/hareketler`)
     .then(d => eksTipleriDoldur(d.data || []))
     .catch(() => eksTipleriDoldur([]));
@@ -1131,12 +1129,12 @@ function eksTipleriDoldur(hareketler) {
   const tipler = [...new Set((hareketler || [])
     .map(h => h.islem_tip).filter(Boolean))].sort();
   if (!tipler.length) {
-    kutu.innerHTML = '<span style="color:var(--soluk);font-size:.8rem">hareket yok</span>';
+    kutu.innerHTML = '<span class="sec-bos">hareket yok</span>';
     return;
   }
   kutu.innerHTML = tipler.map(t => `
-    <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer">
-      <input type="checkbox" class="eks-tip" value="${kacar(t)}"> ${kacar(t)}
+    <label class="sec-ogesi">
+      <input type="checkbox" class="eks-tip" value="${kacar(t)}"><span>${kacar(t)}</span>
     </label>`).join('');
 }
 

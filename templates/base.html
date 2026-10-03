@@ -148,7 +148,17 @@ a{color:inherit;text-decoration:none}
 .modal-bas{padding:18px 22px 0}
 .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
 .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
-.modal-gov{padding:18px 22px;overflow-y:auto}
+/* ── MD2: GÖVDE ZEMİNİ KOYU ──
+   Pencere, içindeki kutular ve giriş alanları aynı beyazdı; sınırlar
+   yalnızca ince çizgilerle belliydi ve göz yoruyordu. Artık başlık ve
+   alt şerit beyaz, GÖVDE zemin rengi — içindeki beyaz alanlar üstünde
+   duruyor. Uygulamanın geri kalanıyla aynı mantık (kart/zemin). */
+.modal-gov{padding:18px 22px;overflow-y:auto;background:var(--taban)}
+/* Her şablon giriş alanlarına beyaz zemin tanımlamıyor; koyu gövdede
+   kaybolmasınlar. Salt okunur alanlar hariç — onlar bilerek soluk. */
+.modal-gov input:not([type=checkbox]):not([type=radio]):not([type=file]):not([readonly]),
+.modal-gov select:not([readonly]),
+.modal-gov textarea:not([readonly]){background:var(--yuzey)}
 .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
 .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
 .hs-satir{display:grid;gap:12px;margin-bottom:12px}
@@ -263,26 +273,82 @@ a{color:inherit;text-decoration:none}
 .rz-gri{background:var(--notr-bg);color:var(--soluk)}
 .rz-mor{background:var(--mor-bg);color:var(--mor)}   /* DV6: Acente rozeti — sınıf tanımsızdı, çıplak metin görünüyordu */
 
-.ray-kirmizi{border-left-color:var(--kirmizi)!important}
-.ray-kehribar{border-left-color:var(--kehribar)!important}
-.ray-yesil{border-left-color:var(--verde)!important}
-.ray-mavi{border-left-color:var(--mavi)!important}
-.ray-gri{border-left-color:var(--cizgi-koyu)!important}
-.ray-mor{border-left-color:var(--mor)!important}
+/* İki mekanizma bir arada: `border-left-color` div satırlar için
+   (.d-satir, .bg-satir, .kalem-satir), `--ray` tablo satırları için
+   (KT1 — ayrı kartta TR kenarlığı çizilmiyor). */
+.ray-kirmizi{border-left-color:var(--kirmizi)!important;--ray:var(--kirmizi)}
+.ray-kehribar{border-left-color:var(--kehribar)!important;--ray:var(--kehribar)}
+.ray-yesil{border-left-color:var(--verde)!important;--ray:var(--verde)}
+.ray-mavi{border-left-color:var(--mavi)!important;--ray:var(--mavi)}
+.ray-gri{border-left-color:var(--cizgi-koyu)!important;--ray:var(--cizgi-koyu)}
+.ray-mor{border-left-color:var(--mor)!important;--ray:var(--mor)}
+
+/* ── SC1: ÇOKTAN SEÇMELİ SEÇENEK IZGARASI ──
+   Onay kutuları çıplak `label`'lardı ve `.form-alan label` stillerini
+   (BÜYÜK HARF, kalın, harf aralığı) miras alıyorlardı: "Avans Devri
+   (Giriş)" üç satıra sarıyor, kutu metinden kopuyordu. Seçenek sayısı
+   arttıkça bozulma büyüyordu.
+
+   Artık her seçenek kendi kutusu; sütun sayısı genişliğe göre kendini
+   ayarlıyor (`auto-fill`), 3 seçenekle de 30 seçenekle de düzgün. */
+.sec-izgara{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));
+  gap:6px;max-height:228px;overflow:auto;padding:1px}
+/* Seçici `.form-alan label` (0,1,1) kadar güçlü OLMALI, yoksa sayfanın
+   kendi stil bloğu sonra geldiği için BÜYÜK HARF/kalın miras kalır.
+   `.sec-izgara > label.sec-ogesi` = (0,2,1) — her yerde kazanır. */
+.sec-izgara > label.sec-ogesi{display:flex;align-items:center;gap:9px;margin:0;padding:8px 11px;
+  border:1px solid var(--cizgi);border-radius:9px;background:var(--yuzey);
+  cursor:pointer;font-size:.83rem;font-weight:500;line-height:1.3;
+  letter-spacing:0;text-transform:none;color:var(--murekkep);
+  transition:border-color .12s, background .12s}
+.sec-izgara > label.sec-ogesi:hover{border-color:var(--verde)}
+.sec-izgara > label.sec-ogesi input{width:15px;height:15px;flex:none;cursor:pointer;accent-color:var(--verde)}
+/* Seçili kutu vurgusu — `:has` desteklenmezse yalnızca vurgu olmaz,
+   seçim yine çalışır. */
+.sec-izgara > label.sec-ogesi:has(input:checked){border-color:var(--verde);background:var(--verde-acik)}
+.sec-bos{color:var(--soluk);font-size:.8rem;padding:4px 2px}
 
 .mini-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:6px;padding:5px 11px;font-size:.78rem;font-weight:600;color:var(--murekkep);white-space:nowrap;transition:border-color .15s}
 .mini-btn:hover{border-color:var(--verde);color:var(--verde)}
 .mini-btn.dolu{background:var(--verde);border-color:var(--verde);color:#fff}
 .mini-btn.dolu:hover{background:var(--verde-koyu)}
 
-.tablo-kutu{background:var(--yuzey);border:1px solid var(--cizgi);border-radius:var(--r);overflow:hidden}
+/* ── LİSTE SATIRI = BAĞIMSIZ KART (KT1) ──
+   Satırlar tek gövdede ince çizgilerle ayrılıyordu; artık aralarında
+   boşluk olan ayrı kartlar — çekmecedeki kartlarla aynı dil.
+
+   Neden hâlâ TABLO: sütunların hizalı kalması gerekiyor (tutar sağa
+   dayalı, tarih son sütun). div'lere çevirmek her sayfada sütun
+   genişliklerini elle ayarlamak demekti; `border-collapse:separate` +
+   `border-spacing` aynı sonucu tablo düzenini bozmadan veriyor.
+
+   Kapsam `.tablo-kutu` İÇİ: sayfalarda kendi inline stili olan iç içe
+   tablolar da var (stok plaka dökümü gibi), onlar etkilenmesin. */
+.tablo-kutu{background:transparent;border:0;border-radius:0;overflow:visible}
 table{width:100%;border-collapse:collapse}
+.tablo-kutu > table{border-collapse:separate;border-spacing:0 7px}
 thead th{text-align:left;font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);padding:11px 14px;border-bottom:1px solid var(--cizgi);background:#FBFBF9}
+.tablo-kutu > table thead th{border-bottom:0;background:transparent;padding:2px 14px 1px}
 thead th.sag,td.sag{text-align:right}
 tbody td{padding:11px 14px;border-bottom:1px solid var(--cizgi);font-size:.88rem}
 tbody tr{border-left:3px solid transparent;transition:background .12s}
 tbody tr:hover{background:#FAFAF7}
 tbody tr:last-child td{border-bottom:0}
+.tablo-kutu > table > tbody > tr > td{background:var(--yuzey);padding:13px 14px;
+  border-top:1px solid var(--cizgi);border-bottom:1px solid var(--cizgi);
+  box-shadow:0 1px 2px rgba(25,28,26,.04)}
+/* Renkli ray: `border-collapse:separate` iken tarayıcı TR'ye verilen
+   kenarlığı ÇİZMEZ. Ray sınıfları bir değişken de yazıyor (aşağıda),
+   ilk hücre onu iç gölge olarak basıyor — kart kenarlığı bozulmadan. */
+.tablo-kutu > table > tbody > tr > td:first-child{border-left:1px solid var(--cizgi);
+  border-radius:10px 0 0 10px;
+  box-shadow:inset 3px 0 0 var(--ray, transparent), 0 1px 2px rgba(25,28,26,.04)}
+.tablo-kutu > table > tbody > tr > td:last-child{border-right:1px solid var(--cizgi);
+  border-radius:0 10px 10px 0}
+.tablo-kutu > table > tbody > tr:hover > td{background:#FAFAF7}
+/* Tek hücrelik durum satırı (yükleniyor / kayıt yok) kart olmasın. */
+.tablo-kutu > table > tbody > tr > td[colspan]:only-child{background:transparent;
+  border:0;box-shadow:none;border-radius:0}
 td.mono,.mono{font-family:var(--mono)}
 td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 .bos{text-align:center;color:var(--soluk);padding:30px;font-size:.9rem}
@@ -301,6 +367,9 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 .d-satir:last-child{border-bottom:0}
 .d-satir .kim{font-weight:500;font-size:.9rem}
 .d-satir .detay{font-size:.78rem;color:var(--soluk);margin-top:1px}
+/* Listenin altındaki açıklama satırı (ör. termini girilmemiş siparişler):
+   kayıt değil, listenin KAPSAMI hakkında not. */
+.d-dipnot{padding:9px 16px;font-size:.76rem;color:var(--soluk);background:var(--taban)}
 .d-satir .tutar{margin-left:auto;font-family:var(--mono);font-weight:600;font-size:.88rem;white-space:nowrap}
 
 /* ─── Sağ çekmece ─── */
@@ -1024,6 +1093,19 @@ function para2(n, doviz = 'USD') {
   return (n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + s;
 }
 /** '2026-07-03' → gün farkı */
+/* Sipariş durumlarının okunur adları. Tek yerde: Bugün sayfası ham
+   değeri basıyordu ("Onaylandi"), sipariş sayfası düzgün olanı. */
+const SIPARIS_ADI = { 'Teklif Asam.':'Teklif', 'Onaylandi':'Onaylandı',
+  'Uretimde':'Üretimde', 'Hazir':'Hazır', 'Teslim Edildi':'Teslim Edildi',
+  'Iptal Edildi':'İptal' };
+const durumAdi = d => SIPARIS_ADI[d] || d || '—';
+
+/** '2026-09-30' → '30.09.2026'. Tek yerde: aynı biçim iki sayfada
+    ayrı ayrı yazılırsa zamanla ayrışırlar. */
+function tarihTR(iso) {
+  const [y, a, g] = String(iso || '').slice(0, 10).split('-');
+  return g ? `${g}.${a}.${y}` : (iso || '—');
+}
 function gunFarki(tarih) {
   if (!tarih) return 0;
   const t = new Date(tarih + 'T00:00:00');

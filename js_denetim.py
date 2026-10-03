@@ -338,6 +338,35 @@ else:
     print("   ✓ temiz — her fonksiyon adı dosyasında bir kez tanımlı")
 
 print()
+print("─" * 70)
+print(" J6 · SATIR KARTININ İLK HÜCRESİ GİZLİ   [RAY SESSİZCE KAYBOLUR]")
+print("─" * 70)
+# KT1: liste satirlari ayri kart; kartin sol kenari ve renkli ray
+# `td:first-child` uzerinden ciziliyor. Ilk hucre `display:none` ise
+# kenarlik gorunmeyen hucreye duser — ray ve yuvarlak kose sessizce
+# kaybolur, sayfa yine acilir. Olculdu: stok listesinde secim kipi
+# kapaliyken gizli onay kutusu hucresi yuzunden durum raylari yok oldu.
+_j6 = 0
+for p6 in sorted(SABLON.glob('*.html')):
+    if p6.name.endswith('_print.html') or p6.name in ('base.html', 'giris.html'):
+        continue
+    ham6 = p6.read_text(encoding='utf-8', errors='replace')
+    # Satir aciliminin HEMEN ardindaki ilk <td ...> gizli mi
+    for m6 in re.finditer(r'<tr\b[^>]*>\s*(?:\$\{[^}]*\}\s*)?<td\b([^>]*)>', ham6):
+        if 'display:none' in m6.group(1).replace(' ', ''):
+            satir = ham6[:m6.start()].count('\n') + 1
+            print(f"   ✗ {p6.name}:{satir} — satırın ilk hücresi gizlenmiş")
+            _j6 += 1
+if _j6:
+    print()
+    print("   → İlk hücreyi `display:none` ile gizlemeyin; gerekmiyorsa")
+    print("     HİÇ basmayın (koşullu üretin). Gizli hücre tablo düzeninden")
+    print("     çıkar ama `:first-child` yine onu seçer.")
+    bulgu += _j6
+else:
+    print("   ✓ temiz — hiçbir satırın ilk hücresi gizli değil")
+
+print()
 print("═" * 70)
 if bulgu:
     print(f" ✗ {bulgu} şablonda JavaScript hatası ({betikli} şablon tarandı)")

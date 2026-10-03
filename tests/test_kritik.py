@@ -1897,14 +1897,18 @@ def test_bg1_dashboard_ozet_rakamlari():
         if not Cari.query.get('CBG'):
             db.session.add(Cari(id='CBG', unvan='BUGUN MERMER', cari_tip='Müşteri',
                                 para_birimi='USD', gorunurluk='ortak'))
-        # Bu yıl 2 satış: 100.000 ciro, 70.000 maliyet
-        for i, (ay, tutar, mal) in enumerate([(1, 60000, 42000), (bugun.month, 40000, 28000)]):
+        # Bu yıl 2 satış: 100.000 ciro, 70.000 maliyet.
+        # Ay içi satışın tarihi BUGÜN: ayın 5'i yazılırsa her ayın ilk
+        # dört gününde gelecekte kalır, özet onu saymaz ve test tarihe
+        # göre düşerdi (3 Ekim'de düştü).
+        for i, (tarih, tutar, mal) in enumerate([
+                (_d(bugun.year, 1, 5), 60000, 42000), (bugun, 40000, 28000)]):
             sid = f'SK-BG1-{i}'
             if not SatisKaydi.query.get(sid):
                 db.session.add(SatisKaydi(
                     id=sid, stok_id=f'BGX{i}', stok_tip='PLAKA', cins='BG TEST',
                     musteri='BUGUN MERMER', cari_id='CBG',
-                    satis_tarihi=_d(bugun.year, ay, 5), doviz='USD',
+                    satis_tarihi=tarih, doviz='USD',
                     tutar=tutar, tutar_usd=tutar, maliyet_usd=mal, kar_usd=tutar - mal))
         # AYNI cari: hem borç hem alacak → cari içinde netlenmeli
         for hid, borc, alacak in [('HBG-A', 50000, 0), ('HBG-B', 0, 20000)]:
@@ -2336,3 +2340,42 @@ def test_tr1_tarihce_metni_ucta_kurulmuyor():
         assert not any(ch in str(o.get('ek', '')) for ch in ('$', '\u20ac')), o
     para = [o for o in th if o['olay'] == 'avans_alindi']
     assert para and abs(float(para[0]['tutar']) - 1500) < 0.01, para
+
+def test_tg1_termini_gecen_siparis_listesi():
+    """TG1: Bugün sayfasının termin listesi /api/siparis'ten besleniyor;
+    uç `termin` alanını vermeli ve KAPALI siparişler ayrılabilmeli.
+
+    Liste tarayıcıda süzülüyor; burada süzgecin dayandığı alanların
+    gerçekten geldiği doğrulanıyor — alan sessizce düşerse kutu
+    kalıcı olarak boş kalır ve kimse fark etmez."""
+    from models import Siparis
+    from datetime import date as _d, timedelta as _td
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='TERMIN AS', cari_id='CTG1', tutar=4000)
+    gecmis = _d.today() - _td(days=12)
+    with fa.app.app_context():
+        sp = Siparis.query.get(sid)
+        sp.termin = gecmis
+        db.session.commit()
+    d = c.get('/api/siparis?per_page=300', headers=H).get_json()
+    satir = [x for x in d['data'] if x['id'] == sid]
+    assert satir, [x['id'] for x in d['data']][:5]
+    assert satir[0]['termin'] == gecmis.isoformat(), satir[0]
+    assert satir[0]['durum'] not in ('Teslim Edildi', 'Iptal Edildi'), satir[0]
+
+
+def test_tg1_teslim_edilen_siparis_gecikme_sayilmaz():
+    """TG1: teslim edilmiş siparişin geçmiş termini TARİHTİR, bekleyen
+    iş değil. Uç durumu doğru vermeli ki liste onu ayıklayabilsin."""
+    from models import Siparis
+    from datetime import date as _d, timedelta as _td
+    c = istemci('admin', 'ADMIN')
+    sid = _av1_siparis(c, musteri='TESLIM AS', cari_id='CTG2', tutar=3000)
+    with fa.app.app_context():
+        sp = Siparis.query.get(sid)
+        sp.termin = _d.today() - _td(days=30)
+        sp.durum = 'Teslim Edildi'
+        db.session.commit()
+    d = c.get('/api/siparis?per_page=300', headers=H).get_json()
+    satir = [x for x in d['data'] if x['id'] == sid][0]
+    assert satir['durum'] == 'Teslim Edildi', satir
