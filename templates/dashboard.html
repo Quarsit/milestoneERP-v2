@@ -23,13 +23,26 @@
     padding:0 0 9px;border-bottom:1px solid var(--cizgi);margin-bottom:4px;
     font-size:.8rem;color:var(--soluk)}
   .bg-detay-ust strong{font-family:var(--mono);font-size:.92rem;color:var(--murekkep)}
-  .bg-satir{display:flex;align-items:center;gap:10px;padding:9px 10px 9px 11px;
-    border-bottom:1px solid var(--cizgi);cursor:pointer;
-    border-left:3px solid transparent;border-radius:0 6px 6px 0}
-  .bg-satir:hover{background:var(--notr-bg)}
-  .bg-satir.bs-kirmizi{border-left-color:var(--kirmizi)}
-  .bg-satir.bs-kehribar{border-left-color:var(--kehribar)}
-  .bg-satir.bs-yesil{border-left-color:var(--verde)}
+  /* ── CK1: ÇEKMECE SATIRI = BAĞIMSIZ KART ──
+     Satırlar ince çizgilerle ayrılmış düz bir listeydi; sayfadaki
+     listeler kart olunca burası geride kaldı. Artık aynı dil.
+
+     Ray, kenarlığı bozmadan İÇ GÖLGEYLE çiziliyor — tablolardaki
+     kart satırlarıyla aynı yöntem. */
+  .bg-detay-liste{display:flex;flex-direction:column;gap:7px}
+  /* Satırlar kart olduğuna göre onları saran bölüm KART OLMAMALI,
+     yoksa kart içinde kart olur. `:has` desteklenmezse eski görünüm
+     kalır — işlev etkilenmez. */
+  .cek-bolum:has(> .bg-detay-liste){background:transparent;border:0;
+    box-shadow:none;padding:0}
+  .bg-satir{display:flex;align-items:center;gap:10px;padding:11px 13px;
+    background:var(--yuzey);border:1px solid var(--cizgi);border-radius:10px;
+    cursor:pointer;transition:border-color .12s;
+    box-shadow:inset 3px 0 0 transparent}
+  .bg-satir:hover{border-color:var(--verde)}
+  .bg-satir.bs-kirmizi{box-shadow:inset 3px 0 0 var(--kirmizi)}
+  .bg-satir.bs-kehribar{box-shadow:inset 3px 0 0 var(--kehribar)}
+  .bg-satir.bs-yesil{box-shadow:inset 3px 0 0 var(--verde)}
   /* Satırın tıklanabilir olduğunu gösteren ok; hover'da belirir. */
   .bg-satir-ok{color:var(--cizgi-koyu);font-size:1.1rem;flex:none;
     opacity:.45;transition:opacity .15s,color .15s}
@@ -42,7 +55,9 @@
   .bg-satir-tutar .eksi{color:var(--kirmizi)}
 
 
-  .bg-serit{display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-bottom:22px}
+  /* Eşit sütun: 1.4fr/1fr'de iki kutu farklı genişlikteydi ve göz
+     her seferinde hizayı aramak zorunda kalıyordu. */
+  .bg-serit{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px}
   .bg-kutu{background:var(--yuzey);border:1px solid var(--cizgi);
     border-radius:var(--r);padding:14px 16px}
   .bg-kutu-bas{display:flex;align-items:baseline;gap:9px;margin-bottom:10px}
@@ -553,7 +568,8 @@ async function detayAc(anahtar) {
       <span>${d.adet} kayıt</span>
       <strong>${para(d.toplam_usd)}</strong>
     </div>`;
-  cekmeceAc(d.baslik || 'Detay', d.aciklama || '', ustBilgi + govde,
+  const liste = `<div class="bg-detay-liste">${govde}</div>`;
+  cekmeceAc(d.baslik || 'Detay', d.aciklama || '', ustBilgi + liste,
     modul ? `<button class="blok-btn" onclick="location.href='/${modul === 'kasa' ? 'cek' : modul}'">Modülü aç</button>` : '');
 }
 

@@ -66,12 +66,15 @@
     text-transform:uppercase;color:var(--soluk);margin-bottom:8px}
 
   /* ── TARİHÇE (TR1) ── olay günlüğü: tarih | olay | ek */
-  .tarihce{display:grid;grid-template-columns:auto 1fr;gap:0 14px;font-size:.84rem}
-  .th-satir{display:contents}
+  /* CK1: olaylar da kart. Tarih sütunu SABİT GENİŞLİK — `display:contents`
+     ızgarasında hizalıydı, kartta da hizalı kalsın diye. */
+  .tarihce{display:flex;flex-direction:column;gap:6px;font-size:.84rem}
+  .th-satir{display:flex;align-items:baseline;gap:12px;
+    background:var(--taban);border:1px solid var(--cizgi);
+    border-radius:9px;padding:8px 11px}
   .th-tarih{font-family:var(--mono);font-size:.78rem;color:var(--soluk);
-    white-space:nowrap;padding:5px 0;border-top:1px solid var(--cizgi)}
-  .th-govde{padding:5px 0;border-top:1px solid var(--cizgi);min-width:0}
-  .th-satir:first-child .th-tarih,.th-satir:first-child .th-govde{border-top:0}
+    white-space:nowrap;width:82px;flex:none}
+  .th-govde{min-width:0;flex:1}
   .th-govde .th-ek{color:var(--soluk);font-size:.76rem}
   .th-nokta{display:inline-block;width:7px;height:7px;border-radius:50%;
     margin-right:7px;vertical-align:1px;background:var(--cizgi-koyu)}
@@ -88,7 +91,10 @@
   /* Özet kutusunda ikinci satır (AV1: avansın kalanı) */
   .alan .alan-alt{font-size:.74rem!important;font-weight:500!important;
     color:var(--soluk);margin-top:1px!important}
-  .kalem-satir{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
+  /* `flex-wrap`: karşılama bilgisi KENDİ satırında dursun. Markup'ta
+     `grid-column:1/-1` yazıyordu ama kap flex; o kural hiçbir şey
+     yapmıyor, bilgi fiyatın yanına sıkışıyordu (`flex-basis:100%` oldu). */
+  .kalem-satir{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
   .kalem-satir:last-child{border-bottom:0}
   .kalem-satir .m{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
   #liste tbody tr{cursor:pointer}
@@ -755,7 +761,7 @@ async function detayAc(id) {
             </div>
           </div>
           <span class="m">${para(k.toplam_fiyat, k.doviz)}</span>
-          <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;margin-top:4px;
+          <div style="flex-basis:100%;display:flex;align-items:center;gap:8px;margin-top:4px;
                       font-size:.74rem;color:var(--soluk)">
             <span>${karsilamaOzetMetni(k)}</span>
             ${yazabilir('siparis') ? `<button class="mini-btn" onclick="event.stopPropagation();karsilamaAc('${kacar(sip.id)}', ${k.id})">Karşılama</button>` : ''}

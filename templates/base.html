@@ -448,6 +448,46 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   .cek-eylemler .blok-btn[style*="kirmizi"]:hover{background:var(--kirmizi-bg)}
   .cek-eylemler .blok-btn:disabled{border-color:var(--cizgi);color:var(--cizgi-koyu);background:var(--yuzey)}
 }
+/* ── ÇEKMECE LİSTE SATIRI = KART (CK1) ──
+   Sayfadaki listeler karta dönünce çekmecedekiler düz satır kaldı.
+
+   Buradaki satırlar BEYAZ bir kartın İÇİNDE duruyor; beyaz yapılsalar
+   kart içinde kart olurdu. Zemin rengiyle ayrışıyorlar — çekmecedeki
+   boş durum kutularıyla (`.cek-bolum .bos`) aynı mantık.
+
+   `#cekGov` ile nitelemek ŞART: şablonların kendi kuralları bu
+   dosyadan SONRA yüklendiği için eşit özgüllükte onlar kazanırdı.
+   Ayrıca bu satır sınıflarının bir kısmı çekmece DIŞINDA da
+   kullanılıyor; oradaki görünüm değişmesin.
+
+   Yeni bir çekmece listesi eklenirse sınıf adı bu iki listeye yazılır. */
+#cekGov .lookup-satir,
+#cekGov .ekstre-satir,
+#cekGov .fark-satir,
+#cekGov .tahs-satir,
+#cekGov .ozet-satir,
+#cekGov .hareket-satir,
+#cekGov .aday-satir,
+#cekGov .hedef-satir,
+#cekGov .kalem-satir,
+#cekGov .yas-satir,
+#cekGov .stok-satir,
+#cekGov .af-satir{
+  background:var(--taban);border:1px solid var(--cizgi);border-radius:9px;
+  margin-bottom:6px;padding-left:11px;padding-right:11px}
+#cekGov .lookup-satir:last-child,
+#cekGov .ekstre-satir:last-child,
+#cekGov .fark-satir:last-child,
+#cekGov .tahs-satir:last-child,
+#cekGov .ozet-satir:last-child,
+#cekGov .hareket-satir:last-child,
+#cekGov .aday-satir:last-child,
+#cekGov .hedef-satir:last-child,
+#cekGov .kalem-satir:last-child,
+#cekGov .yas-satir:last-child,
+#cekGov .stok-satir:last-child,
+#cekGov .af-satir:last-child{margin-bottom:0}
+
 .cek-bolum > h4:first-child{margin-top:0}
 /* GR4: cari bakiye tablosu */
 .bakiye-alan .bk-tablo{display:grid;grid-template-columns:auto 1fr;gap:4px 0;align-items:baseline;
