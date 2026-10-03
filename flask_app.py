@@ -15691,18 +15691,37 @@ def create_app():
             # Ciro edilen cariye borç kapatma (opsiyonel cari hareket)
             if d.get('cari_hareket_olustur') and ciro_cari_id:
                 try:
+                    # GT1: TRY karsiligi ve kur da yazilir. Eskiden
+                    # ikisi de bos kaliyordu; ekstre, yaslandirma ve
+                    # kasa mutabakati bos alani birbirinden FARKLI
+                    # varsayimlarla dolduruyordu.
+                    _c_try, _c_kur = _try_karsilik(
+                        q2(c.tutar), c.doviz or 'TRY', tarih=date.today())
                     _ch = CariHareket(
                         id=_yeni_id('HR'), hareket_tarihi=date.today(),
                         cari_id=ciro_cari_id, cari_unvan=ciro_unvan,
                         islem_tip='Çek Cirosu',
                         aciklama=f'Çek cirosu ({c.cek_no or c.id})',
                         borc=q2(c.tutar), alacak=0, doviz=c.doviz or 'TRY',
+                        borc_try=q2(_c_try), alacak_try=0,
+                        kur_uygulanan=q_kur(_c_kur),
                         kaynak='cek', baglanti_tip='cek', baglanti_id=c.id,
                         kullanici=session.get('kullanici'))
                     db.session.add(_ch)
                     c.cari_hareket_id = _ch.id
-                except Exception:
-                    pass
+                except Exception as _ce:
+                    # F13 ile ayni gerekce — o yama kasa blogunu
+                    # duzeltmis, HEMEN USTTEKI ciro blogu atlanmisti.
+                    # Sessiz yutmada cek 'Ciro Edildi' isaretleniyor
+                    # ama borcu kapatan cari hareket yazilmiyordu:
+                    # cari hesap oldugundan fazla borclu kaliyordu ve
+                    # bu yalnizca mutabakatta fark ediliyordu.
+                    _hata = str(_ce)
+                    db.session.rollback()
+                    app.logger.warning(
+                        f'Çek cirosu cari hareketi yazılamadı ({cek_id}): {_hata}')
+                    return jsonify({'ok': False, 'error': 'ciro_hatasi', 'mesaj':
+                                    f'Ciro cari hareketi yazılamadı: {_hata}. Çek durumu DEĞİŞTİRİLMEDİ — ciro edilen cariyi kontrol edin.'}), 400
             mesaj = 'Çek ciro edildi'
 
         elif islem in ('tahsil_et', 'odendi'):

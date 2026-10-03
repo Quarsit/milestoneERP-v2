@@ -2483,3 +2483,34 @@ def test_gt1_ekstre_ozeti_satirlarla_tutar():
     # Özetteki en büyük rakam toplam alacak olmalı
     assert abs(max(coz(x) for x in sayilar) - beklenen) < 0.05, (
         'özet ile satırlar tutmuyor', sayilar, beklenen)
+
+def test_gt1_cek_cirosu_try_karsiligi_yazilir():
+    """GT1/K3: çek cirosu cari hareketi `borc_try` ve `kur_uygulanan`
+    yazmıyordu. Alan NULL kalınca ekstre, yaşlandırma ve mutabakat
+    boşluğu birbirinden FARKLI varsayımlarla dolduruyordu."""
+    from models import Cari, Cek, CariHareket
+    from datetime import date as _d, timedelta as _td
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        for cid, ad in (('CCK1', 'CEK VEREN AS'), ('CCK2', 'CIRO EDILEN AS')):
+            if not Cari.query.get(cid):
+                db.session.add(Cari(id=cid, unvan=ad, cari_tip='Musteri',
+                                    para_birimi='USD', gorunurluk='ortak'))
+        db.session.commit()
+    r = c.post('/api/cek', headers=H, json={
+        'yon': 'alinan', 'tutar': 2500, 'doviz': 'USD',
+        'vade_tarihi': (_d.today() + _td(days=30)).isoformat(),
+        'cari_id': 'CCK1', 'cek_no': 'CK-GT1'})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    cek_id = (r.get_json() or {}).get('id')
+    assert cek_id, r.get_json()
+    r2 = c.post(f'/api/cek/{cek_id}/durum', headers=H, json={
+        'islem': 'ciro', 'ciro_cari_id': 'CCK2', 'cari_hareket_olustur': True})
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(cari_id='CCK2', islem_tip='Çek Cirosu').first()
+        assert h is not None, 'ciro cari hareketi yazılmadı'
+        kur = float(h.kur_uygulanan or 0)
+        assert kur > 1.5, ('USD çekte kur yazılmalı', kur)
+        assert abs(float(h.borc_try or 0) - 2500 * kur) < 0.05, (
+            h.borc_try, kur)
