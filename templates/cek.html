@@ -493,6 +493,35 @@ function modalKapat() {
    "Alınan Çek" / "Verilen Çek" seçtiğinde buraya yönlendiriliyor
    ve form ÖN DOLU açılıyor. Çek formunu cari ekranına kopyalamak
    iki ayrı gerçek üretirdi — biri güncellenip diğeri unutulurdu. */
+/* KD2 — ?ac=<cek_id> ile MEVCUT çeki açar.
+   Bu sayfa yalnızca ?yeni= okuyordu; Bugün sayfasından bir çeke
+   tıklandığında gidecek adres yoktu. Kalıp cari.html'deki çalışan
+   örnekten: liste dolana kadar bekle, sonra detayı aç. */
+(async function cekAcParametresi() {
+  const id = new URLSearchParams(location.search).get('ac');
+  if (!id) return;
+  for (let i = 0; i < 40 && !(Array.isArray(TUM) && TUM.length); i++) {
+    await new Promise(r => setTimeout(r, 120));
+  }
+  const c = (TUM || []).find(x => String(x.id) === String(id));
+  if (!c) { bildir('Çek bulunamadı: ' + id, true); return; }
+  /* YON süzgeci varsayılan 'alinan'. Verilen bir çek açılırsa
+     çekmece açılır ama ARKADAKİ LİSTE boş görünür — kullanıcı
+     yanlış yere geldiğini sanır. Süzgeci kaydın yönüne çevir. */
+  if (c.yon && c.yon !== YON) {
+    YON = c.yon;
+    /* Öznitelik `data-y` — `data-yon` DEĞİL. Sekme düğmeleri
+       cek.html:71-72'de `data-y="alinan|verilen"` taşıyor ve
+       mevcut süzgeç kodu (:619) `b.dataset.y` okuyor. Yanlış ad
+       sessizce hiçbir düğmeyi eşleştirmez: liste doğru süzülür
+       ama sekme eski yerinde kalır. */
+    document.querySelectorAll('#yonSecim button').forEach(b =>
+      b.classList.toggle('aktif', b.dataset.y === YON));
+    ciz();
+  }
+  detayAc(c.id);
+})();
+
 (async function cekUrlParametresi() {
   const q = new URLSearchParams(location.search);
   if (q.get('yeni') !== 'alinan' && q.get('yeni') !== 'verilen') return;

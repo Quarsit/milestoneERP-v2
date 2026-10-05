@@ -385,6 +385,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
   box-shadow:inset 3px 0 0 var(--ray,transparent),0 1px 2px rgba(25,28,26,.04)}
 .d-satir:last-child{margin-bottom:0}
 .d-satir:hover{border-color:var(--verde)}
+/* KD2: tıklanabilir kart. İmleç ve hover yükselmesi, kartın
+   açılabilir olduğunu söyler — detay panelindeki .bg-satir ile
+   aynı davranış. */
+.d-satir[data-git]{cursor:pointer}
+.d-satir[data-git]:hover{box-shadow:inset 3px 0 0 var(--ray,transparent),0 3px 8px rgba(25,28,26,.09)}
+.d-satir[data-git]:focus-visible{outline:2px solid var(--verde);outline-offset:2px}
+.d-satir .ok{margin-left:6px;color:var(--soluk);font-size:1.05rem;line-height:1;flex:none}
 .d-satir .kim{font-weight:500;font-size:.9rem}
 .d-satir .detay{font-size:.78rem;color:var(--soluk);margin-top:1px}
 /* Listenin altındaki açıklama satırı (ör. termini girilmemiş siparişler):

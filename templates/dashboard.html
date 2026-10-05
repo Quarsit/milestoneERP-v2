@@ -392,12 +392,13 @@ async function alacakYukle() {
 
     if (!gecikmis.length) { kok.innerHTML = bosMesaj('Vadesi geçen alacak yok. Tahsilatlar güncel.'); return; }
     kok.innerHTML = gecikmis.slice(0, 6).map(c => `
-      <div class="d-satir ray-kirmizi">
+      <div class="d-satir ray-kirmizi" ${dGitOz('/cari?ac=' + encodeURIComponent(c.id))}>
         <div>
           <div class="kim">${kacar(c.unvan)}</div>
           <div class="detay">${c.kova} gecikmiş${c.ulke ? ' · ' + kacar(c.ulke) : ''}</div>
         </div>
         <span class="tutar">${para(c.gecen_usd)}</span>
+        <span class="ok">›</span>
       </div>`).join('');
   } catch (e) {
     kok.innerHTML = bosMesaj('Alacak verisi alınamadı.');
@@ -420,15 +421,40 @@ async function cekYukle() {
     kok.innerHTML = cekler.map(c => {
       const gecmis = (c.kalan_gun || 0) < 0;
       return `
-      <div class="d-satir ${gecmis ? 'ray-kirmizi' : 'ray-kehribar'}">
+      <div class="d-satir ${gecmis ? 'ray-kirmizi' : 'ray-kehribar'}" ${dGitOz('/cek?ac=' + encodeURIComponent(c.id))}>
         <div>
           <div class="kim">${kacar(c.cek_no || '—')}${c.banka_adi ? ' · ' + kacar(c.banka_adi) : ''}</div>
           <div class="detay">${gecmis ? Math.abs(c.kalan_gun) + ' gün geçti' : c.kalan_gun + ' gün kaldı'} · ${kacar(c.cari_unvan || '')}</div>
         </div>
         <span class="tutar">${para(c.tutar, c.doviz)}</span>
+        <span class="ok">›</span>
       </div>`;
     }).join('');
   } catch (e) { kok.innerHTML = bosMesaj('Çek verisi alınamadı.'); }
+}
+
+/* ── KD2 · KARTA TIKLAYINCA KAYDA GİT ──
+   Her listenin hedefi ve PARAMETRESİ farklı; uydurulmadı, her
+   sayfanın mevcut okuyucusundan alındı:
+     cari.html    → ?ac=<id>   (detayAc çağırır)
+     cek.html     → ?ac=<id>   (bu yama ekliyor)
+     siparis.html → ?ara=<id>  (listeyi süzer)
+   Yanlış parametre sessizce tüm listeye düşürürdü. */
+function dGit(el) {
+  const hedef = el && el.dataset ? el.dataset.git : null;
+  if (hedef) location.href = hedef;
+}
+/* Klavyeyle de açılabilsin — tıklanır görünüp erişilemeyen öğe
+   bırakmamak için. */
+function dTus(e, el) {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dGit(el); }
+}
+/* Karta tıklama özniteliklerini tek yerden üretir; dört liste de
+   aynı kalıbı kullansın diye. */
+function dGitOz(url) {
+  const u = kacar(url);
+  return `data-git="${u}" role="link" tabindex="0" title="Aç"
+          onclick="dGit(this)" onkeydown="dTus(event,this)"`;
 }
 
 /* ── Takılı siparişler ── */
@@ -452,13 +478,13 @@ async function siparisYukle() {
     ozet.textContent = takili.length ? takili.length + ' sipariş bekliyor' : '';
     if (!takili.length) { kok.innerHTML = bosMesaj('Bekleyen sipariş yok. Hat akıyor.'); return; }
     kok.innerHTML = takili.slice(0, 6).map(s => `
-      <div class="d-satir ray-mavi">
+      <div class="d-satir ray-mavi" ${dGitOz('/siparis?ara=' + encodeURIComponent(s.id))}>
         <div>
           <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || '')}</div>
           <div class="detay">${s.bekleme} gündür “${kacar(durumAdi(s.durum))}” — ${s.durum === 'Hazir' ? 'sevkiyat bekliyor' : 'ilerlemedi'}</div>
         </div>
         <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
-
+        <span class="ok">›</span>
       </div>`).join('');
   } catch (e) { kok.innerHTML = bosMesaj('Sipariş verisi alınamadı.'); }
 }
@@ -494,12 +520,13 @@ async function terminYukle() {
       return;
     }
     kok.innerHTML = gecen.slice(0, 6).map(s => `
-      <div class="d-satir ${s.gecikme >= 7 ? 'ray-kirmizi' : 'ray-kehribar'}">
+      <div class="d-satir ${s.gecikme >= 7 ? 'ray-kirmizi' : 'ray-kehribar'}" ${dGitOz('/siparis?ara=' + encodeURIComponent(s.id))}>
         <div>
           <div class="kim">${kacar(s.id)} · ${kacar(s.musteri || '')}</div>
           <div class="detay">${s.gecikme} gün gecikti · termin ${tarihTR(s.termin)} · “${kacar(durumAdi(s.durum))}”</div>
         </div>
         <span class="tutar">${para(s.toplam_tutar, s.doviz)}</span>
+        <span class="ok">›</span>
       </div>`).join('') + dipnot;
   } catch (e) { kok.innerHTML = bosMesaj('Sipariş verisi alınamadı.'); }
 }

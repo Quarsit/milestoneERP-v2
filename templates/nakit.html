@@ -71,6 +71,28 @@
     border-radius:var(--r-kucuk);padding:11px 15px;margin-bottom:14px;
     font-size:.86rem;line-height:1.6}
   .na-bos{padding:34px;text-align:center;color:var(--soluk);font-size:.9rem}
+  /* NA4 — vadesi belirsiz / geçmiş hareket paneli */
+  .na-bag{background:none;border:0;padding:0;font:inherit;color:var(--verde);
+  text-decoration:underline;cursor:pointer}
+  .na-belirsiz{background:var(--yuzey);border:1px solid var(--cizgi);
+  border-radius:var(--r);margin-bottom:16px;overflow:hidden}
+  .na-belirsiz-bas{display:flex;align-items:center;gap:10px;padding:12px 15px;
+  border-bottom:1px solid var(--cizgi);font-size:.9rem}
+  .na-belirsiz-bas span{color:var(--soluk);font-size:.8rem}
+  .na-kapat{margin-left:auto;background:none;border:0;font-size:1.3rem;
+  line-height:1;color:var(--soluk);cursor:pointer;padding:0 2px}
+  .nb-satir{display:flex;align-items:center;gap:12px;padding:10px 15px;
+  border-bottom:1px solid var(--cizgi);font-size:.86rem}
+  .nb-satir:last-child{border-bottom:0}
+  .nb-satir .ad{flex:1;min-width:0}
+  .nb-satir .alt{font-size:.76rem;color:var(--soluk);margin-top:1px}
+  .nb-satir .tut{font-family:var(--mono);font-weight:600;white-space:nowrap}
+  .nb-rozet{font-size:.7rem;padding:2px 7px;border-radius:20px;background:var(--notr-bg);
+  color:var(--soluk);white-space:nowrap}
+  .nb-gec{background:#FDECEC;color:var(--kirmizi)}
+  .nb-btn{border:1px solid var(--cizgi-koyu);background:var(--kagit);border-radius:7px;
+  padding:4px 10px;font-size:.78rem;cursor:pointer;white-space:nowrap}
+  .nb-btn:hover{border-color:var(--verde);color:var(--verde)}
 
   .na-plan{margin-top:18px}
   .na-plan-bas{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -157,6 +179,19 @@
 </div>
 
 <div id="naUyarilar"></div>
+
+<!-- NA4 — VADESİ BELİRSİZ / GEÇMİŞ HAREKETLER
+     Projeksiyona girmeyen kayıtlar. Her satırdan tek tıkla tahmini
+     tarih verilebilir; ASIL KAYDA DOKUNULMAZ (muhasebe kaydı
+     gerçek, nakit planı öngörü). -->
+<div class="na-belirsiz" id="naBelirsiz" style="display:none">
+  <div class="na-belirsiz-bas">
+    <strong>Projeksiyona girmeyen hareketler</strong>
+    <span id="naBelirsizOzet"></span>
+    <button class="na-kapat" onclick="naBelirsizKapat()" title="Kapat">×</button>
+  </div>
+  <div id="naBelirsizListe"></div>
+</div>
 <div class="na-kartlar" id="naKartlar"></div>
 
 <!-- NK1b: tahsilat/ödemenin ayrı satır olmadığı açıkça yazsın;
@@ -329,8 +364,13 @@ function naCiz() {
       + o.adet + ' kayıt).');
   }
   const vszAdet = Object.values((d.vadesiz || {}).ozet || {}).reduce((t, o) => t + o.adet, 0);
+  /* NA4: sayı yetmiyordu — HANGİ hareketler olduğu da gerekli.
+     Aksi halde kullanıcı cari ekranına gidip tek tek arıyor, tutarı
+     not alıyor, buraya dönüp elle giriyordu. API kalemleri zaten
+     döndürüyor; tek eksik onları çizmekti. */
   if (vszAdet) uy.push('<strong>' + vszAdet + ' hareketin vadesi belirsiz</strong> — '
-    + 'projeksiyona dahil DEĞİL. "Nakit kalemi ekle" ile tahmini tarih verebilirsiniz.');
+    + 'projeksiyona dahil DEĞİL. '
+    + '<button class="na-bag" onclick="naBelirsizAc()">Listele ve vade ata</button>');
   /* Çevrilmiş görünümde kur riski GİZLENİR — hangi kurla
      çevrildiği açıkça yazılmalı, yoksa rakam olduğundan kesin
      görünür. */
@@ -428,6 +468,69 @@ function naDetayAc(id) {
   if (e) e.style.display = (e.style.display === 'none') ? '' : 'none';
 }
 
+/* ── NA4 · VADESİ BELİRSİZ / GEÇMİŞ HAREKETLER ──
+   API bu kalemleri zaten döndürüyordu (vadesiz.kalemler,
+   vadesi_gecmis.kalemler); ekran yalnızca SAYILARINI yazıyordu.
+   Veri vardı, kullanıcıya yolu yoktu. */
+function naBelirsizAc() {
+  const kutu = document.getElementById('naBelirsiz');
+  if (!kutu || !NA_VERI) return;
+  const vsz = ((NA_VERI.vadesiz || {}).kalemler) || [];
+  const gec = ((NA_VERI.vadesi_gecmis || {}).kalemler) || [];
+  /* Vadesi geçmişler de projeksiyona girmiyor — aynı panelde,
+     ama ayırt edilsin diye rozetli. */
+  const hepsi = vsz.map(x => ({ ...x, _tur: 'vadesiz' }))
+          .concat(gec.map(x => ({ ...x, _tur: 'gecmis' })));
+  if (!hepsi.length) { bildir('Projeksiyon dışı hareket yok'); return; }
+
+  document.getElementById('naBelirsizOzet').textContent =
+    hepsi.length + ' kayıt · vade verilmeden projeksiyona girmez';
+  document.getElementById('naBelirsizListe').innerHTML = hepsi.map((x, i) => {
+    const gecMi = x._tur === 'gecmis';
+    const yonAd = x.yon === 'giris' ? 'tahsilat' : 'ödeme';
+    return '<div class="nb-satir">'
+      + '<span class="nb-rozet' + (gecMi ? ' nb-gec' : '') + '">'
+      + (gecMi ? 'vadesi geçmiş' : 'vadesiz') + '</span>'
+      + '<div class="ad"><div>' + kacar(x.aciklama || '—') + '</div>'
+      + '<div class="alt">' + kacar(x.kaynak || '') + ' · ' + yonAd
+      + (gecMi && x.tarih ? ' · vade ' + x.tarih.split('-').reverse().join('.') : '')
+      + '</div></div>'
+      + '<span class="tut">' + naPara(x.tutar, x.doviz) + '</span>'
+      + '<button class="nb-btn" onclick="naVadeAta(' + i + ')">Vade ata</button>'
+      + '</div>';
+  }).join('');
+  NA_BELIRSIZ = hepsi;
+  kutu.style.display = '';
+  kutu.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function naBelirsizKapat() {
+  const k = document.getElementById('naBelirsiz');
+  if (k) k.style.display = 'none';
+}
+
+let NA_BELIRSIZ = [];
+
+/* Kipi kayıttan DOLDURULMUŞ açar — kullanıcı yalnızca tarih girer.
+   Tutarı ve dövizi elle yeniden yazdırmak, yazım hatasıyla
+   projeksiyonu bozma riski demekti. */
+function naVadeAta(i) {
+  const x = NA_BELIRSIZ[i];
+  if (!x) return;
+  naPlanAc();
+  document.getElementById('npTutar').value = x.tutar;
+  document.getElementById('npYon').value = x.yon;
+  document.getElementById('npDoviz').value = x.doviz || 'TRY';
+  document.getElementById('npAciklama').value = (x.aciklama || '').slice(0, 200);
+  /* Asıl kayda bağla: "bu tahmin hangi harekete ait" sorusu
+     ileride cevaplanabilsin. */
+  NA_PLAN_KAYNAK = x.kayit_id || null;
+  const t = document.getElementById('npTarih');
+  if (t) { t.value = ''; t.focus(); }
+}
+
+let NA_PLAN_KAYNAK = null;
+
 /* ── Elle nakit kalemi ── */
 function naPlanAc() {
   const g = new Date();
@@ -454,9 +557,12 @@ async function naPlanKaydet() {
       yon: document.getElementById('npYon').value,
       tutar: tutar,
       doviz: document.getElementById('npDoviz').value,
-      aciklama: document.getElementById('npAciklama').value })});
+      aciklama: document.getElementById('npAciklama').value,
+      kaynak_id: NA_PLAN_KAYNAK || null })});   /* NA4: asıl kayda bağ */
     bildir('Nakit kalemi eklendi');
+    NA_PLAN_KAYNAK = null;
     naPlanKapat();
+    naBelirsizKapat();
     naYukle();
   } catch (e) { /* api() zaten bildiriyor */ }
 }
