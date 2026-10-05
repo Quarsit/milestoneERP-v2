@@ -358,18 +358,39 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 
 /* ─── Dikkat kartı (Bugün) ─── */
 .dikkat-izgara{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.dikkat{background:var(--yuzey);border:1px solid var(--cizgi);border-radius:var(--r);overflow:hidden;box-shadow:var(--golge)}
-.dikkat-bas{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--cizgi)}
+/* KD1: zemin SAYFA ZEMİNİ. İçindeki satırlar artık beyaz kart;
+   kutu da beyaz kalsaydı kartlar görünmezdi — kontrast buradan.
+   `overflow:hidden` kaldırıldı: kartların gölgesi kırpılıyordu. */
+.dikkat{background:var(--taban);border:1px solid var(--cizgi);border-radius:var(--r);box-shadow:var(--golge)}
+.dikkat-bas{display:flex;align-items:center;gap:9px;padding:13px 16px;border-bottom:1px solid var(--cizgi);background:var(--yuzey);border-radius:var(--r) var(--r) 0 0}
+/* KD1: kart listesinin kenarlardan boşluğu. Başlık id'siz olduğu
+   için yalnızca id'li liste kökleri (lAlacak, lCek, lSiparis,
+   lTermin) hedeflenir. */
+.dikkat > div[id]{padding:10px 11px 11px}
 .dikkat-bas .nokta{width:9px;height:9px;border-radius:50%;flex:none}
 .dikkat-bas h3{font-size:.92rem;font-weight:600}
 .dikkat-bas .ozet{margin-left:auto;font-family:var(--mono);font-size:.8rem;color:var(--soluk)}
-.d-satir{display:flex;align-items:center;gap:12px;padding:11px 16px 11px 13px;border-bottom:1px solid var(--cizgi);border-left:3px solid transparent}
-.d-satir:last-child{border-bottom:0}
+/* KD1 — KART DÜZENİ
+   Uygulamanın geri kalanıyla aynı dil: beyaz kutu, 10px köşe, ince
+   gölge, sol renk şeridi inset gölgeyle (cari/stok tablolarında ve
+   detay panelindeki .bg-satir'da kullanılan yöntemin aynısı).
+
+   Renk şeridi `--ray` değişkeninden gelir; ray-* sınıfları onu zaten
+   yazıyor (bkz. yukarıdaki .ray-kirmizi vd.). Bu sınıflar ayrıca
+   `border-left-color` da yazdığı için sol kenarlık da aynı renge
+   döner — 3px şeritle bütünleşir, ayrı durmaz. */
+.d-satir{display:flex;align-items:center;gap:12px;padding:12px 14px;
+  background:var(--yuzey);border:1px solid var(--cizgi);border-radius:10px;
+  margin-bottom:7px;transition:border-color .12s,box-shadow .12s;
+  box-shadow:inset 3px 0 0 var(--ray,transparent),0 1px 2px rgba(25,28,26,.04)}
+.d-satir:last-child{margin-bottom:0}
+.d-satir:hover{border-color:var(--verde)}
 .d-satir .kim{font-weight:500;font-size:.9rem}
 .d-satir .detay{font-size:.78rem;color:var(--soluk);margin-top:1px}
 /* Listenin altındaki açıklama satırı (ör. termini girilmemiş siparişler):
    kayıt değil, listenin KAPSAMI hakkında not. */
-.d-dipnot{padding:9px 16px;font-size:.76rem;color:var(--soluk);background:var(--taban)}
+/* Kayıt değil, listenin KAPSAMI hakkında not — kart olmamalı. */
+.d-dipnot{padding:7px 3px 0;font-size:.76rem;color:var(--soluk);background:transparent}
 .d-satir .tutar{margin-left:auto;font-family:var(--mono);font-weight:600;font-size:.88rem;white-space:nowrap}
 
 /* ─── Sağ çekmece ─── */
