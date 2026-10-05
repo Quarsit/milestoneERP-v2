@@ -11114,6 +11114,11 @@ def create_app():
         if k.stok_ids_json:
             try: stok_ids = json.loads(k.stok_ids_json)
             except Exception: stok_ids = []
+        # KRS2: eskiden ayni satirlar IKI KEZ sorgulaniyordu — biri
+        # esik, biri liste icin. Bir kez cekilip ikisinde kullanilir.
+        _krs = (KalemKarsilama.query.filter_by(siparis_kalem_id=k.id)
+                .order_by(KalemKarsilama.kaynak_tip,
+                          KalemKarsilama.olusturma).all())
         return {
             'id': k.id, 'siparis_id': k.siparis_id, 'sira': k.sira,
             'urun_tip': k.urun_tip, 'cins': k.cins, 'ozellik': k.ozellik,
@@ -11127,14 +11132,15 @@ def create_app():
             'birim_fiyat': k.birim_fiyat, 'toplam_fiyat': k.toplam_fiyat,
             'doviz': k.doviz,
             'stoktan_geldi': k.stoktan_geldi, 'stok_ids': stok_ids,
+            # KRS1: satir ozeti API cagirmiyor, esigi buradan okur.
+            'karsilama_tolerans': _karsilama_tolerans(k, _krs),
             # F1: kalemin kaynak kirilimi (stok / uretim / dis alim)
             'karsilama': [
                 {'id': x.id, 'kaynak_tip': x.kaynak_tip, 'kaynak_ad': x.kaynak_ad,
                  'kaynak_ref': x.kaynak_ref, 'miktar': float(x.miktar or 0),
                  'birim': x.birim, 'birim_maliyet': float(x.birim_maliyet or 0),
                  'doviz': x.doviz or 'USD', 'durum': x.durum}
-                for x in KalemKarsilama.query.filter_by(siparis_kalem_id=k.id)
-                .order_by(KalemKarsilama.kaynak_tip, KalemKarsilama.olusturma).all()],
+                for x in _krs],
             'notlar': k.notlar
         }
 
@@ -12015,6 +12021,48 @@ def create_app():
             'durum': k.durum or 'Planlandi', 'aciklama': k.aciklama,
         }
 
+    def _karsilama_tolerans(kalem, satirlar=None):
+        """KRS1 · "Açık" sayılması için anlamlı en küçük fark.
+
+        Eskiden her yerde sabit 0,005 (50 cm²) vardı ve bu TEK parçalı
+        kalem için ayarlanmış bir değerdi. Oysa karşılaştırılan iki sayı
+        ayrı kaynaklardan gelir:
+            hedef      = SiparisKalem.miktar  (proformadan taşınır)
+            karşılanan = stokların GERÇEK ölçüleri toplamı
+        İkisi de NUMERIC(18,2) olduğundan (models.Olcu) parça başına
+        ±0,005 sapma taşır ve sapma PARÇA SAYISIYLA BİRİKİR:
+        32 plakada ±0,16 m² — eşikten 32 kat büyük. Veri doğru olsa
+        bile "0,08 m² açık" uyarısı çıkıyordu; 0,08 m² ≈ 28×28 cm,
+        kesilemez, sipariş edilemez, aksiyonu yok. Aksiyonsuz uyarı
+        okunmaz hale gelir, sonra gerçek bir eksik de okunmaz.
+
+        eşik = max(0,01 , min(parça × 0,005 , parça_ölçüsü / 4))
+            · parça × 0,005   yuvarlama birikiminin üst sınırı
+            · parça_ölçüsü/4  eksik bir PARÇA asla gizlenmesin
+            · taban 0,01      tek parçalı kalemde eski davranış
+        """
+        # KRS2: parca sayisi artik `adet`ten DEGIL, karsilama SATIRI
+        # sayisindan gelir. `adet` bir GIRDI alani: "stoktan siparise
+        # ekle" yolunda stok sayisina esit oluyor ama proformadan gelen
+        # sipariste `adet=pk.adet or 1` — proformada miktar toplam m2
+        # olarak yazildiysa 1 kaliyor. Olculdu: 9 plakali bir kalemde
+        # esik 0,01 cikip 0,03 sapma "acik" gorunuyordu. Sapmayi ureten
+        # sey zaten TOPLANAN YUVARLANMIS DEGER SAYISI; o da elimizde.
+        if satirlar is None:
+            satirlar = KalemKarsilama.query.filter_by(
+                siparis_kalem_id=kalem.id).all()
+        n = len(satirlar)
+        if n <= 0:
+            return 0.01
+        hedef = float(getattr(kalem, 'miktar', 0) or 0)
+        karsilanan = sum(float(getattr(x, 'miktar', 0) or 0) for x in satirlar)
+        # n satir + hedefin kendisi: her biri NUMERIC(18,2)
+        birikim = (n + 1) * 0.005
+        parca_olcu = (karsilanan or hedef) / n
+        if parca_olcu > 0:
+            return max(0.01, min(birikim, parca_olcu / 4.0))
+        return max(0.01, birikim)
+
     def _kalem_karsilama_ozet(kalem):
         """Kalemin ne kadarı karşılandı, ne kadarı açık?"""
         satirlar = KalemKarsilama.query.filter_by(siparis_kalem_id=kalem.id).all()
@@ -12024,6 +12072,9 @@ def create_app():
             'satirlar': [_karsilama_json(k) for k in satirlar],
             'karsilanan': q2(karsilanan), 'hedef': q2(hedef),
             'acik': q2(max(hedef - karsilanan, 0)),
+            # KRS1: esik tek dogruluk kaynagi — ekran da bunu okur.
+            # KRS2: satirlar zaten yukarida cekildi, tekrar sorgulama.
+            'tolerans': _karsilama_tolerans(kalem, satirlar),
             'kaynaklar': sorted({k.kaynak_tip for k in satirlar}),
         }
 
@@ -12038,7 +12089,10 @@ def create_app():
         ozet.update({'ok': True, 'kalem': {
             'id': kalem.id, 'cins': kalem.cins, 'urun_tip': kalem.urun_tip,
             'miktar': float(kalem.miktar or 0), 'birim': kalem.birim,
-            'birim_fiyat': float(kalem.birim_fiyat or 0), 'doviz': kalem.doviz}})
+            'birim_fiyat': float(kalem.birim_fiyat or 0), 'doviz': kalem.doviz,
+            # KRS1: esik parca sayisina baglidir, ekran da gorsun.
+            'adet': int(kalem.adet or 1),
+            'kasa_ici_adet': int(kalem.kasa_ici_adet or 1)}})
         return jsonify(ozet)
 
     @app.route('/api/siparis/<siparis_id>/kalem/<int:kalem_id>/karsilama',
@@ -12071,7 +12125,11 @@ def create_app():
 
         ozet = _kalem_karsilama_ozet(kalem)
         hedef = float(kalem.miktar or 0)
-        if hedef > 0 and ozet['karsilanan'] + miktar > hedef + 0.005:
+        # KRS1: sabit 0,005 yerine kalemin olceginden gelen esik.
+        # Eskiden yuvarlama birikimi acik miktari eksiye dusurdugunde
+        # mesru bir uretim/dis alim satiri eklemek REDDEDILIYORDU.
+        _tol = _karsilama_tolerans(kalem)
+        if hedef > 0 and ozet['karsilanan'] + miktar > hedef + _tol:
             return jsonify({'ok': False, 'error': 'miktar_asiyor', 'mesaj':
                 f'Kalem {hedef:,.2f} {kalem.birim or ""}; bu satırla toplam '
                 f'{ozet["karsilanan"] + miktar:,.2f} olur. Açık miktar: '

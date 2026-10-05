@@ -74,3 +74,4 @@ instance/
 *.patch
 veri_disari/
 *.xlsx
+*.yedek_*
