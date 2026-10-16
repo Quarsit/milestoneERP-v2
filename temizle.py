@@ -61,11 +61,16 @@ GRUPLAR.append((
 
 # 2) Yedek dosyaları (.yedek-*)
 #    Yama betiklerinin bıraktığı kopyalar. git zaten sürüm tutuyor.
-_yedekler = sorted(KOK.glob('*.yedek-*'))
-_yedekler += sorted((KOK / 'templates').glob('*.yedek-*'))
-_yedekler += sorted((KOK / 'migrations').glob('*.yedek-*'))
+# TZ1: İKİ DESEN. Eski yamalar `.yedek-mf1` bırakıyordu, yeni yama
+# şablonum `.yedek_mf1` bırakıyor (ALT ÇİZGİ). Tek desen arandığı
+# için yeniler hiç silinmiyordu; depoya sızmıyorlar (.gitignore'da
+# `*.yedek_*` var) ama diskte birikiyorlardı.
+_yedekler = []
+for _d in ('.', 'templates', 'migrations'):
+    for _desen in ('*.yedek-*', '*.yedek_*'):
+        _yedekler += sorted((KOK / _d).glob(_desen))
 GRUPLAR.append((
-    'Yedek dosyaları (*.yedek-*)',
+    'Yedek dosyaları (*.yedek-* ve *.yedek_*)',
     _yedekler,
     'Yama betiklerinin bıraktığı kopyalar. Sürüm takibi git\'te.',
 ))
@@ -131,12 +136,19 @@ KORUNAN = [
     ('export_utils.py · yedek.py', 'uygulama modülleri'),
     ('requirements.txt · requirements_pardus.txt', 'bağımlılıklar'),
     ('blueprints/ (5 dosya)', 'aktif — server.py kaydediyor'),
-    ('templates/*.html (25)', 'arayüz'),
-    ('static/ (4)', 'PWA ve stil'),
-    ('migrations/ kaynak + 3 revizyon', 'ŞEMA GEÇMİŞİ — silinemez'),
-    ('sema_ form_ sessiz_ zincir_ js_ degismezlik_denetim.py', '6 denetim aracı'),
+    # TZ1: bu liste güncelliğini yitirmişti. `sifirla.py` ve
+    # `sifirla_windows.py` ARTIK YOK — adı geçen dosya korunuyor
+    # sanmak, aslında var olmayan bir güvence verir. Şablon sayısı
+    # da 25 değil; sayı yazmak her yeni şablonda yanlışa döner,
+    # artık yazmıyoruz.
+    ('templates/*.html', 'arayüz (firma_sec.html dahil)'),
+    ('static/', 'PWA ve stil'),
+    ('migrations/ kaynak + revizyonlar', 'ŞEMA GEÇMİŞİ — silinemez'),
+    ('sema_ form_ sessiz_ zincir_ js_ akis_ degismezlik_denetim.py',
+     'kalıcı denetim araçları'),
+    ('firma_denetim.py', 'çoklu firma kapsam denetimi (F1–F4)'),
     ('goc.py · migration_kur.py · migration_ayarla.py', 'şema göçü'),
-    ('sifirla.py · sifirla_windows.py', 'veri sıfırlama'),
+    ('sifirla2.py', 'veri sıfırlama (üç kip: tümü / tüm firmalar / tek firma)'),
     ('listeler_excel.py · envanter_kdv.py', 'veri aktarma'),
     ('tani_izli_kdv.py · tani_fatura_kilit.py', 'tanı araçları'),
     ('kur_arsivi_doldur.py · kur_guncelle.py', 'kur yönetimi'),

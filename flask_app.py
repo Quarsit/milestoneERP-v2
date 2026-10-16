@@ -51,6 +51,7 @@ from models import CariAktivite              # CRM-E: temas kaydi
 from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
 from models import Konteyner
+from models import Firma, CariFirma   # MF3
 import tcmb_kur   # TK1: ortak TCMB kur cekici
 import yedek as yedek_modul
 import threading
@@ -731,6 +732,7 @@ def create_app():
         ('/api/ayarlar', 'ayarlar'),
         ('/api/yedek', 'ayarlar'),
         ('/api/banka', 'ayarlar'),
+        ('/api/firma', 'ayarlar'),   # MF3
         ('/api/denetim', 'denetim'),
     ]
 
@@ -968,19 +970,102 @@ def create_app():
         veritabanından okunur. Böylece her sayfa yüklemesinde büyük base64
         veriyi boşuna çekmeyiz; sadece belge yazdırılırken okunur.
         """
+        # MF5: TEK KAYNAK `firma` tablosu. Eskiden burasi
+        # Veriler'i okuyordu ve firma tablosundaki ünvan/logoyu
+        # görmüyordu — ikinci firmanın belgelerinde ana firmanın
+        # bilgisi çıkardı.
         def _logo():
             try:
-                k = Veriler.query.filter_by(kategori='firma_logo', deger='logo').first()
-                return (k.uzun_deger if k else None) or None
+                f = _firma_kayit()
+                return (f.logo if f else None) or None
             except Exception:
                 return None
         def _firma_adi():
             try:
-                k = Veriler.query.filter_by(kategori='firma').first()
-                return (k.deger if k else None) or ''
+                f = _firma_kayit()
+                return (f.unvan or f.ad) if f else ''
             except Exception:
                 return ''
-        return {'firma_logo': _logo, 'firma_adi_ayar': _firma_adi}
+        return {'firma_logo': _logo, 'firma_adi_ayar': _firma_adi,
+                # MF3: banner çipi ve firma seçici bunları okur.
+                'aktif_firma': _aktif_firma_ozet(),
+                'firma_listesi': _firma_listesi_ozet()}
+
+    # ══════════════════════════════════════════════════════════
+    #  ÇOKLU FİRMA — ŞABLON VERİSİ ve BELGE KODU  (MF3)
+    # ══════════════════════════════════════════════════════════
+
+    def _firma_listesi_ozet():
+        """Aktif firmaların kısa listesi — banner ve ayarlar için."""
+        if not has_request_context():
+            return []
+        _o = getattr(g, '_mf3_liste', None)
+        if _o is not None:
+            return _o
+        _l = []
+        try:
+            with firma_atla():          # firma listesi SÜZÜLMEZ
+                for f in (Firma.query.filter_by(aktif=True)
+                          .order_by(Firma.sira, Firma.id).all()):
+                    _l.append({'id': f.id, 'ad': f.ad,
+                               'kod': (f.belge_kodu or '')})
+        except Exception:
+            _l = []
+        g._mf3_liste = _l
+        return _l
+
+    def _aktif_firma_ozet():
+        """Şu an çalışılan firma — şablonda {{ aktif_firma.ad }}."""
+        _fid = aktif_firma_id()
+        if not _fid:
+            return None
+        for f in _firma_listesi_ozet():
+            if f['id'] == _fid:
+                return f
+        return None
+
+    def _firma_belge_kodu():
+        """Aktif firmanın belge kodu — KİMLİĞİN KÖKÜNE girer.
+
+        ANA firmada BOŞ: mevcut kimlikler (SIP-STN26-03) korunur ve
+        sayaç kaldığı yerden devam eder. İkinci firma kod aldığı için
+        kökü farklı olur (SIP-K-STN26-…) ve `LIKE` taraması o köke
+        bakar — sayacı kendiliğinden 01'den başlar.
+
+        HAM SQL: bu fonksiyon kimlik üretirken çağrılıyor, yani yazma
+        yolunun ortasında. ORM sorgusu açmak süzgeç kancasını yeniden
+        tetiklerdi.
+        """
+        if not has_request_context():
+            return ''
+        _o = getattr(g, '_mf3_kod', None)
+        if _o is not None:
+            return _o
+        kod = ''
+        try:
+            _f = aktif_firma_id()
+            if _f:
+                with db.engine.connect() as _b:
+                    _r = _b.execute(sa_text(
+                        'SELECT belge_kodu FROM firma WHERE id = :i'),
+                        {'i': _f}).fetchone()
+                kod = ((_r[0] if _r else '') or '').strip().upper()
+        except Exception:
+            kod = ''
+        g._mf3_kod = kod
+        return kod
+
+    def _firma_onbellek_dusur():
+        """Firma değişince istek içi önbellekleri temizler.
+
+        Düşürülmezse aynı istekte ESKİ firmanın süzgeci sürerdi:
+        kullanıcı B'ye geçtiğini sanıp A'nın verisini görürdü.
+        """
+        for _a in ('_mf2_firma', '_mf3_kod', '_mf3_liste',
+                   'erisim_izin', '_kp1_kapsam'):
+            if hasattr(g, _a):
+                delattr(g, _a)
+
 
 
     # ════════════════════════════════════════════════════════
@@ -2123,7 +2208,10 @@ def create_app():
                             if h.isalnum() or h == '-').strip('-')
             if not temiz:
                 return _yeni_id(on_ek)
-            aday = f'{on_ek}-{temiz}' + (f'-{int(sira):02d}' if sira not in (None, '') else '')
+            # MF3: ayni blok numarasi iki firmada da olabilir.
+            _fk = _firma_belge_kodu()
+            _on = f'{on_ek}-{_fk}' if _fk else on_ek
+            aday = f'{_on}-{temiz}' + (f'-{int(sira):02d}' if sira not in (None, '') else '')
             if len(aday) <= 20 and db.session.get(model, aday) is None:
                 return aday
             # Çakışma ya da uzunluk: kökü kısalt, sonra sıra ekle
@@ -2152,12 +2240,16 @@ def create_app():
                 kok_ic = f'{_cari_kisaltma(cari)}{yil}'
             else:
                 kok_ic = yil
-            kok = f'{on_ek}-{kok_ic}-'
+            # MF3: firma kodu köke girer — her firmanın sayacı
+            # kendi başına ilerlesin diye. Ana firmada kod boş.
+            _fk = _firma_belge_kodu()
+            _on = f'{on_ek}-{_fk}' if _fk else on_ek
+            kok = f'{_on}-{kok_ic}-'
             # 20 karaktere sığdır: sıra için yer bırak
             azami_kok = 20 - (basamak + 1)
             if len(kok) > azami_kok:
                 kesilecek = len(kok) - azami_kok
-                kok = f'{on_ek}-{kok_ic[:max(1, len(kok_ic) - kesilecek)]}-'
+                kok = f'{_on}-{kok_ic[:max(1, len(kok_ic) - kesilecek)]}-'
             son = 0
             for (mevcut,) in db.session.query(model.id).filter(
                     model.id.like(kok + '%')).all():
@@ -4209,9 +4301,57 @@ def create_app():
                 db.session.commit()
                 # Arka planda otomatik yedek al (giriş bekletmesin)
                 threading.Thread(target=yedek_modul.yedek_al, args=('auto',), daemon=True).start()
+                # ── MF3B/MF3C · GİRİŞTE FİRMA SEÇİMİ ──
+                # Admin önce hangi firmada çalışacağını seçer
+                # (Logo/Mikro/Netsis'teki yerleşik akış).
+                #
+                # MF3C: eskiden ekran yalnızca İKİ ve daha çok firma
+                # varken çıkıyordu. Oysa yeni firmayı BİR FİRMANIN
+                # İÇİNE GİRMEDEN açabilmek gerekiyor — tek firma
+                # varken de. Artık koşulsuz.
+                #
+                # Admin OLMAYAN kullanıcı ekranı görmez: firma seçimi
+                # şimdilik admin yetkisinde, onlar varsayılan firmaya
+                # girer.
+                try:
+                    if (k.rol or '').upper() == 'ADMIN':
+                        session.pop('firma_id', None)
+                        return redirect(url_for('firma_sec_ekran'))
+                except Exception as _e:
+                    app.logger.warning(f'[MF3B] firma secim ekrani atlandi: {_e}')
                 return redirect(url_for('dashboard'))
             flash('Kullanıcı adı veya şifre hatalı', 'error')
         return render_template('giris.html')
+
+    @app.route('/firma-sec')
+    def firma_sec_ekran():
+        """Girişten sonra hangi firmada çalışılacağını seçtirir.
+
+        Yeni firma da BURADAN açılır — bir firmanın ayarlarının
+        içinden değil. Eski düzende A'nın ayarlarındayken B ekleniyor,
+        hemen altındaki "Firma Bilgileri" formu ise hâlâ A'yı
+        düzenliyordu; yeni firmanın unvanını oraya yazmak A'nın
+        unvanını sessizce değiştirirdi.
+        """
+        if _auth_required():
+            return _auth_required()
+        # Firma seçimi şimdilik admin yetkisinde; diğerleri varsayılan
+        # firmada çalışır ve bu ekranı hiç görmez.
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return redirect(url_for('dashboard'))
+        with firma_atla():
+            kayitlar = (Firma.query.filter_by(aktif=True)
+                        .order_by(Firma.sira, Firma.id).all())
+        # MF3C: tek firma varken de açılır. Ekranın işi yalnızca
+        # seçtirmek değil; YENİ FİRMA buradan açılıyor ve bunu bir
+        # firmanın içine girmeden yapabilmek gerekiyor. Hiç firma
+        # yoksa da sorun değil: liste boş gelir, "yeni firma ekle"
+        # durur.
+        return render_template('firma_sec.html', firmalar=[{
+            'id': f.id, 'ad': f.ad, 'unvan': f.unvan or '',
+            'kod': f.belge_kodu or '', 'vergi_no': f.vergi_no or '',
+            'varsayilan': bool(f.varsayilan),
+        } for f in kayitlar], secili=session.get('firma_id'))
 
     @app.route('/cikis')
     def cikis():
@@ -6578,6 +6718,105 @@ def create_app():
             durum.statement = durum.statement.options(
                 _wlc(_model, _kosul, include_aliases=True))
 
+    # ══════════════════════════════════════════════════════════
+    #  ÇOKLU FİRMA — OKUMA SÜZGECİ  (MF2)
+    # ══════════════════════════════════════════════════════════
+    #  Her SELECT'e aktif firmanın şartını ekler. 699 sorgunun
+    #  hiçbirine dokunulmadı; süzgeç tek yerde duruyor.
+    #
+    #  Yukarıdaki CRM-C2 süzgeciyle BİRLİKTE çalışır ve ikisi VE ile
+    #  birleşir: satışçı yalnızca KENDİ carilerini, onların da
+    #  yalnızca AKTİF FİRMADA görünenlerini görür. Ölçüldü.
+    #
+    #  Mixin lambda'sı kullanılıyor. CRM-C2'deki "düz ifade kullan"
+    #  uyarısı bir DÖNGÜDE farklı MODELLER için lambda üretmeye
+    #  dair; burada tek satırda tek lambda var ve değişen şey model
+    #  değil firma DEĞERİ. 3 firma arasında 300 rastgele geçişte 0
+    #  yanlış sonuç. 28 modele ayrı düz ifade de doğru çalışıyor ama
+    #  sorgu başına iki kat maliyetli (1,76 s / 0,84 s / 1000 sorgu).
+
+    from models import (FirmaKapsamli as _FirmaKapsamli,
+                        CariFirma as _CariFirma,
+                        firma_cozucu_ayarla as _firma_cozucu_ayarla,
+                        _varsayilan_firma_id as _varsayilan_firma)
+    from sqlalchemy import select as _sa_select
+
+    @_contextmanager
+    def firma_atla():
+        """Firma süzgecini GEÇİCİ kapatır — YÖNETİCİ işlemleri için.
+
+        Firma yönetim ekranı bütün firmaları listelemek zorunda;
+        sıfırlama ve göç betikleri de firma ayrımı gözetmez.
+        CRM-C2'deki `erisim_atla()` ile aynı desen: tek ve açık kapı.
+        Her kullanımı GEREKÇESİYLE yazılmalı — dağılırsa süzgeç
+        sessizce devre dışı kalır.
+        """
+        onceki = getattr(g, 'firma_atla_bayrak', False)
+        g.firma_atla_bayrak = True
+        try:
+            yield
+        finally:
+            g.firma_atla_bayrak = onceki
+
+    def aktif_firma_id():
+        """Şu an hangi firmada çalışılıyor.
+
+        İstek bağlamı yoksa None döner ve süzgeç devreye girmez:
+        CLI, arka plan görevi ve denetim betikleri yönetici
+        işlemleridir, firma ayrımı gözetmezler.
+
+        Sonuç istek başına `g` üzerinde saklanır. CRM-C2'de ölçülen
+        tuzak burada da geçerliydi: her sorguda yeni bir sorgu
+        doğurmak kancayı tekrar tetikler.
+        """
+        if not has_request_context():
+            return None
+        if getattr(g, 'firma_atla_bayrak', False):
+            return None
+        _onbellek = getattr(g, '_mf2_firma', None)
+        if _onbellek is not None:
+            return _onbellek
+        _f = session.get('firma_id')
+        if not _f:
+            # Firma seçici MF3'te geliyor; o zamana kadar (ve seçim
+            # yapılmamışsa) varsayılan firma. HAM SQL okur, ORM değil
+            # — ORM sorgusu bu kancayı yeniden tetiklerdi.
+            _f = _varsayilan_firma()
+        g._mf2_firma = _f
+        return _f
+
+    # models.py'deki YAZMA damgası da aynı kaynaktan beslensin:
+    # okuma ve yazma iki ayrı "aktif firma" hesabı yaparsa, A
+    # firmasında açılan kayıt B'ye damgalanabilirdi.
+    _firma_cozucu_ayarla(aktif_firma_id)
+
+    @_sa_event.listens_for(_SaSession, 'do_orm_execute')
+    def _firma_suzgeci(durum):
+        if not durum.is_select or durum.is_column_load or durum.is_relationship_load:
+            return
+        _f = aktif_firma_id()
+        if not _f:
+            return
+        durum.statement = durum.statement.options(
+            # 1 · firma kapsamındaki 28 tablo
+            _wlc(_FirmaKapsamli, lambda _s: _s.firma_id == _f,
+                 include_aliases=True),
+            # 2 · ayarlar ve tanım listeleri
+            #    MF6: firma "ortak liste" kullanıyorsa NULL satırlar
+            #    (cins, yüzey, ülke) da görünür. Kullanmıyorsa
+            #    YALNIZCA kendi satırları — kuruluşta bir kopya
+            #    yazıldığı için boş kalmaz.
+            _wlc(Veriler,
+                 ((Veriler.firma_id == _f) | (Veriler.firma_id.is_(None)))
+                 if _firma_ortak_liste() else (Veriler.firma_id == _f),
+                 include_aliases=True),
+            # 3 · cari: kart ortak, GÖRÜNÜRLÜK üyelikten
+            _wlc(Cari, Cari.id.in_(
+                _sa_select(_CariFirma.cari_id).where(
+                    _CariFirma.firma_id == _f)),
+                include_aliases=True),
+        )
+
     # ── YAZMA KORUMASI KANCASI  (CRM-D) ──
     # models.py'deki before_insert dinleyicisi, gorunurlugu bilmek
     # icin bu kancayi cagirir. Kural TEK YERDE kalsin diye mantik
@@ -7029,6 +7268,57 @@ def create_app():
         return jsonify({'ok': True, 'mesaj': f'{kim} erişimi kaldırıldı'})
 
     # ---------- API: CARİ VE HAREKETLER ----------
+    def _cari_firma_idleri(cari_idler):
+        """MF6 — hangi cari hangi firmalarda görünüyor: {cari_id: [firma…]}.
+
+        Tek sorgu. Cari listesi 170 satır; her satır için ayrı sorgu
+        açmak sayfayı dakikalara çıkarırdı.
+        """
+        _h = {}
+        if not cari_idler:
+            return _h
+        try:
+            with firma_atla():          # üyelik tablosu süzülmez
+                for _cid, _fid in db.session.query(
+                        CariFirma.cari_id, CariFirma.firma_id).filter(
+                        CariFirma.cari_id.in_(list(cari_idler))).all():
+                    _h.setdefault(_cid, []).append(_fid)
+        except Exception as _e:
+            app.logger.warning(f'[MF6] cari firma baglari okunamadi: {_e}')
+        return _h
+
+    def _cari_firmalari_uygula(cari_id, istenen):
+        """MF6 — cari kartındaki firma seçimini üyelik tablosuna işler.
+
+        YALNIZCA ADMIN çağırmalı: bir firmayı listeden çıkarmak o
+        firmada cariyi görünmez yapar.
+
+        HİÇ firma seçilmemişse DOKUNULMAZ. Boş listeyi "hepsini kaldır"
+        saymak, formu eksik dolduran birinin müşteriyi her yerden
+        silmesi demek olurdu.
+        """
+        if not istenen:
+            return 0, 0
+        _istenen = {int(x) for x in istenen if str(x).strip().isdigit()}
+        if not _istenen:
+            return 0, 0
+        with firma_atla():
+            _gecerli = {f.id for f in Firma.query.filter_by(aktif=True).all()}
+            _istenen &= _gecerli
+            if not _istenen:
+                return 0, 0
+            _mevcut = {m.firma_id: m for m in
+                       CariFirma.query.filter_by(cari_id=cari_id).all()}
+            _eklenen = 0
+            for _fid in _istenen - set(_mevcut):
+                db.session.add(CariFirma(cari_id=cari_id, firma_id=_fid))
+                _eklenen += 1
+            _silinen = 0
+            for _fid in set(_mevcut) - _istenen:
+                db.session.delete(_mevcut[_fid])
+                _silinen += 1
+        return _eklenen, _silinen
+
     @app.route('/api/cari', methods=['GET'])
     def api_cari_liste():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -7046,6 +7336,7 @@ def create_app():
                                          func.max(CariHareket.hareket_tarihi))
                         .filter(CariHareket.cari_id.in_(_sayfa_idler))
                         .group_by(CariHareket.cari_id).all())
+        _cf = _cari_firma_idleri(_sayfa_idler)      # MF6
         return jsonify({'data': [{'id': c.id, 'unvan': c.unvan, 'cari_tip': c.cari_tip, 'telefon': c.telefon,
                                   'son_hareket': (_son[c.id].isoformat() if _son.get(c.id) else None),
                                   'risk_limiti': c.risk_limiti, 'urun_tedarikcisi': c.urun_tedarikcisi,
@@ -7059,7 +7350,9 @@ def create_app():
                                   'odeme_vadesi_gun': c.odeme_vadesi_gun,
                                   'aciklama': c.aciklama,
                                   'sorumlu': c.sorumlu,
-                                  'gorunurluk': c.gorunurluk or 'kapali'}
+                                  'gorunurluk': c.gorunurluk or 'kapali',
+                                  # MF6: kartta "hangi firmalarda görünsün"
+                                  'firmalar': _cf.get(c.id, [])}
                                  for c in paginated.items],
                         'meta': {'page': page, 'per_page': per_page, 'total': paginated.total}})
 
@@ -7116,6 +7409,11 @@ def create_app():
                         para_birimi=data.get('para_birimi', 'USD'),
                         urun_tedarikcisi=is_uretici, uretici_kisaltma=uretici_kis)
             db.session.add(cari)
+            db.session.flush()
+            # MF6: formda firma seçildiyse ona göre bağlanır. Seçim
+            # yoksa models.py'deki kanca AKTİF firmaya bağlar.
+            if data.get('firmalar') and (session.get('rol') or '').upper() == 'ADMIN':
+                _cari_firmalari_uygula(cari.id, data.get('firmalar'))
             _log_audit('EKLE', 'cari', cari.id, yeni={'unvan': cari.unvan, 'tip': cari.cari_tip})
             db.session.commit()
             return jsonify({'ok': True, 'id': cari.id, 'mesaj': 'Cari kaydedildi',
@@ -7157,6 +7455,18 @@ def create_app():
                 return jsonify({'ok': False,
                                 'mesaj': f'Kullanıcı bulunamadı: {_s}'}), 400
             data['sorumlu'] = _s or None
+
+        # ── MF6 · FİRMA GÖRÜNÜRLÜĞÜ ──
+        # Yalnızca admin: bir firmayı listeden çıkarmak o firmada
+        # cariyi görünmez yapar. Alan HİÇ gönderilmemişse dokunulmaz.
+        if 'firmalar' in data and (session.get('rol') or '').upper() == 'ADMIN':
+            try:
+                _ek, _sil = _cari_firmalari_uygula(c.id, data.get('firmalar'))
+                if _ek or _sil:
+                    _log_audit('GUNCELLE', 'cari', c.id,
+                               aciklama=f'firma gorunurlugu: +{_ek} / -{_sil}')
+            except Exception as _e:
+                app.logger.warning(f'[MF6] cari firma baglari yazilamadi: {_e}')
 
         _eski_unvan = c.unvan          # BL-16: yeniden adlandirma izi
 
@@ -16202,21 +16512,153 @@ def create_app():
     #   • Yedekle birlikte taşınır (Pardus'a geçişte otomatik gelir)
     #   • Dosya izni / yol sorunu yaşanmaz
     #   • Tek yerden güncellenir, tüm belgelerde anında değişir
+    def _firma_ortak_liste():
+        """Aktif firma ortak tanım listelerini kullanıyor mu?
+
+        HAM SQL ve istek içi önbellek: bu fonksiyon SÜZGECİN içinden
+        çağrılıyor, ORM sorgusu açmak kancayı yeniden tetiklerdi
+        (CRM-C2'de ölçülmüş tuzak).
+
+        NULL = ortak (varsayılan). MF6'dan önce açılmış firmalarda
+        sütun boş; eski davranış korunsun diye ortak sayılır.
+        """
+        if not has_request_context():
+            return True
+        _o = getattr(g, '_mf6_ortak_liste', None)
+        if _o is not None:
+            return _o
+        _sonuc = True
+        try:
+            _f = session.get('firma_id') or _varsayilan_firma()
+            if _f:
+                with db.engine.connect() as _b:
+                    _r = _b.execute(sa_text(
+                        'SELECT ortak_liste FROM firma WHERE id = :i'),
+                        {'i': _f}).fetchone()
+                if _r is not None and _r[0] is not None:
+                    _sonuc = bool(_r[0])
+        except Exception:
+            _sonuc = True
+        g._mf6_ortak_liste = _sonuc
+        return _sonuc
+
+    def _liste_firma_id():
+        """Yeni liste tanımı (cins, yüzey, ülke…) HANGİ havuza yazılsın.
+
+        Ortak liste kullanan firmada ORTAK havuza (NULL): bir kez
+        girilen cins her firmada görünür. Kullanmayan firmada KENDİ
+        havuzuna; yoksa eklediğini kendisi göremezdi.
+
+        ÖLÇÜLDÜ: ortak listesi kapalı firmada eklenen "SADECE D"
+        ortak havuza düşüyor, o firmanın açılır listesinde
+        çıkmıyordu — kullanıcı aynı cinsi tekrar tekrar eklerdi.
+        """
+        return None if _firma_ortak_liste() else aktif_firma_id()
+
+    def _konsolide_firmalar():
+        """Ekstre hangi firmaların hareketlerini içersin.
+
+        `?firmalar=1,3` verilmişse o firmalar; verilmemişse None
+        (aktif firma — süzgeç zaten halleder).
+
+        YALNIZCA ADMIN: konsolide ekstre, kullanıcının o an içinde
+        OLMADIĞI firmaların rakamlarını gösterir.
+        """
+        _ham = (request.args.get('firmalar') or '').strip()
+        if not _ham:
+            return None
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return None
+        try:
+            _istenen = {int(x) for x in _ham.split(',') if x.strip().isdigit()}
+        except Exception:
+            return None
+        if not _istenen:
+            return None
+        with firma_atla():
+            _gecerli = {f.id for f in Firma.query.filter_by(aktif=True).all()}
+        _sonuc = sorted(_istenen & _gecerli)
+        # Tek firma seçildiyse konsolide değil, sıradan ekstre.
+        return _sonuc if len(_sonuc) > 1 else None
+
+    def _firma_adlari(idler):
+        """{firma_id: ad} — ekstrede FİRMA sütunu bunu basar."""
+        if not idler:
+            return {}
+        with firma_atla():
+            return {f.id: (f.ad or str(f.id))
+                    for f in Firma.query.filter(Firma.id.in_(idler)).all()}
+
+    def _firma_kayit():
+        """Aktif firmanın kaydı — firma kimliğinin TEK KAYNAĞI.
+
+        MF5'ten önce ünvan, adres, telefon, e-posta ve logo İKİ yerde
+        duruyordu:
+          · `firma` tablosu            — firma açılırken girilenler
+          · `Veriler(kategori='firma')` — Ayarlar formunun yazdıkları
+        İkisi birbirini görmüyordu. İkinci firmayı açıp ünvanını
+        girince Ayarlar formu BOŞ geliyor, ekranda şablondaki örnek
+        metin (ana firmanın adı) görünüyordu. Ölçüldü 16.10.
+
+        Artık tek kaynak `firma`. Eski Veriler satırındaki değerler,
+        firmada KARŞILIĞI BOŞSA ilk okumada taşınır — bir kez olur,
+        sonra Veriler'e bakılmaz. Veriler sorgusu da süzgeçten
+        geçtiği için doğru firmanın satırını getirir.
+        """
+        _fid = aktif_firma_id()
+        if not _fid:
+            return None
+        f = db.session.get(Firma, _fid)
+        if f is None or not has_request_context():
+            return f
+        if getattr(g, '_mf5_tasindi', False):
+            return f
+        g._mf5_tasindi = True
+        try:
+            import json as _j
+            _tasindi = False
+            _v = Veriler.query.filter_by(kategori='firma').first()
+            if _v:
+                try:
+                    _ek = _j.loads(_v.uzun_deger or '{}') or {}
+                except Exception:
+                    _ek = {}
+                for _alan, _deger in (('unvan', _v.deger),
+                                      ('kisaltma', _v.kisaltma),
+                                      ('adres', _ek.get('adres')),
+                                      ('telefon', _ek.get('tel')),
+                                      ('eposta', _ek.get('email'))):
+                    if _deger and not str(getattr(f, _alan, '') or '').strip():
+                        setattr(f, _alan, _deger)
+                        _tasindi = True
+            _l = Veriler.query.filter_by(kategori='firma_logo',
+                                         deger='logo').first()
+            if _l and _l.uzun_deger and not (f.logo or ''):
+                f.logo = _l.uzun_deger
+                f.logo_dosya = _l.ek_bilgi
+                _tasindi = True
+            if _tasindi:
+                db.session.commit()
+        except Exception as _e:
+            db.session.rollback()
+            app.logger.warning(f'[MF5] firma bilgisi tasinamadi: {_e}')
+        return f
+
     def _firma_logo_al():
-        """Kayıtlı logoyu döner: 'data:image/png;base64,...' veya None."""
-        k = Veriler.query.filter_by(kategori='firma_logo', deger='logo').first()
-        return (k.uzun_deger if k else None) or None
+        """Aktif firmanın logosu: 'data:image/png;base64,…' ya da None."""
+        f = _firma_kayit()                        # MF5: tek kaynak
+        return (f.logo if f else None) or None
 
     @app.route('/api/ayarlar/logo', methods=['GET'])
     def api_logo_get():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        logo = _firma_logo_al()
-        k = Veriler.query.filter_by(kategori='firma_logo', deger='logo').first()
+        f = _firma_kayit()                        # MF5: tek kaynak
+        logo = (f.logo if f else None) or None
         return jsonify({
             'ok': True,
             'var_mi': bool(logo),
             'logo': logo,                      # data URI (önizleme için)
-            'dosya_adi': (k.ek_bilgi if k else None) or '',
+            'dosya_adi': (f.logo_dosya if f else None) or '',
             'boyut_kb': round(len(logo) * 3 / 4 / 1024, 1) if logo else 0
         })
 
@@ -16247,12 +16689,12 @@ def create_app():
                 'mesaj': f'Logo cok buyuk ({tahmini_kb:.0f} KB). En fazla 500 KB olmali. '
                          f'Gorseli kucultup tekrar deneyin.'}), 400
 
-        k = Veriler.query.filter_by(kategori='firma_logo', deger='logo').first()
-        if not k:
-            k = Veriler(kategori='firma_logo', deger='logo')
-            db.session.add(k)
-        k.uzun_deger = logo
-        k.ek_bilgi = (data.get('dosya_adi') or '')[:200]
+        f = _firma_kayit()                        # MF5: tek kaynak
+        if not f:
+            return jsonify({'ok': False,
+                            'mesaj': 'Aktif firma bulunamadi.'}), 400
+        f.logo = logo
+        f.logo_dosya = (data.get('dosya_adi') or '')[:200]
         # Denetim izi commit'ten ÖNCE eklenmeli — _log_audit kendi commit'ini
         # yapmaz, çağıranın commit'ine yazılır. Sonra çağrılırsa kaydedilmez.
         _log_audit('GUNCELLE', 'ayarlar', 'firma_logo',
@@ -16268,36 +16710,360 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         if session.get('rol') not in ('admin', 'ADMIN'):
             return jsonify({'ok': False, 'mesaj': 'Bu islem icin yonetici yetkisi gerekli.'}), 403
-        k = Veriler.query.filter_by(kategori='firma_logo', deger='logo').first()
-        if k:
-            _log_audit('SIL', 'ayarlar', 'firma_logo', eski={'dosya': k.ek_bilgi})
-            db.session.delete(k)
+        f = _firma_kayit()                        # MF5: tek kaynak
+        if f and f.logo:
+            _log_audit('SIL', 'ayarlar', 'firma_logo',
+                       eski={'dosya': f.logo_dosya, 'firma': f.ad})
+            f.logo = None
+            f.logo_dosya = None
             db.session.commit()
         return jsonify({'ok': True, 'mesaj': 'Logo kaldirildi. Belgelerde firma adi yazisi kullanilacak.'})
+
+    # ══════════════════════════════════════════════════════════
+    #  ÇOKLU FİRMA — YÖNETİM VE SEÇİM  (MF3)
+    # ══════════════════════════════════════════════════════════
+
+    @app.route('/api/firma', methods=['GET'])
+    def api_firma_liste():
+        """Firmalar + hangisinde çalışıldığı."""
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        _admin = (session.get('rol') or '').upper() == 'ADMIN'
+        with firma_atla():
+            kayitlar = (Firma.query.order_by(Firma.sira, Firma.id).all())
+        return jsonify({
+            'ok': True,
+            'aktif': aktif_firma_id(),
+            'admin': _admin,
+            'firmalar': [{
+                'id': f.id, 'ad': f.ad, 'unvan': f.unvan or '',
+                'belge_kodu': f.belge_kodu or '',
+                'vergi_no': f.vergi_no or '',
+                'varsayilan': bool(f.varsayilan), 'aktif': bool(f.aktif),
+            } for f in kayitlar]})
+
+    @app.route('/api/firma', methods=['POST'])
+    def api_firma_ekle():
+        """Yeni firma açar. YALNIZCA ADMIN."""
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj':
+                            'Firma eklemek yalnızca admin yetkisindedir'}), 403
+        data = request.get_json(silent=True) or {}
+        ad = (data.get('ad') or '').strip()
+        kod = (data.get('belge_kodu') or '').strip().upper()
+        if not ad:
+            return jsonify({'ok': False, 'mesaj': 'Firma adı zorunlu'}), 400
+        # ── KOD NEDEN ZORUNLU ──
+        # Belge kimlikleri birincil anahtar. Kodsuz ikinci firma ana
+        # firmayla AYNI kökü üretir (SIP-STN26-), sayaç ikisini birden
+        # sayar ve numaralar iç içe geçer. Kod, her firmanın sayacını
+        # kendi başına tutan tek şey.
+        if not kod:
+            return jsonify({'ok': False, 'mesaj':
+                            'Belge kodu zorunlu — bu kod olmadan iki firmanın '
+                            'belge numaraları çakışır. Örnek: K'}), 400
+        if len(kod) > 4 or not kod.isalnum():
+            return jsonify({'ok': False, 'mesaj':
+                            'Belge kodu en çok 4 karakter, yalnızca harf/rakam'}), 400
+        with firma_atla():
+            if Firma.query.filter(db.func.upper(Firma.belge_kodu) == kod).first():
+                return jsonify({'ok': False, 'mesaj':
+                                f'"{kod}" kodu başka bir firmada kullanılıyor'}), 400
+            _son = db.session.query(db.func.max(Firma.sira)).scalar() or 0
+            # ── MF6 · ORTAK KULLANIM ──
+            # Yeni firma bomboş açılıyordu: 170 cari ve bütün tanım
+            # listeleri yeniden girilecekti. İki seçenek:
+            #   ortak_cari  → mevcut cariler bu firmaya da BAĞLANIR
+            #                 (kuruluşta kopyalama; sonrası ayrı)
+            #   ortak_liste → cins/yüzey/ülke CANLI paylaşılır
+            _ortak_cari = bool(data.get('ortak_cari'))
+            _ortak_liste = bool(data.get('ortak_liste'))
+            f = Firma(ad=ad, unvan=(data.get('unvan') or ad).strip(),
+                      belge_kodu=kod,
+                      vergi_dairesi=(data.get('vergi_dairesi') or '').strip() or None,
+                      vergi_no=(data.get('vergi_no') or '').strip() or None,
+                      adres=(data.get('adres') or '').strip() or None,
+                      telefon=(data.get('telefon') or '').strip() or None,
+                      eposta=(data.get('eposta') or '').strip() or None,
+                      varsayilan=False, aktif=True, sira=_son + 1,
+                      ortak_liste=_ortak_liste)
+            db.session.add(f)
+            db.session.flush()         # f.id lazim
+
+            # ── ORTAK CARİ: kuruluşta KOPYALAMA ──
+            # Mevcut bütün cariler yeni firmaya da bağlanır; 170
+            # müşteriyi yeniden girmek gerekmez. Sonrası AYRI:
+            # A'da açılan yeni müşteri B'de görünmez.
+            _kopya_cari = 0
+            if _ortak_cari:
+                _bagli = {m.cari_id for m in
+                          CariFirma.query.filter_by(firma_id=f.id).all()}
+                for (_cid,) in db.session.query(Cari.id).all():
+                    if _cid in _bagli:
+                        continue
+                    db.session.add(CariFirma(cari_id=_cid, firma_id=f.id))
+                    _kopya_cari += 1
+
+            # ── ORTAK LİSTE KAPALIYSA: listeleri KOPYALA ──
+            # "Paylaşma" demek "sıfırdan başla" demek değil. Kopya
+            # yazılmazsa cins/yüzey/ülke açılır listeleri bomboş gelir
+            # ve firma kullanılamaz olurdu.
+            _kopya_liste = 0
+            if not _ortak_liste:
+                for _v in Veriler.query.filter(
+                        Veriler.firma_id.is_(None)).all():
+                    db.session.add(Veriler(
+                        kategori=_v.kategori, deger=_v.deger,
+                        kisaltma=_v.kisaltma, ek_bilgi=_v.ek_bilgi,
+                        uzun_deger=_v.uzun_deger, firma_id=f.id))
+                    _kopya_liste += 1
+            _log_audit('EKLE', 'firma', ad, yeni={'ad': ad, 'kod': kod,
+                                                  'ortak_cari': _ortak_cari,
+                                                  'ortak_liste': _ortak_liste})
+            ok, hata = _safe_commit(f'Firma ekle: {ad}')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        _firma_onbellek_dusur()
+        _m = f'{ad} eklendi'
+        if _kopya_cari:
+            _m += f' · {_kopya_cari} cari bağlandı'
+        if _kopya_liste:
+            _m += f' · {_kopya_liste} liste tanımı kopyalandı'
+        _m += '. Bilgilerini girmek için o firmaya geçin.'
+        return jsonify({'ok': True, 'id': f.id, 'mesaj': _m,
+                        'kopya_cari': _kopya_cari,
+                        'kopya_liste': _kopya_liste})
+
+    def _firma_kayit_sayim(fid):
+        """Firmaya bağlı kayıtları tablo tablo sayar.
+
+        HAM SQL: süzgeç zaten aktif firmaya bakıyor, biz BAŞKA bir
+        firmayı sayıyoruz. ORM ile sorgulamak yanlış firmayı sayardı.
+        """
+        sayim, toplam = {}, 0
+        with db.engine.connect() as _b:
+            for _t in db.metadata.sorted_tables:
+                if 'firma_id' not in _t.c:
+                    continue
+                if _t.name in ('firma', 'audit_log', 'veriler'):
+                    continue            # aşağıda ayrı ele alınıyor
+                _n = _b.execute(sa_text(
+                    f'SELECT COUNT(*) FROM "{_t.name}" WHERE firma_id = :f'),
+                    {'f': fid}).scalar() or 0
+                if _n:
+                    sayim[_t.name] = _n
+                    toplam += _n
+            _c = _b.execute(sa_text(
+                'SELECT COUNT(*) FROM cari_firma WHERE firma_id = :f'),
+                {'f': fid}).scalar() or 0
+        return sayim, toplam, _c
+
+    @app.route('/api/firma/<int:fid>/ozet', methods=['GET'])
+    def api_firma_ozet(fid):
+        """Silmeden önce: bu firmada ne var, silinebilir mi?"""
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj': 'Yalnızca admin'}), 403
+        with firma_atla():
+            f = db.session.get(Firma, fid)
+            _toplam_firma = Firma.query.count()
+        if not f:
+            return jsonify({'ok': False, 'mesaj': 'Firma bulunamadı'}), 404
+        sayim, toplam, cari_n = _firma_kayit_sayim(fid)
+        engel = None
+        if f.id == aktif_firma_id():
+            engel = 'İçinde bulunduğun firmayı silemezsin. Önce başka bir firmaya geç.'
+        elif f.varsayilan:
+            engel = 'Varsayılan firma silinemez. Önce başka bir firmayı varsayılan yap.'
+        elif _toplam_firma <= 1:
+            engel = 'Son firma silinemez — firmasız sistem kayıt yazamaz.'
+        return jsonify({'ok': True, 'id': f.id, 'ad': f.ad,
+                        'belge_kodu': f.belge_kodu or '',
+                        'kayit_sayisi': toplam, 'cari_baglantisi': cari_n,
+                        'dagilim': sayim, 'engel': engel,
+                        'silinebilir': engel is None})
+
+    @app.route('/api/firma/<int:fid>', methods=['DELETE'])
+    def api_firma_sil(fid):
+        """Firmayı ve ona bağlı HER ŞEYİ siler.
+
+        Kayıt varsa ÖNCE tam veritabanı yedeği alınır. Yedek
+        alınamazsa silme İPTAL edilir: kurtarılamayacak bir silme
+        yapmaktansa hiç yapmamak doğrudur.
+        """
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj':
+                            'Firma silmek yalnızca admin yetkisindedir'}), 403
+        with firma_atla():
+            f = db.session.get(Firma, fid)
+            _toplam_firma = Firma.query.count()
+        if not f:
+            return jsonify({'ok': False, 'mesaj': 'Firma bulunamadı'}), 404
+        if f.id == aktif_firma_id():
+            return jsonify({'ok': False, 'mesaj':
+                            'İçinde bulunduğun firmayı silemezsin. '
+                            'Önce başka bir firmaya geç.'}), 400
+        if f.varsayilan:
+            return jsonify({'ok': False, 'mesaj':
+                            'Varsayılan firma silinemez.'}), 400
+        if _toplam_firma <= 1:
+            return jsonify({'ok': False, 'mesaj':
+                            'Son firma silinemez.'}), 400
+
+        _ad = f.ad
+        sayim, toplam, _ = _firma_kayit_sayim(fid)
+
+        # ── YEDEK ──
+        # Kayıt varsa zorunlu. `firma_silme` tipi otomatik temizliğe
+        # takılmaz (yedek.py): normal yedekler 30'u geçince en eski
+        # silinir, bir firmanın TEK kurtarma noktası öyle kaybolmamalı.
+        yedek_dosya = None
+        if toplam > 0:
+            try:
+                yol = yedek_modul.yedek_al('firma_silme')
+            except Exception as _e:
+                app.logger.exception('[MF4] firma silme yedegi alinamadi')
+                yol = None
+            if not yol:
+                return jsonify({'ok': False, 'mesaj':
+                                'Yedek ALINAMADI — silme iptal edildi. '
+                                'Kurtarılamayacak bir silme yapmıyorum. '
+                                'Ayarlar → Yedekleme bölümündeki tanıya bak.'}), 500
+            yedek_dosya = os.path.basename(str(yol))
+
+        # ── SİLME (tek transaction) ──
+        try:
+            with db.engine.begin() as _b:
+                # Çocuk tablo önce: metadata topolojik sıralı, tersi
+                # silme sırası. Elle sıralamak her yeni yabancı
+                # anahtarda kırılırdı (sifirla2'de ölçülmüştü).
+                for _t in reversed(db.metadata.sorted_tables):
+                    if 'firma_id' not in _t.c or _t.name in ('firma', 'audit_log'):
+                        continue
+                    _b.execute(sa_text(
+                        f'DELETE FROM "{_t.name}" WHERE firma_id = :f'), {'f': fid})
+                _b.execute(sa_text(
+                    'DELETE FROM cari_firma WHERE firma_id = :f'), {'f': fid})
+                # Denetim izi SİLİNMEZ — silinen firmada ne yapıldığı
+                # da görünebilmeli. Yalnızca bağ koparılır.
+                _b.execute(sa_text(
+                    'UPDATE audit_log SET firma_id = NULL WHERE firma_id = :f'),
+                    {'f': fid})
+                _b.execute(sa_text('DELETE FROM firma WHERE id = :f'), {'f': fid})
+        except Exception as _e:
+            app.logger.exception('[MF4] firma silinemedi')
+            return jsonify({'ok': False, 'mesaj': f'Silinemedi: {_e}'}), 500
+
+        # ── ARTIK CARİLER ──
+        # Üyeliği kalmayan cari hiçbir firmada görünmez. Başka hiçbir
+        # kaydı yoksa kart da gider; kaydı varsa DOKUNULMAZ ve
+        # raporlanır — veri sessizce yok edilmez.
+        silinen_cari, kalan_artik = 0, 0
+        try:
+            _izli = ('cari_hareket', 'faturalar', 'siparis_kayit', 'proforma',
+                     'cek', 'rezervasyon', 'satis_kaydi', 'cari_aktivite')
+            with db.engine.begin() as _b:
+                _artik = [r[0] for r in _b.execute(sa_text(
+                    'SELECT c.id FROM cariler c WHERE NOT EXISTS '
+                    '(SELECT 1 FROM cari_firma cf WHERE cf.cari_id = c.id)'
+                )).fetchall()]
+                for _cid in _artik:
+                    _var = False
+                    for _tn in _izli:
+                        if _b.execute(sa_text(
+                            f'SELECT 1 FROM "{_tn}" WHERE cari_id = :c LIMIT 1'),
+                                {'c': _cid}).fetchone():
+                            _var = True
+                            break
+                    if _var:
+                        kalan_artik += 1
+                        continue
+                    _b.execute(sa_text(
+                        'DELETE FROM cari_kisi WHERE cari_id = :c'), {'c': _cid})
+                    _b.execute(sa_text(
+                        'DELETE FROM cari_erisim WHERE cari_id = :c'), {'c': _cid})
+                    _b.execute(sa_text(
+                        'DELETE FROM cariler WHERE id = :c'), {'c': _cid})
+                    silinen_cari += 1
+        except Exception as _e:
+            app.logger.warning(f'[MF4] artik cari temizligi atlandi: {_e}')
+
+        # Onbellekler: silinen firma varsayilan degildi ama models
+        # tarafindaki onbellek yine de tazelensin — firma tablosu
+        # degisti. MF2'nin ice aktarim satirinda bu ad YOKTU,
+        # NameError veriyordu (olculdu).
+        from models import varsayilan_firma_unut as _vfu
+        _vfu()
+        _firma_onbellek_dusur()
+        _log_audit('SIL', 'firma', fid,
+                   eski={'ad': _ad, 'kayit': toplam, 'yedek': yedek_dosya})
+        db.session.commit()
+
+        _m = f'{_ad} silindi'
+        if toplam:
+            _m += f' · {toplam:,} kayıt'
+        if silinen_cari:
+            _m += f' · {silinen_cari} artık cari kaldırıldı'
+        if kalan_artik:
+            _m += f' · {kalan_artik} cari kaydı olduğu için BIRAKILDI'
+        if yedek_dosya:
+            _m += f' · yedek: {yedek_dosya}'
+        return jsonify({'ok': True, 'mesaj': _m, 'yedek': yedek_dosya,
+                        'silinen_kayit': toplam, 'silinen_cari': silinen_cari,
+                        'kalan_artik_cari': kalan_artik})
+
+    @app.route('/api/firma/sec', methods=['POST'])
+    def api_firma_sec():
+        """Çalışılan firmayı değiştirir. YALNIZCA ADMIN."""
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj':
+                            'Firma değiştirmek yalnızca admin yetkisindedir'}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            fid = int(data.get('firma_id') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Firma kimliği sayı olmalı'}), 400
+        with firma_atla():
+            f = db.session.get(Firma, fid)
+        if not f or not f.aktif:
+            return jsonify({'ok': False, 'mesaj': 'Firma bulunamadı ya da pasif'}), 404
+        session['firma_id'] = f.id
+        _firma_onbellek_dusur()
+        _log_audit('DURUM', 'firma', f.id, aciklama=f'{f.ad} firmasina gecildi')
+        db.session.commit()
+        return jsonify({'ok': True, 'id': f.id, 'ad': f.ad,
+                        'mesaj': f'{f.ad} firmasına geçildi'})
 
     @app.route('/api/ayarlar/firma', methods=['GET'])
     def api_ayarlar_firma_get():
         """Satıcı firma varsayılan bilgisi (proforma/fatura için). Veriler tablosunda kategori='firma'."""
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        kayit = Veriler.query.filter_by(kategori='firma').first()
-        if kayit:
-            # F3-1: adres/tel/e-posta uzun_deger icinde JSON olarak tutulur;
-            # yeni tablo veya sutun gerektirmez.
-            _ek = {}
-            try:
-                import json as _json
-                _ek = _json.loads(kayit.uzun_deger or '{}') or {}
-            except Exception:
-                _ek = {}
+        # MF5: TEK KAYNAK `firma`. Eskiden Veriler okunuyordu ve
+        # firma tablosundaki ünvanı görmüyordu — ikinci firmada form
+        # boş geliyor, ekranda şablondaki örnek metin kalıyordu.
+        f = _firma_kayit()
+        if f:
             return jsonify({
-                'satici_firma': kayit.deger or '',
-                'kisaltma': kayit.kisaltma or '',
-                'satici_adres': _ek.get('adres', ''),
-                'satici_tel': _ek.get('tel', ''),
-                'satici_email': _ek.get('email', ''),
+                'satici_firma': f.unvan or '',
+                'kisaltma': f.kisaltma or '',
+                'satici_adres': f.adres or '',
+                'satici_tel': f.telefon or '',
+                'satici_email': f.eposta or '',
+                # Hangi firmayı düzenlediğini ekran yazsın: iki firma
+                # arasında gidip gelirken yanlış firmanın ünvanını
+                # değiştirmek çok kolaydı.
+                'firma_ad': f.ad or '', 'firma_id': f.id,
             })
         return jsonify({'satici_firma': '', 'kisaltma': '',
-                        'satici_adres': '', 'satici_tel': '', 'satici_email': ''})
+                        'satici_adres': '', 'satici_tel': '',
+                        'satici_email': '', 'firma_ad': '', 'firma_id': None})
 
     @app.route('/api/ayarlar/firma', methods=['POST'])
     def api_ayarlar_firma_post():
@@ -16305,26 +17071,20 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         data = request.get_json(silent=True) or {}
         satici = (data.get('satici_firma') or '').strip()
-        kayit = Veriler.query.filter_by(kategori='firma').first()
-        if not kayit:
-            kayit = Veriler(kategori='firma', deger=satici, kisaltma=(data.get('kisaltma') or ''))
-            db.session.add(kayit)
-        else:
-            kayit.deger = satici
-            if data.get('kisaltma') is not None:
-                kayit.kisaltma = data.get('kisaltma')
-        # F3-1: iletisim bilgileri — belgelerde basiliyor, bir kez girilir
-        import json as _json
-        try:
-            _ek = _json.loads(kayit.uzun_deger or '{}') or {}
-        except Exception:
-            _ek = {}
-        for _a, _k in (('satici_adres', 'adres'), ('satici_tel', 'tel'),
-                       ('satici_email', 'email')):
+        # MF5: AKTİF FİRMANIN kaydına yazılır. Eskiden Veriler'e
+        # yazılıyordu ve firma tablosundaki ünvanla ayrışıyordu.
+        f = _firma_kayit()
+        if not f:
+            return jsonify({'ok': False,
+                            'mesaj': 'Aktif firma bulunamadi.'}), 400
+        f.unvan = satici
+        if data.get('kisaltma') is not None:
+            f.kisaltma = (data.get('kisaltma') or '').strip()[:10]
+        for _a, _alan in (('satici_adres', 'adres'), ('satici_tel', 'telefon'),
+                          ('satici_email', 'eposta')):
             if data.get(_a) is not None:
-                _ek[_k] = (data.get(_a) or '').strip()
-        kayit.uzun_deger = _json.dumps(_ek, ensure_ascii=False)
-        ok, hata = _safe_commit('Firma ayarı kaydet')
+                setattr(f, _alan, (data.get(_a) or '').strip())
+        ok, hata = _safe_commit(f'Firma ayarı kaydet: {f.ad}')
         if not ok:
             return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
         return jsonify({'ok': True, 'satici_firma': satici})
@@ -16399,7 +17159,8 @@ def create_app():
                             'mesaj': f'{deger} zaten listede'})
 
         v = Veriler(kategori=kategori, deger=deger,
-                    kisaltma=(data.get('kisaltma') or None))
+                    kisaltma=(data.get('kisaltma') or None),
+                    firma_id=_liste_firma_id())          # MF6
         db.session.add(v)
         db.session.commit()
         return jsonify({'ok': True, 'mevcut': False, 'id': v.id})
@@ -16435,7 +17196,8 @@ def create_app():
             return jsonify({'ok': True, 'mevcut': True, 'id': mevcut.id,
                             'deger': mevcut.deger,
                             'mesaj': f'{mevcut.deger} zaten listede'})
-        v = Veriler(kategori=kategori, deger=deger)
+        v = Veriler(kategori=kategori, deger=deger,
+                    firma_id=_liste_firma_id())          # MF6
         db.session.add(v)
         db.session.flush()
         _log_audit('EKLE', 'veriler', v.id, yeni={'kategori': kategori, 'deger': deger},
@@ -16822,21 +17584,22 @@ def create_app():
         Ayarlar: Veriler(kategori='firma') — deger=unvan,
         uzun_deger=JSON{adres, tel, email}
         """
-        _ayar, _ek = None, {}
+        # MF5: TEK KAYNAK `firma`. Belgenin üstünde hangi firmanın
+        # ünvanı yazacağı buradan geliyor — yanlış kaynak, yanlış
+        # firmanın adıyla fatura demekti.
+        _f = None
         try:
-            _ayar = Veriler.query.filter_by(kategori='firma').first()
-            if _ayar and _ayar.uzun_deger:
-                import json as _json
-                _ek = _json.loads(_ayar.uzun_deger) or {}
+            _f = _firma_kayit()
         except Exception:
             pass
         _sec = lambda anahtar, varsayilan: (
             data.get(anahtar) if data.get(anahtar) else varsayilan) or None
         return {
-            'satici_firma': _sec('satici_firma', _ayar.deger if _ayar else ''),
-            'satici_adres': _sec('satici_adres', _ek.get('adres', '')),
-            'satici_tel':   _sec('satici_tel',   _ek.get('tel', '')),
-            'satici_email': _sec('satici_email', _ek.get('email', '')),
+            'satici_firma': _sec('satici_firma',
+                                 ((_f.unvan or _f.ad) if _f else '')),
+            'satici_adres': _sec('satici_adres', (_f.adres if _f else '')),
+            'satici_tel':   _sec('satici_tel',   (_f.telefon if _f else '')),
+            'satici_email': _sec('satici_email', (_f.eposta if _f else '')),
         }
 
     @app.route('/api/proforma', methods=['POST'])
@@ -17593,7 +18356,20 @@ def create_app():
             return jsonify({'error': 'Unauthorized'}), 401
         cari = Cari.query.get(cari_id)
         if not cari: return "Cari bulunamadı", 404
-        hareketler = CariHareket.query.filter_by(cari_id=cari_id).order_by(CariHareket.hareket_tarihi, CariHareket.guncelleme).all()
+        # ── MF7 · KONSOLİDE EKSTRE ──
+        # Aynı müşteri birden çok firmada işlem görüyorsa, seçilen
+        # firmaların hareketleri BİRLEŞTİRİLİR. Süzgeç aktif firmaya
+        # bakar; burada bilerek atlanıyor ve firma şartı ELLE konuyor.
+        _kons = _konsolide_firmalar()
+        if _kons:
+            with firma_atla():
+                hareketler = (CariHareket.query
+                              .filter(CariHareket.cari_id == cari_id,
+                                      CariHareket.firma_id.in_(_kons))
+                              .order_by(CariHareket.hareket_tarihi,
+                                        CariHareket.guncelleme).all())
+        else:
+            hareketler = CariHareket.query.filter_by(cari_id=cari_id).order_by(CariHareket.hareket_tarihi, CariHareket.guncelleme).all()
 
         # ── İŞLEM TÜRÜ SÜZGECİ (ET1) ──
         # `?tip=Tahsilat,Odeme` ile yalnizca belirli turler.
@@ -17738,8 +18514,14 @@ def create_app():
         return render_template('ekstre_print.html', cari=cari, hareketler=hareketler,
                                dil=_belge_dili(getattr(cari, 'ulke', None)),
                                baslik='Cari Ekstre', bugun=date.today(),
-                               firma_adi='Milestone Mermer', toplam_borc=toplam_borc, toplam_alacak=toplam_alacak,
-                               net_bakiye=net_bakiye, hedef_doviz=hedef_doviz, kur_modu=kur_modu)
+                               # MF7: SABİT 'Milestone Mermer' yazıyordu —
+                               # ikinci firmanın ekstresinde de o basılıyordu.
+                               firma_adi=((_fk.unvan or _fk.ad) if (_fk := _firma_kayit()) else ''),
+                               toplam_borc=toplam_borc, toplam_alacak=toplam_alacak,
+                               net_bakiye=net_bakiye, hedef_doviz=hedef_doviz, kur_modu=kur_modu,
+                               # MF7: konsolideyse FİRMA sütunu açılır.
+                               konsolide=bool(_kons),
+                               firma_adlari=_firma_adlari(_kons or []))
 
     @app.route('/api/cari/<cari_id>/siparis_ekstre_pdf')
     def api_siparis_ekstre_pdf(cari_id):

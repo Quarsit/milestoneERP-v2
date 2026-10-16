@@ -78,13 +78,37 @@
 
 <!-- FİRMA -->
 <section class="bolum" id="b-firma">
+  <!-- ── FİRMALAR (MF3) ──
+       Sistem birden çok tüzel kişilik taşıyabilir. Aşağıdaki "Firma
+       Bilgileri" formu AKTİF FİRMAYI düzenler; başka bir firmanın
+       bilgisini girmek için önce üst bardan o firmaya geç. -->
+  <div class="panel" id="firmalarPanel" style="margin-bottom:18px">
+    <h4>Firmalar</h4>
+    <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+      Her firmanın stoğu, siparişi, kasası ve defteri ayrıdır.
+      Aşağıdaki form <b>aktif firmayı</b> düzenler.</p>
+    <div class="tablo-kutu">
+      <table>
+        <thead><tr><th>Firma</th><th>Belge Kodu</th><th>Vergi No</th>
+          <th class="sag" style="width:120px"></th></tr></thead>
+        <tbody id="firmaGovde"><tr><td colspan="4" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+    <div id="firmaEkleKutu" style="margin-top:14px"></div>
+  </div>
   <div class="izgara-2">
     <div class="panel">
-      <h4>Firma Bilgileri</h4>
-      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Proforma ve fatura belgelerinde görünür.</p>
+      <h4>Firma Bilgileri <span id="fBaslikFirma" style="color:var(--verde);font-weight:600"></span></h4>
+      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+        Proforma ve fatura belgelerinde görünür.
+        <b>Aktif firmanın</b> bilgileridir — başka bir firmanınkini
+        düzenlemek için önce o firmaya geç.</p>
       <div class="form-alan" style="margin-bottom:12px">
         <label>Satıcı Firma Ünvanı</label>
-        <input id="fFirma" placeholder="Milestone Mermer San. ve Tic. Ltd. Şti.">
+        <!-- MF5: örnek metin GERÇEK bir firma adı olmamalı. Boş
+             formda "Milestone Mermer…" yazınca, ikinci firmadayken
+             ana firmanın bilgisi oraya yazılmış gibi görünüyordu. -->
+        <input id="fFirma" placeholder="Tam ticari ünvan — belgelerde basılır">
       </div>
       <div class="form-alan" style="margin-bottom:12px">
         <label>Kısaltma (stok kodlarında)</label>
@@ -97,13 +121,13 @@
            Bir kez girilir, oluşturulan her belgeye otomatik işlenir. -->
       <div class="form-alan" style="margin-bottom:12px">
         <label>Firma Adresi <span style="color:var(--soluk);font-weight:400;text-transform:none">· belgelerde basılır</span></label>
-        <input id="fAdres" placeholder="Organize Sanayi Bölgesi ... Denizli / Türkiye">
+        <input id="fAdres" placeholder="Açık adres — belgelerde basılır">
       </div>
       <div class="form-satir f2" style="margin-bottom:14px">
         <div class="form-alan"><label>Telefon</label>
           <input id="fTelefon" data-buyuk-harf="hayir" placeholder="+90 258 000 00 00"></div>
         <div class="form-alan"><label>E-posta</label>
-          <input id="fEposta" data-buyuk-harf="hayir" placeholder="info@milestonemermer.com"></div>
+          <input id="fEposta" data-buyuk-harf="hayir" placeholder="ornek@firma.com"></div>
       </div>
       <button class="btn-yeni" onclick="firmaKaydet()">Kaydet</button>
 
@@ -242,15 +266,12 @@
        (kendisi dahil) Kullanıcılar sekmesindeki formdan tanımlıyor
        ve oradan test ediyor. İki ayrı yol = iki ayrı gerçek. -->
 
-  <div class="panel" style="margin-top:14px">
-    <h4>Yedekler <span id="yedekAdet" style="color:var(--soluk);font-weight:400"></span></h4>
-    <div class="tablo-kutu" style="border:0">
-      <table>
-        <thead><tr><th>Dosya</th><th>Tip</th><th>Tarih</th><th class="sag">Boyut</th><th class="sag" style="width:230px"></th></tr></thead>
-        <tbody id="yedekGovde"><tr><td colspan="5" class="yukleniyor">Yükleniyor…</td></tr></tbody>
-      </table>
-    </div>
-  </div>
+  <!-- MF4: BURADA bir "Yedekler" paneli DAHA vardı — Yedekleme
+       sekmesindekiyle AYNI id'leri taşıyordu (yedekGovde, yedekAdet).
+       getElementById İLKİNİ döndürdüğü için JS bu GÖRÜNMEYEN kopyayı
+       dolduruyor, Yedekleme sekmesindeki tablo "Yükleniyor…"da
+       kalıyordu. Diskte 30 yedek varken liste boş görünmesinin
+       sebebi buydu. Panelin yeri Yedekleme sekmesi; burada işi yok. -->
 </section>
 
 <section class="bolum" id="b-listeler">
@@ -912,6 +933,9 @@ async function firmaYukle() {
   try {
     const d = await api('/api/ayarlar/firma');
     document.getElementById('fFirma').value = d.satici_firma || '';
+  // MF5: hangi firmayı düzenlediğin başlıkta yazsın.
+  const _bf = document.getElementById('fBaslikFirma');
+  if (_bf) _bf.textContent = d.firma_ad ? '· ' + d.firma_ad : '';
     document.getElementById('fKisaltma').value = d.kisaltma || '';
     document.getElementById('fAdres').value = d.satici_adres || '';
     document.getElementById('fTelefon').value = d.satici_tel || '';
@@ -1227,8 +1251,13 @@ async function bankaSil(id, ad) {
 }
 
 /* ── Yedekleme ── */
-const YTIP = { auto: 'Otomatik', manual: 'Elle', pre_restore: 'Geri yükleme öncesi' };
-const YRZ  = { auto: 'rz-gri', manual: 'rz-yesil', pre_restore: 'rz-kehribar' };
+const YTIP = { auto: 'Otomatik', manual: 'Elle',
+               pre_restore: 'Geri yükleme öncesi',
+               // MF4: firma silinmeden önce alınır, otomatik
+               // temizliğe TAKILMAZ — tek kurtarma noktası.
+               firma_silme: 'Firma silme öncesi' };
+const YRZ  = { auto: 'rz-gri', manual: 'rz-yesil',
+               pre_restore: 'rz-kehribar', firma_silme: 'rz-kehribar' };
 
 async function yedekYukle() {
   // Ortam tanısı (pg_dump var mı, klasör yazılabilir mi)
@@ -1310,7 +1339,14 @@ async function yedekSil(dosya) {
 
 /* ── Sekmeler ── */
 const yuklendi = { kullanici: false, firma: false, listeler: false, banka: false, yedek: false };
-const yukleyici = { kullanici: kullaniciYukle, firma: firmaYukle, listeler: lookupYukle,
+const yukleyici = { kullanici: kullaniciYukle,
+                    // MF3B: "firma" sekmesi İKİ şey yükler — firma
+                    // bilgisi formu ve FİRMALAR listesi. MF3'te
+                    // firmaListesiYukle yazılmış ama buraya
+                    // bağlanmamıştı: tablo "Yükleniyor…"da kalıyor,
+                    // "+ Yeni Firma" düğmesi hiç basılmıyordu.
+                    firma: () => { firmaYukle(); firmaListesiYukle(); },
+                    listeler: lookupYukle,
                     banka: bankaYukle, yedek: yedekYukle,
                     // E-posta sekmesi: hem şirket ayarı hem kişisel hesap yüklenir
                     /* EP5: kepYukle kaldırıldı (kişisel panel yok).
@@ -1326,5 +1362,111 @@ document.querySelectorAll('.sekme').forEach(s => s.onclick = () => {
 
 yuklendi.kullanici = true;
 kullaniciYukle();
+
+/* ── FİRMALAR (MF3) ── */
+let FIRMA_VERI = null;
+async function firmaListesiYukle() {
+  const govde = document.getElementById('firmaGovde');
+  if (!govde) return;
+  try {
+    FIRMA_VERI = await api('/api/firma');
+  } catch (e) {
+    govde.innerHTML = '<tr><td colspan="4" class="bos">Firmalar okunamadı</td></tr>';
+    return;
+  }
+  const fl = (FIRMA_VERI && FIRMA_VERI.firmalar) || [];
+  govde.innerHTML = fl.length ? fl.map(f => `
+    <tr>
+      <td><b>${kacar(f.ad)}</b>${f.varsayilan ? ' <span class="rozet rz-gri">varsayılan</span>' : ''}
+          ${f.id === FIRMA_VERI.aktif ? ' <span class="rozet rz-yesil">aktif</span>' : ''}
+          ${f.unvan && f.unvan !== f.ad ? `<div style="color:var(--soluk);font-size:.78rem">${kacar(f.unvan)}</div>` : ''}</td>
+      <td class="mono">${kacar(f.belge_kodu || '—')}</td>
+      <td class="mono">${kacar(f.vergi_no || '—')}</td>
+      <td class="sag">${(FIRMA_VERI.admin && f.id !== FIRMA_VERI.aktif)
+        ? `<button class="mini-btn" onclick="firmaGec(${f.id})">Bu firmaya geç</button>` : ''}</td>
+    </tr>`).join('')
+    : '<tr><td colspan="4" class="bos">Firma kaydı yok</td></tr>';
+
+  const kutu = document.getElementById('firmaEkleKutu');
+  if (!kutu) return;
+  if (!FIRMA_VERI.admin) { kutu.innerHTML = ''; return; }
+  kutu.innerHTML = `<button class="btn-yeni" onclick="firmaEkleAc()">+ Yeni Firma</button>`;
+}
+
+function firmaEkleAc() {
+  const kutu = document.getElementById('firmaEkleKutu');
+  kutu.innerHTML = `
+    <div class="panel" style="background:var(--taban)">
+      <h4 style="margin-bottom:10px">Yeni Firma</h4>
+      <p style="color:var(--soluk);font-size:.82rem;margin-bottom:12px">
+        <b>Belge kodu</b> zorunlu ve kısa olmalı (örn. K). Bu kod belge
+        kimliklerinin köküne girer — <span class="mono">SIP-K-STN26-01</span> —
+        ve her firmanın numarasının kendi başına ilerlemesini sağlar.
+        Kodsuz iki firmanın numaraları çakışır.</p>
+      <div class="izgara-2">
+        <div class="form-alan"><label>Firma Adı *</label>
+          <input id="nfAd" placeholder="İkinci Mermer A.Ş."></div>
+        <div class="form-alan"><label>Belge Kodu * (en çok 4)</label>
+          <input id="nfKod" maxlength="4" placeholder="K" style="text-transform:uppercase"></div>
+        <div class="form-alan"><label>Ticari Ünvan</label>
+          <input id="nfUnvan" placeholder="Belgelerde görünen tam ünvan"></div>
+        <div class="form-alan"><label>Vergi No</label>
+          <input id="nfVno" placeholder="1234567890"></div>
+      </div>
+      <!-- MF6: ortak kullanım seçimi -->
+      <div class="form-alan" style="margin-top:10px">
+        <label>Mevcut firmadan ortak kullanılsın</label>
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;
+                      font-weight:400;cursor:pointer;font-size:.86rem">
+          <input type="checkbox" id="nfOrtakCari" checked
+                 style="margin-top:3px;width:15px;height:15px;cursor:pointer">
+          <span>Cari listesi — mevcut müşteri ve tedarikçiler bu firmaya da
+          bağlanır, yeniden girmen gerekmez.</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;
+                      font-weight:400;cursor:pointer;font-size:.86rem">
+          <input type="checkbox" id="nfOrtakListe" checked
+                 style="margin-top:3px;width:15px;height:15px;cursor:pointer">
+          <span>Tanım listeleri — cins, yüzey, ülke her firmada aynı kalır.
+          İşaretlemezsen kuruluşta bir kopya yazılır, sonra ayrışır.</span></label>
+      </div>
+      <div style="display:none">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn-yeni" id="nfKaydet" onclick="yeniFirmaKaydet()">Firmayı Ekle</button>
+        <button class="iptal-btn" onclick="firmaListesiYukle()">Vazgeç</button>
+      </div>
+    </div>`;
+}
+
+async function yeniFirmaKaydet() {
+  const ad = (document.getElementById('nfAd').value || '').trim();
+  const kod = (document.getElementById('nfKod').value || '').trim().toUpperCase();
+  if (!ad) { bildir('Firma adı gir.', true); return; }
+  if (!kod) { bildir('Belge kodu gir — numaralar çakışmasın.', true); return; }
+  const b = document.getElementById('nfKaydet');
+  b.disabled = true; b.textContent = 'Ekleniyor…';
+  try {
+    const d = await api('/api/firma', { method: 'POST', body: JSON.stringify({
+      ad, belge_kodu: kod,
+      unvan: (document.getElementById('nfUnvan').value || '').trim(),
+      vergi_no: (document.getElementById('nfVno').value || '').trim(),
+      ortak_cari: document.getElementById('nfOrtakCari').checked,
+      ortak_liste: document.getElementById('nfOrtakListe').checked }) });
+    if (d && d.ok) { bildir(d.mesaj || 'Firma eklendi'); await firmaListesiYukle(); }
+    else { bildir((d && d.mesaj) || 'Eklenemedi', true); b.disabled = false;
+           b.textContent = 'Firmayı Ekle'; }
+  } catch (e) {
+    bildir('Eklenemedi', true); b.disabled = false; b.textContent = 'Firmayı Ekle';
+  }
+}
+
+async function firmaGec(id) {
+  try {
+    const d = await api('/api/firma/sec', {
+      method: 'POST', body: JSON.stringify({ firma_id: id }) });
+    if (d && d.ok) location.reload();
+    else bildir((d && d.mesaj) || 'Geçilemedi', true);
+  } catch (e) { bildir('Geçilemedi', true); }
+}
 </script>
 {% endblock %}

@@ -1,4 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import declared_attr   # MF1
 from datetime import datetime, date
 db = SQLAlchemy()
 
@@ -58,6 +59,106 @@ class Olcu(db.TypeDecorator):
         return None if value is None else float(value)
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  ÇOKLU FİRMA  (MF1)
+# ══════════════════════════════════════════════════════════════════════
+# Sistem tek firmayı yönetmek üzere yazılmıştı. Artık birden çok tüzel
+# kişilik taşıyor; her birinin stoğu, siparişi, kasası ve defteri AYRI.
+#
+# ── NEDEN SÜTUN, NEDEN AYRI VERİTABANI DEĞİL ──
+#   Ayrı veritabanı en güvenli yol olurdu ama ortak olması gereken
+#   şeyleri (TCMB kur arşivi, kullanıcılar, cari kartları) ikizlerdi ve
+#   her göçü firma sayısı kadar çalıştırmak gerekirdi. Tek veritabanı +
+#   `firma_id` + KÜRESEL SÜZGEÇ seçildi: süzgeç tek yerde durur ve
+#   699 sorgunun hiçbirine dokunulmaz.
+#
+# ── ÜÇ SINIF TABLO ──
+#   1. FirmaKapsamli taşıyanlar → firma_id ZORUNLU, süzgeç uygulanır
+#   2. Ortak tablolar           → kullanicilar, doviz_kur, cariler,
+#                                 cari_kisi, cari_erisim
+#   3. Özel                     → veriler   (NULL=ortak liste)
+#                                 audit_log (bilgi amaçlı, süzülmez)
+
+class Firma(db.Model):
+    """Sistemin yönettiği tüzel kişilikler."""
+    __tablename__ = 'firma'
+    id            = db.Column(db.Integer, primary_key=True)
+    ad            = db.Column(db.String(100), nullable=False)   # ekranda
+    unvan         = db.Column(db.String(200))                   # belgede
+    # ── BELGE KODU — kimliklere girer: SIP-K-STN26-03 ──
+    # Her firmanın kendi sayacı olsun isteniyor, yani ikisi de 01'den
+    # başlıyor. Kimlik sütunu birincil anahtar olduğu için çakışmayı
+    # önleyen bir ayraç gerekiyor; kod o ayraç.
+    #
+    # ANA firmada BOŞ bırakılır: mevcut kimlikler (SIP-STN26-03) olduğu
+    # gibi kalsın, 30'a yakın yabancı anahtar taşınmasın. İkinci ve
+    # sonraki firmalar kod almak ZORUNDA — kodsuz ikinci firma ana
+    # firmayla numara çakıştırırdı.
+    belge_kodu    = db.Column(db.String(4))
+    vergi_dairesi = db.Column(db.String(100))
+    vergi_no      = db.Column(db.String(20))
+    adres         = db.Column(db.Text)
+    telefon       = db.Column(db.String(30))
+    eposta        = db.Column(db.String(100))
+    web           = db.Column(db.String(120))
+    logo          = db.Column(db.Text)                          # base64
+    # MF5: ikisi de Veriler(kategori='firma') icinde duruyordu.
+    # Firma kimliginin TEK kaynagi `firma` tablosu olunca
+    # buraya tasindilar. SD2 acilista eksik sutunu kendisi
+    # ekler; ayri goc gerekmiyor.
+    kisaltma      = db.Column(db.String(10))   # stok kodlarinda
+    logo_dosya    = db.Column(db.String(200))  # yuklenen dosyanin adi
+    # Admin olmayan kullanıcının çalıştığı firma; firma seçici
+    # kapalıyken sistem buraya düşer.
+    # MF6: tanim listelerini (cins, yuzey, ulke) ORTAK kullanir mi?
+    # NULL = ortak — MF6'dan once acilmis firmalarda eski davranis
+    # korunur. Kapaliysa firma yalnizca KENDI satirlarini gorur;
+    # kurulusta bir kopya yazildigi icin bos kalmaz.
+    ortak_liste   = db.Column(db.Boolean, default=True)
+    varsayilan    = db.Column(db.Boolean, default=False, index=True)
+    aktif         = db.Column(db.Boolean, default=True, index=True)
+    sira          = db.Column(db.Integer, default=0)
+    olusturma     = db.Column(db.DateTime, default=datetime.now)
+
+
+class CariFirma(db.Model):
+    """Hangi cari HANGİ FİRMADA görünür.
+
+    Cari kartı ORTAK: aynı müşteri iki firmayla da çalışabilir ve
+    vergi no, adres, kişiler tek yerde durur. Ama firmaların kendi
+    müşterileri de var ve onlar diğerinde GÖRÜNMEMELİ. Bunu kartı
+    ikizlemeden çözen şey üyelik: cari yalnızca bağlandığı firmalarda
+    listelenir.
+
+    Hareketler, bakiye ve risk limiti zaten `cari_hareket` üzerinden
+    firma bazlı — bu tablo yalnızca GÖRÜNÜRLÜĞÜ belirler.
+    """
+    __tablename__ = 'cari_firma'
+    id        = db.Column(db.Integer, primary_key=True)
+    cari_id   = db.Column(db.String(20), db.ForeignKey('cariler.id'),
+                          nullable=False, index=True)
+    firma_id  = db.Column(db.Integer, db.ForeignKey('firma.id'),
+                          nullable=False, index=True)
+    olusturma = db.Column(db.DateTime, default=datetime.now)
+    __table_args__ = (db.UniqueConstraint('cari_id', 'firma_id',
+                                          name='uq_cari_firma'),)
+
+
+class FirmaKapsamli:
+    """Bu mixin'i alan tablo FİRMA KAPSAMINDADIR.
+
+    Tek işlevi `firma_id` sütununu eklemek; süzgeci uygulayan kanca
+    (MF2) TİPİ bu sınıfa bakarak tanır. Yeni bir model eklerken
+    mixin'i yazmayı unutmak o tablonun SÜZÜLMEMESİ demektir — bu
+    yüzden hem sifirla2.py hem denetim betiği her tablonun kapsamlı ya
+    da ortak olarak AÇIKÇA sınıflandırıldığını doğrular.
+    """
+    @declared_attr
+    def firma_id(cls):
+        return db.Column(db.Integer, db.ForeignKey('firma.id'),
+                         index=True, nullable=False)
+
+
 class Kullanici(db.Model):
     __tablename__ = 'kullanicilar'
     id       = db.Column(db.Integer, primary_key=True)
@@ -88,7 +189,7 @@ class Kullanici(db.Model):
     cari_kapsam = db.Column(db.String(10), default='atanan')
     olusturma = db.Column(db.DateTime, default=datetime.now)
 
-class Bildirim(db.Model):
+class Bildirim(FirmaKapsamli, db.Model):
     """Sistem içi bildirim  ·  BL1
 
     ── TASARIM: OLAY BAŞINA TEK KAYIT ──
@@ -126,7 +227,7 @@ class Bildirim(db.Model):
 # Üretimde 102 karakterlik bir ünvan varchar(100)'e sığmayıp toplu
 # içe aktarmayı tümüyle engellemişti. Ünvanı kesmek belgede yanlış
 # firma adı yazdırırdı — alan genişletildi.
-class BlokStok(db.Model):
+class BlokStok(FirmaKapsamli, db.Model):
     __tablename__ = 'blok_stok'
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
@@ -163,7 +264,7 @@ class BlokStok(db.Model):
     alis_tarihi     = db.Column(db.Date)               # Fatura/borç tarihi (giris_tarihi'nden farklı olabilir)
     fatura_durumu   = db.Column(db.String(20), default='faturali')  # faturali / faturasiz / mal_bekliyor
 
-class PlakaStok(db.Model):
+class PlakaStok(FirmaKapsamli, db.Model):
     __tablename__ = 'plaka_stok'
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
@@ -203,7 +304,7 @@ class PlakaStok(db.Model):
     alis_tarihi     = db.Column(db.Date)
     fatura_durumu   = db.Column(db.String(20), default='faturali')
 
-class EbatliStok(db.Model):
+class EbatliStok(FirmaKapsamli, db.Model):
     __tablename__ = 'ebatli_stok'
     id              = db.Column(db.String(20), primary_key=True)
     giris_tarihi    = db.Column(db.Date, default=date.today)
@@ -245,7 +346,7 @@ class EbatliStok(db.Model):
     alis_tarihi     = db.Column(db.Date)
     fatura_durumu   = db.Column(db.String(20), default='faturali')
 
-class StokCikis(db.Model):
+class StokCikis(FirmaKapsamli, db.Model):
     __tablename__ = 'stok_cikis'
     id              = db.Column(db.String(20), primary_key=True)
     cikis_tarihi    = db.Column(db.Date, default=date.today)
@@ -275,7 +376,7 @@ class StokCikis(db.Model):
 #   - toplam_tutar (kalemlerin toplami, kalem kayit/silme'de senkronize)
 #   - kalemler relationship (1-N)
 # ═══════════════════════════════════════════════════════════════════════
-class Siparis(db.Model):
+class Siparis(FirmaKapsamli, db.Model):
     __tablename__ = 'siparis_kayit'
     id              = db.Column(db.String(20), primary_key=True)
     siparis_tarihi  = db.Column(db.Date, default=date.today)
@@ -352,7 +453,7 @@ class Siparis(db.Model):
 #   EBATLI : boy + yukseklik + kalinlik + adet + kasa_ici_adet + m2_toplam
 #                                                       (birim: m2, sqft veya adet)
 # ═══════════════════════════════════════════════════════════════════════
-class SiparisKalem(db.Model):
+class SiparisKalem(FirmaKapsamli, db.Model):
     __tablename__ = 'siparis_kalem'
     id              = db.Column(db.Integer, primary_key=True, autoincrement=True)
     siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'),
@@ -412,7 +513,7 @@ class SiparisKalem(db.Model):
 #   • gelir yanlış kaleme yazılıyordu
 # Bu tablo karşılamayı KAYNAK KIRILIMIYLA tutar; kârlılık ve fatura tipi
 # buradan okunur.
-class KalemKarsilama(db.Model):
+class KalemKarsilama(FirmaKapsamli, db.Model):
     __tablename__ = 'kalem_karsilama'
     id              = db.Column(db.String(20), primary_key=True)
     siparis_id      = db.Column(db.String(20), db.ForeignKey('siparis_kayit.id'),
@@ -442,7 +543,7 @@ class KalemKarsilama(db.Model):
 
 # ── REZERVASYON ───────────────────────────────────────────────────────
 # FAZ 16: siparis_kalem_id eklendi (hangi kaleme bağlı olduğu)
-class Rezervasyon(db.Model):
+class Rezervasyon(FirmaKapsamli, db.Model):
     __tablename__ = 'rezervasyon'
     id              = db.Column(db.String(20), primary_key=True)
     musteri         = db.Column(db.String(200))
@@ -503,7 +604,7 @@ class Cari(db.Model):
     hareketler      = db.relationship('CariHareket', backref='cari_hesap',
                                       lazy=True, cascade='all, delete-orphan')
 
-class CariHareket(db.Model):
+class CariHareket(FirmaKapsamli, db.Model):
     __tablename__ = 'cari_hareket'
     id              = db.Column(db.String(20), primary_key=True)
     hareket_tarihi  = db.Column(db.Date, default=date.today)
@@ -552,7 +653,7 @@ class CariHareket(db.Model):
     matrah          = db.Column(Para, default=0)
 
 # ── FATURA ────────────────────────────────────────────────────────────
-class Fatura(db.Model):
+class Fatura(FirmaKapsamli, db.Model):
     __tablename__ = 'faturalar'
     id              = db.Column(db.String(20), primary_key=True)
     fatura_no       = db.Column(db.String(50))
@@ -609,7 +710,7 @@ class Fatura(db.Model):
     kullanici       = db.Column(db.String(50))
 
 # ── MALİYET ───────────────────────────────────────────────────────────
-class Maliyet(db.Model):
+class Maliyet(FirmaKapsamli, db.Model):
     __tablename__ = 'maliyetler'
     id              = db.Column(db.String(20), primary_key=True)
     maliyet_tarihi  = db.Column(db.Date, default=date.today)
@@ -639,7 +740,7 @@ class Maliyet(db.Model):
     olusturma       = db.Column(db.DateTime, default=datetime.now)
 
 # ── SEVKİYAT ──────────────────────────────────────────────────────────
-class Sevkiyat(db.Model):
+class Sevkiyat(FirmaKapsamli, db.Model):
     __tablename__ = 'sevkiyat_kayit'
     id              = db.Column(db.String(20), primary_key=True)
     sevk_tarihi     = db.Column(db.Date, default=date.today)
@@ -717,9 +818,15 @@ class Veriler(db.Model):
     ek_bilgi    = db.Column(db.String(200))
     # Uzun içerikler (logo base64, uzun metin ayarları vb.) — ek_bilgi 200 karakterle sınırlı.
     uzun_deger  = db.Column(db.Text)
+    # MF1: NULL ise ORTAK (cins, yüzey, ülke, ödeme listeleri —
+    # hepsi her firmada aynı). Dolu ise O FİRMAYA ait ayar:
+    # logo, unvan, SMTP, KDV oranı. Böylece referans listeleri
+    # ikizlemeden firma başına kimlik tutulabiliyor.
+    firma_id    = db.Column(db.Integer, db.ForeignKey('firma.id'),
+                            index=True, nullable=True)
 
 # ── BANKA ──────────────────────────────────────────────────────────────
-class Banka(db.Model):
+class Banka(FirmaKapsamli, db.Model):
     __tablename__ = 'banka'
     id          = db.Column(db.Integer, primary_key=True)
     banka_adi   = db.Column(db.String(100), nullable=False)
@@ -734,7 +841,7 @@ class Banka(db.Model):
     olusturma   = db.Column(db.DateTime, default=datetime.now)
 
 # ── KASA ──────────────────────────────────────────────────────────────
-class Kasa(db.Model):
+class Kasa(FirmaKapsamli, db.Model):
     __tablename__ = 'kasa'
     id          = db.Column(db.Integer, primary_key=True)
     ad          = db.Column(db.String(100), nullable=False)
@@ -749,7 +856,7 @@ class Kasa(db.Model):
     aktif       = db.Column(db.Boolean, default=True)
     olusturma   = db.Column(db.DateTime, default=datetime.now)
 
-class KasaHareket(db.Model):
+class KasaHareket(FirmaKapsamli, db.Model):
     __tablename__ = 'kasa_hareket'
     id              = db.Column(db.Integer, primary_key=True)
     kasa_id         = db.Column(db.Integer, db.ForeignKey('kasa.id'), nullable=False)
@@ -767,7 +874,7 @@ class KasaHareket(db.Model):
     kasa            = db.relationship('Kasa', backref='hareketler', lazy=True)
 
 # ── KESİM ─────────────────────────────────────────────────────────────
-class Kesim(db.Model):
+class Kesim(FirmaKapsamli, db.Model):
     __tablename__ = 'kesim'
     id              = db.Column(db.String(20), primary_key=True)
     kesim_tarihi    = db.Column(db.Date, default=date.today)
@@ -805,7 +912,7 @@ class Kesim(db.Model):
     olusturma       = db.Column(db.DateTime, default=datetime.now)
     detaylar        = db.relationship('KesimDetay', backref='kesim', lazy=True, cascade='all, delete-orphan')
 
-class KesimDetay(db.Model):
+class KesimDetay(FirmaKapsamli, db.Model):
     __tablename__ = 'kesim_detay'
     id              = db.Column(db.Integer, primary_key=True)
     kesim_id        = db.Column(db.String(20), db.ForeignKey('kesim.id'), nullable=False)
@@ -826,7 +933,7 @@ class KesimDetay(db.Model):
     aciklama        = db.Column(db.String(200))
 
 # ── PROFORMA ──────────────────────────────────────────────────────────
-class Proforma(db.Model):
+class Proforma(FirmaKapsamli, db.Model):
     __tablename__ = 'proforma'
     id              = db.Column(db.String(20), primary_key=True)
     olusturma       = db.Column(db.DateTime, default=datetime.now)
@@ -923,7 +1030,7 @@ class Proforma(db.Model):
     onay_red_notu   = db.Column(db.Text)         # red gerekçesi
     kalemler        = db.relationship('ProformaKalem', backref='proforma', lazy=True, cascade='all, delete-orphan')
 
-class ProformaKalem(db.Model):
+class ProformaKalem(FirmaKapsamli, db.Model):
     __tablename__ = 'proforma_kalem'
     id              = db.Column(db.Integer, primary_key=True, autoincrement=True)
     proforma_id     = db.Column(db.String(20), db.ForeignKey('proforma.id'), nullable=False)
@@ -987,7 +1094,7 @@ class ProformaKalem(db.Model):
 
 # ── SATIŞ KAYDI ────────────────────────────────────────────────────────
 # FAZ 16: siparis_kalem_id eklendi
-class SatisKaydi(db.Model):
+class SatisKaydi(FirmaKapsamli, db.Model):
     __tablename__ = 'satis_kaydi'
     id              = db.Column(db.String(30), primary_key=True)
     stok_id         = db.Column(db.String(50), index=True)
@@ -1038,7 +1145,7 @@ class SatisKaydi(db.Model):
     guncelleme      = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 # ── ÇEK / SENET ───────────────────────────────────────────────────────
-class Cek(db.Model):
+class Cek(FirmaKapsamli, db.Model):
     """Alınan (müşteriden) ve verilen (tedarikçiye) çekler/senetler.
     Bir çek yaşam döngüsünden geçer: portföy → tahsilde/ciro/teminat → tahsil/öded."""
     __tablename__ = 'cek'
@@ -1077,7 +1184,7 @@ class Cek(db.Model):
     guncelleme      = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 
-class CekHareket(db.Model):
+class CekHareket(FirmaKapsamli, db.Model):
     """Bir çekin yaşam döngüsündeki her durum değişikliğinin kaydı (geçmiş/log)."""
     __tablename__ = 'cek_hareket'
     id              = db.Column(db.Integer, primary_key=True)
@@ -1102,7 +1209,7 @@ class CekHareket(db.Model):
 # 'Devreden KDV' → 'Iade KDV' dönüşümü flask_app.py'de zaten yapılıyor
 # (KDV İADE DÖNÜŞÜMÜ, Madde 6). Bu tablo o kalemleri bir dosyaya
 # bağlar ve süreci izler.
-class KdvIadeDosya(db.Model):
+class KdvIadeDosya(FirmaKapsamli, db.Model):
     __tablename__ = 'kdv_iade_dosya'
     id               = db.Column(db.String(20), primary_key=True)
     donem            = db.Column(db.String(7))    # 'YYYY-MM' KDV beyan dönemi
@@ -1140,7 +1247,7 @@ class KdvIadeDosya(db.Model):
 #
 # Hem proformaya (belge uretimi) hem sevkiyata (operasyon) baglanabilir;
 # proformadan sevkiyata gecerken kayitlar tasinabilir.
-class Konteyner(db.Model):
+class Konteyner(FirmaKapsamli, db.Model):
     __tablename__ = 'konteyner'
     id            = db.Column(db.Integer, primary_key=True)
     sira          = db.Column(db.Integer, default=1)
@@ -1160,7 +1267,7 @@ class Konteyner(db.Model):
 
 
 # ── NAKİT AKIŞI (NA1) ─────────────────────────────────────────────────
-class SabitGider(db.Model):
+class SabitGider(FirmaKapsamli, db.Model):
     """Tekrarlayan gider SABLONU — kira, maas, elektrik…
 
     Projeksiyona otomatik yayilir. `tutar` TAHMINIDIR: elektrik her ay
@@ -1191,7 +1298,7 @@ class SabitGider(db.Model):
     olusturma   = db.Column(db.DateTime, default=datetime.now)
 
 
-class NakitPlan(db.Model):
+class NakitPlan(FirmaKapsamli, db.Model):
     """Projeksiyondaki TEKIL kalem.
 
     Uc kaynaktan dogar:
@@ -1225,6 +1332,12 @@ class NakitPlan(db.Model):
 
 class AuditLog(db.Model):
     __tablename__ = 'audit_log'
+    # MF1: hangi firmada yapıldı — BİLGİ amaçlı. Denetim izi
+    # SÜZÜLMEZ: admin bütün firmaların hareketini görebilmeli,
+    # ayrıca giriş gibi firma öncesi olaylar da buraya düşer
+    # (o satırlarda NULL kalır).
+    firma_id    = db.Column(db.Integer, db.ForeignKey('firma.id'),
+                            index=True, nullable=True)
     id              = db.Column(db.Integer, primary_key=True)
     tarih           = db.Column(db.DateTime, default=datetime.utcnow)
     kullanici       = db.Column(db.String(100))
@@ -1257,7 +1370,7 @@ class CariErisim(db.Model):
     )
 
 
-class CariAktivite(db.Model):
+class CariAktivite(FirmaKapsamli, db.Model):
     """Musteriyle yapilan temaslar ve SONRAKI ADIM.
 
     Sistemde musteriyle ne konusuldugunu tutan hicbir yer yoktu;
@@ -1469,3 +1582,145 @@ def siparis_durum_damgasi_yeni(mapper, connection, hedef):
 # dolar (durum_tarihi_goc.py), gundelik duzenlemeyle degil.
 _event.listen(Siparis, 'before_insert', siparis_durum_damgasi_yeni)
 _event.listen(Siparis, 'before_update', siparis_durum_damgasi)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  ÇOKLU FİRMA — YAZARKEN DAMGA  (MF1)
+# ══════════════════════════════════════════════════════════════════════
+# firma_id ZORUNLU bir sütun. Onu her INSERT'te elle yazmak 300'ü aşkın
+# noktaya dokunmak demekti; bunun yerine flush öncesi tek bir kanca
+# damgayı basıyor.
+#
+# KANCA ŞEMAYLA AYNI YAMADA OLMAK ZORUNDA: ölçüldü, kancasız şema
+# bütün yazma yollarını kırıyor ("NOT NULL constraint failed:
+# blok_stok.firma_id" — 81 testin 81'i).
+#
+# OKUMA SÜZGECİ burada DEĞİL (MF2 ile gelecek). Bu yama uygulandığında
+# sistem bugünküyle birebir aynı davranır: tek firma, her şey ona
+# damgalı.
+
+_firma_cozucu = None               # MF2/MF3: oturumdaki aktif firmayı verir
+_varsayilan_firma_onbellek = None
+
+
+def firma_cozucu_ayarla(fn):
+    """Aktif firmayı veren işleyiciyi takar (flask_app tarafı, MF2)."""
+    global _firma_cozucu
+    _firma_cozucu = fn
+
+
+def varsayilan_firma_unut():
+    """Firma kaydı eklenip değişince önbelleği düşürür."""
+    global _varsayilan_firma_onbellek
+    _varsayilan_firma_onbellek = None
+
+
+def _varsayilan_firma_id():
+    """Varsayılan firmanın kimliği.
+
+    HAM SQL kullanır: before_flush içinde ORM sorgusu açmak aynı
+    oturuma yeniden girmek demek olurdu.
+
+    `ORDER BY varsayilan DESC` iki lehçede de çalışır (PostgreSQL'de
+    TRUE, SQLite'ta 1 önce gelir); `WHERE varsayilan = 1` SQLite'a,
+    `WHERE varsayilan` PostgreSQL'e özgü olurdu.
+    """
+    global _varsayilan_firma_onbellek
+    if _varsayilan_firma_onbellek is not None:
+        return _varsayilan_firma_onbellek
+    try:
+        with db.engine.connect() as b:
+            r = b.execute(_text(
+                'SELECT id FROM firma ORDER BY varsayilan DESC, id '
+                'LIMIT 1')).fetchone()
+        if r is None:
+            # ── BOŞ KURULUM KENDİNİ ONARIR ──
+            # Taze veritabanında (yeni kurulum, testler) firma tablosu
+            # boştur ve damga basacak kimlik bulunamaz; o hâlde HİÇBİR
+            # kayıt yazılamaz. Ölçüldü: 81 testin 81'i
+            # "RuntimeError: Aktif firma yok" veriyordu.
+            # Burada bir ANA FİRMA açılır; göç betiği adını, unvanını ve
+            # logosunu Ayarlar'dan okuyup ÜSTÜNE yazar.
+            with db.engine.begin() as b:
+                b.execute(_text(
+                    'INSERT INTO firma (ad, unvan, varsayilan, aktif, sira)'
+                    " VALUES ('ANA FİRMA', 'ANA FİRMA', :e, :e, 0)"),
+                    {'e': True})
+                r = b.execute(_text(
+                    'SELECT id FROM firma ORDER BY id LIMIT 1')).fetchone()
+    except Exception:
+        return None                # firma tablosu henüz yok (göç öncesi)
+    _varsayilan_firma_onbellek = r[0] if r else None
+    return _varsayilan_firma_onbellek
+
+
+def aktif_firma_id():
+    """Şu an hangi firmada çalışılıyor."""
+    if _firma_cozucu is not None:
+        try:
+            v = _firma_cozucu()
+        except Exception:
+            v = None
+        if v:
+            return v
+    return _varsayilan_firma_id()
+
+
+def _firma_damgasi(oturum, baglam, ornekler):
+    """Yeni kayıtlara firma_id basar."""
+    fid = None
+    for n in oturum.new:
+        if isinstance(n, Veriler):
+            # Ortak referans listeleri (cins, yüzey, ülke) firmasız
+            # kalır. Firmaya özel AYAR satırını yazan yer firma_id'yi
+            # kendisi verir.
+            continue
+        if not isinstance(n, (FirmaKapsamli, AuditLog)):
+            continue
+        if getattr(n, 'firma_id', None) is not None:
+            continue
+        if fid is None:
+            fid = aktif_firma_id()
+        if fid is None:
+            if isinstance(n, AuditLog):
+                continue       # denetim izi firmasız da yazılabilir
+            raise RuntimeError(
+                'Aktif firma yok — firma tanımlanmadan kayıt yazılamaz. '
+                'goc_mf1.py çalıştırıldı mı?')
+        n.firma_id = fid
+
+
+def _cari_firma_uyeligi(oturum, baglam, ornekler):
+    """MF2 — Yeni cari AKTİF FİRMAYA bağlanır.
+
+    Cari kartı ORTAK bir tablo; hangi firmada GÖRÜNECEĞİ `cari_firma`
+    üyeliğinden geliyor. Üyelik satırı yazılmazsa cari hiçbir firmada
+    görünmez: kaydedilir ama kaybolur.
+
+    ÖLÇÜLDÜ: okuma süzgeci (MF2) devreye girince 27 test düştü, hepsi
+    aynı kök nedenden — cari kaydı var, üyeliği yok, listede yok.
+
+    İstek bağlamı yoksa (içe aktarma betiği, test kurulumu) varsayılan
+    firmaya bağlanır; `aktif_firma_id` zaten oraya düşüyor.
+    """
+    yeni = [n for n in oturum.new if isinstance(n, Cari) and n.id]
+    if not yeni:
+        return
+    fid = aktif_firma_id()
+    if fid is None:
+        return
+    # Aynı flush'ta elle eklenmiş üyelik varsa ikizlemeyelim —
+    # uq_cari_firma kısıtı patlardı.
+    eldeki = {(x.cari_id, x.firma_id) for x in oturum.new
+              if isinstance(x, CariFirma)}
+    for c in yeni:
+        if (c.id, fid) in eldeki:
+            continue
+        oturum.add(CariFirma(cari_id=c.id, firma_id=fid))
+
+
+_event.listen(db.session, 'before_flush', _cari_firma_uyeligi)
+
+
+_event.listen(db.session, 'before_flush', _firma_damgasi)
+

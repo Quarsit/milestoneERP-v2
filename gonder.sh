@@ -77,25 +77,38 @@ else
     #                 Engellemek yanlış olur; ama SESSİZ de geçilmez.
     HATA=0
     UYARI=0
-    for D in js_denetim form_denetim zincir_denetim akis_denetim sema_denetim; do
+    # TZ1: firma_denetim eklendi. Çoklu firmanın tek dayanağı her
+    # sorgunun aktif firmaya süzülmesi; süzgeç de damga da otomatik
+    # ve otomatik olan şey SESSİZ bozulur. Mixin'i almayan bir
+    # model tüm firmalarda görünür ve hiçbir hata vermez.
+    for D in js_denetim form_denetim zincir_denetim akis_denetim sema_denetim firma_denetim; do
         [ -f "$D.py" ] || continue
         printf "  %-18s " "$D"
-        CIKTI=$("$PY" "$D.py" 2>&1)
-        # BASARI KELIMESI ARACA GORE DEGISIYOR:
-        #   js/form/zincir/akis -> "TEMİZ"
-        #   sema_denetim        -> "Şema modellerle uyumlu"
-        # Ilk surum yalnizca "TEMİZ" ariyordu ve sema_denetim'i
-        # "calistirilamadi" saniyordu. Iki tur boyunca "sema
-        # dogrulanmadi" diye uyardik; oysa dogrulanmisti.
-        # Yanlis rapor, hic rapor vermemekten kotudur.
-        if echo "$CIKTI" | grep -qE "TEMİZ|temiz$|uyumlu"; then
+        CIKTI=$("$PY" "$D.py" 2>&1); KOD=$?
+        # ── TZ1: ESAS SİNYAL ÇIKIŞ KODU ──
+        # Eski sürüm başarıyı METİNDE KELİME ARAYARAK ölçüyordu
+        # ("TEMİZ|temiz$|uyumlu"). Bu tasarım bir kez çoktan
+        # patladı: sema_denetim "Şema modellerle uyumlu" diyor,
+        # kelime listesinde yoktu ve iki tur boyunca
+        # "çalıştırılamadı" sanıldı — "şema doğrulanmadı" diye
+        # uyardık, oysa doğrulanmıştı.
+        #
+        # Çare kelime eklemek değil: her denetim aracı çıkış kodunu
+        # DOĞRU veriyor (0 temiz / 1 bulgu) — altısında da ölçüldü.
+        # Metne yalnızca ÇÖKTÜ mü BULDU mu ayrımı için bakılıyor;
+        # ikisi ayrı şeydir:
+        #   · Bulgu     → kodda sorun var, push ENGELLENİR.
+        #   · Çöktü     → ortam sorunu (veritabanı yok, modül
+        #                 eksik). Engellemek yanlış olur; ama
+        #                 SESSİZ de geçilmez.
+        if [ "$KOD" -eq 0 ]; then
             echo "temiz"
-        elif echo "$CIKTI" | grep -qE "BULGU|✗ "; then
-            echo "✗ BULGU"
-            HATA=1
-        else
+        elif echo "$CIKTI" | grep -qE "Traceback \(most recent|^HATA:|ModuleNotFoundError|No module named|OperationalError|could not connect"; then
             echo "⚠ çalıştırılamadı (ortam)"
             UYARI=1
+        else
+            echo "✗ BULGU"
+            HATA=1
         fi
     done
     if [ "$UYARI" -ne 0 ]; then
@@ -130,7 +143,11 @@ baslik "4/5 · COMMIT"
 # "Unimplemented pathspec magic" hatasi veriyor; once hepsini
 # ekleyip sonra reset etmek her surumde calisiyor.
 git add -A
-for DESEN in '*.yedek-*' '__pycache__/*' '__pycache__' '*.pyc' '*.db' '.env' 'venv'; do
+# TZ1: '*.yedek_*' eklendi (ALT ÇİZGİ). .gitignore onu zaten yok
+# sayıyor, yani sızmıyordu; ama bu liste "neyi bilerek dışarıda
+# tutuyoruz"un okunur kaydı ve iki desenden birini atlamış olması
+# okuyana yanlış bilgi veriyordu.
+for DESEN in '*.yedek-*' '*.yedek_*' '__pycache__/*' '__pycache__' '*.pyc' '*.db' '.env' 'venv'; do
     git reset -q -- "$DESEN" 2>/dev/null || true
 done
 

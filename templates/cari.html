@@ -194,6 +194,18 @@
         </div>
       </div>
       </div>
+      <!-- MF7: KONSOLİDE EKSTRE — yalnızca cari birden çok
+           firmaya bağlıysa görünür; tek firmadaysa seçecek bir şey
+           yok ve pencere bugünküyle aynı kalır. -->
+      <div id="eksKonsolideAlan" style="display:none">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;
+                      font-weight:600;font-size:.86rem;padding:4px 0">
+          <input type="checkbox" id="eksKonsolide" onchange="eksKonsolideDegisti()"
+                 style="width:15px;height:15px;cursor:pointer">
+          Konsolide ekstre — birden çok firmanın hareketlerini birleştir
+        </label>
+        <div id="eksFirmalar" class="sec-izgara" style="display:none;margin-top:6px"></div>
+      </div>
       <div id="eksAciklama" style="font-size:.79rem;color:var(--soluk);
            line-height:1.5;background:var(--notr-bg);border-radius:8px;padding:10px 12px"></div>
     </div>
@@ -499,6 +511,14 @@
                      style="width:15px;height:15px;cursor:pointer"> Acente</label>
           </div>
           <input type="hidden" id="cTip" value="Müşteri">
+        </div>
+        <!-- MF6: bu cari HANGİ FİRMALARDA görünsün. Tek firma varsa
+             blok hiç basılmaz; yalnızca admin değiştirebilir, çünkü
+             bir firmayı kaldırmak orada cariyi görünmez yapar. -->
+        <div class="form-alan" id="cFirmaAlan" style="display:none">
+          <label>Hangi firmalarda görünsün
+            <span style="font-weight:400;color:var(--soluk)">(birden çok)</span></label>
+          <div id="cFirmalar" style="display:flex;gap:12px;flex-wrap:wrap;padding:7px 0"></div>
         </div>
       </div>
       <div class="form-satir f3">
@@ -907,6 +927,7 @@ function ekstreSecenek(id) {
   document.getElementById('eksDoviz').value = c.para_birimi || 'TRY';
   document.getElementById('eksKurModu').value = 'islem';
   ekstreKipGoster();
+  eksKonsolideHazirla(c);                       // MF7
   document.getElementById('ekstreModal').classList.add('acik');
 
   /* Tür listesi carinin GERÇEK hareketlerinden doldurulur.
@@ -917,6 +938,45 @@ function ekstreSecenek(id) {
   api(`/api/cari/${encodeURIComponent(id)}/hareketler`)
     .then(d => eksTipleriDoldur(d.data || []))
     .catch(() => eksTipleriDoldur([]));
+}
+
+/* ── MF7 · KONSOLİDE EKSTRE SEÇİMİ ──
+   Cari birden çok firmaya bağlıysa, ekstre o firmaların
+   hareketlerini birleştirebilir. Firma listesi MF6'da zaten
+   çekiliyor (FIRMALAR); cari kartındaki bağlar da listede. */
+function eksKonsolideHazirla(cari) {
+  const alan = document.getElementById('eksKonsolideAlan');
+  const kap = document.getElementById('eksFirmalar');
+  if (!alan || !kap) return;
+  const bagli = (cari && cari.firmalar) || [];
+  /* Admin değilse ya da cari tek firmadaysa bölüm hiç görünmez —
+     sunucu da admin olmayanın isteğini yok sayar. */
+  if (!window.ADMIN || bagli.length < 2) {
+    alan.style.display = 'none';
+    document.getElementById('eksKonsolide').checked = false;
+    kap.style.display = 'none';
+    return;
+  }
+  alan.style.display = '';
+  document.getElementById('eksKonsolide').checked = false;
+  kap.style.display = 'none';
+  const adlar = {};
+  (FIRMALAR || []).forEach(f => { adlar[f.id] = f.ad; });
+  kap.innerHTML = bagli.map(fid => `
+    <label class="sec-ogesi">
+      <input type="checkbox" class="eks-firma" value="${fid}" checked>
+      <span>${kacar(adlar[fid] || ('#' + fid))}</span>
+    </label>`).join('');
+}
+
+function eksKonsolideDegisti() {
+  const acik = document.getElementById('eksKonsolide').checked;
+  document.getElementById('eksFirmalar').style.display = acik ? '' : 'none';
+}
+
+function eksSeciliFirmalar() {
+  if (!document.getElementById('eksKonsolide').checked) return [];
+  return [...document.querySelectorAll('.eks-firma:checked')].map(x => x.value);
 }
 
 function ekstreKapat() {
@@ -1156,7 +1216,11 @@ function ekstreAc() {
               `?doviz=${encodeURIComponent(d)}&kur_modu=${encodeURIComponent(m)}`
               /* Hiçbiri seçilmezse parametre GÖNDERİLMEZ → tümü gelir. */
               + (eksSeciliTipler().length
-                 ? `&tip=${encodeURIComponent(eksSeciliTipler().join(','))}` : ''),
+                 ? `&tip=${encodeURIComponent(eksSeciliTipler().join(','))}` : '')
+              /* MF7: tek firma seçiliyse sunucu konsolide SAYMAZ —
+                 sıradan ekstre çıkar, firma sütunu da basılmaz. */
+              + (eksSeciliFirmalar().length > 1
+                 ? `&firmalar=${encodeURIComponent(eksSeciliFirmalar().join(','))}` : ''),
               '_blank');
 }
 
@@ -1863,6 +1927,39 @@ async function cSorumluDoldur(mevcut) {
   }
 }
 
+/* ── MF6 · CARİ HANGİ FİRMALARDA GÖRÜNÜR ──
+   Cari kartı ORTAK; görünürlük cari_firma üyeliğinden geliyor.
+   Liste bir kez çekilip saklanır — her form açılışında sorgu
+   açmak çekmeceyi yavaşlatırdı. */
+let FIRMALAR = [];
+async function firmalariYukle() {
+  if (!window.ADMIN) return;
+  try {
+    const d = await api('/api/firma');
+    FIRMALAR = (d && d.firmalar || []).filter(f => f.aktif);
+  } catch (e) { FIRMALAR = []; }
+}
+
+function firmaKutulariniDoldur(secili) {
+  const alan = document.getElementById('cFirmaAlan');
+  const kap = document.getElementById('cFirmalar');
+  if (!alan || !kap) return;
+  /* Tek firma varsa seçecek bir şey yok — blok hiç gösterilmez,
+     bugünkü cari formu aynen kalır. */
+  if (!window.ADMIN || FIRMALAR.length < 2) { alan.style.display = 'none'; return; }
+  alan.style.display = '';
+  /* Yeni caride AKTİF firma işaretli gelir: kullanıcı zaten o
+     firmada çalışıyor ve müşteriyi oraya açıyor. */
+  const set = new Set(secili && secili.length ? secili.map(Number)
+                                              : [Number(window.AKTIF_FIRMA || 0)]);
+  kap.innerHTML = FIRMALAR.map(f => `
+    <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-weight:400">
+      <input type="checkbox" class="firma-kutu" value="${f.id}"
+             ${set.has(f.id) ? 'checked' : ''}
+             style="width:15px;height:15px;cursor:pointer">
+      ${kacar(f.ad)}</label>`).join('');
+}
+
 function formAc(c) {
   DUZENLENEN = c || null;
   // Ülke: tam ad seçilir, ISO3 kodu (USA) saklanır
@@ -1891,6 +1988,7 @@ function formAc(c) {
   document.getElementById('cGorunurluk').value = c ? (c.gorunurluk || 'kapali') : 'kapali';
   document.getElementById('cUrunTed').checked = c ? !!c.urun_tedarikcisi : false;
   document.getElementById('cKisaltma').value = c ? (c.uretici_kisaltma || '') : '';
+  firmaKutulariniDoldur(c ? (c.firmalar || []) : null);   // MF6
   tipDegisti();
   cekmeceKapat();
   document.getElementById('modal').classList.add('acik');
@@ -1958,7 +2056,12 @@ async function cariKaydet() {
     } : {}),
     urun_tedarikcisi: (tip === 'Tedarikçi' || tip === 'Üretici') && document.getElementById('cUrunTed').checked,
     // RN1: kısaltma her cari için geçerli (belge numarası ondan üretilir)
-    uretici_kisaltma: (document.getElementById('cKisaltma').value || '').trim().toUpperCase() || null
+    uretici_kisaltma: (document.getElementById('cKisaltma').value || '').trim().toUpperCase() || null,
+    // MF6: yalnızca admin gönderir; sunucu da admin değilse yok sayar.
+    ...(window.ADMIN && FIRMALAR.length > 1
+        ? { firmalar: [...document.querySelectorAll('.firma-kutu:checked')]
+              .map(x => parseInt(x.value, 10)) }
+        : {})
   };
   try {
     if (DUZENLENEN) {
@@ -2455,6 +2558,9 @@ async function hareketSil(hareketId, cariId) {
   } catch (e) { /* */ }
 }
 
+/* MF6: firma listesi bir kez cekilir; form her acilista
+   sorgu acsaydi cekmece yavaslardi. */
+firmalariYukle();
 yukle();
 </script>
 {% endblock %}

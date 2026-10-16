@@ -123,6 +123,30 @@ a{color:inherit;text-decoration:none}
   background:var(--yuzey);border:1px solid var(--cizgi);border-radius:20px;padding:5px 12px}
 .kur-cip b{color:var(--murekkep);font-weight:600}
 .kur-cip:empty{display:none}
+
+/* ── FİRMA ÇİPİ (MF3) ──
+   Birden fazla firma varsa üst barda görünür; tek firmada hiç
+   basılmaz, bugünkü ekran aynen kalır. Admin tıklayıp değiştirir,
+   diğerleri yalnızca hangi firmada olduklarını görür. */
+.firma-cip{display:flex;align-items:center;gap:7px;font-size:.8rem;font-weight:600;
+  color:var(--murekkep);background:var(--yuzey);border:1px solid var(--cizgi-koyu);
+  border-radius:20px;padding:5px 13px;white-space:nowrap;transition:border-color .15s}
+.firma-cip[data-secilebilir]{cursor:pointer}
+.firma-cip[data-secilebilir]:hover{border-color:var(--verde);color:var(--verde)}
+.firma-cip .kod{font-family:var(--mono);font-size:.72rem;color:var(--soluk);
+  border:1px solid var(--cizgi);border-radius:5px;padding:0 5px}
+.firma-menu{display:none;position:absolute;right:0;top:38px;min-width:240px;
+  background:var(--yuzey);border:1px solid var(--cizgi);border-radius:11px;
+  box-shadow:0 16px 44px rgba(25,28,26,.22);z-index:60;padding:6px}
+.firma-menu.acik{display:block}
+.firma-menu .baslik{font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--soluk);padding:7px 10px 5px}
+.firma-menu button{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;text-align:left;padding:9px 10px;border:0;background:transparent;
+  border-radius:7px;font-size:.86rem;color:var(--murekkep);cursor:pointer}
+.firma-menu button:hover{background:var(--taban)}
+.firma-menu button.secili{color:var(--verde);font-weight:700}
+@media (max-width:1100px){.ust .firma-cip .ad{display:none}}
 .kur-cip{cursor:pointer;transition:border-color .15s}
 .kur-cip:hover{border-color:var(--verde)}
 .kur-cip.yenileniyor{opacity:.55}
@@ -753,6 +777,36 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <kbd>Ctrl K</kbd>
       </button>
       <div class="ust-sag">
+        {# ── FİRMA ÇİPİ (MF3) ──
+           Tek firma varsa HİÇ basılmaz: bugünkü üst bar aynen kalır.
+           Admin seçici görür, diğerleri yalnızca etiket — firma
+           değiştirmek admin yetkisinde. #}
+        {% if firma_listesi and firma_listesi|length > 1 %}
+        <div style="position:relative">
+          <button class="firma-cip" {% if menu_admin %}data-secilebilir="1"
+                  onclick="firmaMenuAc(event)" title="Çalışılan firma — değiştir"
+                  {% else %}disabled title="Çalışılan firma"{% endif %}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2"><path d="M3 21h18"/>
+              <path d="M5 21V7l7-4 7 4v14"/><path d="M10 21v-6h4v6"/></svg>
+            <span class="ad">{{ aktif_firma.ad if aktif_firma else '—' }}</span>
+            {% if aktif_firma and aktif_firma.kod %}
+            <span class="kod">{{ aktif_firma.kod }}</span>{% endif %}
+          </button>
+          {% if menu_admin %}
+          <div class="firma-menu" id="firmaMenu">
+            <div class="baslik">Firma değiştir</div>
+            {% for f in firma_listesi %}
+            <button onclick="firmaSec({{ f.id }})"
+                    class="{{ 'secili' if aktif_firma and f.id == aktif_firma.id else '' }}">
+              <span>{{ f.ad }}</span>
+              <span class="kod">{{ f.kod or '—' }}</span>
+            </button>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
         <span class="kur-cip" id="ustKur" onclick="kurSorguAc()" title="Kur sorgula — geçmiş tarihler dahil"></span>
         <span class="tarih-cip" id="ustTarih"></span>
         {% set satis_sayfasi = yol.startswith('/siparis') or yol.startswith('/proforma')
@@ -1026,6 +1080,9 @@ window.YETKI = {{ (menu_yetki|default({}))|tojson }};
 window.PROFORMA_ONAY = {{ (menu_proforma_onay|default(false))|tojson }};
 window.AKTIF_KULLANICI = {{ (session.get('kullanici','')|default(''))|tojson }};
 window.ADMIN = {{ (menu_admin|default(false))|tojson }};
+/* MF6: cari kartindaki firma kutulari yeni kayitta AKTIF
+   firmayi isaretli getirir — kullanici zaten orada calisiyor. */
+window.AKTIF_FIRMA = {{ (aktif_firma.id if aktif_firma else 0)|tojson }};
 function yazabilir(modul){ return window.ADMIN || window.YETKI[modul] === 'yazma'; }
 
 /* ══ BİLDİRİMLER (BL1) ══
@@ -2223,5 +2280,33 @@ async function kurlariGoster() {
 kurlariGoster();
 </script>
 {% block scripts %}{% endblock %}
+<script>
+/* ── FİRMA SEÇİCİ (MF3) ── */
+function firmaMenuAc(e) {
+  if (e) e.stopPropagation();
+  const m = document.getElementById('firmaMenu');
+  if (m) m.classList.toggle('acik');
+}
+document.addEventListener('click', e => {
+  const m = document.getElementById('firmaMenu');
+  if (m && m.classList.contains('acik') && !m.contains(e.target)) {
+    m.classList.remove('acik');
+  }
+});
+async function firmaSec(id) {
+  try {
+    const d = await api('/api/firma/sec', {
+      method: 'POST', body: JSON.stringify({ firma_id: id }) });
+    if (d && d.ok) {
+      /* TAM YENİLEME ŞART: açık listeler, çekmeceler ve önbellekli
+         sayılar hâlâ ESKİ firmanın verisini taşıyor. Kısmi tazeleme
+         iki firmanın verisini aynı ekranda gösterirdi. */
+      location.reload();
+    } else {
+      bildir((d && d.mesaj) || 'Firma değiştirilemedi', true);
+    }
+  } catch (err) { bildir('Firma değiştirilemedi', true); }
+}
+</script>
 </body>
 </html>

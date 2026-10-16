@@ -367,6 +367,40 @@ else:
     print("   ✓ temiz — hiçbir satırın ilk hücresi gizli değil")
 
 print()
+print("─" * 70)
+print(" J7 · AYNI id İKİ KEZ   [YANLIŞ ÖĞE DOLAR, HATA VERMEZ]")
+print("─" * 70)
+# getElementById İLKİNİ döndürür. İki panel aynı id'yi taşıyorsa JS
+# görünmeyen kopyayı doldurur, ekrandaki hiç değişmez. Hiçbir şey
+# patlamaz, konsola hata da düşmez — tam bu yüzden aylarca durur.
+#
+# ÖLÇÜLDÜ (16.10): ayarlar.html'de "Yedekler" paneli İKİ kez vardı
+# (e-posta ve yedekleme sekmelerinde), ikisi de `yedekGovde`. Diskte
+# 30 yedek varken liste "Yükleniyor…"da kalıyordu.
+_j7 = 0
+for p7 in sorted(SABLON.glob('*.html')):
+    ham7 = p7.read_text(encoding='utf-8', errors='replace')
+    gorulen, tekrar = set(), {}
+    for m7 in re.finditer(r'\\sid="([^"]+)"', ham7):
+        ad7 = m7.group(1)
+        if '{{' in ad7 or '{%' in ad7 or '${' in ad7:
+            continue            # şablon/JS ifadesi — üretimde farklı olur
+        if ad7 in gorulen:
+            tekrar[ad7] = tekrar.get(ad7, 1) + 1
+        gorulen.add(ad7)
+    if tekrar:
+        _j7 += len(tekrar)
+        print(f"   ✗ {p7.name}: " + ', '.join(
+            f'id="{a}" ({n}×)' for a, n in sorted(tekrar.items())))
+if _j7:
+    print()
+    print("   → Bir id bir sayfada TEK olmalı. Fazla olanı kaldırın ya da")
+    print("     ayırt edici bir ad verin; JS şu an yanlış öğeyi dolduruyor.")
+    bulgu += _j7
+else:
+    print("   ✓ temiz — her element id'si şablonunda bir kez geçiyor")
+
+print()
 print("═" * 70)
 if bulgu:
     print(f" ✗ {bulgu} şablonda JavaScript hatası ({betikli} şablon tarandı)")

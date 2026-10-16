@@ -85,14 +85,42 @@ else
     echo " YAMA DURUMU"
     cizgi
     for Y in "${YAMALAR[@]}"; do
-        CIKTI=$("$PY" "$Y" 2>&1)
-        if echo "$CIKTI" | grep -q "Zaten uygulanmış"; then
-            printf "   ✓ %-34s uygulanmış → silinecek\n" "$Y"
-            SILINECEK+=("$Y")
-        elif echo "$CIKTI" | grep -qE "bağlantılar çalışır durumda|Üç şablon da yerinde"; then
+        CIKTI=$("$PY" "$Y" 2>&1); KOD=$?
+        # Kaç blok "zaten var" / "zaten uygulanmış" diyor:
+        ZATEN=$(echo "$CIKTI" | grep -ciE "zaten (var|uygulanmış)")
+
+        # ══ TZ1 · KARAR ARTIK ÇIKIŞ KODUNDAN ══
+        #
+        # Eski sürüm tek bir cümle arıyordu: grep -q "Zaten
+        # uygulanmış" (BÜYÜK Z). Yama şablonlarım o cümleyi
+        # kurmuyor — "⊙ Yama MF7 zaten uygulanmış." (küçük z)
+        # ya da MF1'de "⊙ İmza "MF1" zaten var — yama uygulanmış."
+        # diyorlar. Sonuç ölçüldü: uygulanmış 10 yamanın HEPSİ
+        # "UYGULANMAMIŞ" göründü, hiçbiri silinmedi, ekrana zaten
+        # uygulanmış yamaları TEKRAR UYGULA diye yazdı ve en altta
+        # "✓ Zaten temiz" dedi. İki cümle birbirini yalanlıyordu.
+        #
+        # Harfi düzeltmek yetmez; cümleyi kovalamak yapısal olarak
+        # kırılgan. Yama betiklerinin hepsi ÇIKIŞ KODUNU doğru
+        # veriyor (ölçüldü) ve iki sinyali birleştirmek durumu
+        # tam ayırıyor:
+        #
+        #   kod 0 · zaten>0  → TAM UYGULANMIŞ      → silinebilir
+        #   kod 0 · zaten=0  → hiç uygulanmamış    → KORUNUR
+        #                      (rapor kipi temiz geçti, o kadar)
+        #   kod≠0 · zaten>0  → YARIM / AŞILMIŞ     → KORUNUR
+        #                      (bir blok imzalı, biri eşleşmiyor)
+        #   kod≠0 · zaten=0  → uygulanmamış/bozuk  → KORUNUR
+        #
+        # Şüphe her durumda KORUMA yönünde: bu betiğin en önemli
+        # kuralı "uygulanmamış yama silinmez" ve bir kez çiğnendi.
+        if echo "$CIKTI" | grep -qE "bağlantılar çalışır durumda|Üç şablon da yerinde"; then
             printf "   ✓ %-34s doğrulandı → silinecek\n" "$Y"
             SILINECEK+=("$Y")
-        elif echo "$CIKTI" | grep -q "atlandı (zaten var)"; then
+        elif [ "$KOD" -eq 0 ] && [ "$ZATEN" -gt 0 ]; then
+            printf "   ✓ %-34s uygulanmış → silinecek\n" "$Y"
+            SILINECEK+=("$Y")
+        elif [ "$ZATEN" -gt 0 ]; then
             # AŞILMIŞ YAMA: blokların bir kısmı "zaten var" diyor ama
             # biri bulunamıyor. Tipik sebep, SONRAKİ bir yamanın bu
             # yamanın çıktısını değiştirmesi — örn. CRM-G, CRM-F'nin
@@ -101,7 +129,10 @@ else
             #
             # Uygulanmamış DEĞİL, aşılmış. Yine de otomatik silinmiyor:
             # karar kullanıcının.
-            printf "   ↷ %-34s AŞILMIŞ (sonraki yama değiştirmiş)\n" "$Y"
+            # TZ1: "aşılmış" ile "yarım" aynı ölçüte düşüyor —
+            # ikisinde de bir kısım blok imzalı, biri eşleşmiyor.
+            # Hangisi olduğuna kullanıcı bakar; betik silmez.
+            printf "   ↷ %-34s YARIM/AŞILMIŞ (bir blok eşleşmiyor)\n" "$Y"
             ASILMIS+=("$Y")
         else
             printf "   ⚠ %-34s UYGULANMAMIŞ → korunuyor\n" "$Y"
@@ -144,7 +175,11 @@ if [ ${#KALACAK[@]} -gt 0 ]; then
 fi
 
 shopt -s nullglob
-YEDEKLER=(*.yedek-* templates/*.yedek-*)
+# TZ1: iki desen birlikte. Eski betikler `.yedek-mf1` yazıyordu,
+# yeni yama şablonum `.yedek_mf1` yazıyor (ALT ÇİZGİ). Yalnızca
+# tireli desen arandığı için yenileri hiç görünmüyordu: bu klonda
+# 28 tanesi birikmişti.
+YEDEKLER=(*.yedek-* templates/*.yedek-* *.yedek_* templates/*.yedek_*)
 shopt -u nullglob
 echo " Yedek dosyası     : ${#YEDEKLER[@]}"
 echo " Silinecek yama    : ${#SILINECEK[@]}"

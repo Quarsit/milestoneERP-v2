@@ -189,8 +189,12 @@ def eski_yedekleri_temizle():
     """Son MAX_BACKUPS auto+manual yedeği tut; pre_restore'a dokunma."""
     ensure_backup_dir()
     yedekler = sorted(
+        # MF4: `firma_silme` de korunur. Bir firma silinmeden
+        # once alinan yedek, o firmanin TEK kurtarma noktasi;
+        # 30 yedek siniri yuzunden sessizce silinmemeli.
         [p for p in BACKUP_DIR.glob(f'milestone_*{YEDEK_UZANTI}')
-         if '_pre_restore_' not in p.name],
+         if '_pre_restore_' not in p.name
+         and '_firma_silme_' not in p.name],
         key=lambda p: p.stat().st_mtime, reverse=True
     )
     if len(yedekler) > MAX_BACKUPS:
@@ -213,6 +217,8 @@ def yedek_listesi():
             tip = 'auto'
         elif '_pre_restore_' in p.name:
             tip = 'pre_restore'
+        elif '_firma_silme_' in p.name:
+            tip = 'firma_silme'
         else:
             tip = 'manual'
         yedekler.append({

@@ -94,6 +94,13 @@
     <img class="logo-img" src="{{ firma_logo() }}" alt="{{ firma_adi }}">
     {% else %}
     <h1>{{ firma_adi }}</h1>
+    {% if konsolide %}
+    {# MF7: belgeyi okuyan, rakamların hangi defterlerden toplandığını
+       görmeli. Yazmadan basmak yanıltıcı bir toplam olurdu. #}
+    <div style="font-size:11px;color:#444;margin-top:2px">
+      KONSOLİDE EKSTRE — {{ firma_adlari.values()|join(' · ') }}
+    </div>
+    {% endif %}
     {% endif %}
     <p>{{ firma_adres }}</p>
   </div>
@@ -147,6 +154,9 @@
 <table>
   <thead>
     <tr>
+      {# MF7: konsolide ekstrede hangi satır hangi firmadan —
+         sütun olmadan iki defter birbirine karışır, belge okunmaz. #}
+      {% if konsolide %}<th style="width: 80px;">Firma</th>{% endif %}
       <th style="width: 75px;">{{ _ceviri('tarih', dil) }}</th>
       <th style="width: 90px;">{{ _ceviri('islem_tipi', dil) }}</th>
       <th style="width: 90px;">{{ _ceviri('evrak_no', dil) }}</th>
@@ -163,6 +173,7 @@
       {# YAMA E1b: model alani 'hareket_tarihi'. Eskiden 'h.tarih'
          yaziyordu; boyle bir alan olmadigi icin Jinja SESSIZCE bos
          basiyor ve ekstre tarihsiz cikiyordu. #}
+      {% if konsolide %}<td style="font-size:10px;color:#444">{{ firma_adlari.get(h.firma_id, '—') }}</td>{% endif %}
       <td>{{ h.hareket_tarihi.strftime('%d.%m.%Y') if h.hareket_tarihi else '—' }}</td>
       <td style="font-weight:600;">{{ _deger_cevir('islem', h.islem_tip, dil) }}</td>
       <td>{{ h.evrak_no or '-' }}</td>
