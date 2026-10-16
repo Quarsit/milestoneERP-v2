@@ -9,7 +9,7 @@
 #    konteyner. R1 ile sıfırlarsanız bu tablolardaki test verisi
 #    kalırdı.
 #
-#  ══ KORUNUR (6 tablo) ══
+#  ══ KORUNUR (8 tablo) ══
 #    cariler       Cari firma kayıtları (unvan, vergi no, adres,
 #                  risk limiti, ödeme vadesi...). Cari'de ÖNBELLEK
 #                  BAKİYE ALANI YOK — bakiye hareketlerden
@@ -21,10 +21,11 @@
 #    doviz_kur     TCMB kur arşivi (yeniden çekmek uzun sürer)
 #
 #  ══ SİLİNİR (27 tablo) ══
-#    Tüm işlem verisi: stok, sipariş, proforma, fatura, sevkiyat,
-#    kesim, maliyet, çek, kasa+hareketleri, cari hareketleri,
-#    KDV iade, konteyner, sabit gider, nakit planı, denetim izi,
-#    banka tanımları.
+#    Tüm işlem verisi: stok, sipariş (kalem karşılama kırılımı
+#    dahil), proforma, fatura, sevkiyat, kesim, maliyet, çek, kasa
+#    hareketleri, cari hareketleri, KDV iade, konteyner, sabit gider,
+#    nakit planı, bildirimler, denetim izi.
+#    NOT: `banka` tablosu SİLİNMEZ — tanımlar korunur (aşağıda).
 #
 #  ══ TAM KAPSAMA DENETİMİ ══
 #    Betik, veritabanındaki her tablonun ya KORUNAN ya da SİLİNECEK
@@ -91,6 +92,9 @@ SILINECEK_TABLOLAR = [
     # Satış zinciri
     'satis_kaydi', 'rezervasyon',
     'proforma_kalem', 'proforma',
+    # R4: F1 ile gelen kalem kaynak kirilimi (stok/uretim/dis alim).
+    # Betige yazilmadigi icin kapsama denetimi calismayi REDDEDIYORDU.
+    'kalem_karsilama',
     'siparis_kalem',
     'faturalar',
     'konteyner',
@@ -151,8 +155,13 @@ KORUNAN = {
 # Tamsayı birincil anahtarlı tablolar — dizileri 1'e çekilir.
 # KASA/BANKA BURADA YOK (KB1): tablolar artik silinmiyor, id
 # sayacini sifirlamak MEVCUT kayitlarla cakisan id uretirdi.
+# R4: bildirimler / proforma_kalem / siparis_kalem de tamsayi id
+# tasiyor ve siliniyor. Dizi sifirlanmazsa "temiz baslangic"ta ilk
+# kalem id'si 1 degil, eski sayacin kaldigi yerden devam ederdi.
+# kalem_karsilama METIN id kullaniyor (KRS...), dizisi yok.
 DIZI_SIFIRLA = ['kasa_hareket', 'kesim_detay',
-                'cek_hareket', 'audit_log', 'konteyner', 'cari_aktivite']
+                'cek_hareket', 'audit_log', 'konteyner', 'cari_aktivite',
+                'bildirimler', 'proforma_kalem', 'siparis_kalem']
 
 # ── SİLME SIRASI: modelin topolojik sırasından, TERS ──
 # metadata.sorted_tables ebeveynden çocuğa sıralı; silmek için
@@ -380,7 +389,10 @@ print(" Cari firma kayıtlarınız duruyor; hareketleri sıfırlandı.")
 print(" Bakiyeler hareketlerden hesaplandığı için hepsi 0 görünür.")
 print()
 print(" SONRAKİ ADIMLAR:")
-print("   1) Kasa/banka hesaplarını yeniden tanımlayın (açılış bakiyesiyle)")
+# R4: KB1'den beri kasa/banka TANIMLARI korunuyor, yalnizca bakiye
+# sifirlaniyor. Mesaj "yeniden tanimlayin" diyordu; yeniden tanimlamak
+# mukerrer kasa acardi.
+print("   1) Kasa açılış bakiyelerini girin (tanımlar duruyor)")
 print("   2) Ayarlar → Listeler'i gözden geçirin")
 print("   3) Sabit giderleri girin (kira, maaş, SGK...)")
 print("   4) venv/bin/python degismezlik_denetim.py")
