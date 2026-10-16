@@ -204,8 +204,23 @@ print()
 print("─" * 70)
 print(" F3 · ÇIKIŞ KAPILARI (firma_atla)   [GÖZDEN GEÇİRİLMEMİŞ ATLAMA]")
 print("─" * 70)
+# ── YALNIZCA GERÇEK KULLANIM SAYILIR ──
+# İlk sürüm 'firma_atla()' geçen HER satırı sayıyordu ve YORUMLARI
+# da sayıyordu: bir çıkış kapısını kaldırıp yerine "burada
+# firma_atla() gerekmiyor, çünkü…" diye iki satır yorum yazınca
+# sayı 12'den 14'e ÇIKTI. Denetim, kodu değil metni ölçüyordu.
+#
+# Artık yorumlar atılıyor ve yalnızca `with firma_atla()` biçimi
+# sayılıyor — süzgeci fiilen kapatan tek kullanım şekli bu.
+def _kodsuz(satir):
+    """Satırdaki yorumu atar (dizgi içindeki # için yeterince iyi:
+    bu kaynakta firma_atla dizgi içinde geçmiyor)."""
+    _k = satir.find('#')
+    return satir if _k < 0 else satir[:_k]
+
+
 _atla = [(i + 1, s.strip()) for i, s in enumerate(KAYNAK.split('\n'))
-         if 'firma_atla()' in s and 'def firma_atla' not in s]
+         if re.search(r'\bwith\s+firma_atla\(\)', _kodsuz(s))]
 print(f"   {len(_atla)} kullanım (beklenen {ATLA_BEKLENEN})")
 if len(_atla) > ATLA_BEKLENEN:
     print()
@@ -296,7 +311,7 @@ else:
 # üreteç kökü `LIKE` ile tarayıp en büyük numarayı bulur, bir ekler.
 # Kök FİRMA KODUNU TAŞIMAZSA iki firma AYNI SAYACI paylaşır.
 #
-# Ölçüldü (RN2): kök `HR-{kisaltma}{yil}-` idi, firma kodu yoktu.
+# Ölçüldü (RN3): kök `HR-{kisaltma}{yil}-` idi, firma kodu yoktu.
 # STONEHUB'ın hareketi HR-STN26-0001, MILESTONE'un HR-STN26-0002
 # oldu. Kimlikler çakışmıyor — tarama tüm firmalarda benzersizlik
 # arıyor — ama her firmanın defteri DELİKLİ görünüyor: MILESTONE'un

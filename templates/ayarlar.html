@@ -110,9 +110,31 @@
              ana firmanın bilgisi oraya yazılmış gibi görünüyordu. -->
         <input id="fFirma" placeholder="Tam ticari ünvan — belgelerde basılır">
       </div>
+      <!-- ── RN3 · BELGE KODU ──
+           Buradaki alan eskiden "Kısaltma (stok kodlarında)" idi.
+           Etiket stok kodlarını etkilediğini söylüyordu ama `kisaltma`
+           alanını HİÇBİR YER OKUMUYOR (tüm kaynakta arandı: yalnızca
+           bu form yazıyor ve geri okuyor). Stok ve belge kodlarını
+           gerçekten belirleyen alan `belge_kodu` ve o da yalnızca
+           firma AÇILIRKEN sorulup bir daha değiştirilemiyordu.
+
+           Yani ekranda etkisi olmayan bir alan dururken, etkisi olan
+           alana erişim yoktu. Alan değiştirildi; `kisaltma` sütunu
+           veritabanında duruyor (göç yok, veri kaybı yok) ama forma
+           dönmüyor — ölü alanı ekranda tutmak aynı karışıklığı
+           yeniden doğurur. -->
       <div class="form-alan" style="margin-bottom:12px">
-        <label>Kısaltma (stok kodlarında)</label>
-        <input id="fKisaltma" placeholder="MST">
+        <label>Belge Kodu (sipariş, fatura, stok ve cari kimliklerinde)</label>
+        <input id="fBelgeKodu" placeholder="en çok 4 karakter — örn. MLS"
+               maxlength="4" style="text-transform:uppercase">
+        <div class="ipucu" style="font-size:12px;color:var(--soluk);margin-top:4px">
+          Her firmanın belge sayacı bu koda göre ayrılır:
+          <code>SIP-MLS-STN26-01</code>. Boş bırakılırsa kimlikler
+          kodsuz üretilir (<code>SIP-STN26-01</code>).
+          <b>Belge varken değiştirmeyin</b> — eski belgeler eski kökte
+          kalır, yeni seri 01'den başlar; kimlikler bozulmaz ama
+          numara sürekliliği kopar.
+        </div>
       </div>
 
       <!-- F3: Bu üç alan proforma, ticari fatura ve packing list
@@ -606,7 +628,7 @@ function sifreGorunurlukDegistir(alanId, btn) {
 
 /* ═══ AYARLAR ═══
    Kullanıcı: /api/ayarlar/kullanici (GET/POST), /<id> (PUT/DELETE)
-   Firma    : /api/ayarlar/firma (GET/POST) — satici_firma, kisaltma
+   Firma    : /api/ayarlar/firma (GET/POST) — satici_firma, belge_kodu
    KDV      : /api/ayarlar/kdv_oran (GET/POST)
    Listeler : /api/ayarlar/lookup?kategori= (GET/POST), /<id> (PUT/DELETE)
    NOT: lookup POST/PUT/DELETE yalnızca ADMIN rolüne açıktır (backend kuralı). */
@@ -936,7 +958,7 @@ async function firmaYukle() {
   // MF5: hangi firmayı düzenlediğin başlıkta yazsın.
   const _bf = document.getElementById('fBaslikFirma');
   if (_bf) _bf.textContent = d.firma_ad ? '· ' + d.firma_ad : '';
-    document.getElementById('fKisaltma').value = d.kisaltma || '';
+    document.getElementById('fBelgeKodu').value = d.belge_kodu || '';
     document.getElementById('fAdres').value = d.satici_adres || '';
     document.getElementById('fTelefon').value = d.satici_tel || '';
     document.getElementById('fEposta').value = d.satici_email || '';
@@ -1033,7 +1055,8 @@ async function firmaKaydet() {
       method: 'POST',
       body: JSON.stringify({
         satici_firma: document.getElementById('fFirma').value,
-        kisaltma: document.getElementById('fKisaltma').value,
+        belge_kodu: document.getElementById('fBelgeKodu').value
+                      .trim().toUpperCase(),
       satici_adres: document.getElementById('fAdres').value.trim(),
       satici_tel: document.getElementById('fTelefon').value.trim(),
       satici_email: document.getElementById('fEposta').value.trim()

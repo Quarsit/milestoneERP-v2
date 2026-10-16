@@ -1111,7 +1111,14 @@ def test_rn1_okunur_belge_numaralari():
              'birim_fiyat': 100, 'adet': 1}]})
     assert r1.status_code == 200, r1.get_data(as_text=True)
     sid1 = r1.get_json()['id']
-    assert sid1.startswith('SIP-STN'), sid1
+    # RN3: eskiden `startswith('SIP-STN')` yazıyordu — yani `SIP-` ile
+    # cari kısaltması ARASINDA hiçbir şey olmadığını varsayıyordu.
+    # Firma belge kodu köke girince kimlik `SIP-MLS-STN26-01` oluyor
+    # ve test ÜRÜN DOĞRU ÇALIŞTIĞI HALDE kırılıyordu. Sınanacak şey
+    # kısaltmanın kimlikte GEÇMESİ, kaçıncı karakterde olduğu değil.
+    _p1 = sid1.split('-')
+    assert _p1[0] == 'SIP', sid1
+    assert any(p.startswith('STN') for p in _p1[1:]), sid1
     assert sid1.endswith('-01'), sid1
     r2 = c.post('/api/siparis', headers=H, json={
         'musteri': 'STONELAND USA LLC', 'doviz': 'USD',
@@ -1128,7 +1135,12 @@ def test_rn1_okunur_belge_numaralari():
     rp = c.post('/api/proforma', headers=H, json={
         'musteri': 'STONELAND USA LLC', 'doviz': 'USD', 'toplam': 1000})
     assert rp.status_code == 200, rp.get_data(as_text=True)
-    assert rp.get_json()['id'].startswith('PI-STN'), rp.get_json()['id']
+    # RN3: `startswith('PI-STN')` de aynı sabit konum varsayımıydı
+    # (firma kodlu hâli PI-MLS-STN26-01). Parçaya bakıyoruz.
+    _pid = rp.get_json()['id']
+    _pp = _pid.split('-')
+    assert _pp[0] == 'PI', _pid
+    assert any(p.startswith('STN') for p in _pp[1:]), _pid
 
     # ── Cari hareket: HR-STN26-0001 (tek yerden, dinleyiciyle) ──
     with fa.app.app_context():
@@ -1148,7 +1160,12 @@ def test_rn1_okunur_belge_numaralari():
     assert rh.status_code == 200, rh.get_data(as_text=True)
     with fa.app.app_context():
         h = CariHareket.query.filter_by(cari_id='CRN').first()
-        assert h.id.startswith('HR-STN26-'), h.id
+        # RN3: bu üretecin kökü firma kodunu taşıyor artık
+        # (HR-MLS-STN26-0001). Sabit önek varsayımı burada da kalkıyor.
+        _hp = h.id.split('-')
+        assert _hp[0] == 'HR', h.id
+        assert any(p.startswith('STN26') for p in _hp[1:]), h.id
+        assert _hp[-1].isdigit(), h.id
 
     # ── Stok: blok no ve plaka no kimlikte görünür ──
     rs = c.post('/api/stok/ekle', headers=H, json={
@@ -1233,7 +1250,15 @@ def test_rn2_belge_numarasi_ayri_kisaltmayi_kullanir():
     assert numaralar[0] != numaralar[1], numaralar
     # ikisi de -01 ile bitiyor ama kısaltmaları farklı
     assert all(n.endswith('-01') for n in numaralar), numaralar
-    assert numaralar[0][4:7] != numaralar[1][4:7], numaralar
+
+    # RN3: eskiden `[4:7]` sabit dilimi karşılaştırılıyordu. Firma
+    # belge kodu köke girince o dilim kodun kendisi oluyor (ikisinde
+    # de aynı) ve test ürün doğru çalıştığı halde kırılıyordu:
+    #   ['SIP-MLS-GRN26-01', 'SIP-MLS-GRT26-01'] → 'MLS' != 'MLS'
+    # Kısaltma kimliğin SONDAN İKİNCİ parçasında ve orada yılı da
+    # taşıyor; konumdan bağımsız okumak için oradan alıyoruz.
+    _kis = [n.split('-')[-2] for n in numaralar]
+    assert _kis[0] != _kis[1], (numaralar, _kis)
 
 
 def test_f8_karsilama_plani_onayda_zorunlu():

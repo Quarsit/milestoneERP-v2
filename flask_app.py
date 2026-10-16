@@ -2169,7 +2169,12 @@ def create_app():
                 kis = _kisaltma_uret(hareket.cari_unvan)
             kis = (kis + 'XXX')[:3]
             yil = (hareket.hareket_tarihi or date.today()).strftime('%y')
-            # ── RN2 · FİRMA KODU KÖKE GİRER ──
+            # ── RN3 · FİRMA KODU KÖKE GİRER ──
+            # (İlk sürümde bu bloğa RN2 demiştim; o etiket projede
+            #  ÇOKTAN KULLANILIYOR — RN2, aynı isimli iki carinin
+            #  farklı kısaltma almasıdır, testlerde de o adla duruyor.
+            #  Etiketler bu projede geçmişte gezinme aracı; aynı adı
+            #  iki ayrı şeye vermek altı ay sonra tuzak olurdu.)
             # Eskiden kök `HR-{kis}{yil}-` idi ve firma kodu YOKTU.
             # Sayaç bu kökü `LIKE` ile tarıyor, yani iki firma aynı
             # müşteri için AYNI SAYACI paylaşıyordu. Ölçüldü: STONEHUB'ın
@@ -17102,6 +17107,13 @@ def create_app():
             return jsonify({
                 'satici_firma': f.unvan or '',
                 'kisaltma': f.kisaltma or '',
+                # RN3: belge kodu BURADA DÜZENLENEBİLİR olmalı.
+                # Eskiden yalnızca firma AÇILIRKEN sorulup bir daha
+                # değiştirilemiyordu. Göçle gelen ana firmanın kodu
+                # boştu ve doldurmanın hiçbir yolu yoktu; ekranda da
+                # onun yerine `kisaltma` duruyordu — hiçbir şeyin
+                # okumadığı ölü bir alan (ölçüldü).
+                'belge_kodu': f.belge_kodu or '',
                 'satici_adres': f.adres or '',
                 'satici_tel': f.telefon or '',
                 'satici_email': f.eposta or '',
@@ -17110,7 +17122,7 @@ def create_app():
                 # değiştirmek çok kolaydı.
                 'firma_ad': f.ad or '', 'firma_id': f.id,
             })
-        return jsonify({'satici_firma': '', 'kisaltma': '',
+        return jsonify({'satici_firma': '', 'kisaltma': '', 'belge_kodu': '',
                         'satici_adres': '', 'satici_tel': '',
                         'satici_email': '', 'firma_ad': '', 'firma_id': None})
 
@@ -17129,6 +17141,44 @@ def create_app():
         f.unvan = satici
         if data.get('kisaltma') is not None:
             f.kisaltma = (data.get('kisaltma') or '').strip()[:10]
+        # ── RN3 · BELGE KODU ──
+        # Doğrulama firma AÇMA ucuyla AYNI olmalı: iki firma aynı kodu
+        # taşırsa kimlik kökleri çakışır ve sayacı yeniden paylaşırlar
+        # — düzeltilen hatanın tam kendisi geri gelir.
+        #
+        # Açma ucu kodu ZORUNLU tutuyor; burada BOŞ BIRAKMAYA izin var:
+        # göçle gelen ana firmanın kodu boş ve boş kod geçerli bir
+        # durum (kimlikler eski biçimde kalır). Zorunlu kılmak, ayar
+        # formunu açan herkesi kod vermeye mecbur ederdi.
+        if data.get('belge_kodu') is not None:
+            _kod = (data.get('belge_kodu') or '').strip().upper()
+            if _kod:
+                if len(_kod) > 4 or not _kod.isalnum():
+                    return jsonify({'ok': False, 'mesaj':
+                                    'Belge kodu en çok 4 karakter, '
+                                    'yalnızca harf/rakam'}), 400
+                # `firma_atla()` GEREKMİYOR: okuma süzgeci yalnızca
+                # FirmaKapsamli, Veriler ve Cari'ye uygulanıyor (bkz.
+                # _firma_suzgeci); `firma` tablosu kapsam dışı, sorgu
+                # zaten tüm firmaları görüyor. Komşu `api_firma_ekle`
+                # aynı sorguyu firma_atla() içinde yapıyor ama orada da
+                # etkisiz — ona dokunmadım, kapsam dışı.
+                #
+                # Gereksiz bir çıkış kapısı açmamak önemli: her atlama
+                # süzgecin KAPALI olduğu bir yer ve firma_denetim F3
+                # her birini gerekçelendirmemi istiyor. İşe yaramayan
+                # bir kapı eklemek o listeyi anlamsızlaştırır.
+                _c = Firma.query.filter(
+                    db.func.upper(Firma.belge_kodu) == _kod,
+                    Firma.id != f.id).first()
+                if _c:
+                    return jsonify({'ok': False, 'mesaj':
+                                    f'"{_kod}" kodu {_c.ad} firmasında '
+                                    'kullanılıyor'}), 400
+            f.belge_kodu = _kod or None
+            # Kod kimlik köküne giriyor ve istek içinde önbellekli;
+            # düşürülmezse aynı istekte ESKİ kodla kimlik üretilir.
+            _firma_onbellek_dusur()
         for _a, _alan in (('satici_adres', 'adres'), ('satici_tel', 'telefon'),
                           ('satici_email', 'eposta')):
             if data.get(_a) is not None:
