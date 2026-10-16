@@ -2169,7 +2169,56 @@ def create_app():
                 kis = _kisaltma_uret(hareket.cari_unvan)
             kis = (kis + 'XXX')[:3]
             yil = (hareket.hareket_tarihi or date.today()).strftime('%y')
-            kok = f'HR-{kis}{yil}-'
+            # ── RN2 · FİRMA KODU KÖKE GİRER ──
+            # Eskiden kök `HR-{kis}{yil}-` idi ve firma kodu YOKTU.
+            # Sayaç bu kökü `LIKE` ile tarıyor, yani iki firma aynı
+            # müşteri için AYNI SAYACI paylaşıyordu. Ölçüldü: STONEHUB'ın
+            # hareketi HR-STN26-0001, MILESTONE'un hareketi HR-STN26-0002
+            # oldu. Kimlikler çakışmıyor (tarama tüm firmalarda
+            # benzersizlik arıyor) ama her firmanın defteri DELİKLİ
+            # görünüyor: MILESTONE'un ekstresinde 0002 var, 0001 yok.
+            # Denetimde "silinmiş kayıt" diye okunur.
+            #
+            # Sipariş/proforma/kesim kimlikleri bunu `_okunur_id`
+            # içinde zaten yapıyordu; cari hareket ayrı bir yolda
+            # olduğu için atlanmıştı. Kök artık firma kodunu taşıyor,
+            # LIKE taraması o köke bakıyor ve her firmanın sayacı
+            # kendiliğinden 0001'den başlıyor.
+            #
+            # KOD, OTURUMDAN DEĞİL SATIRDAN OKUNUYOR.
+            # `_firma_belge_kodu()` istek bağlamına bakıyor ve CLI'da,
+            # betiklerde, testlerde boş dönüyor. Oysa damga (before_flush)
+            # bu kancadan ÖNCE çalışıp `firma_id`yi dolduruyor (ölçüldü),
+            # yani satırın gerçek firması burada zaten biliniyor. Satırdan
+            # okumak hem bağlamsız yollarda da doğru çalışır hem de kimlik
+            # ile damga asla birbirinden ayrılmaz.
+            #
+            # ANA firmada belge kodu BOŞSA kök eskisi gibi kalır
+            # (HR-STN26-0001) — mevcut kimlikler korunur. Ana firmaya da
+            # kod vermek istersen Ayarlar → Firmalar'dan belge kodunu
+            # doldurmak yeterli; burada kod değişikliği gerekmiyor.
+            _fk = ''
+            try:
+                _fid = getattr(hareket, 'firma_id', None)
+                if _fid:
+                    # Flush başına önbellek: bu kanca her satır için
+                    # çalışıyor, her birinde firma sorgusu açmak gereksiz.
+                    # Aynı desen aşağıdaki sayaç için de kullanılıyor.
+                    _kod_onb = baglanti.info.setdefault('rn2_firma_kod', {})
+                    if _fid in _kod_onb:
+                        _fk = _kod_onb[_fid]
+                    else:
+                        _fr = baglanti.execute(sa_text(
+                            'SELECT belge_kodu FROM firma WHERE id = :i'),
+                            {'i': _fid}).fetchone()
+                        _fk = ((_fr[0] if _fr else '') or '').strip().upper()
+                        _kod_onb[_fid] = _fk
+            except Exception:
+                # Kod okunamazsa kimliksiz kalmaktansa eski kökle devam:
+                # kimlik üretilemezse hareket rastgele kimlikle yazılır ve
+                # okunurluk kaybolur. Benzersizlik her durumda korunur.
+                _fk = ''
+            kok = f'HR-{_fk}-{kis}{yil}-' if _fk else f'HR-{kis}{yil}-'
             satir = baglanti.execute(sa_text(
                 'SELECT id FROM cari_hareket WHERE id LIKE :k'), {'k': kok + '%'}).fetchall()
             son = 0

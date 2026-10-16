@@ -288,6 +288,73 @@ else:
     for _d, _n in HAM_SQL_BEKLENEN.items():
         print(f"       {_d:<34} {_n}")
 
+# ══════════════════════════════════════════════════════════════════════
+#  F5 · KİMLİK SAYAÇLARI
+# ══════════════════════════════════════════════════════════════════════
+#
+# Okunur kimlikler (SIP-STN26-03, HR-STN26-0007) sayaçla üretiliyor:
+# üreteç kökü `LIKE` ile tarayıp en büyük numarayı bulur, bir ekler.
+# Kök FİRMA KODUNU TAŞIMAZSA iki firma AYNI SAYACI paylaşır.
+#
+# Ölçüldü (RN2): kök `HR-{kisaltma}{yil}-` idi, firma kodu yoktu.
+# STONEHUB'ın hareketi HR-STN26-0001, MILESTONE'un HR-STN26-0002
+# oldu. Kimlikler çakışmıyor — tarama tüm firmalarda benzersizlik
+# arıyor — ama her firmanın defteri DELİKLİ görünüyor: MILESTONE'un
+# ekstresinde 0002 var, 0001 yok. Denetimde "silinmiş kayıt" diye
+# okunur. Sessiz, çünkü hiçbir hata vermiyor.
+#
+# Kural: `id LIKE` ile sayaç tarayan her fonksiyon firma kodunu da
+# çözmeli. İki yolla olur — `_firma_belge_kodu()` (oturumdan) ya da
+# satırın firma_id'sinden `belge_kodu` okumak.
+KOD_BELIRTILERI = ('_firma_belge_kodu', 'belge_kodu FROM firma')
+print()
+print("─" * 70)
+print(" F5 · KİMLİK SAYAÇLARI   [FİRMALARIN PAYLAŞTIĞI SAYAÇ]")
+print("─" * 70)
+_satirlar = KAYNAK.split('\n')
+_tarama = [i for i, s in enumerate(_satirlar)
+           if re.search(r'id LIKE|id\.like\(', s)]
+_eksik, _tamam = [], []
+for _i in _tarama:
+    # Kapsayan `def`i geriye doğru arayıp gövdesini çıkar: girintisi
+    # def'ten büyük olan satırlar o fonksiyonun gövdesi.
+    _d = None
+    for _j in range(_i, -1, -1):
+        _m = re.match(r'^(\s*)def\s+(\w+)', _satirlar[_j])
+        if _m:
+            _d = (_j, len(_m.group(1)), _m.group(2))
+            break
+    if not _d:
+        _eksik.append((_i + 1, '<fonksiyon dışı>'))
+        continue
+    _bas, _gir, _ad = _d
+    _govde = []
+    for _k in range(_bas + 1, len(_satirlar)):
+        _s = _satirlar[_k]
+        if _s.strip() and (len(_s) - len(_s.lstrip())) <= _gir:
+            break
+        _govde.append(_s)
+    _metin = '\n'.join(_govde)
+    if any(b in _metin for b in KOD_BELIRTILERI):
+        _tamam.append((_ad, _i + 1))
+    else:
+        _eksik.append((_i + 1, _ad))
+if _eksik:
+    for _n, _ad in _eksik:
+        print(f"   ✗ {_ad}  (satır {_n}) — sayaç tarıyor ama firma kodunu")
+        print("     çözmüyor: iki firma aynı numara dizisini paylaşır")
+    print()
+    print("   → Köke firma kodunu ekleyin. Satırın kendi firmasından")
+    print("     okumak yeğdir (`SELECT belge_kodu FROM firma WHERE id`):")
+    print("     `_firma_belge_kodu()` istek bağlamına bakıyor ve CLI'da,")
+    print("     betiklerde, testlerde boş döner.")
+    bulgu += len(_eksik)
+else:
+    print(f"   ✓ temiz — {len(_tamam)} sayaç tarayıcısının hepsi firma")
+    print("     kodunu çözüyor")
+    for _ad, _n in _tamam:
+        print(f"       {_ad:<28} satır {_n}")
+
 print()
 print("═" * 70)
 if bulgu:
