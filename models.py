@@ -115,7 +115,22 @@ class Firma(db.Model):
     # korunur. Kapaliysa firma yalnizca KENDI satirlarini gorur;
     # kurulusta bir kopya yazildigi icin bos kalmaz.
     ortak_liste   = db.Column(db.Boolean, default=True)
-    varsayilan    = db.Column(db.Boolean, default=False, index=True)
+    # ── KF1: `varsayilan` KALDIRILDI ──
+    # Çoklu firma artık tüm kullanıcılara açık ve her kullanıcı kendi
+    # izinli firmalarından BİRİNİ SEÇEREK giriyor. Küresel bir
+    # "varsayılan firma" bu düzende yalnızca zarar verir: seçim
+    # ekranını atlatıp kullanıcıyı sessizce bir firmaya düşürür ve
+    # "ben hangi firmadayım?" sorusunu ekranda cevapsız bırakır.
+    #
+    # Kullanıcısız yollar (CLI betikleri, boş kurulumun kendini
+    # onarması) yine bir çapaya ihtiyaç duyuyor; o çapa artık bir
+    # bayrak değil, EN KÜÇÜK KİMLİKLİ AKTİF FİRMA — bkz.
+    # _sistem_firma_id(). Bayrak kimsenin bilinçli olarak
+    # ayarlamadığı bir alandı; kimlik sırası en azından belirli.
+    #
+    # Sütun göçle DÜŞÜRÜLÜYOR (goc_kf1.py): modelde olmayıp
+    # veritabanında kalan sütun, `kisaltma` tuzağının aynısı olurdu —
+    # sema_denetim FAZLA sütunu görmüyor, yalnızca eksiği görüyor.
     aktif         = db.Column(db.Boolean, default=True, index=True)
     sira          = db.Column(db.Integer, default=0)
     olusturma     = db.Column(db.DateTime, default=datetime.now)
@@ -142,6 +157,39 @@ class CariFirma(db.Model):
     olusturma = db.Column(db.DateTime, default=datetime.now)
     __table_args__ = (db.UniqueConstraint('cari_id', 'firma_id',
                                           name='uq_cari_firma'),)
+
+
+class KullaniciFirma(db.Model):
+    """Hangi kullanıcı HANGİ FİRMADA çalışabilir (KF1).
+
+    Çoklu firma artık admin'e özel değil. Kimin hangi firmayı
+    göreceğine yönetici karar veriyor ve kararın yaşadığı yer bu
+    tablo.
+
+    `Kullanici.firma_kapsam` ile birlikte okunur:
+
+        'tumu'   → bu tablo DİKKATE ALINMAZ, bütün firmalar
+        'secili' → YALNIZCA burada yazılı firmalar
+
+    Satır YOKSA ve kapsam 'secili' ise kullanıcı hiçbir firmada
+    çalışamaz ve sisteme giremez. Bu bilinçli: firmasız bir
+    kullanıcıyı sessizce bir firmaya düşürmek, yöneticinin
+    vermediği bir yetkiyi vermek olurdu. Giriş ekranı o kullanıcıya
+    ne olduğunu açıkça söylüyor (KF2).
+
+    ADMIN rolü bu tablodan bağımsız olarak HER firmayı görür:
+    firmaları açan, silen ve yetkilendiren o. Kendi erişimini
+    kazara kapatabilmesi, sistemden kilitlenmesi demek olurdu.
+    """
+    __tablename__ = 'kullanici_firma'
+    id           = db.Column(db.Integer, primary_key=True)
+    kullanici_id = db.Column(db.Integer, db.ForeignKey('kullanicilar.id'),
+                             nullable=False, index=True)
+    firma_id     = db.Column(db.Integer, db.ForeignKey('firma.id'),
+                             nullable=False, index=True)
+    olusturma    = db.Column(db.DateTime, default=datetime.now)
+    __table_args__ = (db.UniqueConstraint('kullanici_id', 'firma_id',
+                                          name='uq_kullanici_firma'),)
 
 
 class FirmaKapsamli:
@@ -187,6 +235,22 @@ class Kullanici(db.Model):
     # sayılır; eksik değer "herkes her şeyi görsün" anlamına
     # gelmemeli.
     cari_kapsam = db.Column(db.String(10), default='atanan')
+    # ── FİRMA KAPSAMI (KF1) ──
+    # `cari_kapsam` ile AYNI iki eksenli desen:
+    #
+    #   'secili' → yalnızca `kullanici_firma` ile atanmış firmalar
+    #   'tumu'   → bütün firmalar (muhasebe, yönetim)
+    #
+    # 'tumu' olanlar YENİ AÇILAN firmayı da kendiliğinden görür.
+    # Yalnızca açık liste tutulsaydı, her yeni firmada o firmayı
+    # görmesi gereken herkesi tek tek düzenlemek gerekirdi ve
+    # unutulan kullanıcı firmayı hiç görmezdi.
+    #
+    # Varsayılan 'secili' — güvenli taraf. Eksik değer "herkes her
+    # firmayı görsün" anlamına GELMEMELİ. Göç mevcut kullanıcıları
+    # bilerek 'tumu' yapıyor (goc_kf1.py): yükseltme kimsenin
+    # erişimini sessizce kesmemeli, daraltma kararı yöneticinin.
+    firma_kapsam = db.Column(db.String(10), default='secili')
     olusturma = db.Column(db.DateTime, default=datetime.now)
 
 class Bildirim(FirmaKapsamli, db.Model):
@@ -1600,7 +1664,7 @@ _event.listen(Siparis, 'before_update', siparis_durum_damgasi)
 # damgalı.
 
 _firma_cozucu = None               # MF2/MF3: oturumdaki aktif firmayı verir
-_varsayilan_firma_onbellek = None
+_sistem_firma_onbellek = None      # KF1: kullanıcısız yolların çapası
 
 
 def firma_cozucu_ayarla(fn):
@@ -1609,30 +1673,36 @@ def firma_cozucu_ayarla(fn):
     _firma_cozucu = fn
 
 
-def varsayilan_firma_unut():
+def sistem_firma_unut():
     """Firma kaydı eklenip değişince önbelleği düşürür."""
-    global _varsayilan_firma_onbellek
-    _varsayilan_firma_onbellek = None
+    global _sistem_firma_onbellek
+    _sistem_firma_onbellek = None
 
 
-def _varsayilan_firma_id():
-    """Varsayılan firmanın kimliği.
+def _sistem_firma_id():
+    """KULLANICISIZ yollarda yazma damgasının bastığı firma (KF1).
+
+    BU BİR "VARSAYILAN FİRMA" DEĞİL. Ekranda hiçbir kullanıcı buraya
+    düşmez; giriş akışı herkesi kendi izinli firmalarından seçim
+    yapmaya zorluyor (KF2). Buranın tek işi, OTURUM OLMAYAN yollarda
+    yazılan kaydın bir firmaya damgalanabilmesi: CLI betikleri,
+    göçler, testler ve taze kurulumun kendini onarması.
+
+    KF1'den önce `firma.varsayilan` bayrağına bakılıyordu. Bayrak
+    kaldırıldı: kimsenin bilinçli ayarlamadığı bir alandı ve giriş
+    akışında kullanıcıyı sessizce bir firmaya düşürüyordu. Yerine EN
+    KÜÇÜK KİMLİKLİ firma alınıyor — belirli ve açıklanabilir.
 
     HAM SQL kullanır: before_flush içinde ORM sorgusu açmak aynı
     oturuma yeniden girmek demek olurdu.
-
-    `ORDER BY varsayilan DESC` iki lehçede de çalışır (PostgreSQL'de
-    TRUE, SQLite'ta 1 önce gelir); `WHERE varsayilan = 1` SQLite'a,
-    `WHERE varsayilan` PostgreSQL'e özgü olurdu.
     """
-    global _varsayilan_firma_onbellek
-    if _varsayilan_firma_onbellek is not None:
-        return _varsayilan_firma_onbellek
+    global _sistem_firma_onbellek
+    if _sistem_firma_onbellek is not None:
+        return _sistem_firma_onbellek
     try:
         with db.engine.connect() as b:
             r = b.execute(_text(
-                'SELECT id FROM firma ORDER BY varsayilan DESC, id '
-                'LIMIT 1')).fetchone()
+                'SELECT id FROM firma ORDER BY id LIMIT 1')).fetchone()
         if r is None:
             # ── BOŞ KURULUM KENDİNİ ONARIR ──
             # Taze veritabanında (yeni kurulum, testler) firma tablosu
@@ -1643,15 +1713,15 @@ def _varsayilan_firma_id():
             # logosunu Ayarlar'dan okuyup ÜSTÜNE yazar.
             with db.engine.begin() as b:
                 b.execute(_text(
-                    'INSERT INTO firma (ad, unvan, varsayilan, aktif, sira)'
-                    " VALUES ('ANA FİRMA', 'ANA FİRMA', :e, :e, 0)"),
+                    'INSERT INTO firma (ad, unvan, aktif, sira)'
+                    " VALUES ('ANA FİRMA', 'ANA FİRMA', :e, 0)"),
                     {'e': True})
                 r = b.execute(_text(
                     'SELECT id FROM firma ORDER BY id LIMIT 1')).fetchone()
     except Exception:
         return None                # firma tablosu henüz yok (göç öncesi)
-    _varsayilan_firma_onbellek = r[0] if r else None
-    return _varsayilan_firma_onbellek
+    _sistem_firma_onbellek = r[0] if r else None
+    return _sistem_firma_onbellek
 
 
 def aktif_firma_id():
@@ -1661,9 +1731,15 @@ def aktif_firma_id():
             v = _firma_cozucu()
         except Exception:
             v = None
-        if v:
+        # KF2: `if v:` yazılıydı. Çözümleyici "firma seçilmedi"
+        # durumunda 0 dönüyor ve 0 falsy olduğu için eski satır
+        # SİSTEM ÇAPASINA düşerdi — yani seçim yapmamış bir
+        # kullanıcının yazdığı kayıt rastgele bir firmaya
+        # damgalanırdı. 0 bir BİLGİ taşıyor, onu yukarı geçiriyoruz;
+        # damga aşağıda açıkça reddediyor.
+        if v is not None:
             return v
-    return _varsayilan_firma_id()
+    return _sistem_firma_id()
 
 
 def _firma_damgasi(oturum, baglam, ornekler):
@@ -1687,6 +1763,19 @@ def _firma_damgasi(oturum, baglam, ornekler):
             raise RuntimeError(
                 'Aktif firma yok — firma tanımlanmadan kayıt yazılamaz. '
                 'goc_mf1.py çalıştırıldı mı?')
+        if not fid:
+            # KF2: 0 = "oturumda firma SEÇİLMEDİ ya da seçilen firma
+            # artık izinli değil". Bu sayıyı damgalamak yabancı
+            # anahtarı kırardı; sistem çapasına düşmek ise kaydı
+            # rastgele bir firmaya yazmak olurdu — ikisi de yanlış.
+            # Kullanıcı seçim yapmadan yazma yolu açılmamalı; buraya
+            # düşülüyorsa bir uç `_firma_secim_guard`'ın dışında
+            # kalmış demektir ve bunu sessizce geçmek istemiyorum.
+            if isinstance(n, AuditLog):
+                continue
+            raise RuntimeError(
+                'Firma seçilmedi — kayıt yazılamaz. Çıkış yapıp '
+                'yeniden girerek firma seçin.')
         n.firma_id = fid
 
 
@@ -1707,7 +1796,9 @@ def _cari_firma_uyeligi(oturum, baglam, ornekler):
     if not yeni:
         return
     fid = aktif_firma_id()
-    if fid is None:
+    # KF2: `is None` değil `not` — 0 da (firma seçilmedi) geçmemeli;
+    # firma_id=0 ile üyelik yazmak yabancı anahtarı kırardı.
+    if not fid:
         return
     # Aynı flush'ta elle eklenmiş üyelik varsa ikizlemeyelim —
     # uq_cari_firma kısıtı patlardı.

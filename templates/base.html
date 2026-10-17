@@ -777,15 +777,20 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         <kbd>Ctrl K</kbd>
       </button>
       <div class="ust-sag">
-        {# ── FİRMA ÇİPİ (MF3) ──
+        {# ── FİRMA ÇİPİ (MF3 · KF2) ──
            Tek firma varsa HİÇ basılmaz: bugünkü üst bar aynen kalır.
-           Admin seçici görür, diğerleri yalnızca etiket — firma
-           değiştirmek admin yetkisinde. #}
+
+           KF2: çip artık HERKESTE seçilebilir. `firma_listesi` zaten
+           kullanıcının İZİNLİ firmalarını taşıyor (api_firma_liste /
+           _firma_listesi_ozet süzüyor), yani listede yalnızca
+           geçebileceği firmalar var. Eskiden admin olmayan için
+           `disabled` idi ve iki firması olan bir muhasebeci, ikisi
+           arasında geçmek için çıkış yapıp yeniden girmek zorunda
+           kalıyordu. #}
         {% if firma_listesi and firma_listesi|length > 1 %}
         <div style="position:relative">
-          <button class="firma-cip" {% if menu_admin %}data-secilebilir="1"
-                  onclick="firmaMenuAc(event)" title="Çalışılan firma — değiştir"
-                  {% else %}disabled title="Çalışılan firma"{% endif %}>
+          <button class="firma-cip" data-secilebilir="1"
+                  onclick="firmaMenuAc(event)" title="Çalışılan firma — değiştir">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2"><path d="M3 21h18"/>
               <path d="M5 21V7l7-4 7 4v14"/><path d="M10 21v-6h4v6"/></svg>

@@ -86,6 +86,20 @@ def veri():
                         baglanti_id='FT1', hareket_tarihi=date(2026, 1, 1)),
         ])
         db.session.commit()
+        # ── KF1/KF2 · FİRMA KAPSAMI ──
+        # Modeldeki varsayılan 'secili' ve kullanici_firma boş; yani
+        # bu kullanıcıların izinli firması YOK ve seçim kapısı onları
+        # 403 ile durduruyor. Doğru davranış — ÖLÇÜLDÜ: bu satır
+        # eklenmeden 5 test düştü, hepsi "firma_yok" yüzünden.
+        #
+        # Gerçek sistemde göç (goc_kf1.py) mevcut kullanıcılara tam
+        # olarak bunu yapıyor: yükseltme kimsenin erişimini sessizce
+        # kesmemeli. Fixture gerçeği taklit ediyor.
+        #
+        # Erişim KURALLARININ kendisi ayrı testlerde sınanıyor
+        # (test_kf2_*): firmasız giremez, izinsiz firmaya geçemez.
+        Kullanici.query.update({'firma_kapsam': 'tumu'})
+        db.session.commit()
     yield
 
 
@@ -95,7 +109,41 @@ def istemci(ad, rol='SATIS'):
         s['kullanici'] = ad
         s['rol'] = rol
         s['_csrf'] = 't'
+        # ── KF2 · FİRMA SEÇİMİ DE TAKLİT EDİLMELİ ──
+        # Gerçek giriş akışı ya firmayı seçtiriyor ya (tek firma
+        # varsa) kendiliğinden seçiyor. Yardımcı bunu yapmazsa seçim
+        # kapısı isteği 409 ile durdurur.
+        #
+        # ÖLÇÜLDÜ: eskiden çalışıyordu çünkü testlerde TEK firma
+        # vardı ve çözümleyici onu kendiliğinden seçiyordu. KF2/KF3
+        # testleri ikinci, üçüncü firmayı açınca admin'in izinli
+        # firma sayısı 1'i geçti ve 5 test 409 aldı. Hata testlerde
+        # değil, taklidin eksikliğindeydi.
+        #
+        # KULLANICININ İZİNLİ olduğu ilk firma seçiliyor: gelişigüzel
+        # bir kimlik yazmak, izni olmayan firmayı seçmek olurdu ve
+        # kapı yine durdururdu.
+        s['firma_id'] = _ilk_izinli_firma(ad, rol)
     return c
+
+
+def _ilk_izinli_firma(ad, rol):
+    """Testlik: kullanıcının çalışabileceği ilk firma kimliği."""
+    from models import Firma, Kullanici, KullaniciFirma
+    with fa.app.app_context():
+        if (rol or '').upper() == 'ADMIN':
+            f = Firma.query.filter_by(aktif=True).order_by(Firma.id).first()
+            return f.id if f else None
+        k = Kullanici.query.filter_by(ad=ad).first()
+        if k and (k.firma_kapsam or 'secili') == 'tumu':
+            f = Firma.query.filter_by(aktif=True).order_by(Firma.id).first()
+            return f.id if f else None
+        if k:
+            u = (KullaniciFirma.query.filter_by(kullanici_id=k.id)
+                 .order_by(KullaniciFirma.firma_id).first())
+            if u:
+                return u.firma_id
+        return None
 
 
 def _cek(cari_id):
@@ -845,7 +893,10 @@ def test_f12_yetkisiz_kullanici_yazamaz():
     from models import Kullanici
     with fa.app.app_context():
         if not Kullanici.query.filter_by(ad='yetkisiz').first():
-            db.session.add(Kullanici(ad='yetkisiz', sifre=generate_password_hash('x'),
+            # KF1: test icinde dogan kullanici fixture'in kapsam
+            # guncellemesini KACIRIR — kendisi 'tumu' almali.
+            db.session.add(Kullanici(ad='yetkisiz', firma_kapsam='tumu',
+                                     sifre=generate_password_hash('x'),
                                      rol='SATIS', cari_kapsam='tumu', yetkiler='{}'))
             db.session.commit()
     c = istemci('yetkisiz', 'SATIS')
@@ -1996,7 +2047,8 @@ def test_bg1_yetkisiz_kullanici_rakam_gormez():
     with fa.app.app_context():
         k = Kullanici.query.filter_by(ad='bgkisitli').first()
         if not k:
-            k = Kullanici(ad='bgkisitli', sifre='x', rol='SATIS')
+            k = Kullanici(ad='bgkisitli', sifre='x', rol='SATIS',
+                          firma_kapsam='tumu')
             db.session.add(k)
         # Yalnızca sipariş okuma yetkisi
         k.yetkiler = _json.dumps({'siparis': 'okuma', 'dashboard': 'okuma'})
@@ -2090,7 +2142,8 @@ def test_bg2_detay_yetki_kontrolu():
     with fa.app.app_context():
         k = Kullanici.query.filter_by(ad='bg2kisitli').first()
         if not k:
-            k = Kullanici(ad='bg2kisitli', sifre='x', rol='SATIS')
+            k = Kullanici(ad='bg2kisitli', sifre='x', rol='SATIS',
+                          firma_kapsam='tumu')
             db.session.add(k)
         k.yetkiler = _json.dumps({'siparis': 'okuma', 'dashboard': 'okuma'})
         db.session.commit()
@@ -2539,3 +2592,334 @@ def test_gt1_cek_cirosu_try_karsiligi_yazilir():
         assert kur > 1.5, ('USD çekte kur yazılmalı', kur)
         assert abs(float(h.borc_try or 0) - 2500 * kur) < 0.05, (
             h.borc_try, kur)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  KF2 · FİRMA ERİŞİM KURALLARI
+#
+#  Çoklu firma artık tüm kullanıcılara açık ve kimin hangi firmayı
+#  göreceğine yönetici karar veriyor. Bu kuralların HEPSİ sessizce
+#  bozulabilecek türden: yanlış tarafa düşen bir koşul ya kullanıcıyı
+#  sistemden kilitler ya da ona başka şirketin defterini açar. İkisi
+#  de hata vermez, o yüzden burada sınanıyor.
+# ══════════════════════════════════════════════════════════════════════
+
+def _kf_kullanici(ad, kapsam='secili', firmalar=(), rol='SATIS'):
+    """Testlik kullanıcı + firma izinleri. Varsa günceller."""
+    from models import Kullanici, KullaniciFirma
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad=ad).first()
+        if not k:
+            k = Kullanici(ad=ad, sifre=generate_password_hash('x'), rol=rol)
+            db.session.add(k)
+        k.rol = rol
+        k.firma_kapsam = kapsam
+        k.yetkiler = json.dumps({m: 'yazma' for m in TUM_YAZMA})
+        db.session.commit()
+        KullaniciFirma.query.filter_by(kullanici_id=k.id).delete()
+        for fid in firmalar:
+            db.session.add(KullaniciFirma(kullanici_id=k.id, firma_id=fid))
+        db.session.commit()
+        return k.id
+
+
+def test_kf2_firmasiz_kullanici_giremez():
+    """KF1/KF2: kapsamı 'secili' ve hiç firması olmayan kullanıcı
+    sisteme giremez — SESSİZCE bir firmaya atanmaz.
+
+    Eskiden küresel bir varsayılan firma vardı ve böyle bir kullanıcı
+    oraya düşüyordu: yöneticinin VERMEDİĞİ bir erişim. Artık durup
+    sebebini söylüyor."""
+    _kf_kullanici('kfyok', kapsam='secili', firmalar=())
+    c = istemci('kfyok', 'SATIS')
+    r = c.get('/api/dashboard/ozet', headers=H)
+    assert r.status_code == 403, r.get_data(as_text=True)
+    d = r.get_json() or {}
+    assert d.get('error') == 'firma_yok', d
+    # Sebep YAZILI olmalı: boş ekran kullanıcıya ne yapacağını
+    # söylemiyor.
+    assert 'firma' in (d.get('mesaj') or '').lower(), d
+
+
+def test_kf2_tek_firma_kendiliginden_secilir():
+    """KF2: tek firması olan kullanıcı seçim ekranı görmeden çalışır.
+
+    İstenen buydu: "kullanıcıya sadece tek firma tanımlanmışsa
+    varsayılan ihtiyacı ortadan kalkıyor"."""
+    from models import Firma
+    with fa.app.app_context():
+        fid = Firma.query.order_by(Firma.id).first().id
+    _kf_kullanici('kftek', kapsam='secili', firmalar=(fid,))
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'kftek'; s['rol'] = 'SATIS'; s['_csrf'] = 't'
+        # firma_id BİLEREK yazılmıyor — kendiliğinden seçmesi gerek.
+    r = c.get('/api/dashboard/ozet', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with c.session_transaction() as s:
+        assert s.get('firma_id') == fid, dict(s)
+
+
+def test_kf2_izinsiz_firmaya_gecilemez():
+    """KF2: kullanıcı izinli olmadığı firmaya GEÇEMEZ.
+
+    /api/firma/sec eskiden 'yalnızca admin' idi; rol denetiminin
+    yerini izin denetimi aldı. Yerine bir şey konmazsa herkes her
+    firmaya geçebilirdi — çoklu firmayı açmanın tam tersi."""
+    from models import Firma
+    with fa.app.app_context():
+        f2 = Firma(ad='KF YABANCI', unvan='KF YABANCI', belge_kodu='KFY',
+                   aktif=True)
+        db.session.add(f2)
+        db.session.commit()
+        yabanci = f2.id
+        kendi = Firma.query.order_by(Firma.id).first().id
+    _kf_kullanici('kfsinir', kapsam='secili', firmalar=(kendi,))
+    c = istemci('kfsinir', 'SATIS')
+    r = c.post('/api/firma/sec', headers=H,
+               json={'firma_id': yabanci})
+    assert r.status_code == 403, r.get_data(as_text=True)
+    # Oturum DEĞİŞMEMELİ — reddedilen geçiş yan etki bırakmasın.
+    with c.session_transaction() as s:
+        assert s.get('firma_id') != yabanci, dict(s)
+    # Kendi firmasına geçiş SERBEST (admin olmayan da geçebilir).
+    r = c.post('/api/firma/sec', headers=H, json={'firma_id': kendi})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_kf2_yetkisiz_firmanin_adi_dahi_gorunmez():
+    """KF2: yetkisi olmayan firmanın ADI bile sızmamalı.
+
+    Geçiş yapamamak yetmez: firma adı ve belge kodu tek başına
+    bilgidir (kaç şirket var, adları ne).
+
+    NEREYE BAKIYORUZ: ilk sürümde `/api/firma/liste` ucuna
+    bakıyordum ve test 403 aldı — o uç 'ayarlar' modülünde ve
+    satışçının orada yetkisi YOK. Doğrusu da bu; ama o zaman test
+    yanlış yüzeyi sınıyor demektir. Admin olmayan kullanıcıya firma
+    adları GERÇEKTEN iki yerden ulaşıyor ve ikisi de sunucuda
+    basılıyor: banner çipi (base.html · _firma_listesi_ozet) ve
+    firma seçim ekranı. Sızıntı olacaksa orada olur, o yüzden
+    basılan HTML'e bakıyoruz."""
+    from models import Firma
+    with fa.app.app_context():
+        f = Firma.query.filter_by(ad='KF YABANCI').first()
+        if not f:
+            f = Firma(ad='KF YABANCI', unvan='KF YABANCI',
+                      belge_kodu='KFY', aktif=True)
+            db.session.add(f); db.session.commit()
+        kendi = Firma.query.order_by(Firma.id).first().id
+    _kf_kullanici('kfgoz', kapsam='secili', firmalar=(kendi,))
+    c = istemci('kfgoz', 'SATIS')
+
+    # 1 · firma seçim ekranı
+    r = c.get('/firma-sec')
+    assert r.status_code == 200, r.status_code
+    assert 'KF YABANCI' not in r.get_data(as_text=True)
+
+    # 2 · banner çipi (base.html ile basılan herhangi bir sayfa)
+    r = c.get('/', follow_redirects=True)
+    assert r.status_code == 200, r.status_code
+    assert 'KF YABANCI' not in r.get_data(as_text=True)
+
+
+def test_kf2_kapsam_tumu_yeni_firmayi_da_gorur():
+    """KF1: kapsamı 'tumu' olan kullanıcı SONRADAN açılan firmayı da
+    görür — iki eksenli desenin sebebi bu.
+
+    Yalnızca açık liste tutulsaydı, her yeni firmada onu görmesi
+    gereken herkesi tek tek düzenlemek gerekirdi."""
+    from models import Firma
+    _kf_kullanici('kftumu', kapsam='tumu', firmalar=())
+    # Firma adlarına admin olmayanın ulaştığı yer seçim ekranı
+    # (yukarıdaki testin notu).
+    c = istemci('kftumu', 'SATIS')
+    assert 'KF SONRADAN' not in c.get('/firma-sec').get_data(as_text=True)
+    with fa.app.app_context():
+        db.session.add(Firma(ad='KF SONRADAN', unvan='KF SONRADAN',
+                             belge_kodu='KFS', aktif=True))
+        db.session.commit()
+    c = istemci('kftumu', 'SATIS')
+    r = c.get('/firma-sec')
+    assert r.status_code == 200, r.status_code
+    # Kapsamı 'tumu': hiç üyelik satırı olmadan yeni firmayı GÖRÜR.
+    assert 'KF SONRADAN' in r.get_data(as_text=True)
+
+
+def test_kf2_tek_firmasi_olan_kullanici_kilitlenmez():
+    """KF2: bir kullanıcının TEK firması silinemez.
+
+    Silinirse o kullanıcının izin listesi boşalır ve sisteme giremez.
+    Yöneticinin kimi kilitlediğini görmesi gerekiyor; sessizce
+    yapılmamalı."""
+    from models import Firma
+    with fa.app.app_context():
+        f = Firma(ad='KF SILINECEK', unvan='KF SILINECEK',
+                  belge_kodu='KFD', aktif=True)
+        db.session.add(f); db.session.commit()
+        fid = f.id
+    _kf_kullanici('kfbagli', kapsam='secili', firmalar=(fid,))
+    c = istemci('admin', 'ADMIN')
+    # Önizleme engeli söylüyor mu
+    r = c.get(f'/api/firma/{fid}/ozet', headers=H)
+    if r.status_code == 200:
+        assert 'kfbagli' in ((r.get_json() or {}).get('engel') or ''), \
+            r.get_data(as_text=True)
+    # Gerçek silme REDDEDİLMELİ
+    r = c.delete(f'/api/firma/{fid}', headers=H)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert 'kfbagli' in ((r.get_json() or {}).get('mesaj') or ''), \
+        r.get_data(as_text=True)
+    with fa.app.app_context():
+        assert db.session.get(Firma, fid) is not None, 'firma silinmiş'
+
+
+def test_kf2_secim_yapilmadan_suzgec_kapanmaz():
+    """KF2 · EN KRİTİK: firma seçilmeden süzgeç AÇIK kalmamalı.
+
+    Çözümleyici "seçilmedi" durumunda 0 dönüyor. Süzgeçte
+    `if not _f: return` yazılı olsaydı 0 falsy olduğu için süzgeç
+    HİÇ KURULMAZ ve kullanıcı BÜTÜN firmaların verisini görürdü —
+    fail-closed diye yazılan değer tam tersi etki yapardı. Süzgeç
+    yalnızca None'da (CLI / firma_atla) kapanmalı.
+
+    Burada doğrudan çözümleyiciye bakıyoruz: iki firması olup seçim
+    yapmamış bir kullanıcıda dönen değer 0 olmalı, None OLMAMALI."""
+    from models import Firma
+    with fa.app.app_context():
+        kayitlar = Firma.query.filter_by(aktif=True).order_by(Firma.id).all()
+        assert len(kayitlar) >= 2, 'test iki firma istiyor'
+        ikisi = (kayitlar[0].id, kayitlar[1].id)
+    _kf_kullanici('kfiki', kapsam='secili', firmalar=ikisi)
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'kfiki'; s['rol'] = 'SATIS'; s['_csrf'] = 't'
+    # Seçim yapılmadı: API 409 ile seçim istemeli
+    r = c.get('/api/dashboard/ozet', headers=H)
+    assert r.status_code == 409, r.get_data(as_text=True)
+    assert (r.get_json() or {}).get('error') == 'firma_secilmedi', \
+        r.get_data(as_text=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  KF3 · YETKİ PANELİNDEN FİRMA ATAMA
+# ══════════════════════════════════════════════════════════════════════
+
+def test_kf3_yetki_paneli_firma_atar():
+    """KF3: admin, yetki panelinden kullanıcıya firma atayabilir ve
+    atama ANINDA erişime dönüşür."""
+    from models import Firma, Kullanici, KullaniciFirma
+    with fa.app.app_context():
+        f = Firma.query.filter_by(ad='KF3 HEDEF').first()
+        if not f:
+            f = Firma(ad='KF3 HEDEF', unvan='KF3 HEDEF', belge_kodu='KF3',
+                      aktif=True)
+            db.session.add(f); db.session.commit()
+        hedef = f.id
+    a = istemci('admin', 'ADMIN')
+    r = a.post('/api/ayarlar/kullanici', headers=H, json={
+        'ad': 'kf3yeni', 'sifre': 'x', 'rol': 'SATIS',
+        'yetkiler': {'dashboard': 'okuma'},
+        'firma_kapsam': 'secili', 'firmalar': [hedef]})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad='kf3yeni').first()
+        assert k is not None
+        assert (k.firma_kapsam or '') == 'secili', k.firma_kapsam
+        uyelik = [x.firma_id for x in
+                  KullaniciFirma.query.filter_by(kullanici_id=k.id).all()]
+        assert uyelik == [hedef], uyelik
+
+
+def test_kf3_liste_ucu_kapsam_ve_uyelik_donduruyor():
+    """KF3: düzenleme penceresinin DOLDURABİLMESİ için liste ucu
+    kapsamı ve üyelikleri vermeli.
+
+    Vermezse pencere boş kutularla açılır ve kaydet'e basmak
+    kullanıcının firma izinlerini SESSİZCE SİLER. KP1'de cari
+    kapsamında tam olarak bu yaşanmıştı."""
+    a = istemci('admin', 'ADMIN')
+    r = a.get('/api/ayarlar/kullanici', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    kayitlar = d if isinstance(d, list) else (d.get('data') or [])
+    assert kayitlar, d
+    for k in kayitlar:
+        assert 'firma_kapsam' in k, k
+        assert 'firmalar' in k and isinstance(k['firmalar'], list), k
+
+
+def test_kf3_kismi_guncelleme_izinleri_silmez():
+    """KF3: gövdede `firmalar` YOKSA üyeliklere DOKUNULMAZ.
+
+    Başka bir alanı (örn. rol) güncellemek firma erişimini
+    kesmemeli — kısmi güncellemenin sessiz yan etkisi olmamalı."""
+    from models import Firma, Kullanici, KullaniciFirma
+    with fa.app.app_context():
+        fid = Firma.query.order_by(Firma.id).first().id
+    _kf_kullanici('kf3kismi', kapsam='secili', firmalar=(fid,))
+    a = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        kid = Kullanici.query.filter_by(ad='kf3kismi').first().id
+    # YALNIZCA rol gönderiliyor
+    r = a.put(f'/api/ayarlar/kullanici/{kid}', headers=H,
+              json={'rol': 'SATIS'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        uyelik = [x.firma_id for x in
+                  KullaniciFirma.query.filter_by(kullanici_id=kid).all()]
+        assert uyelik == [fid], uyelik
+        assert (Kullanici.query.get(kid).firma_kapsam or '') == 'secili'
+
+
+def test_kf3_gecersiz_kapsam_guvenli_tarafa_duser():
+    """KF3: tanınmayan kapsam değeri 'secili'ye düşer.
+
+    Eksik ya da bozuk değer "herkes her firmayı görsün" anlamına
+    gelmemeli — gorunurluk='kapali' varsayılanıyla aynı mantık."""
+    from models import Kullanici
+    a = istemci('admin', 'ADMIN')
+    r = a.post('/api/ayarlar/kullanici', headers=H, json={
+        'ad': 'kf3bozuk', 'sifre': 'x', 'rol': 'SATIS',
+        'yetkiler': {'dashboard': 'okuma'},
+        'firma_kapsam': 'HEPSI_BIRDEN', 'firmalar': []})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad='kf3bozuk').first()
+        assert (k.firma_kapsam or '') == 'secili', k.firma_kapsam
+
+
+def test_kf3_olmayan_firma_atanamaz():
+    """KF3: ekrandan eski/silinmiş bir firma kimliği gelirse atılır.
+
+    Yabancı anahtarı kırmak yerine sessizce süzülüyor; aksi halde
+    bu arada silinmiş bir firmayı işaretli bırakan bir pencere
+    kaydet'te 500 verirdi."""
+    from models import Kullanici, KullaniciFirma
+    a = istemci('admin', 'ADMIN')
+    r = a.post('/api/ayarlar/kullanici', headers=H, json={
+        'ad': 'kf3hayalet', 'sifre': 'x', 'rol': 'SATIS',
+        'yetkiler': {'dashboard': 'okuma'},
+        'firma_kapsam': 'secili', 'firmalar': [999999]})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad='kf3hayalet').first()
+        uyelik = [x.firma_id for x in
+                  KullaniciFirma.query.filter_by(kullanici_id=k.id).all()]
+        assert uyelik == [], uyelik
+
+
+def test_kf3_formda_firma_kapsami_var():
+    """KF3: `firma_kapsam` ekranda GİRİLEBİLİR olmalı.
+
+    form_denetim D2 bunu zaten arıyor (modelde var, formda yok →
+    öksüz alan). Burada ayrıca sabitliyoruz: alan ve onu dolduran
+    JS birlikte durmalı — biri eksikse pencere boş açılır ve
+    kaydet izinleri siler."""
+    import io as _io
+    ay = _io.open('templates/ayarlar.html', encoding='utf-8').read()
+    assert 'id="uFirmaKapsam"' in ay
+    assert "getElementById('uFirmaKapsam')" in ay
+    assert 'uFirmaKutulariCiz()' in ay
+    # Kutular kullaniciAc içinde DOLDURULUYOR mu
+    assert 'SECILI_FIRMALAR = (DUZENLENEN' in ay

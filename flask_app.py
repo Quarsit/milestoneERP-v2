@@ -769,6 +769,23 @@ def create_app():
     # Yazma kontrolünden MUAF endpoint'ler (genel veya kişisel)
     YAZMA_MUAF_PATHS = [
         '/api/yetkilerim',
+        # ── KF2 · FİRMA DEĞİŞTİRME AYAR DEĞİL, GEZİNMEDİR ──
+        # ÖLÇÜLDÜ: bu satır olmadan `/api/firma/sec` 403 veriyordu —
+        # yol `/api/firma/...` olduğu için yazma muhafızı onu
+        # 'ayarlar' modülüne sayıyor ve 'ayarlar: yazma' arıyor.
+        # Sonuç: iki firması olan ama ayar yetkisi olmayan bir
+        # satışçı firmalar arasında GEÇEMİYORDU. Çoklu firmayı
+        # kullanıcılara açmanın amacı tam olarak buydu; rol
+        # denetimini kaldırıp yerine yetki duvarı bırakmak
+        # özelliği kâğıt üstünde açmak olurdu.
+        #
+        # Yetkisizlik riski yok: uç kendi İZİN denetimini yapıyor
+        # (istenen firma kullanıcının listesinde değilse 403) ve
+        # hiçbir veriyi değiştirmiyor — yalnızca oturumdaki seçimi
+        # taşıyor. Firma AÇMA (`POST /api/firma`) ve SİLME
+        # (`DELETE /api/firma/<id>`) muaf DEĞİL; onlar admin şartı
+        # arayan ayrı uçlar.
+        '/api/firma/sec',
         # '/api/diag/' KALDIRILDI (F0-3): tani uc noktalari toplu veri
         # degistirebiliyor (sil_zorla, durum_otomatik_duzelt...). Artik
         # asagidaki _diag_guard ile ADMIN sarti araniyor.
@@ -996,7 +1013,20 @@ def create_app():
     # ══════════════════════════════════════════════════════════
 
     def _firma_listesi_ozet():
-        """Aktif firmaların kısa listesi — banner ve ayarlar için."""
+        """Kullanıcının İZİNLİ firmaları — banner çipi ve ayarlar için.
+
+        KF2: burada süzgeç YOKTU ve bütün açık firmalar dönüyordu.
+        Çoklu firma admin'e özelken sorun değildi; herkese açılınca
+        sızıntı oldu — admin olmayan bir kullanıcı, yetkisi olmayan
+        firmaların ADINI ve BELGE KODUNU çipin açılır listesinde
+        görürdü. Geçiş yapamasa bile (uç 403 veriyor) firma adı tek
+        başına bilgidir: kaç şirket var, adları ne.
+
+        `firma_atla()` DURUYOR: firma tablosu okuma süzgecinin
+        kapsamında değil ama çağıran yerlerden biri süzgeç içinden
+        geliyor; MF3'ten beri böyle ve dokunmak için sebep yok.
+        Süzmeyi ORM koşulu yapıyor, süzgeç kancası değil.
+        """
         if not has_request_context():
             return []
         _o = getattr(g, '_mf3_liste', None)
@@ -1004,8 +1034,11 @@ def create_app():
             return _o
         _l = []
         try:
-            with firma_atla():          # firma listesi SÜZÜLMEZ
-                for f in (Firma.query.filter_by(aktif=True)
+            _izinli = _kullanici_firma_idleri()
+            with firma_atla():
+                for f in (Firma.query
+                          .filter(Firma.aktif.is_(True),
+                                  Firma.id.in_(_izinli or [0]))
                           .order_by(Firma.sira, Firma.id).all()):
                     _l.append({'id': f.id, 'ad': f.ad,
                                'kod': (f.belge_kodu or '')})
@@ -4355,24 +4388,36 @@ def create_app():
                 db.session.commit()
                 # Arka planda otomatik yedek al (giriş bekletmesin)
                 threading.Thread(target=yedek_modul.yedek_al, args=('auto',), daemon=True).start()
-                # ── MF3B/MF3C · GİRİŞTE FİRMA SEÇİMİ ──
-                # Admin önce hangi firmada çalışacağını seçer
-                # (Logo/Mikro/Netsis'teki yerleşik akış).
+                # ── KF2 · GİRİŞTE FİRMA SEÇİMİ (HERKESE) ──
+                # Çoklu firma artık admin'e özel değil. Giriş akışı
+                # kullanıcının İZİNLİ firma sayısına göre ayrışıyor:
                 #
-                # MF3C: eskiden ekran yalnızca İKİ ve daha çok firma
-                # varken çıkıyordu. Oysa yeni firmayı BİR FİRMANIN
-                # İÇİNE GİRMEDEN açabilmek gerekiyor — tek firma
-                # varken de. Artık koşulsuz.
+                #   0 firma  → seçim ekranı, sebebini yazar, içeri
+                #              girilemez. Sessizce bir firmaya
+                #              atamak yöneticinin vermediği yetkiyi
+                #              vermek olurdu.
+                #   1 firma  → DOĞRUDAN içeri. Seçtirecek bir şey
+                #              yok; istenen de buydu — tek firma
+                #              varsa varsayılan ihtiyacı kalmıyor.
+                #              (Admin bu kuralın dışında: tek firma
+                #              olsa da ekranı görür, çünkü YENİ
+                #              FİRMA oradan açılıyor ve bunu bir
+                #              firmanın içine girmeden yapabilmek
+                #              gerekiyor — MF3C.)
+                #   çok      → seçim ekranı.
                 #
-                # Admin OLMAYAN kullanıcı ekranı görmez: firma seçimi
-                # şimdilik admin yetkisinde, onlar varsayılan firmaya
-                # girer.
+                # Önceki seçim HER GİRİŞTE silinir: "tamamen seçilen
+                # firma ile açılsın" denmişti; eski oturumdan kalan
+                # kimlik sessizce devralınmamalı.
                 try:
-                    if (k.rol or '').upper() == 'ADMIN':
-                        session.pop('firma_id', None)
+                    session.pop('firma_id', None)
+                    session.pop('firma_hata', None)
+                    _n = len(_kullanici_firma_idleri())
+                    if _n != 1 or (k.rol or '').upper() == 'ADMIN':
                         return redirect(url_for('firma_sec_ekran'))
                 except Exception as _e:
-                    app.logger.warning(f'[MF3B] firma secim ekrani atlandi: {_e}')
+                    app.logger.warning(f'[KF2] firma secim ekrani atlandi: {_e}')
+                    return redirect(url_for('firma_sec_ekran'))
                 return redirect(url_for('dashboard'))
             flash('Kullanıcı adı veya şifre hatalı', 'error')
         return render_template('giris.html')
@@ -4389,23 +4434,30 @@ def create_app():
         """
         if _auth_required():
             return _auth_required()
-        # Firma seçimi şimdilik admin yetkisinde; diğerleri varsayılan
-        # firmada çalışır ve bu ekranı hiç görmez.
-        if (session.get('rol') or '').upper() != 'ADMIN':
-            return redirect(url_for('dashboard'))
+        # ── KF2 · EKRAN HERKESE AÇIK, LİSTE KİŞİYE ÖZEL ──
+        # Eskiden admin olmayan buradan dashboard'a çevriliyordu.
+        # Artık herkes kendi izinli firmalarını görüyor; liste
+        # `_kullanici_firma_idleri()` ile süzülüyor, yani kimse
+        # yetkisi olmayan bir firmanın ADINI dahi görmüyor.
+        _admin = (session.get('rol') or '').upper() == 'ADMIN'
+        _izinli = _kullanici_firma_idleri()
         with firma_atla():
-            kayitlar = (Firma.query.filter_by(aktif=True)
+            kayitlar = (Firma.query.filter(Firma.aktif.is_(True),
+                                           Firma.id.in_(_izinli or [0]))
                         .order_by(Firma.sira, Firma.id).all())
-        # MF3C: tek firma varken de açılır. Ekranın işi yalnızca
-        # seçtirmek değil; YENİ FİRMA buradan açılıyor ve bunu bir
-        # firmanın içine girmeden yapabilmek gerekiyor. Hiç firma
-        # yoksa da sorun değil: liste boş gelir, "yeni firma ekle"
-        # durur.
+        # MF3C: admin'de tek firma varken de açılır — ekranın işi
+        # yalnızca seçtirmek değil, YENİ FİRMA buradan açılıyor ve
+        # bunu bir firmanın içine girmeden yapabilmek gerekiyor.
+        #
+        # KF2: admin OLMAYAN ve tek firması olan kullanıcı buraya hiç
+        # gelmiyor (giriş akışı doğrudan içeri alıyor). Yine de adres
+        # çubuğundan gelirse ekran açılır ve tek kartını gösterir.
+        _hata = session.pop('firma_hata', None)
         return render_template('firma_sec.html', firmalar=[{
             'id': f.id, 'ad': f.ad, 'unvan': f.unvan or '',
             'kod': f.belge_kodu or '', 'vergi_no': f.vergi_no or '',
-            'varsayilan': bool(f.varsayilan),
-        } for f in kayitlar], secili=session.get('firma_id'))
+        } for f in kayitlar], secili=session.get('firma_id'),
+            admin=_admin, hata=_hata)
 
     @app.route('/cikis')
     def cikis():
@@ -6792,7 +6844,7 @@ def create_app():
     from models import (FirmaKapsamli as _FirmaKapsamli,
                         CariFirma as _CariFirma,
                         firma_cozucu_ayarla as _firma_cozucu_ayarla,
-                        _varsayilan_firma_id as _varsayilan_firma)
+                        _sistem_firma_id as _sistem_firma)
     from sqlalchemy import select as _sa_select
 
     @_contextmanager
@@ -6812,6 +6864,68 @@ def create_app():
         finally:
             g.firma_atla_bayrak = onceki
 
+    def _kullanici_firma_idleri():
+        """Oturumdaki kullanıcının ÇALIŞABİLECEĞİ firma kimlikleri (KF1).
+
+        Üç kaynak, bu sırayla:
+
+          ADMIN            → bütün AÇIK firmalar. Firmaları açan,
+                             silen ve yetkilendiren o; kendi erişimini
+                             kazara kapatması sistemden kilitlenmesi
+                             demek olurdu.
+          kapsam 'tumu'    → bütün AÇIK firmalar (muhasebe, yönetim).
+                             Yeni açılan firmayı da kendiliğinden görür.
+          kapsam 'secili'  → yalnızca `kullanici_firma` satırları.
+
+        KAPALI firma hiçbir listede yok: seçilemeyen bir firmaya
+        düşmek, girilemeyen bir sistem demek.
+
+        HAM SQL — ZORUNLU. Bu işlev okuma süzgecinin içinden
+        çağrılıyor; ORM sorgusu açmak `do_orm_execute` kancasını
+        yeniden tetikler ve sonsuz döngü olur (CRM-C2'de ölçülmüştü).
+
+        Sonuç istek başına `g`'de saklanır: kanca her sorguda
+        çalışıyor, her birinde iki sorgu açmak pahalı olurdu.
+        """
+        if not has_request_context():
+            return []
+        _o = getattr(g, '_kf1_firmalar', None)
+        if _o is not None:
+            return _o
+        _sonuc = []
+        try:
+            _rol = (session.get('rol') or '').upper()
+            _ad = session.get('kullanici')
+            _hepsi = ('SELECT id FROM firma WHERE aktif = :e '
+                      'ORDER BY sira, id')
+            with db.engine.connect() as _b:
+                if _rol == 'ADMIN':
+                    _sonuc = [r[0] for r in _b.execute(
+                        sa_text(_hepsi), {'e': True}).fetchall()]
+                elif _ad:
+                    _k = _b.execute(sa_text(
+                        'SELECT id, firma_kapsam FROM kullanicilar '
+                        'WHERE ad = :a'), {'a': _ad}).fetchone()
+                    if _k:
+                        if (_k[1] or 'secili') == 'tumu':
+                            _sonuc = [r[0] for r in _b.execute(
+                                sa_text(_hepsi), {'e': True}).fetchall()]
+                        else:
+                            _sonuc = [r[0] for r in _b.execute(sa_text(
+                                'SELECT f.id FROM firma f '
+                                'JOIN kullanici_firma kf ON kf.firma_id = f.id '
+                                'WHERE kf.kullanici_id = :k AND f.aktif = :e '
+                                'ORDER BY f.sira, f.id'),
+                                {'k': _k[0], 'e': True}).fetchall()]
+        except Exception as _e:
+            # Göç öncesi (tablo/sütun yok) ya da beklenmedik hata:
+            # BOŞ dönüyoruz, yani hiçbir firma. Fail-closed; dolu
+            # dönmek yetkisiz erişim açardı.
+            app.logger.warning(f'[KF1] firma izinleri okunamadi: {_e}')
+            _sonuc = []
+        g._kf1_firmalar = _sonuc
+        return _sonuc
+
     def aktif_firma_id():
         """Şu an hangi firmada çalışılıyor.
 
@@ -6830,12 +6944,43 @@ def create_app():
         _onbellek = getattr(g, '_mf2_firma', None)
         if _onbellek is not None:
             return _onbellek
+        # ══ KF2 · KÜRESEL VARSAYILANA DÜŞMEK YOK ══
+        #
+        # Eskiden seçim yoksa `_sistem_firma()` dönüyordu: kullanıcı
+        # sessizce bir firmaya düşerdi ve "ben hangi firmadayım?"
+        # sorusu ekranda cevapsız kalırdı. Varsayılan firma kavramı
+        # kaldırıldı; artık yalnızca İZİNLİ firmalar konuşuyor.
+        #
+        # Dört durum var ve dördü de kapalı uçlu:
+        _izinli = _kullanici_firma_idleri()
         _f = session.get('firma_id')
-        if not _f:
-            # Firma seçici MF3'te geliyor; o zamana kadar (ve seçim
-            # yapılmamışsa) varsayılan firma. HAM SQL okur, ORM değil
-            # — ORM sorgusu bu kancayı yeniden tetiklerdi.
-            _f = _varsayilan_firma()
+
+        if _f and _f in _izinli:
+            pass                        # 1 · seçili ve hâlâ izinli
+
+        elif len(_izinli) == 1:
+            # 2 · TEK FİRMA → seçtirecek bir şey yok, kendiliğinden
+            # girer. İstenen de buydu: "kullanıcıya sadece tek firma
+            # tanımlanmışsa varsayılan ihtiyacı ortadan kalkıyor."
+            _f = _izinli[0]
+            session['firma_id'] = _f
+
+        else:
+            # 3 · hiç izinli firma yok   ·   4 · çok firma var ama
+            # seçilmemiş (ya da oturumdaki seçim artık izinli değil —
+            # yönetici yetkiyi geri almış olabilir).
+            #
+            # 0 DÖNÜYORUZ, None DEĞİL. Fark hayati: None "süzgeç
+            # yok" demek ve kullanıcı BÜTÜN firmaların verisini
+            # görürdü — tam tersi. 0 hiçbir firmanın kimliği
+            # olmadığı için süzgeç HİÇBİR SATIRI geçirmez.
+            #
+            # Bu duruma normalde hiç düşülmüyor: aşağıdaki
+            # `_firma_secim_guard` isteği zaten seçim ekranına
+            # çeviriyor. Burası o kapının arkasındaki emniyet;
+            # ileride kapının dışında kalan bir uç eklenirse
+            # sızıntı değil boş liste görülsün.
+            _f = 0
         g._mf2_firma = _f
         return _f
 
@@ -6849,7 +6994,17 @@ def create_app():
         if not durum.is_select or durum.is_column_load or durum.is_relationship_load:
             return
         _f = aktif_firma_id()
-        if not _f:
+        # ══ KF2 · `is None` İLE `not` ARASINDAKİ FARK HAYATİ ══
+        # Burada `if not _f:` yazılıydı. KF2'den sonra çözümleyici
+        # "firma seçilmedi / izinli değil" durumunda 0 dönüyor; 0
+        # falsy olduğu için eski satır SÜZGECİ HİÇ KURMUYOR ve
+        # kullanıcı BÜTÜN firmaların verisini görüyordu. Yani fail-
+        # closed diye yazdığım değer, tam tersi etki yapardı.
+        #
+        # Süzgeç YALNIZCA None'da kapanmalı: None demek "istek
+        # bağlamı yok" (CLI, betik) ya da "firma_atla() ile bilerek
+        # atlandı". 0 ise süzülmeli — ve hiçbir satırı geçirmemeli.
+        if _f is None:
             return
         durum.statement = durum.statement.options(
             # 1 · firma kapsamındaki 28 tablo
@@ -6903,6 +7058,62 @@ def create_app():
     # Admin ve 'tumu' kapsamli kullanicilar etkilenmez.
     _CARI_ANAHTARLARI = ('cari_id', 'hedef_cari_id', 'ciro_cari_id',
                          'acente_cari_id', 'kaynak_cari_id')
+
+    # ── MUAF YOLLAR (KF2) ──
+    # Seçim kapısı bu yolları engellemez; aksi halde seçim ekranının
+    # kendisi de engellenir ve kullanıcı sonsuz yönlendirmede kalır.
+    FIRMA_SECIM_MUAF = (
+        '/firma-sec', '/api/firma/sec', '/api/firma/liste', '/api/firma',
+        '/giris', '/cikis', '/static/', '/favicon', '/saglik',
+    )
+
+    @app.before_request
+    def _firma_secim_guard():
+        """Firma seçmeden hiçbir ekran/uç çalışmaz (KF2).
+
+        Varsayılan firma kaldırıldı: kullanıcı artık sessizce bir
+        firmaya DÜŞMÜYOR, seçmek zorunda. Seçmeden istek çalıştırmak
+        iki kötü sonuçtan birini verirdi — ya boş ekran (süzgeç
+        hiçbir satırı geçirmiyor) ya da sebebi görünmeyen bir yazma
+        hatası. İkisi de kullanıcıya ne yapacağını söylemiyor.
+
+        Burada erkenden durdurup seçim ekranına gönderiyoruz; API
+        isteklerine de HTML değil net bir JSON dönüyor, yoksa
+        tarayıcıdaki `api()` yardımcısı HTML'i ayrıştıramayıp
+        anlamsız hata basardı.
+        """
+        if 'kullanici' not in session:
+            return None                 # oturum yok: _auth_required işi
+        for _m in FIRMA_SECIM_MUAF:
+            if request.path.startswith(_m):
+                return None
+        if session.get('firma_id') and aktif_firma_id():
+            return None                 # seçim var ve hâlâ izinli
+
+        _izinli = _kullanici_firma_idleri()
+        if len(_izinli) == 1:
+            # Tek firma: çözümleyici zaten kendiliğinden seçiyor,
+            # kapıdan geçsin.
+            return None
+        if not _izinli:
+            # ── HİÇ FİRMA ATANMAMIŞ ──
+            # Sessizce bir firmaya atamak, yöneticinin VERMEDİĞİ bir
+            # yetkiyi vermek olurdu. Durup sebebini söylüyoruz.
+            if request.path.startswith('/api/'):
+                return jsonify({'ok': False, 'error': 'firma_yok',
+                                'mesaj': 'Hesabınıza hiçbir firma '
+                                'tanımlanmamış. Yöneticinizden Ayarlar → '
+                                'Kullanıcılar bölümünden firma yetkisi '
+                                'istemeniz gerekiyor.'}), 403
+            session['firma_hata'] = ('Hesabınıza hiçbir firma tanımlanmamış. '
+                                     'Yöneticinizden firma yetkisi isteyin.')
+            return redirect(url_for('firma_sec_ekran'))
+        # Birden çok firma var, seçim yapılmamış
+        if request.path.startswith('/api/'):
+            return jsonify({'ok': False, 'error': 'firma_secilmedi',
+                            'mesaj': 'Firma seçilmedi. Firma seçim '
+                            'ekranına dönün.'}), 409
+        return redirect(url_for('firma_sec_ekran'))
 
     @app.before_request
     def _yazma_cari_kapisi():
@@ -16583,7 +16794,16 @@ def create_app():
             return _o
         _sonuc = True
         try:
-            _f = session.get('firma_id') or _varsayilan_firma()
+            # KF2: `or _sistem_firma()` KALDIRILDI. Firma seçilmemişse
+            # küresel çapaya düşmek, kullanıcının hiç seçmediği bir
+            # firmanın ortak-liste ayarını uygulamak olurdu. Seçim
+            # yoksa varsayılan davranış (ortak = True) yeterli;
+            # seçim kapısı isteği zaten geçirmiyor.
+            #
+            # firma_denetim F6 bu kalıntıyı yakaladı — KF2'de dokuz
+            # çağrı yerini güncellemiştim, bu dokuzuncu gözden
+            # kaçmıştı.
+            _f = session.get('firma_id')
             if _f:
                 with db.engine.connect() as _b:
                     _r = _b.execute(sa_text(
@@ -16783,8 +17003,18 @@ def create_app():
         if _auth_required():
             return jsonify({'error': 'Unauthorized'}), 401
         _admin = (session.get('rol') or '').upper() == 'ADMIN'
+        # ── KF2 · LİSTE KİŞİYE ÖZEL ──
+        # Banner çipi ve Ayarlar paneli bu uçtan besleniyor. Admin
+        # bütün firmaları (kapalılar dahil — yönetmesi gerekiyor),
+        # diğerleri YALNIZCA izinli olduklarını görür. Süzmezsek
+        # kullanıcı yetkisi olmayan firmanın adını, ünvanını ve vergi
+        # numarasını görürdü: veri sızıntısı, geçiş yapamasa bile.
+        _izinli = _kullanici_firma_idleri()
         with firma_atla():
-            kayitlar = (Firma.query.order_by(Firma.sira, Firma.id).all())
+            _q = Firma.query
+            if not _admin:
+                _q = _q.filter(Firma.id.in_(_izinli or [0]))
+            kayitlar = _q.order_by(Firma.sira, Firma.id).all()
         return jsonify({
             'ok': True,
             'aktif': aktif_firma_id(),
@@ -16793,7 +17023,7 @@ def create_app():
                 'id': f.id, 'ad': f.ad, 'unvan': f.unvan or '',
                 'belge_kodu': f.belge_kodu or '',
                 'vergi_no': f.vergi_no or '',
-                'varsayilan': bool(f.varsayilan), 'aktif': bool(f.aktif),
+                'aktif': bool(f.aktif),
             } for f in kayitlar]})
 
     @app.route('/api/firma', methods=['POST'])
@@ -16841,7 +17071,7 @@ def create_app():
                       adres=(data.get('adres') or '').strip() or None,
                       telefon=(data.get('telefon') or '').strip() or None,
                       eposta=(data.get('eposta') or '').strip() or None,
-                      varsayilan=False, aktif=True, sira=_son + 1,
+                      aktif=True, sira=_son + 1,
                       ortak_liste=_ortak_liste)
             db.session.add(f)
             db.session.flush()         # f.id lazim
@@ -16930,15 +17160,48 @@ def create_app():
         engel = None
         if f.id == aktif_firma_id():
             engel = 'İçinde bulunduğun firmayı silemezsin. Önce başka bir firmaya geç.'
-        elif f.varsayilan:
-            engel = 'Varsayılan firma silinemez. Önce başka bir firmayı varsayılan yap.'
         elif _toplam_firma <= 1:
             engel = 'Son firma silinemez — firmasız sistem kayıt yazamaz.'
+        else:
+            _kilit = _firma_tek_dayanak(fid)
+            if _kilit:
+                engel = ('Bu firma şu kullanıcıların TEK firması: '
+                         + ', '.join(_kilit)
+                         + '. Silinirse sisteme giremezler. Önce onlara '
+                         'Ayarlar → Kullanıcılar\'dan başka bir firma verin.')
         return jsonify({'ok': True, 'id': f.id, 'ad': f.ad,
                         'belge_kodu': f.belge_kodu or '',
                         'kayit_sayisi': toplam, 'cari_baglantisi': cari_n,
                         'dagilim': sayim, 'engel': engel,
                         'silinebilir': engel is None})
+
+    def _firma_tek_dayanak(fid):
+        """Bu firma SİLİNİRSE firmasız kalacak kullanıcıların adları (KF2).
+
+        Kapsamı 'secili' olan ve yalnızca bu firmaya atanmış bir
+        kullanıcı, firma silindiğinde sisteme GİREMEZ hâle gelir:
+        izin listesi boşalır. Silme bunu sessizce yapmamalı —
+        yöneticinin kimi kilitlediğini görmesi gerekiyor.
+
+        Kapsamı 'tumu' olanlar etkilenmez; onların listesi firma
+        tablosundan geliyor ve boşalmaz (son firma zaten silinemiyor).
+        """
+        try:
+            with db.engine.connect() as _b:
+                return [r[0] for r in _b.execute(sa_text(
+                    'SELECT k.ad FROM kullanicilar k '
+                    'JOIN kullanici_firma kf ON kf.kullanici_id = k.id '
+                    'WHERE kf.firma_id = :f '
+                    "  AND COALESCE(k.firma_kapsam, 'secili') <> 'tumu' "
+                    '  AND NOT EXISTS (SELECT 1 FROM kullanici_firma k2 '
+                    '                  JOIN firma f2 ON f2.id = k2.firma_id '
+                    '                  WHERE k2.kullanici_id = k.id '
+                    '                    AND k2.firma_id <> :f '
+                    '                    AND f2.aktif = :e) '
+                    'ORDER BY k.ad'), {'f': fid, 'e': True}).fetchall()]
+        except Exception as _e:
+            app.logger.warning(f'[KF2] tek dayanak sorgusu basarisiz: {_e}')
+            return []
 
     @app.route('/api/firma/<int:fid>', methods=['DELETE'])
     def api_firma_sil(fid):
@@ -16962,12 +17225,21 @@ def create_app():
             return jsonify({'ok': False, 'mesaj':
                             'İçinde bulunduğun firmayı silemezsin. '
                             'Önce başka bir firmaya geç.'}), 400
-        if f.varsayilan:
-            return jsonify({'ok': False, 'mesaj':
-                            'Varsayılan firma silinemez.'}), 400
+        # KF1: "varsayılan firma silinemez" denetimi KALKTI —
+        # bayrağın kendisi kalktı. Yerine bir şey koymak gerekmiyor:
+        # "içinde bulunduğun firma" ve "son firma" denetimleri
+        # duruyor ve asıl korumayı onlar veriyor.
         if _toplam_firma <= 1:
             return jsonify({'ok': False, 'mesaj':
                             'Son firma silinemez.'}), 400
+        # KF2: kimseyi sistemden kilitleyerek silme.
+        _kilit = _firma_tek_dayanak(fid)
+        if _kilit:
+            return jsonify({'ok': False, 'mesaj':
+                            'Bu firma şu kullanıcıların TEK firması: '
+                            + ', '.join(_kilit) + '. Silinirse sisteme '
+                            'giremezler. Önce onlara başka bir firma '
+                            'verin (Ayarlar → Kullanıcılar).'}), 400
 
         _ad = f.ad
         sayim, toplam, _ = _firma_kayit_sayim(fid)
@@ -17051,7 +17323,7 @@ def create_app():
         # tarafindaki onbellek yine de tazelensin — firma tablosu
         # degisti. MF2'nin ice aktarim satirinda bu ad YOKTU,
         # NameError veriyordu (olculdu).
-        from models import varsayilan_firma_unut as _vfu
+        from models import sistem_firma_unut as _vfu
         _vfu()
         _firma_onbellek_dusur()
         _log_audit('SIL', 'firma', fid,
@@ -17073,17 +17345,26 @@ def create_app():
 
     @app.route('/api/firma/sec', methods=['POST'])
     def api_firma_sec():
-        """Çalışılan firmayı değiştirir. YALNIZCA ADMIN."""
+        """Çalışılan firmayı değiştirir.
+
+        KF2: artık admin'e özel DEĞİL — herkes kendi izinli firmaları
+        arasında geçiş yapabilir. Rol denetiminin yerini İZİN
+        denetimi aldı: istenen firma kullanıcının listesinde yoksa
+        403. Rol denetimini korumak, çoklu firmayı kullanıcılara
+        açmanın tam tersi olurdu.
+        """
         if _auth_required():
             return jsonify({'error': 'Unauthorized'}), 401
-        if (session.get('rol') or '').upper() != 'ADMIN':
-            return jsonify({'ok': False, 'mesaj':
-                            'Firma değiştirmek yalnızca admin yetkisindedir'}), 403
         data = request.get_json(silent=True) or {}
         try:
             fid = int(data.get('firma_id') or 0)
         except (TypeError, ValueError):
             return jsonify({'ok': False, 'mesaj': 'Firma kimliği sayı olmalı'}), 400
+        if fid not in _kullanici_firma_idleri():
+            # "Bulunamadı" demiyoruz: izin yoksa sebebi söylenmeli,
+            # yoksa kullanıcı var olan bir firmayı silinmiş sanır.
+            return jsonify({'ok': False, 'mesaj':
+                            'Bu firmada çalışma yetkiniz yok.'}), 403
         with firma_atla():
             f = db.session.get(Firma, fid)
         if not f or not f.aktif:
@@ -17414,6 +17695,10 @@ def create_app():
                 'rol': k.rol,
                 'aktif': k.aktif,
                 'cari_kapsam': (k.cari_kapsam or 'atanan'),
+                # KF3: düzenleme penceresi bunları DOLDURMAK zorunda;
+                # doldurmazsa kaydet izinleri sessizce siler.
+                'firma_kapsam': (k.firma_kapsam or 'secili'),
+                'firmalar': _kullanici_firma_uyelikleri(k.id),
                 # GUVENLIK: tanimsiz modul 'gizli' sayilir — guard'larla (satir 230/301/353)
                 # ayni varsayilan. Eskiden 'yazma' donuyordu; bu, kisitli bir kullaniciyi
                 # duzenlemek icin acip kaydedince ona tum modullerde YAZMA yetkisi
@@ -17423,6 +17708,43 @@ def create_app():
                 'olusturma': k.olusturma.strftime('%Y-%m-%d %H:%M') if k.olusturma else None
             })
         return jsonify(result)
+
+    def _kullanici_firma_uyelikleri(kid):
+        """Bir kullanıcının atanmış firma kimlikleri (KF3)."""
+        from models import KullaniciFirma as _KF
+        try:
+            return sorted(r.firma_id for r in
+                          _KF.query.filter_by(kullanici_id=kid).all())
+        except Exception:
+            return []
+
+    def _firma_kapsam_temizle(v):
+        """Geçersiz değer 'secili'ye düşer — GÜVENLİ TARAF (KF3).
+
+        Eksik ya da bozuk değer "herkes her firmayı görsün" anlamına
+        GELMEMELİ. `_kapsam_temizle` (cari kapsamı) ile aynı mantık.
+        """
+        return 'tumu' if (v or '').strip().lower() == 'tumu' else 'secili'
+
+    def _kullanici_firmalari_yaz(kid, idler):
+        """Kullanıcının firma üyeliklerini verilen listeye EŞİTLER.
+
+        Var olmayan firma kimlikleri atılır: ekrandan eski bir liste
+        gelirse (firma bu arada silinmişse) yabancı anahtar kırılırdı.
+        """
+        from models import KullaniciFirma as _KF
+        _istek = {int(x) for x in (idler or []) if str(x).strip().isdigit()}
+        # Çıkış kapısı GEREKMİYOR: okuma süzgeci yalnızca
+        # FirmaKapsamli, Veriler ve Cari'ye uygulanıyor; `firma`
+        # tablosu kapsam dışı. (İlk yazışta buraya bir atlama
+        # koymuştum, firma_denetim F3 yakaladı — işe yaramayan her
+        # atlama o listeyi anlamsızlaştırıyor.)
+        _gecerli = {f.id for f in Firma.query.all()}
+        _istek &= _gecerli
+        _KF.query.filter_by(kullanici_id=kid).delete()
+        for _fid in sorted(_istek):
+            db.session.add(_KF(kullanici_id=kid, firma_id=_fid))
+        return sorted(_istek)
 
     @app.route('/api/ayarlar/kullanici', methods=['POST'])
     def api_ayarlar_kullanici_ekle():
@@ -17466,10 +17788,15 @@ def create_app():
                 aktif=data.get('aktif', 'true') == 'true',
                 # KP1: kapsam YETKIDEN AYRI eksen
                 cari_kapsam=_kapsam_temizle(data.get('cari_kapsam')),
+                # KF3: firma kapsamı da ayrı eksen
+                firma_kapsam=_firma_kapsam_temizle(data.get('firma_kapsam')),
                 yetkiler=json.dumps(temiz_yetki, ensure_ascii=False)
             )
             db.session.add(k)
             db.session.commit()
+            if 'firmalar' in data:
+                _kullanici_firmalari_yaz(k.id, data.get('firmalar'))
+                db.session.commit()
             return jsonify({'ok': True, 'id': k.id})
         except Exception as e:
             db.session.rollback()
@@ -17512,6 +17839,15 @@ def create_app():
         # daraltmamali.
         if 'cari_kapsam' in data:
             k.cari_kapsam = _kapsam_temizle(data.get('cari_kapsam'))
+        # KF3: firma kapsamı ve üyelikler. İkisi de GÖNDERİLDİYSE
+        # güncellenir, gönderilmediğinde DOKUNULMAZ — kısmi
+        # güncelleme bir kullanıcının firma erişimini sessizce
+        # kesmemeli. (Aynı kural cari kapsamında da geçerli, yorumu
+        # yukarıda.)
+        if 'firma_kapsam' in data:
+            k.firma_kapsam = _firma_kapsam_temizle(data.get('firma_kapsam'))
+        if 'firmalar' in data:
+            _kullanici_firmalari_yaz(k.id, data.get('firmalar'))
         db.session.commit()
         return jsonify({'ok': True})
 

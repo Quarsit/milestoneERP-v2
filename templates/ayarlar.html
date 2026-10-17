@@ -14,6 +14,75 @@
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
   .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
   .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  /* ── FİRMA SEÇİM LİSTESİ (KF5) ──
+     KENDİ SINIFLARIYLA ÇİZİLİR — sebebi acı:
+
+       .form-alan input { width:100%; border:1px solid; padding:9px 11px }
+       .form-alan label { display:block; text-transform:uppercase;
+                          font-size:.72rem; color:var(--soluk) }
+
+     Bu iki kural onay kutusuna da uyguluyordu. Kutu tam genişliğe
+     yayılıp çerçeve ve dolgu alıyor, firma adı satırın sağ ucuna
+     itiliyor, etiket küçücük gri BÜYÜK HARFE dönüyordu. MF7'de
+     `.kutu` ile birebir aynı çakışmayı yaşamış ve "bundan sonra
+     sınıf adının kullanılıp kullanılmadığına bakacağım" demiştim;
+     yine düştüm. Bu sefer kurtulmanın yolu ad seçmek değil,
+     ANCESTOR KURALLARINI AÇIKÇA GERİ ALMAK: aşağıdaki
+     `.kf-fir input` ve `.kf-fir label` sıfırlamaları o yüzden var.
+
+     Ölçeklenmesi de gerekiyordu: firma sayısı arttıkça pencere
+     uzayıp kaydet düğmesini aşağı itiyordu. Gövde kaydırmalı,
+     8'den fazla firmada arama kutusu çıkıyor. */
+  .kf-fir{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+          background:var(--yuzey);overflow:hidden}
+  .kf-fir-ust{display:flex;align-items:center;gap:8px;padding:7px 10px;
+              border-bottom:1px solid var(--cizgi);background:var(--taban)}
+  .kf-fir-sayi{font-size:.74rem;font-weight:600;color:var(--soluk);
+               letter-spacing:.02em}
+  .kf-fir-ust .kf-mini{margin-left:auto;display:flex;gap:4px}
+  .kf-mini button{border:1px solid var(--cizgi-koyu);background:var(--yuzey);
+                  border-radius:5px;padding:3px 8px;font-size:.72rem;
+                  font-weight:600;color:var(--soluk);cursor:pointer;
+                  font-family:var(--govde)}
+  .kf-mini button:hover{color:var(--verde);border-color:var(--verde)}
+  .kf-fir-ara{padding:7px 10px;border-bottom:1px solid var(--cizgi)}
+  /* Arama kutusu .form-alan input kuralından payını alabilir; burada
+     açıkça yeniden tanımlıyoruz ki yükseklik satırlara uysun. */
+  .kf-fir .kf-fir-ara input{width:100%;border:1px solid var(--cizgi-koyu);
+                    border-radius:5px;padding:5px 8px;font-size:.82rem;
+                    font-family:var(--govde);background:var(--yuzey)}
+  .kf-fir-govde{max-height:208px;overflow-y:auto}
+  /* ── ANCESTOR SIFIRLAMASI ──
+     ÖZGÜLLÜK VE SIRA, İKİSİ BİRDEN. İlk denemede yalnızca
+     `.kf-fir label` yazmıştım: `.form-alan label` ile AYNI
+     özgüllükte (0,0,1,1) ve benim bloğum stil sayfasında ÖNCE
+     geliyordu — eşitlikte sonraki kazanır, yani sıfırlamam
+     kaybetti. Ekranda görüldü: kutuyla ad arasında boşluk yok
+     (flex uygulanmamış), yazı kalın ve BÜYÜK HARF.
+
+     Artık etiketin kendi sınıfı var (`label.kf-satir` → 0,0,2,1)
+     ve kurallar `.form-alan` tanımlarından SONRA geliyor. Biri
+     bozulsa öteki tutar. */
+  .kf-fir label.kf-satir{display:flex;align-items:center;gap:9px;
+                margin:0;padding:7px 10px;font-size:.86rem;
+                font-weight:400;letter-spacing:normal;
+                text-transform:none;color:var(--murekkep);
+                cursor:pointer;border-bottom:1px solid var(--cizgi)}
+  .kf-fir label.kf-satir:last-child{border-bottom:0}
+  .kf-fir label.kf-satir:hover{background:var(--verde-acik)}
+  .kf-fir label.kf-satir input[type=checkbox]{width:15px;height:15px;
+                               flex:0 0 15px;margin:0;padding:0;
+                               border:0;border-radius:3px;
+                               accent-color:var(--verde);cursor:pointer}
+  .kf-fir .kf-ad{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+                 white-space:nowrap}
+  .kf-fir .kf-kod{font-family:var(--mono,monospace);font-size:.72rem;
+                  color:var(--soluk);background:var(--taban);
+                  border:1px solid var(--cizgi);border-radius:4px;
+                  padding:1px 5px;flex:0 0 auto}
+  .kf-fir .kf-kapali{font-size:.72rem;color:var(--soluk);flex:0 0 auto}
+  .kf-fir-bos{padding:14px 10px;font-size:.8rem;color:var(--soluk);
+              text-align:center}
   .yetki-tablo{width:100%;border-collapse:collapse;font-size:.85rem}
   .yetki-tablo th{text-align:left;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);padding:8px 10px;border-bottom:1px solid var(--cizgi)}
   .yetki-tablo td{padding:7px 10px;border-bottom:1px solid var(--cizgi)}
@@ -434,6 +503,22 @@
           işlemlerini yapabilir.
         </div>
       </div>
+      <!-- ── FİRMA KAPSAMI (KF3) ──
+           Hangi kullanıcı HANGİ FİRMADA çalışabilir. `cari_kapsam`
+           ile aynı iki eksenli desen; sebebi de aynı: yalnızca açık
+           liste tutulsaydı, yeni bir firma açıldığında onu görmesi
+           gereken herkesi tek tek düzenlemek gerekirdi ve unutulan
+           kullanıcı firmayı hiç görmezdi. -->
+      <div class="form-alan" id="uFirmaKapsamAlan" style="margin-top:6px">
+        <label>Firma Kapsamı</label>
+        <select id="uFirmaKapsam" onchange="uFirmaKapsamDegisti()">
+          <option value="secili">Seçili firmalar — aşağıda işaretlenenler</option>
+          <option value="tumu">Tüm firmalar — muhasebe, yönetim</option>
+        </select>
+        <div id="uFirmaKutular" style="margin-top:8px"></div>
+        <div id="uFirmaNot" style="font-size:.76rem;color:var(--soluk);
+             margin-top:4px;line-height:1.5"></div>
+      </div>
       <!-- ── KULLANICININ E-POSTA HESABI (EP3) ──
            Admin olmayan kullanıcı Ayarlar sayfasına HİÇ giremiyor,
            dolayısıyla kendi hesabını tanımlaması imkânsızdı.
@@ -708,6 +793,15 @@ let KULLANICILAR = [], DUZENLENEN = null, YETKILER = {}, PROFORMA_ONAY_YETKI = f
 
 /* ── Kullanıcılar ── */
 async function kullaniciYukle() {
+  /* KF3: firma kutuları için firma listesi de gerekiyor. Kullanıcı
+     panelinden yükleniyor; Firmalar paneline hiç uğramadan kullanıcı
+     düzenlenebiliyor ve o zaman kutular BOŞ çizilirdi — kaydet
+     basıldığında izinler sessizce silinirdi. İkinci bir uç
+     açmıyoruz, Firmalar panelinin kullandığı uç bu. */
+  try {
+    const _f = await api('/api/firma');
+    FIRMALAR_KF = (_f && _f.firmalar) || [];
+  } catch (e) { FIRMALAR_KF = []; }
   try {
     const d = await api('/api/ayarlar/kullanici');
     KULLANICILAR = Array.isArray(d) ? d : (d.data || []);
@@ -755,6 +849,14 @@ function kullaniciAc(id) {
      muhasebecinin görünürlüğünü kapatır — sessiz yetki kaybı. */
   document.getElementById('uKapsam').value =
     DUZENLENEN ? (DUZENLENEN.cari_kapsam || 'atanan') : 'atanan';
+  /* KF3: firma kapsamı ve işaretli firmalar da doldurulmalı —
+     doldurulmazsa kaydet, kullanıcının firma izinlerini siler. */
+  const _fk = document.getElementById('uFirmaKapsam');
+  if (_fk) _fk.value = DUZENLENEN ? (DUZENLENEN.firma_kapsam || 'secili')
+                                  : 'secili';
+  SECILI_FIRMALAR = (DUZENLENEN && Array.isArray(DUZENLENEN.firmalar))
+    ? DUZENLENEN.firmalar.slice() : [];
+  uFirmaKutulariCiz();
   /* EP3: kullanıcının e-posta hesabını yükle. YENİ kullanıcıda
      alanlar boş; kullanıcı henüz kaydedilmediği için ayar da
      kaydedilemez — bu yüzden alan gizlenir. */
@@ -767,15 +869,131 @@ function kullaniciAc(id) {
         ? JSON.parse(DUZENLENEN.yetkiler || '{}') : (DUZENLENEN.yetkiler || {});
     } catch (e) { YETKILER = {}; }
   }
-  yetkiCiz(); rolDegisti();
+  yetkiCiz(); rolDegisti(); uFirmaKapsamDegisti();
   document.getElementById('modal').classList.add('acik');
 }
+/* ══ FİRMA KAPSAMI (KF3) ══
+   Kutular `FIRMALAR_KF` listesinden çiziliyor; o liste
+   `firmaListesiYukle()` ile zaten çekilen firma özetinden besleniyor
+   (Firmalar paneli de aynı veriyi kullanıyor, ikinci bir uç
+   açmıyoruz).
+
+   ÖNEMLİ: kutular `kullaniciAc()` içinde DOLDURULMALI. Doldurulmazsa
+   düzenleme penceresi her açılışta boş kutularla gelir ve kaydet'e
+   basmak kullanıcının firma izinlerini sessizce SİLER — KP1'de cari
+   kapsamı için aynı tuzağa düşülmüştü, yorumu hâlâ yukarıda. */
+let FIRMALAR_KF = [];
+let SECILI_FIRMALAR = [];
+
+/* Arama kutusu 8 firmadan sonra çıkıyor: altında kalabalık değil,
+   üstünde listede göz gezdirmek yetmiyor. */
+const KF_ARAMA_ESIGI = 8;
+
+function uFirmaKutulariCiz() {
+  const kap = document.getElementById('uFirmaKutular');
+  if (!kap) return;
+  if (!FIRMALAR_KF.length) {
+    kap.innerHTML = '<div class="kf-fir"><div class="kf-fir-bos">' +
+      'Henüz firma yok — Ayarlar → Firmalar bölümünden açabilirsin.' +
+      '</div></div>';
+    return;
+  }
+  const ara = FIRMALAR_KF.length > KF_ARAMA_ESIGI;
+  kap.innerHTML = `
+    <div class="kf-fir">
+      <div class="kf-fir-ust">
+        <span class="kf-fir-sayi" id="uFirmaSayi"></span>
+        <span class="kf-mini">
+          <button type="button" onclick="uFirmaTopluSec(true)">Tümü</button>
+          <button type="button" onclick="uFirmaTopluSec(false)">Temizle</button>
+        </span>
+      </div>
+      ${ara ? `<div class="kf-fir-ara">
+        <input type="text" id="uFirmaAra" placeholder="Firma ara…"
+               oninput="uFirmaSuz()" autocomplete="off">
+      </div>` : ''}
+      <div class="kf-fir-govde" id="uFirmaGovde">
+        ${FIRMALAR_KF.map(f => `
+        <label class="kf-satir" data-ad="${kacar((f.ad || '').toLocaleLowerCase('tr'))}">
+          <input type="checkbox" value="${f.id}"
+                 onchange="uFirmaSayiTazele()"
+                 ${SECILI_FIRMALAR.includes(f.id) ? 'checked' : ''}>
+          <span class="kf-ad">${kacar(f.ad)}</span>
+          ${f.belge_kodu ? `<span class="kf-kod">${kacar(f.belge_kodu)}</span>` : ''}
+          ${f.aktif === false ? '<span class="kf-kapali">kapalı</span>' : ''}
+        </label>`).join('')}
+      </div>
+    </div>`;
+  uFirmaSayiTazele();
+}
+
+function uFirmaKutular() {
+  return Array.from(document.querySelectorAll(
+    '#uFirmaKutular input[type=checkbox]'));
+}
+
+function uFirmaSayiTazele() {
+  const k = uFirmaKutular();
+  const n = k.filter(x => x.checked).length;
+  const e = document.getElementById('uFirmaSayi');
+  if (!e) return;
+  /* Hiçbiri işaretli değilken bunu SÖYLEMEK gerekiyor: o kullanıcı
+     sisteme giremez ve sebebi sayıdan okunmalı. */
+  e.textContent = n ? `${n} / ${k.length} firma seçili`
+                    : 'Hiçbiri seçili değil — giriş yapamaz';
+  e.style.color = n ? 'var(--soluk)' : 'var(--kirmizi, #B4332B)';
+}
+
+function uFirmaTopluSec(deger) {
+  /* Yalnızca GÖRÜNEN satırlar: arama süzgeci açıkken "Tümü"nün
+     gizli firmaları da işaretlemesi, görmediğin bir yetkiyi vermek
+     olurdu. */
+  uFirmaKutular().forEach(x => {
+    if (x.closest('label').style.display !== 'none') x.checked = deger;
+  });
+  uFirmaSayiTazele();
+}
+
+function uFirmaSuz() {
+  const q = (document.getElementById('uFirmaAra') || {}).value || '';
+  const t = q.trim().toLocaleLowerCase('tr');
+  document.querySelectorAll('#uFirmaGovde label').forEach(l => {
+    l.style.display = (!t || (l.dataset.ad || '').includes(t)) ? '' : 'none';
+  });
+}
+
+function uFirmaKapsamDegisti() {
+  const kapsam = (document.getElementById('uFirmaKapsam') || {}).value;
+  const rol = (document.getElementById('uRol') || {}).value;
+  const kutular = document.getElementById('uFirmaKutular');
+  const not = document.getElementById('uFirmaNot');
+  const admin = rol === 'ADMIN';
+  /* ADMIN'de kapsam da kutular da ANLAMSIZ: firmaları açan, silen ve
+     yetkilendiren o, rolü gereği hepsini görüyor. Gizlemek yerine
+     sebebini yazıyoruz — gizli alan "neden yok?" sorusu doğurur. */
+  if (kutular) kutular.style.display = (admin || kapsam === 'tumu') ? 'none' : '';
+  if (not) {
+    not.innerHTML = admin
+      ? 'ADMIN rolü <b>bütün firmaları</b> görür — firma kapsamı bu rolde ' +
+        'dikkate alınmaz. Rolü değiştirirsen buradaki seçim devreye girer.'
+      : (kapsam === 'tumu'
+        ? 'Bütün firmalarda çalışabilir. <b>Sonradan açılan firmaları da</b> ' +
+          'kendiliğinden görür — işaretleme gerekmez.'
+        : 'Yalnızca işaretlenen firmalarda çalışabilir. Hiçbiri ' +
+          'işaretlenmezse <b>sisteme giremez</b>; yeni açılan firmaları ' +
+          'da görmez, buradan eklemen gerekir.');
+  }
+}
+
 function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
 
 function rolDegisti() {
   const admin = document.getElementById('uRol').value === 'ADMIN';
   document.getElementById('adminNot').style.display = admin ? '' : 'none';
   document.getElementById('yetkiKutu').style.display = admin ? 'none' : '';
+  /* KF3: rol değişince firma kapsamı notu da tazelenmeli — ADMIN'de
+     kapsam dikkate alınmıyor ve bunu ekranın söylemesi gerekiyor. */
+  uFirmaKapsamDegisti();
 }
 
 let ACIK_MODUL = {};
@@ -868,6 +1086,16 @@ async function kullaniciKaydet() {
      görür) ama göndermek zarar vermez, tutarlı kalsın. */
   const govde = { ad, rol, yetkiler: yetkilerGovde,
                   cari_kapsam: (document.getElementById('uKapsam') || {}).value || 'atanan' };
+  /* KF3: firma kapsamı + işaretli firmalar. Kutular gizliyken de
+     (kapsam 'tumu' ya da rol ADMIN) gönderiliyor: kullanıcı kapsamı
+     geri 'secili' yaptığında eski işaretleri bulsun. */
+  govde.firma_kapsam =
+    (document.getElementById('uFirmaKapsam') || {}).value || 'secili';
+  /* Arama süzgeci GÖRSEL: gizlenmiş ama işaretli bir firma hâlâ
+     verilmiş bir yetkidir, kaydederken korunmalı. O yüzden
+     görünürlüğe değil `checked`e bakıyoruz. */
+  govde.firmalar = uFirmaKutular()
+    .filter(x => x.checked).map(x => parseInt(x.value, 10));
   if (sifre) govde.sifre = sifre;
   try {
     if (DUZENLENEN) {
@@ -1400,7 +1628,7 @@ async function firmaListesiYukle() {
   const fl = (FIRMA_VERI && FIRMA_VERI.firmalar) || [];
   govde.innerHTML = fl.length ? fl.map(f => `
     <tr>
-      <td><b>${kacar(f.ad)}</b>${f.varsayilan ? ' <span class="rozet rz-gri">varsayılan</span>' : ''}
+      <td><b>${kacar(f.ad)}</b>
           ${f.id === FIRMA_VERI.aktif ? ' <span class="rozet rz-yesil">aktif</span>' : ''}
           ${f.unvan && f.unvan !== f.ad ? `<div style="color:var(--soluk);font-size:.78rem">${kacar(f.unvan)}</div>` : ''}</td>
       <td class="mono">${kacar(f.belge_kodu || '—')}</td>

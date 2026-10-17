@@ -131,7 +131,17 @@ h1{font-family:var(--baslik);font-size:1.6rem;font-weight:800;letter-spacing:-.0
     <p class="alt">Hangi firmada çalışacaksın? Her firmanın stoğu,
        siparişi, kasası ve defteri ayrıdır.</p>
 
-    <div id="hata" class="hata gizli"></div>
+    {# KF2: sunucu bir sebep yolladıysa (örn. hiç firma atanmamış)
+       ekranda baştan görünsün — boş liste tek başına sebebini
+       anlatmıyor. #}
+    <div id="hata" class="hata{% if not hata %} gizli{% endif %}">
+      {{ hata or '' }}</div>
+
+    {% if not firmalar and not admin %}
+    <p class="alt">Hesabınıza henüz firma tanımlanmamış. Yöneticiniz
+       Ayarlar → Kullanıcılar bölümünden size firma yetkisi verdikten
+       sonra buradan seçim yapabileceksiniz.</p>
+    {% endif %}
 
     {% for f in firmalar %}
     <button class="firma" onclick="sec({{ f.id }}, this)">
@@ -144,8 +154,15 @@ h1{font-family:var(--baslik);font-size:1.6rem;font-weight:800;letter-spacing:-.0
         <span class="ad">{{ f.ad }}</span>
         <span class="not">{{ f.unvan or '—' }}{% if f.vergi_no %} · VKN {{ f.vergi_no }}{% endif %}</span>
       </span>
-      {% if f.varsayilan %}<span class="rozet">varsayılan</span>{% endif %}
-      {% if not f.varsayilan %}
+      {# KF1: "varsayılan" rozeti ve onun Sil düğmesini gizlemesi
+         KALKTI — bayrak kaldırıldı. Sil silinemeyecek bir firmaya
+         basılırsa sunucu sebebini söylüyor ("içinde bulunduğun
+         firma", "son firma", "şu kullanıcıların tek firması").
+
+         KF2: Sil YALNIZCA ADMIN'de. Ekran artık herkese açık; firma
+         silmeyi herkese göstermek, basınca 403 yiyecek bir düğme
+         koymak olurdu. #}
+      {% if admin %}
       <span class="sil" role="button" tabindex="0" title="Firmayı sil"
             onclick="firmaSil({{ f.id }}, '{{ f.ad|replace("'", "\\'") }}', event)">Sil</span>
       {% endif %}
@@ -153,8 +170,11 @@ h1{font-family:var(--baslik);font-size:1.6rem;font-weight:800;letter-spacing:-.0
     </button>
     {% endfor %}
 
+    {# KF2: yeni firma açmak admin işi. #}
+    {% if admin %}
     <div class="ayrac">ya da</div>
     <button class="ekle-btn" id="ekleBtn" onclick="formAc()">+ Yeni firma ekle</button>
+    {% endif %}
 
     <div class="form gizli" id="form">
       <h2>Yeni firma</h2>

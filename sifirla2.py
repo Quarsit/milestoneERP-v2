@@ -27,8 +27,11 @@
 #         sayar, sildikten sonra tekrar sayar ve tutmazsa HATA verir.
 #
 #    3) TÜM VERİLERİ SİL                 --tumunu-sil
-#         İşlem verisi + FİRMALARIN KENDİSİ. Bir firma kalır
-#         (varsayılan olan): sistem firmasız çalışmaz ve firma
+#         İşlem verisi + FİRMALARIN KENDİSİ. Bir firma kalır ve
+#         HANGİSİ olduğunu --kalan= ile sen söylersin (KF1: eskiden
+#         `varsayilan` bayrağı karar veriyordu, bayrak kaldırıldı;
+#         geri alınamaz bir kararı kimlik sırasına bırakmıyorum):
+#         sistem firmasız çalışmaz ve firma
 #         kimliği R2'den beri korunan "firma bilgileri, LOGO"nun
 #         yaşadığı yer. Cari kartları korunur ve KALAN FİRMAYA
 #         BAĞLANIR — bağlanmazsa kart diskte durur ama hiçbir
@@ -87,7 +90,7 @@
 #
 #      venv/bin/python sifirla2.py --onayla              # TÜM FİRMALAR
 #      venv/bin/python sifirla2.py --firma=2 --onayla    # SADECE o firma
-#      venv/bin/python sifirla2.py --tumunu-sil --onayla # TÜM VERİLER
+#      venv/bin/python sifirla2.py --tumunu-sil --kalan=1 --onayla
 #
 #  ⚠ GERİ ALINAMAZ.
 # ══════════════════════════════════════════════════════════════════════
@@ -107,9 +110,13 @@ ONAY = '--onayla' in sys.argv
 TUMUNU_SIL = '--tumunu-sil' in sys.argv
 FIRMA_LISTESI = '--firmalar' in sys.argv
 TEK_FIRMA_ARG = None
+KALAN_ARG = None
 for _a in sys.argv[1:]:
     if _a.startswith('--firma='):
         TEK_FIRMA_ARG = _a.split('=', 1)[1].strip()
+    # KF1: --tumunu-sil kipinde hangi firmanın KALACAĞI.
+    elif _a.startswith('--kalan='):
+        KALAN_ARG = _a.split('=', 1)[1].strip()
 
 # İki kip birbirini dışlar. "Tüm verileri sil ama yalnızca şu
 # firmada" diye bir şey yok; sessizce birini seçmek yerine soruyoruz.
@@ -190,6 +197,18 @@ KORUNAN = {
     #               ama ekranda yok — kullanıcı "veri gitmiş" sanır.
     'firma': 'Firma tanımları, kimlik, LOGO, belge kodu',
     'cari_firma': 'Cari görünürlük üyelikleri (hangi cari hangi firmada)',
+    #   kullanici_firma  Hangi kullanıcı hangi firmada çalışabilir (KF1).
+    #               YETKİ kaydıdır, işlem verisi değil. Sıfırlamada
+    #               silinmesi, yöneticinin tek tek verdiği firma
+    #               izinlerini yok etmek olurdu: sıfırlama sonrası
+    #               kimse hiçbir firmaya giremezdi ve sebebi
+    #               ekranda görünmezdi. `kullanicilar` korunuyorsa
+    #               onların erişimi de korunmalı.
+    #
+    #               --tumunu-sil kipinde SİLİNEN firmaların
+    #               satırları gider (aşağıda, FIRMA_BAGLI ile):
+    #               olmayan firmaya bakan izin kaydı artık kalıntı.
+    'kullanici_firma': 'Kullanıcı firma izinleri (yetki kaydı)',
     # KASA/BANKA KORUNUYOR (KB1).
     # Eskiden siliniyordu; her sıfırlamada 8 kasa yeniden
     # tanımlanmak zorunda kalıyordu ve kasa yokken ödeme
@@ -297,11 +316,14 @@ def tr(n):
 def firmalari_oku(b):
     if 'firma' not in mevcut:
         return []
+    # KF1: `varsayilan` sütunu KALDIRILDI. Firma sırası artık
+    # kimliğe göre; "hangi firma kalacak" kararı bayraktan değil
+    # --kalan= seçeneğinden geliyor (aşağıda).
     satirlar = b.execute(text(
-        'SELECT id, ad, unvan, belge_kodu, varsayilan, aktif '
+        'SELECT id, ad, unvan, belge_kodu, aktif '
         'FROM firma ORDER BY id')).fetchall()
     return [{'id': r[0], 'ad': r[1] or '', 'unvan': r[2] or '',
-             'kod': r[3] or '', 'varsayilan': bool(r[4]), 'aktif': bool(r[5])}
+             'kod': r[3] or '', 'aktif': bool(r[4])}
             for r in satirlar]
 
 
@@ -316,6 +338,44 @@ def firma_sayim(b, fid):
         d[t] = n
         toplam += n
     return d, toplam
+
+
+def kilitlenecekler(b, silinecek_idler, kalan_id):
+    """Bu firmalar silinince SİSTEME GİREMEYECEK kullanıcılar (KF6).
+
+    Kapsamı 'secili' olan ve ayakta kalan firmalardan HİÇBİRİNE
+    atanmamış kullanıcı, sıfırlama sonrası giriş yapamaz: izin
+    listesi boşalır. Ekran bu silmeyi zaten reddediyor ve kimi
+    kilitleyeceğini adıyla söylüyor; BU BETİK söylemiyordu.
+
+    İki yol arasındaki bu fark sessiz bir tuzaktı: arayüzden
+    yapamadığın şeyi komut satırından farkında olmadan yapmak.
+    Burada ENGELLEMİYORUZ — sıfırlama zaten bilinçli ve geri
+    alınamaz bir iş — ama kimin kilitleneceğini SÖYLÜYORUZ, ki
+    --onayla'dan önce görülsün.
+    """
+    if 'kullanici_firma' not in mevcut or 'kullanicilar' not in mevcut:
+        return []
+    try:
+        # ADMIN ve PASİF kullanıcılar DIŞARIDA:
+        #   · ADMIN rolü kapsamdan bağımsız olarak bütün firmaları
+        #     görüyor (_kullanici_firma_idleri) — kilitlenemez.
+        #     İlk sürümde onu da listeliyordum ve uyarı "admin
+        #     giremeyecek" diyordu; yanlış alarm, uyarının tamamını
+        #     güvenilmez yapar.
+        #   · Pasif kullanıcı zaten giriş yapamıyor; onu saymak
+        #     gürültü olurdu.
+        return [r[0] for r in b.execute(text(
+            'SELECT k.ad FROM kullanicilar k '
+            "WHERE COALESCE(k.firma_kapsam, 'secili') <> 'tumu' "
+            "  AND UPPER(COALESCE(k.rol, '')) <> 'ADMIN' "
+            '  AND COALESCE(k.aktif, :e) = :e '
+            '  AND NOT EXISTS (SELECT 1 FROM kullanici_firma kf '
+            '                  WHERE kf.kullanici_id = k.id '
+            '                    AND kf.firma_id = :kalan) '
+            'ORDER BY k.ad'), {'kalan': kalan_id, 'e': True}).fetchall()]
+    except Exception:
+        return []
 
 
 def tablo_sayim(b, tablolar):
@@ -424,7 +484,16 @@ if gozden_kacan:
     print("   Bu tablolar ne korunuyor ne siliniyor. Sessizce test")
     print("   verisi bırakmamak için betiği güncelleyin.")
     sys.exit(1)
-print(f" ✓ kapsama tam — {len(mevcut)} tablonun hepsi sınıflandırılmış")
+# KF4 · SAYI DOĞRU OLSUN
+# Burada `len(mevcut)` yazıyordu ve `alembic_version`'ı da sayıyordu.
+# Oysa o tablo SINIFLANDIRILMIŞ değil, kapsama denetiminden MUAF
+# TUTULMUŞ (yukarıdaki `t != 'alembic_version'`). "38 tablonun hepsi
+# sınıflandırılmış" cümlesi 37 doğru, 1 yanlıştı. Küçük bir sapma ama
+# bu betiğin bütün değeri raporunun doğruluğundan geliyor.
+_muaf = sorted(t for t in mevcut if t == 'alembic_version')
+_siniflanan = len(mevcut) - len(_muaf)
+print(f" ✓ kapsama tam — {_siniflanan} tablonun hepsi sınıflandırılmış"
+      + (f" ({', '.join(_muaf)} muaf)" if _muaf else ""))
 
 # ══════════════════════════════════════════════════════════════════════
 #  FİRMALAR
@@ -447,12 +516,11 @@ print()
 print("─" * 70)
 print(" FİRMALAR")
 print("─" * 70)
+# KF1: ★ (varsayılan) işareti KALKTI — bayrak kaldırıldı.
 for f in firmalar:
-    isaret = ' ★' if f['varsayilan'] else '  '
     kapali = '' if f['aktif'] else '  (kapalı)'
-    print(f"  {isaret} [{f['id']:>2}] {f['ad']:<18} {f['kod']:<5} "
+    print(f"     [{f['id']:>2}] {f['ad']:<18} {f['kod']:<5} "
           f"{tr(firma_sayimlari.get(f['id'], 0)):>9} kayıt{kapali}")
-print("     ★ varsayılan firma")
 
 if FIRMA_LISTESI:
     print("═" * 70)
@@ -491,10 +559,41 @@ if TEK_FIRMA_ARG:
 
 if TUMUNU_SIL:
     KIP = 'tumunu'
-    # Kalacak firma: varsayılan, yoksa en küçük kimlikli.
+    # ── HANGİ FİRMA KALACAK? ──
     # Sistem firmasız çalışmaz; üstelik firma kaydı R2'den beri
-    # korunan "firma bilgileri ve LOGO"nun yaşadığı yer (MF5).
-    _kalan = next((f for f in firmalar if f['varsayilan']), None) or firmalar[0]
+    # korunan "firma bilgileri ve LOGO"nun yaşadığı yer (MF5). Yani
+    # bu kipte bir firma KALMAK ZORUNDA.
+    #
+    # KF1'den önce bu karar `varsayilan` bayrağından geliyordu.
+    # Bayrak kaldırıldı ve yerine EN KÜÇÜK KİMLİĞİ koymadım: hangi
+    # firmanın yaşayacağı GERİ ALINAMAZ bir karar ve kimlik sırası
+    # bunun için bir gerekçe değil. Birden çok firma varsa betik
+    # artık SORUYOR.
+    if len(firmalar) > 1 and not KALAN_ARG:
+        print()
+        print(" ✗ HANGİ FİRMA KALACAK? --kalan= ile söyle.")
+        print()
+        print("   Bu kip diğer firmaları SİLER; hangisinin kalacağı")
+        print("   geri alınamaz bir karar, tahmin etmiyorum.")
+        print()
+        for f in firmalar:
+            print(f"     venv/bin/python sifirla2.py --tumunu-sil "
+                  f"--kalan={f['id']} --onayla      # {f['ad']}")
+        print()
+        sys.exit(1)
+    if KALAN_ARG:
+        _ad = [f for f in firmalar
+               if str(f['id']) == KALAN_ARG
+               or f['ad'].strip().upper() == KALAN_ARG.upper()]
+        if not _ad:
+            print(f"\n ✗ Kalacak firma bulunamadı: {KALAN_ARG}")
+            sys.exit(1)
+        if len(_ad) > 1:
+            print(f"\n ✗ '{KALAN_ARG}' birden çok firmaya uyuyor — kimlik yaz.")
+            sys.exit(1)
+        _kalan = _ad[0]
+    else:
+        _kalan = firmalar[0]          # tek firma var, seçilecek bir şey yok
     KALAN_FIRMA = _kalan
     SILINEN_FIRMALAR = [f for f in firmalar if f['id'] != _kalan['id']]
     KIP_ADI = 'TÜM VERİLERİ SİL'
@@ -581,6 +680,25 @@ if KIP == 'tumunu':
     print("   Cari kartları korunur ve KALAN FİRMAYA BAĞLANIR.")
     print("   Bağlanmazsa kart diskte durur ama hiçbir firmada")
     print("   görünmez — kullanıcı 'verim gitti' sanar.")
+    # ── KF6 · KİM KİLİTLENİYOR ──
+    with motor.connect() as _b:
+        _kilit = kilitlenecekler(_b, [f['id'] for f in SILINEN_FIRMALAR],
+                                 KALAN_FIRMA['id'])
+    if _kilit:
+        print()
+        print("   ⚠ BU KULLANICILAR SİSTEME GİREMEYECEK:")
+        for _ad in _kilit:
+            print(f"       {_ad}")
+        print()
+        print("   Kapsamları 'seçili firmalar' ve kalan firmaya")
+        print("   atanmamışlar; sıfırlamadan sonra izin listeleri boş")
+        print("   kalıyor. Arayüzdeki firma silme bunu REDDEDİYOR,")
+        print("   burada engellemiyorum — ama bilerek devam et.")
+        print()
+        print("   Çözüm (sıfırlamadan SONRA da olur):")
+        print("     Ayarlar → Kullanıcılar → kullanıcıyı düzenle →")
+        print(f"     firma kapsamı → [{KALAN_FIRMA['id']}] "
+              f"{KALAN_FIRMA['ad']} işaretle")
 
 # ══════════════════════════════════════════════════════════════════════
 #  RAPOR MODU
@@ -601,8 +719,15 @@ if not ONAY:
         print(f"        venv/bin/python sifirla2.py --firma={f['id']} "
               f"--onayla      # {f['ad']}")
     print()
-    print("   3) TÜM VERİLERİ SİL — firmalar da gider, biri kalır:")
-    print("        venv/bin/python sifirla2.py --tumunu-sil --onayla")
+    print("   3) TÜM VERİLERİ SİL — firmalar da gider, biri kalır.")
+    print("      Hangisinin KALACAĞINI sen söylüyorsun (KF1):")
+    if len(firmalar) > 1:
+        for f in firmalar:
+            print(f"        venv/bin/python sifirla2.py --tumunu-sil "
+                  f"--kalan={f['id']} --onayla   # {f['ad']} kalır")
+    else:
+        print("        venv/bin/python sifirla2.py --tumunu-sil --onayla")
+        print("        (tek firma var, seçilecek bir şey yok)")
     print()
     print(" ⚠ Önce elle yedek alın:")
     print("   sudo /usr/local/bin/milestone-yedek.sh")
@@ -681,10 +806,10 @@ with motor.begin() as b:
             b.execute(text('DELETE FROM firma WHERE id = :f'), {'f': f['id']})
             print(f"   firma [{f['id']}] {f['ad']} silindi")
 
-        # Kalan firma varsayılan ve açık olsun — tek firma kaldığında
-        # "varsayılan yok" durumu giriş akışını kırardı.
-        b.execute(text('UPDATE firma SET varsayilan = :e, aktif = :e '
-                       'WHERE id = :f'),
+        # Kalan firma AÇIK olsun: kapalı tek firma, girilemeyen bir
+        # sistem demek olurdu. (KF1: `varsayilan` kalktı, yalnızca
+        # `aktif` yazılıyor.)
+        b.execute(text('UPDATE firma SET aktif = :e WHERE id = :f'),
                   {'e': True, 'f': KALAN_FIRMA['id']})
 
         # ── CARİ GÖRÜNÜRLÜĞÜ ──
@@ -783,7 +908,13 @@ with motor.connect() as b:
                       f"her cari kalan firmada görünüyor")
             continue
 
-        if KIP == 'tumunu' and t in ('firma', 'kasa', 'banka', 'veriler'):
+        # KF1: `kullanici_firma` da bu gruba girer. Korunan bir tablo
+        # ama --tumunu-sil kipinde SİLİNEN firmalara bakan satırları
+        # bilerek gidiyor; eşitlik beklemek, doğru çalışan silmeyi
+        # HATA diye raporlamak olurdu. (cari_firma'da aynı tuzağa bir
+        # kez düşmüştüm — orada sayı ARTABİLDİĞİ için.)
+        if KIP == 'tumunu' and t in ('firma', 'kasa', 'banka', 'veriler',
+                                     'kullanici_firma'):
             # Bu kipte bilerek azalıyorlar (silinen firmaların
             # satırları). Sayı eşitliği beklenmez; ARTMAMALARI ve
             # firma'nın 1'e inmesi beklenir.
@@ -803,6 +934,18 @@ with motor.connect() as b:
             hatali = True
         print(f"   {isaret} {t:<16s} {tr(simdi):>7} kayıt korundu "
               f"(önce {tr(beklenen)})")
+
+    # 4a · KF6 · firmasız kalan kullanıcı
+    if KIP == 'tumunu' and 'kullanici_firma' in mevcut:
+        _k2 = kilitlenecekler(b, [], KALAN_FIRMA['id'])
+        if _k2:
+            print(f"   ⚠ {len(_k2)} kullanıcı hiçbir firmada: "
+                  f"{', '.join(_k2)}")
+            print("     Giriş yapamazlar — Ayarlar → Kullanıcılar'dan")
+            print("     firma ataması yapılmalı. (Hata değil, uyarı:")
+            print("     sıfırlamanın beklenen sonucu olabilir.)")
+        else:
+            print("   ✓ her kullanıcı en az bir firmada çalışabiliyor")
 
     # 4 · Görünürlüğü kalmayan cari var mı?
     # Kartı olup hiçbir firmada listelenmeyen cari, "veri var ama

@@ -370,6 +370,119 @@ else:
     for _ad, _n in _tamam:
         print(f"       {_ad:<28} satır {_n}")
 
+# ══════════════════════════════════════════════════════════════════════
+#  F6 · ERİŞİM ÇÖZÜMLEYİCİSİ
+# ══════════════════════════════════════════════════════════════════════
+#
+# KF1/KF2 ile çoklu firma tüm kullanıcılara açıldı ve "varsayılan
+# firma" kavramı kaldırıldı. Bu düzen DÖRT SATIRA dayanıyor; dördü de
+# tek kelimeyle bozulabilir ve bozulduğunda HATA VERMEZ:
+#
+#   1. Süzgeç `if _f is None:` ile kapanır. `if not _f:` yazılırsa
+#      "firma seçilmedi" değeri (0) falsy olduğu için süzgeç HİÇ
+#      KURULMAZ ve kullanıcı BÜTÜN firmaların verisini görür. Yani
+#      fail-closed diye konan değer tam tersi etki yapar. Bu satır
+#      zaten bir kez yanlış yazılmıştı.
+#   2. `aktif_firma_id` küresel çapaya (_sistem_firma) DÜŞMEZ. Düşerse
+#      yetkisi olmayan kullanıcı sessizce bir firmaya girer.
+#   3. Damga 0'ı REDDEDER. Etmezse seçim yapmamış kullanıcının yazdığı
+#      kayıt rastgele bir firmaya damgalanır.
+#   4. Firma listesi uçları İZİNLE süzülür. Süzülmezse kullanıcı
+#      yetkisi olmayan firmaların adını ve belge kodunu görür.
+print()
+print("─" * 70)
+print(" F6 · ERİŞİM ÇÖZÜMLEYİCİSİ   [SESSİZ SIZINTI / SESSİZ ERİŞİM]")
+print("─" * 70)
+
+
+def _govde(kaynak, ad):
+    """Bir fonksiyonun gövdesi, YORUMLAR ATILMIŞ (girintiye göre).
+
+    Yorumları atmak şart: F3'te aynı hatayı yapmıştım, 'firma_atla()'
+    geçen yorum satırları çıkış kapısı sayılıyordu. Burada da öyle
+    oldu — `aktif_firma_id` içindeki "eskiden _sistem_firma()
+    dönüyordu" açıklaması, fonksiyon hâlâ çapaya düşüyor gibi
+    okundu. Denetim kodu ölçmeli, metni değil.
+    """
+    m = re.search(r'^(\s*)def\s+' + re.escape(ad) + r'\s*\(', kaynak, re.M)
+    if not m:
+        return None
+    gir = len(m.group(1))
+    satirlar = kaynak[m.end():].split('\n')
+    toplanan = []
+    for sat in satirlar[1:]:
+        if sat.strip() and (len(sat) - len(sat.lstrip())) <= gir:
+            break
+        _k = sat.find('#')
+        toplanan.append(sat if _k < 0 else sat[:_k])
+    return '\n'.join(toplanan)
+
+
+try:
+    MODELS = io.open(KOK / 'models.py', encoding='utf-8').read()
+except Exception:
+    MODELS = ''
+
+_f6 = 0
+
+# 1 · süzgeç `is None` ile kapanıyor mu
+_suz = _govde(KAYNAK, '_firma_suzgeci')
+if _suz is None:
+    print("   ✗ _firma_suzgeci bulunamadı — süzgeç kancası kalkmış mı?")
+    _f6 += 1
+elif 'if _f is None:' not in _suz:
+    print("   ✗ _firma_suzgeci: `if _f is None:` YOK")
+    print("     Süzgeç `not` ile kapatılıyorsa 0 (firma seçilmedi)")
+    print("     değeri süzgeci HİÇ KURMAZ → bütün firmaların verisi")
+    print("     görünür. Fail-closed sanılan satır ters çalışır.")
+    _f6 += 1
+else:
+    print("   ✓ süzgeç yalnızca None'da kapanıyor (0 süzülüyor)")
+
+# 2 · çözümleyici küresel çapaya düşmüyor mu
+_akt = _govde(KAYNAK, 'aktif_firma_id')
+if _akt is None:
+    print("   ✗ aktif_firma_id bulunamadı")
+    _f6 += 1
+elif re.search(r'_sistem_firma\s*\(', _akt):
+    print("   ✗ aktif_firma_id küresel çapaya (_sistem_firma) DÜŞÜYOR")
+    print("     Varsayılan firma kaldırıldı; buraya düşmek yetkisi")
+    print("     olmayan kullanıcıyı sessizce bir firmaya sokar.")
+    print("     Çapa YALNIZCA kullanıcısız yollar için (models).")
+    _f6 += 1
+else:
+    print("   ✓ aktif_firma_id küresel çapaya düşmüyor")
+
+# 3 · damga 0'ı reddediyor mu
+_dmg = _govde(MODELS, '_firma_damgasi') if MODELS else None
+if _dmg is None:
+    print("   ⚠ models.py'de _firma_damgasi okunamadı — bu eksen atlandı")
+elif 'if not fid:' not in _dmg:
+    print("   ✗ _firma_damgasi 0'ı (firma seçilmedi) REDDETMİYOR")
+    print("     Reddetmezse ya yabancı anahtar kırılır ya kayıt")
+    print("     rastgele bir firmaya yazılır.")
+    _f6 += 1
+else:
+    print("   ✓ damga 'firma seçilmedi' durumunu reddediyor")
+
+# 4 · firma listesi uçları izinle süzülüyor mu
+for _ad, _aciklama in (('_firma_listesi_ozet', 'banner çipi'),
+                       ('api_firma_liste', 'ayarlar paneli'),
+                       ('firma_sec_ekran', 'firma seçim ekranı')):
+    _g = _govde(KAYNAK, _ad)
+    if _g is None:
+        print(f"   ⚠ {_ad} bulunamadı — atlandı")
+        continue
+    if '_kullanici_firma_idleri' not in _g:
+        print(f"   ✗ {_ad} ({_aciklama}) izinle SÜZÜLMÜYOR")
+        print("     Kullanıcı yetkisi olmayan firmanın adını ve belge")
+        print("     kodunu görür; geçiş yapamasa bile bu bilgidir.")
+        _f6 += 1
+    else:
+        print(f"   ✓ {_ad:<22} izinle süzülüyor ({_aciklama})")
+
+bulgu += _f6
+
 print()
 print("═" * 70)
 if bulgu:
