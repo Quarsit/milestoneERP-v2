@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Ayarlar{% endblock %}
+{% block title %}{{ 'Yönetim' if PANEL == 'yonetim' else 'Ayarlar' }}{% endblock %}
 
 {% block head %}
 <style>
@@ -111,29 +111,77 @@
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
   .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--kehribar-bg);color:var(--kehribar)}
   .izgara-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  /* YP4: firma seçim kutusu `.form-alan` içinde DEĞİL (satır değil,
+     tek satırlık bir araç çubuğu). Kendi kuralı olmazsa tarayıcının
+     ham <select>'i çıkıyor ve sayfanın geri kalanına yabancı
+     duruyordu — KF5'te aynı ders ölçülmüştü. */
+  #kullaniciFirmaSecim select{border:1px solid var(--cizgi-koyu);
+    border-radius:var(--r-kucuk);padding:8px 11px;font-family:var(--govde);
+    font-size:.88rem;background:var(--yuzey);color:var(--murekkep);
+    min-width:260px}
+  #kullaniciFirmaSecim select:focus{outline:none;border-color:var(--verde);
+    box-shadow:0 0 0 3px var(--verde-acik)}
   @media (max-width:900px){ .izgara-2{grid-template-columns:1fr} }
 </style>
 {% endblock %}
 
 {% block content %}
+{% if PANEL == 'yonetim' %}
+<h1 class="g-baslik">Yönetim</h1>
+<p class="g-alt">Firma üstü işler: firmalar, kullanıcılar ve yetkiler,
+   yedekler. Buradaki hiçbir ayar tek bir firmaya ait değildir —
+   o yüzden firma seçmeden de açılır.</p>
+{% else %}
 <h1 class="g-baslik">Ayarlar</h1>
-<p class="g-alt">Kullanıcılar ve yetkiler, firma bilgileri, liste tanımları.</p>
+<p class="g-alt">Bu firmada çalışırken kullanılan tanımlar: gönderim
+   hesabı, liste tanımları, banka hesapları.
+   {% if menu_admin %}Firmanın <b>kimliği</b> (ünvan, belge kodu, logo),
+   firmalar ve kullanıcılar
+   <a href="/yonetim" style="color:var(--verde);font-weight:600">Yönetim</a>
+   panelinde.{% endif %}</p>
+{% endif %}
 <svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
   <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
   <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
 </svg>
 
+{# ── SEKMELER ROTAYA GÖRE (YP2) ──
+   Aynı şablon iki sayfaya hizmet ediyor:
+
+     /yonetim  → Kullanıcılar · Firmalar · Yedekleme   (SİSTEM)
+     /ayarlar  → Firma Bilgileri · E-posta · Listeler · Bankalar
+                                                       (O FİRMA)
+
+   NEDEN AYNI ŞABLON: panelleri kesip ikinci bir dosyaya taşımak
+   19 KB'lık HTML ve onunla iç içe geçmiş JS'i bölmek demekti.
+   Daha kötüsü, bu projede MÜKERRER PANEL çoktan can yaktı — MF4'te
+   iki `yedekGovde` yüzünden yedek listesi boş görünüyordu. Tek
+   kaynak, iki yüz: ikizlenme yapısal olarak imkânsız, çünkü her
+   bölüm yalnızca bir sayfada BASILIYOR. #}
 <div class="sekmeler">
+  {% if PANEL == 'yonetim' %}
   <button class="sekme aktif" data-b="kullanici">Kullanıcılar</button>
-  <button class="sekme" data-b="firma">Firma</button>
-  <button class="sekme" data-b="eposta">E-posta</button>
+  <button class="sekme" data-b="firmalar">Firmalar</button>
+  <button class="sekme" data-b="yedek">Yedekleme</button>
+  {% else %}
+  {# YP4: "Firma Bilgileri" buradan KALKTI. Ünvan, belge kodu,
+     adres, logo, KDV ve avans firmanın KİMLİĞİ; o firmaya girmeden,
+     Yönetim panelindeki Firmalar sekmesinden düzenleniyor. Burada
+     kalan üç sekme ise o firmada ÇALIŞIRKEN kullanılan tanımlar:
+     gönderim hesabı, listeler, banka hesapları. #}
+  <button class="sekme aktif" data-b="eposta">E-posta</button>
   <button class="sekme" data-b="listeler">Listeler</button>
   <button class="sekme" data-b="banka">Bankalar</button>
-  <button class="sekme" data-b="yedek">Yedekleme</button>
+  {% endif %}
 </div>
 
 <!-- KULLANICILAR -->
+{% if PANEL == 'yonetim' %}
 <section class="bolum aktif" id="b-kullanici">
+  <!-- YP4: önce firma, sonra o firmanın kullanıcıları. 5 firma ×
+       10 kullanıcı tek listede 50 satır ediyordu. -->
+  <div id="kullaniciFirmaSecim" style="display:flex;align-items:center;
+       gap:10px;margin-bottom:14px"></div>
   <div class="tablo-kutu">
     <table>
       <thead><tr><th>Kullanıcı</th><th>Rol</th><th>Yetkili Modüller</th><th>Durum</th><th class="sag" style="width:150px"></th></tr></thead>
@@ -144,135 +192,188 @@
     <button class="btn-yeni" onclick="kullaniciAc()">+ Yeni Kullanıcı</button>
   </div>
 </section>
+{% endif %}
 
 <!-- FİRMA -->
-<section class="bolum" id="b-firma">
-  <!-- ── FİRMALAR (MF3) ──
-       Sistem birden çok tüzel kişilik taşıyabilir. Aşağıdaki "Firma
-       Bilgileri" formu AKTİF FİRMAYI düzenler; başka bir firmanın
-       bilgisini girmek için önce üst bardan o firmaya geç. -->
+{% if PANEL == 'yonetim' %}
+<!-- ── FİRMALAR · SİSTEM DÜZEYİ (YP2) ──
+     Firma açmak/silmek bir firmaya AİT DEĞİL, sisteme ait. Bu yüzden
+     Yönetim panelinde; Ayarlar'da yalnızca AKTİF FİRMANIN kimliği
+     düzenleniyor. Ayrım ölçütü: tablosu `firma_id` taşıyor mu.
+
+     YP3 · `aktif` BURADAN ALINDI. Bölümler `.bolum.aktif` ile
+     gösteriliyor ve bu bölüm de aktif basılıyordu: Kullanıcılar
+     sekmesindeyken Firmalar paneli de AYNI ANDA görünüyordu —
+     üstelik yükleyicisi (sekme tıklanmadığı için) hiç koşmadığından
+     sonsuza kadar "Yükleniyor…" yazıyordu. Hangi bölümün açık
+     geleceğini `.sekme.aktif` söylüyor; ikisi TEK olmalı. -->
+<section class="bolum" id="b-firmalar">
   <div class="panel" id="firmalarPanel" style="margin-bottom:18px">
     <h4>Firmalar</h4>
     <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
       Her firmanın stoğu, siparişi, kasası ve defteri ayrıdır.
-      Aşağıdaki form <b>aktif firmayı</b> düzenler.</p>
+      Firma <b>açmak, silmek ve ayarlarını düzenlemek</b> buradan
+      yapılır — hiçbirinin içine girmeden.</p>
     <div class="tablo-kutu">
       <table>
         <thead><tr><th>Firma</th><th>Belge Kodu</th><th>Vergi No</th>
-          <th class="sag" style="width:120px"></th></tr></thead>
+          <th class="sag" style="width:180px"></th></tr></thead>
         <tbody id="firmaGovde"><tr><td colspan="4" class="yukleniyor">Yükleniyor…</td></tr></tbody>
       </table>
     </div>
     <div id="firmaEkleKutu" style="margin-top:14px"></div>
   </div>
-  <div class="izgara-2">
-    <div class="panel">
-      <h4>Firma Bilgileri <span id="fBaslikFirma" style="color:var(--verde);font-weight:600"></span></h4>
-      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
-        Proforma ve fatura belgelerinde görünür.
-        <b>Aktif firmanın</b> bilgileridir — başka bir firmanınkini
-        düzenlemek için önce o firmaya geç.</p>
-      <div class="form-alan" style="margin-bottom:12px">
-        <label>Satıcı Firma Ünvanı</label>
-        <!-- MF5: örnek metin GERÇEK bir firma adı olmamalı. Boş
-             formda "Milestone Mermer…" yazınca, ikinci firmadayken
-             ana firmanın bilgisi oraya yazılmış gibi görünüyordu. -->
-        <input id="fFirma" placeholder="Tam ticari ünvan — belgelerde basılır">
-      </div>
-      <!-- ── RN3 · BELGE KODU ──
-           Buradaki alan eskiden "Kısaltma (stok kodlarında)" idi.
-           Etiket stok kodlarını etkilediğini söylüyordu ama `kisaltma`
-           alanını HİÇBİR YER OKUMUYOR (tüm kaynakta arandı: yalnızca
-           bu form yazıyor ve geri okuyor). Stok ve belge kodlarını
-           gerçekten belirleyen alan `belge_kodu` ve o da yalnızca
-           firma AÇILIRKEN sorulup bir daha değiştirilemiyordu.
 
-           Yani ekranda etkisi olmayan bir alan dururken, etkisi olan
-           alana erişim yoktu. Alan değiştirildi; `kisaltma` sütunu
-           veritabanında duruyor (göç yok, veri kaybı yok) ama forma
-           dönmüyor — ölü alanı ekranda tutmak aynı karışıklığı
-           yeniden doğurur. -->
-      <div class="form-alan" style="margin-bottom:12px">
-        <label>Belge Kodu (sipariş, fatura, stok ve cari kimliklerinde)</label>
-        <input id="fBelgeKodu" placeholder="en çok 4 karakter — örn. MLS"
-               maxlength="4" style="text-transform:uppercase">
-        <div class="ipucu" style="font-size:12px;color:var(--soluk);margin-top:4px">
-          Her firmanın belge sayacı bu koda göre ayrılır:
-          <code>SIP-MLS-STN26-01</code>. Boş bırakılırsa kimlikler
-          kodsuz üretilir (<code>SIP-STN26-01</code>).
-          <b>Belge varken değiştirmeyin</b> — eski belgeler eski kökte
-          kalır, yeni seri 01'den başlar; kimlikler bozulmaz ama
-          numara sürekliliği kopar.
-        </div>
-      </div>
+  <!-- ── TÜM FİRMALAR İÇİN (YP4) ──
+       KDV oranı ve üretim avans eşiği BUGÜN sistem geneli: ikisi de
+       `Veriler`de firma_id'siz tek satırda duruyor (damga Veriler'i
+       bilerek atlıyor, bkz. models._firma_damgasi). Yani bir firmanın
+       ayar kutusunda göstermek yalan olurdu — orada değiştirilen
+       değer öteki firmalarda da değişirdi.
 
-      <!-- F3: Bu üç alan proforma, ticari fatura ve packing list
-           şablonlarında BASILIYOR ama hiçbir yerden girilemiyordu —
-           belgeler satıcı iletişim bilgisi olmadan çıkıyordu.
-           Bir kez girilir, oluşturulan her belgeye otomatik işlenir. -->
-      <div class="form-alan" style="margin-bottom:12px">
-        <label>Firma Adresi <span style="color:var(--soluk);font-weight:400;text-transform:none">· belgelerde basılır</span></label>
-        <input id="fAdres" placeholder="Açık adres — belgelerde basılır">
-      </div>
-      <div class="form-satir f2" style="margin-bottom:14px">
-        <div class="form-alan"><label>Telefon</label>
-          <input id="fTelefon" data-buyuk-harf="hayir" placeholder="+90 258 000 00 00"></div>
-        <div class="form-alan"><label>E-posta</label>
-          <input id="fEposta" data-buyuk-harf="hayir" placeholder="ornek@firma.com"></div>
-      </div>
-      <button class="btn-yeni" onclick="firmaKaydet()">Kaydet</button>
+       Ölçüldü: panelden firma 2 için %18 yazıldı, firma 1 de %18
+       okudu; satırın firma_id'si NULL'dı. Firma başına ayrı oran
+       istenirse ayrı bir iş — veri taşıma gerekir. -->
+  <div class="panel" style="margin-bottom:18px" id="sistemAyarPanel">
+    <h4>Tüm firmalar için</h4>
+    <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+      Bu iki değer <b>sistem geneli</b>: hangi firmada olursan ol
+      aynısı geçerli. Firma başına ayrı tutulmuyor.</p>
+    <div class="izgara-2">
+        <div class="panel">
+          <h4>Vergi</h4>
+          <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Yurt içi faturalarda varsayılan KDV oranı.</p>
 
-      <div style="border-top:1px solid var(--cizgi);margin-top:18px;padding-top:16px">
-        <h4 style="margin-bottom:6px">Firma Logosu</h4>
-        <p style="color:var(--soluk);font-size:.83rem;margin-bottom:12px">
-          Proforma, Packing List, Commercial Invoice ve ekstre belgelerinin
-          üst kısmında görünür. Değiştirdiğinizde tüm belgeler anında güncellenir.
-        </p>
-        <div id="logoOnizleme" style="display:none;margin-bottom:12px;padding:14px;
-             background:#fff;border:1px solid var(--cizgi);border-radius:var(--r-kucuk);text-align:center">
-          <img id="logoResim" style="max-height:70px;max-width:100%;object-fit:contain">
-          <div id="logoBilgi" style="font-size:.75rem;color:var(--soluk);margin-top:8px"></div>
+          <div class="form-alan" style="margin-bottom:14px">
+            <label>KDV Oranı (%)</label>
+            <input id="fKdv" type="number" step="0.1" placeholder="20">
+          </div>
+          <button class="btn-yeni" onclick="kdvKaydet()">Kaydet</button>
         </div>
-        <div id="logoYokNot" style="padding:14px;background:var(--kagit);border:1px dashed var(--cizgi-koyu);
-             border-radius:var(--r-kucuk);text-align:center;color:var(--soluk);font-size:.85rem;margin-bottom:12px">
-          Henüz logo yüklenmedi — belgelerde firma adı yazı olarak görünüyor.
+        <div class="panel">
+          <h4>Üretim Ödeme Kapısı</h4>
+          <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Onaylı sipariş üretime geçmeden önce gereken minimum avans oranı. <b>0 = kapalı</b> (ödeme kontrolü yapılmaz). Yönetici kapıyı zorla geçebilir.</p>
+          <div class="form-alan" style="margin-bottom:14px">
+            <label>Minimum Avans (%)</label>
+            <input id="fAvans" type="number" step="1" min="0" max="100" placeholder="0">
+          </div>
+          <button class="btn-yeni" onclick="avansKaydet()">Kaydet</button>
         </div>
-        <input type="file" id="logoDosya" accept="image/png,image/jpeg,image/svg+xml,image/webp"
-               style="display:none" onchange="logoSecildi(event)">
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="blok-btn" onclick="document.getElementById('logoDosya').click()">
-            Logo seç ve yükle</button>
-          <button class="blok-btn" id="logoSilBtn" style="color:var(--kirmizi);display:none"
-                  onclick="logoSil()">Logoyu kaldır</button>
-        </div>
-        <div style="font-size:.75rem;color:var(--soluk);margin-top:8px">
-          PNG, JPG, SVG veya WEBP · en fazla 500 KB · şeffaf arka planlı PNG önerilir
-        </div>
-      </div>
     </div>
-    <div class="panel">
-      <h4>Vergi</h4>
-      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Yurt içi faturalarda varsayılan KDV oranı.</p>
-      <div class="form-alan" style="margin-bottom:14px">
-        <label>KDV Oranı (%)</label>
-        <input id="fKdv" type="number" step="0.1" placeholder="20">
-      </div>
-      <button class="btn-yeni" onclick="kdvKaydet()">Kaydet</button>
+  </div>
+
+  {# ── SEÇİLEN FİRMANIN AYARLARI (YP4) ──
+     Ayarlar sayfasındaki "Firma Bilgileri" sekmesi BURAYA TAŞINDI
+     (kopyalanmadı — orada artık yok). Orası AKTİF firmayı
+     düzenliyordu ve başka bir firmanınkini girmek için önce o
+     firmaya geçmek gerekiyordu; MF3B'de can yakan tuzak buydu —
+     A'nın ayarlarındayken B'yi düzenlediğini sanmak.
+
+     Artık düzenlenen firmayı TABLODAN seçiyorsun: `AYAR_FIRMA`
+     hangisi olduğunu tutuyor ve bütün uçlar `firma_id` ile
+     çağrılıyor. Kutu, firma seçilene kadar kapalı. #}
+  <div id="firmaAyarKutu" style="display:none">
+    <div style="display:flex;align-items:center;gap:12px;margin:4px 0 14px">
+      <button class="mini-btn" onclick="firmaAyarKapat()">← Firmalar</button>
+      <div style="font-family:var(--baslik);font-weight:700;font-size:1.02rem"
+           id="fAyarBaslik"></div>
     </div>
-    <div class="panel">
-      <h4>Üretim Ödeme Kapısı</h4>
-      <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">Onaylı sipariş üretime geçmeden önce gereken minimum avans oranı. <b>0 = kapalı</b> (ödeme kontrolü yapılmaz). Yönetici kapıyı zorla geçebilir.</p>
-      <div class="form-alan" style="margin-bottom:14px">
-        <label>Minimum Avans (%)</label>
-        <input id="fAvans" type="number" step="1" min="0" max="100" placeholder="0">
+    <div style="max-width:760px">
+      <div class="panel">
+        <h4>Firma Bilgileri</h4>
+        <p style="color:var(--soluk);font-size:.83rem;margin-bottom:14px">
+          Proforma, fatura ve packing list belgelerinde basılır.
+          Hangi firmayı düzenlediğin yukarıda yazıyor — bu firmaya
+          GİRMEDEN değiştiriliyor.</p>
+        <div class="form-alan" style="margin-bottom:12px">
+          <label>Satıcı Firma Ünvanı</label>
+          <!-- MF5: örnek metin GERÇEK bir firma adı olmamalı. Boş
+               formda "Milestone Mermer…" yazınca, ikinci firmadayken
+               ana firmanın bilgisi oraya yazılmış gibi görünüyordu. -->
+          <input id="fFirma" placeholder="Tam ticari ünvan — belgelerde basılır">
+        </div>
+        <!-- ── RN3 · BELGE KODU ──
+             Buradaki alan eskiden "Kısaltma (stok kodlarında)" idi.
+             Etiket stok kodlarını etkilediğini söylüyordu ama `kisaltma`
+             alanını HİÇBİR YER OKUMUYOR (tüm kaynakta arandı: yalnızca
+             bu form yazıyor ve geri okuyor). Stok ve belge kodlarını
+             gerçekten belirleyen alan `belge_kodu` ve o da yalnızca
+             firma AÇILIRKEN sorulup bir daha değiştirilemiyordu.
+
+             Yani ekranda etkisi olmayan bir alan dururken, etkisi olan
+             alana erişim yoktu. Alan değiştirildi; `kisaltma` sütunu
+             veritabanında duruyor (göç yok, veri kaybı yok) ama forma
+             dönmüyor — ölü alanı ekranda tutmak aynı karışıklığı
+             yeniden doğurur. -->
+        <div class="form-alan" style="margin-bottom:12px">
+          <label>Belge Kodu (sipariş, fatura, stok ve cari kimliklerinde)</label>
+          <input id="fBelgeKodu" placeholder="en çok 4 karakter — örn. MLS"
+                 maxlength="4" style="text-transform:uppercase">
+          <div class="ipucu" style="font-size:12px;color:var(--soluk);margin-top:4px">
+            Her firmanın belge sayacı bu koda göre ayrılır:
+            <code>SIP-MLS-STN26-01</code>. Boş bırakılırsa kimlikler
+            kodsuz üretilir (<code>SIP-STN26-01</code>).
+            <b>Belge varken değiştirmeyin</b> — eski belgeler eski kökte
+            kalır, yeni seri 01'den başlar; kimlikler bozulmaz ama
+            numara sürekliliği kopar.
+          </div>
+        </div>
+
+        <!-- F3: Bu üç alan proforma, ticari fatura ve packing list
+             şablonlarında BASILIYOR ama hiçbir yerden girilemiyordu —
+             belgeler satıcı iletişim bilgisi olmadan çıkıyordu.
+             Bir kez girilir, oluşturulan her belgeye otomatik işlenir. -->
+        <div class="form-alan" style="margin-bottom:12px">
+          <label>Firma Adresi <span style="color:var(--soluk);font-weight:400;text-transform:none">· belgelerde basılır</span></label>
+          <input id="fAdres" placeholder="Açık adres — belgelerde basılır">
+        </div>
+        <div class="form-satir f2" style="margin-bottom:14px">
+          <div class="form-alan"><label>Telefon</label>
+            <input id="fTelefon" data-buyuk-harf="hayir" placeholder="+90 258 000 00 00"></div>
+          <div class="form-alan"><label>E-posta</label>
+            <input id="fEposta" data-buyuk-harf="hayir" placeholder="ornek@firma.com"></div>
+        </div>
+        <button class="btn-yeni" onclick="firmaKaydet()">Kaydet</button>
+
+        <div style="border-top:1px solid var(--cizgi);margin-top:18px;padding-top:16px">
+          <h4 style="margin-bottom:6px">Firma Logosu</h4>
+          <p style="color:var(--soluk);font-size:.83rem;margin-bottom:12px">
+            Proforma, Packing List, Commercial Invoice ve ekstre belgelerinin
+            üst kısmında görünür. Değiştirdiğinizde tüm belgeler anında güncellenir.
+          </p>
+          <div id="logoOnizleme" style="display:none;margin-bottom:12px;padding:14px;
+               background:#fff;border:1px solid var(--cizgi);border-radius:var(--r-kucuk);text-align:center">
+            <img id="logoResim" style="max-height:70px;max-width:100%;object-fit:contain">
+            <div id="logoBilgi" style="font-size:.75rem;color:var(--soluk);margin-top:8px"></div>
+          </div>
+          <div id="logoYokNot" style="padding:14px;background:var(--kagit);border:1px dashed var(--cizgi-koyu);
+               border-radius:var(--r-kucuk);text-align:center;color:var(--soluk);font-size:.85rem;margin-bottom:12px">
+            Henüz logo yüklenmedi — belgelerde firma adı yazı olarak görünüyor.
+          </div>
+          <input type="file" id="logoDosya" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                 style="display:none" onchange="logoSecildi(event)">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="blok-btn" onclick="document.getElementById('logoDosya').click()">
+              Logo seç ve yükle</button>
+            <button class="blok-btn" id="logoSilBtn" style="color:var(--kirmizi);display:none"
+                    onclick="logoSil()">Logoyu kaldır</button>
+          </div>
+          <div style="font-size:.75rem;color:var(--soluk);margin-top:8px">
+            PNG, JPG, SVG veya WEBP · en fazla 500 KB · şeffaf arka planlı PNG önerilir
+          </div>
+        </div>
       </div>
-      <button class="btn-yeni" onclick="avansKaydet()">Kaydet</button>
     </div>
   </div>
 </section>
+{% endif %}
+
 
 <!-- E-POSTA (SMTP) -->
-<section class="bolum" id="b-eposta">
+{% if PANEL != 'yonetim' %}
+<!-- YP4: "Firma Bilgileri" panele taşındı; Ayarlar'ın ilk sekmesi
+     artık bu. Açık sekme ile açık bölüm aynı olmak zorunda. -->
+<section class="bolum aktif" id="b-eposta">
   <!-- ── AKTİF GÖNDERİCİ (EP1) ──
        İki SMTP paneli yan yana duruyordu ve ikisi de aynı
        görünüyordu; kullanıcı hangisinin geçerli olduğunu
@@ -383,8 +484,11 @@
     <button class="btn-yeni" onclick="bankaAc()">+ Yeni Banka Hesabı</button>
   </div>
 </section>
+{% endif %}
 
-<!-- YEDEKLEME -->
+<!-- YEDEKLEME · SİSTEM DÜZEYİ: yedek bütün veritabanını kapsıyor,
+     bir firmaya ait değil. -->
+{% if PANEL == 'yonetim' %}
 <section class="bolum" id="b-yedek">
   <div class="izgara-2">
     <div class="panel">
@@ -419,6 +523,7 @@
     </div>
   </div>
 </section>
+{% endif %}
 
 <!-- Banka modalı -->
 <div class="modal-ortu" id="bankaModal" onclick="if(event.target===this)bankaKapat()">
@@ -810,15 +915,88 @@ async function kullaniciYukle() {
       '<tr><td colspan="5" class="bos">Kullanıcı listesi alınamadı (admin yetkisi gerekir).</td></tr>';
     return;
   }
+  kullaniciFirmaSecimiCiz();
+  kullaniciListeCiz();
+}
+
+/* ══ FİRMA BAZLI KULLANICI LİSTESİ (YP4) ══
+
+   Önce bütün kullanıcılar tek listede basılıyordu. 5 firma × 10
+   kullanıcı = 50 satır: aradığını bulmak için gözle tarama. Artık
+   önce firma seçiliyor, liste o firmada çalışabilenleri gösteriyor.
+
+   SÜZME İSTEMCİDE: uç zaten her kullanıcının `firma_kapsam` ve
+   `firmalar` alanlarını veriyor (KF3). İkinci bir uç açmak, aynı
+   yetki mantığının ikinci bir kopyası demekti.
+
+   ÜÇ GRUP VAR, üçü de görünür olmalı:
+     · o firmaya atanmış olanlar
+     · `firma_kapsam = tumu` olanlar — HER firmada çalışıyorlar,
+       dolayısıyla her firmanın listesinde görünmeliler (muhasebe,
+       yönetim). Rozetle ayırt ediliyor.
+     · HİÇBİR firmaya atanmamış olanlar — bunlar hiçbir firmanın
+       listesine girmez ve seçenek olmasa EKRANDAN KAYBOLURLARDI:
+       sisteme giremeyen ama düzeltilmek için de bulunamayan
+       kullanıcı. Seçim kutusunda kendi satırları var. */
+let KF_LISTE_FIRMA = null;
+
+function _kfFirmasiz(u) {
+  return (u.firma_kapsam || 'secili') !== 'tumu'
+      && (u.rol || '').toUpperCase() !== 'ADMIN'
+      && !((u.firmalar || []).length);
+}
+
+function _kfGorunur(u) {
+  if (KF_LISTE_FIRMA === 'yok') return _kfFirmasiz(u);
+  if (!KF_LISTE_FIRMA) return true;
+  if ((u.firma_kapsam || 'secili') === 'tumu') return true;
+  if ((u.rol || '').toUpperCase() === 'ADMIN') return true;
+  return (u.firmalar || []).includes(KF_LISTE_FIRMA);
+}
+
+function kullaniciFirmaSecimiCiz() {
+  const k = document.getElementById('kullaniciFirmaSecim');
+  if (!k) return;
+  const firmasiz = KULLANICILAR.filter(_kfFirmasiz).length;
+  if (KF_LISTE_FIRMA === null) {
+    /* Açılışta ilk firma seçili gelir: tek firmalı kurulumda
+       seçtirecek bir şey yok, çok firmalıda da bir yerden
+       başlamak gerekiyor. */
+    KF_LISTE_FIRMA = (FIRMALAR_KF[0] || {}).id || 'tum';
+  }
+  k.innerHTML = `
+    <label style="font-size:.76rem;font-weight:600;letter-spacing:.04em;
+           text-transform:uppercase;color:var(--soluk)">Firma</label>
+    <select id="kfListeSecim" onchange="kullaniciFirmaDegisti(this.value)"
+            style="max-width:420px">
+      ${FIRMALAR_KF.map(f => `<option value="${f.id}"${
+          f.id === KF_LISTE_FIRMA ? ' selected' : ''}>${kacar(f.ad)}</option>`).join('')}
+      <option value="tum"${KF_LISTE_FIRMA === 'tum' ? ' selected' : ''}
+        >Tüm kullanıcılar (${KULLANICILAR.length})</option>
+      ${firmasiz ? `<option value="yok"${KF_LISTE_FIRMA === 'yok' ? ' selected' : ''}
+        >⚠ Firması olmayanlar (${firmasiz})</option>` : ''}
+    </select>`;
+}
+
+function kullaniciFirmaDegisti(deger) {
+  KF_LISTE_FIRMA = (deger === 'tum' || deger === 'yok') ? deger : parseInt(deger, 10);
+  kullaniciListeCiz();
+}
+
+function kullaniciListeCiz() {
   const g = document.getElementById('kullaniciGovde');
-  g.innerHTML = KULLANICILAR.length ? KULLANICILAR.map(u => {
+  const liste = KULLANICILAR.filter(_kfGorunur);
+  g.innerHTML = liste.length ? liste.map(u => {
     let y = {};
     try { y = typeof u.yetkiler === 'string' ? JSON.parse(u.yetkiler || '{}') : (u.yetkiler || {}); } catch (e) { y = {}; }
     const admin = (u.rol || '').toUpperCase() === 'ADMIN';
     const acik = Object.entries(y).filter(([, v]) => v !== 'gizli');
     return `
     <tr style="border-left-color:var(${u.aktif === false ? '--cizgi-koyu' : '--verde'})">
-      <td><strong>${kacar(u.ad)}</strong></td>
+      <td><strong>${kacar(u.ad)}</strong>${
+        (u.firma_kapsam || 'secili') === 'tumu' || admin
+          ? ' <span class="rozet rz-mavi" title="Her firmada çalışabilir">tüm firmalar</span>'
+          : ''}</td>
       <td><span class="rozet ${admin ? 'rz-yesil' : 'rz-gri'}">${kacar(u.rol || 'PERSONEL')}</span></td>
       <td style="font-size:.83rem;color:var(--soluk)">
         ${admin ? '<span style="color:var(--verde);font-weight:600">Tüm modüller</span>'
@@ -834,7 +1012,11 @@ async function kullaniciYukle() {
           ? `<button class="mini-btn" style="color:var(--kirmizi)" onclick="kullaniciSil(${u.id}, '${kacar(u.ad)}')">Sil</button>` : ''}
       </td>
     </tr>`;
-  }).join('') : '<tr><td colspan="5" class="bos">Kullanıcı yok.</td></tr>';
+  }).join('')
+    : `<tr><td colspan="5" class="bos">${KF_LISTE_FIRMA === 'yok'
+        ? 'Firması olmayan kullanıcı yok.'
+        : 'Bu firmada kullanıcı yok — "+ Yeni Kullanıcı" ile ekleyebilirsin.'
+      }</td></tr>`;
 }
 
 function kullaniciAc(id) {
@@ -854,8 +1036,14 @@ function kullaniciAc(id) {
   const _fk = document.getElementById('uFirmaKapsam');
   if (_fk) _fk.value = DUZENLENEN ? (DUZENLENEN.firma_kapsam || 'secili')
                                   : 'secili';
+  /* YP4: YENİ kullanıcı, listede açık olan firmayla başlar. Liste
+     artık firma bazlı; "MILESTONE'un kullanıcıları"na bakarken
+     açılan pencere hiçbir firma işaretli gelirse, kaydedilen
+     kullanıcı hiçbir firmada çalışamaz ve kendi listesinde bile
+     görünmez. */
   SECILI_FIRMALAR = (DUZENLENEN && Array.isArray(DUZENLENEN.firmalar))
-    ? DUZENLENEN.firmalar.slice() : [];
+    ? DUZENLENEN.firmalar.slice()
+    : (typeof KF_LISTE_FIRMA === 'number' ? [KF_LISTE_FIRMA] : []);
   uFirmaKutulariCiz();
   /* EP3: kullanıcının e-posta hesabını yükle. YENİ kullanıcıda
      alanlar boş; kullanıcı henüz kaydedilmediği için ayar da
@@ -1125,13 +1313,39 @@ async function kullaniciSil(id, ad) {
   } catch (e) { /* */ }
 }
 
-/* ── Firma + KDV ── */
+/* ══ FİRMA AYARLARI · PANELDEN, FİRMAYA GİRMEDEN (YP4) ══
+
+   Bu formun düzenlediği firmayı artık oturumdaki seçim değil,
+   tablodan tıklanan satır belirliyor. `AYAR_FIRMA` o kimliği
+   tutuyor ve aşağıdaki her çağrı onu taşıyor.
+
+   TAŞIMAYI UNUTMAK SESSİZ BİR HATA olurdu: uç, `firma_id` yoksa
+   AKTİF firmayı düzenliyor (eski davranış, proforma ekranları hâlâ
+   öyle kullanıyor). Panelde aktif firma yok — yani kimlik gitmezse
+   istek boşa düşer ya da yanlış firmaya yazar. O yüzden tek bir
+   yardımcıdan geçiriliyor; çağrı yerlerinde elle string birleştirmek
+   yok. */
+let AYAR_FIRMA = null;
+
+function fYol(yol) {
+  /* GET için sorgu dizesi, POST/DELETE için gövde — ikisi de
+     sunucuda okunuyor. Kimlik yoksa hiç eklenmiyor: o zaman uç
+     eski davranışıyla aktif firmayı düzenler. */
+  if (!AYAR_FIRMA) return yol;
+  return yol + (yol.includes('?') ? '&' : '?') + 'firma_id=' + AYAR_FIRMA;
+}
+
+function fGovde(nesne) {
+  return JSON.stringify(AYAR_FIRMA
+    ? Object.assign({ firma_id: AYAR_FIRMA }, nesne) : nesne);
+}
+
 /* ═══ FİRMA LOGOSU ═══
    Logo veritabanında saklanır; yüklendiği an tüm belgelerde kullanılır.
    Değiştirmek için yeni dosya seçmek yeterli — eskisi otomatik değişir. */
 async function logoYukle() {
   try {
-    const d = await api('/api/ayarlar/logo');
+    const d = await api(fYol('/api/ayarlar/logo'));
     const onizle = document.getElementById('logoOnizleme');
     const yokNot = document.getElementById('logoYokNot');
     const silBtn = document.getElementById('logoSilBtn');
@@ -1159,7 +1373,7 @@ function logoSecildi(olay) {
     try {
       const d = await api('/api/ayarlar/logo', {
         method: 'POST',
-        body: JSON.stringify({ logo: okuyucu.result, dosya_adi: dosya.name })
+        body: fGovde({ logo: okuyucu.result, dosya_adi: dosya.name })
       });
       bildir(d.mesaj || 'Logo kaydedildi');
       logoYukle();
@@ -1173,25 +1387,53 @@ function logoSecildi(olay) {
 async function logoSil() {
   if (!await onayla('Logo kaldırılsın mı?\n\nBelgelerde tekrar firma adı yazısı görünecek.')) return;
   try {
-    const d = await api('/api/ayarlar/logo', { method: 'DELETE' });
+    const d = await api('/api/ayarlar/logo',
+                        { method: 'DELETE', body: fGovde({}) });
     bildir(d.mesaj || 'Logo kaldırıldı');
     logoYukle();
   } catch (e) { /* */ }
 }
 
+/* Tablodan bir firmanın "Ayarlar" düğmesine basılınca açılır. */
+async function firmaAyarAc(fid) {
+  AYAR_FIRMA = fid;
+  const f = ((FIRMA_VERI && FIRMA_VERI.firmalar) || [])
+            .find(x => x.id === fid);
+  document.getElementById('fAyarBaslik').textContent =
+    (f && f.ad) ? f.ad + ' · ayarlar' : 'Firma ayarları';
+  document.getElementById('firmalarPanel').style.display = 'none';
+  document.getElementById('sistemAyarPanel').style.display = 'none';
+  document.getElementById('firmaAyarKutu').style.display = '';
+  await firmaYukle();
+}
+
+function firmaAyarKapat() {
+  AYAR_FIRMA = null;
+  document.getElementById('firmaAyarKutu').style.display = 'none';
+  document.getElementById('firmalarPanel').style.display = '';
+  document.getElementById('sistemAyarPanel').style.display = '';
+  /* Belge kodu ya da ünvan değişmiş olabilir; tablo tazelensin. */
+  firmaListesiYukle();
+}
+
 async function firmaYukle() {
   try {
-    const d = await api('/api/ayarlar/firma');
+    const d = await api(fYol('/api/ayarlar/firma'));
     document.getElementById('fFirma').value = d.satici_firma || '';
-  // MF5: hangi firmayı düzenlediğin başlıkta yazsın.
-  const _bf = document.getElementById('fBaslikFirma');
-  if (_bf) _bf.textContent = d.firma_ad ? '· ' + d.firma_ad : '';
     document.getElementById('fBelgeKodu').value = d.belge_kodu || '';
     document.getElementById('fAdres').value = d.satici_adres || '';
     document.getElementById('fTelefon').value = d.satici_tel || '';
     document.getElementById('fEposta').value = d.satici_email || '';
   } catch (e) { /* */ }
   logoYukle();
+}
+
+/* ── TÜM FİRMALAR İÇİN (YP4) ──
+   KDV oranı ve avans eşiği firma ayarı DEĞİL: ikisi de `Veriler`de
+   firma_id'siz tek satırda duruyor. `firma_id` göndermiyoruz —
+   göndermek, firma başına ayrı tutuluyormuş gibi davranmak olurdu
+   ve uç yine aynı tek satırı yazardı. */
+async function sistemAyarYukle() {
   try {
     const k = await api('/api/ayarlar/kdv_oran');
     document.getElementById('fKdv').value = k.oran != null ? k.oran : '';
@@ -1206,7 +1448,8 @@ async function avansKaydet() {
   if (isNaN(yuzde)) yuzde = 0;
   yuzde = Math.max(0, Math.min(100, yuzde));
   try {
-    const d = await api('/api/ayarlar/uretim_avans', { method: 'POST', body: JSON.stringify({ yuzde }) });
+    const d = await api('/api/ayarlar/uretim_avans',
+                        { method: 'POST', body: JSON.stringify({ yuzde }) });
     bildir(d.mesaj || ('Üretim avans eşiği %' + yuzde));
   } catch (e) { /* */ }
 }
@@ -1281,13 +1524,13 @@ async function firmaKaydet() {
   try {
     await api('/api/ayarlar/firma', {
       method: 'POST',
-      body: JSON.stringify({
+      body: fGovde({
         satici_firma: document.getElementById('fFirma').value,
         belge_kodu: document.getElementById('fBelgeKodu').value
                       .trim().toUpperCase(),
-      satici_adres: document.getElementById('fAdres').value.trim(),
-      satici_tel: document.getElementById('fTelefon').value.trim(),
-      satici_email: document.getElementById('fEposta').value.trim()
+        satici_adres: document.getElementById('fAdres').value.trim(),
+        satici_tel: document.getElementById('fTelefon').value.trim(),
+        satici_email: document.getElementById('fEposta').value.trim()
       })
     });
     bildir('Firma bilgileri kaydedildi');
@@ -1297,7 +1540,8 @@ async function kdvKaydet() {
   const oran = parseFloat(document.getElementById('fKdv').value);
   if (isNaN(oran)) { bildir('Geçerli bir oran gir.', true); return; }
   try {
-    await api('/api/ayarlar/kdv_oran', { method: 'POST', body: JSON.stringify({ oran }) });
+    await api('/api/ayarlar/kdv_oran',
+                { method: 'POST', body: JSON.stringify({ oran }) });
     bildir('KDV oranı kaydedildi · %' + oran);
   } catch (e) { /* */ }
 }
@@ -1589,14 +1833,20 @@ async function yedekSil(dosya) {
 }
 
 /* ── Sekmeler ── */
-const yuklendi = { kullanici: false, firma: false, listeler: false, banka: false, yedek: false };
+const yuklendi = { kullanici: false, firmalar: false, listeler: false, banka: false, yedek: false };
+/* YP2: "firma" sekmesi ikiye ayrıldı — `firmalar` (sistem, Yönetim
+   panelinde) ve `firma` (aktif firmanın kimliği, Ayarlar'da). İkisi
+   ayrı yükleyici istiyor.
+
+   MF3B notu hâlâ geçerli: firmaListesiYukle yazılmış ama buraya
+   bağlanmamıştı ve tablo "Yükleniyor…"da kalıyor, "+ Yeni Firma"
+   düğmesi hiç basılmıyordu. Bağlamayı unutmak sessiz bir hata. */
+/* YP4: `firma` anahtarı KALKTI — Ayarlar'da artık öyle bir sekme
+   yok. Firma ayarları panelin Firmalar sekmesinden, tablodan bir
+   firma seçilerek açılıyor (firmaAyarAc). Haritada ölü anahtar
+   bırakmak, sekme sanıp aramaya yol açardı. */
 const yukleyici = { kullanici: kullaniciYukle,
-                    // MF3B: "firma" sekmesi İKİ şey yükler — firma
-                    // bilgisi formu ve FİRMALAR listesi. MF3'te
-                    // firmaListesiYukle yazılmış ama buraya
-                    // bağlanmamıştı: tablo "Yükleniyor…"da kalıyor,
-                    // "+ Yeni Firma" düğmesi hiç basılmıyordu.
-                    firma: () => { firmaYukle(); firmaListesiYukle(); },
+                    firmalar: firmaListesiYukle,
                     listeler: lookupYukle,
                     banka: bankaYukle, yedek: yedekYukle,
                     // E-posta sekmesi: hem şirket ayarı hem kişisel hesap yüklenir
@@ -1611,8 +1861,21 @@ document.querySelectorAll('.sekme').forEach(s => s.onclick = () => {
   if (!yuklendi[ad]) { yuklendi[ad] = true; yukleyici[ad](); }
 });
 
-yuklendi.kullanici = true;
-kullaniciYukle();
+/* ── AÇILIŞTA HANGİ SEKME ── (YP2)
+   Sabit `kullanici` yazılıydı; Ayarlar'da o sekme artık YOK ve
+   kullaniciYukle() orada 403 alır (uç 'ayarlar' yazma yetkisi
+   arıyor, panel admin'e özel). Açık olan sekme neyse onu
+   yüklüyoruz — şablon koşulu doğru sekmeyi zaten `aktif` basıyor.
+
+   NOT: bu yorumda şablon etiketi YAZMAYIN. İlk hâlinde örnek
+   olsun diye açılı-yüzde etiketi yazmıştım; Jinja JS yorumunun
+   içinde olduğunu bilmiyor, onu etiket sanıp ayrıştırdı ve
+   sayfa TemplateSyntaxError verdi. */
+(function acilisSekmesi() {
+  const ilk = document.querySelector('.sekme.aktif');
+  const ad = ilk && ilk.dataset.b;
+  if (ad && yukleyici[ad]) { yuklendi[ad] = true; yukleyici[ad](); }
+})();
 
 /* ── FİRMALAR (MF3) ── */
 let FIRMA_VERI = null;
@@ -1633,8 +1896,10 @@ async function firmaListesiYukle() {
           ${f.unvan && f.unvan !== f.ad ? `<div style="color:var(--soluk);font-size:.78rem">${kacar(f.unvan)}</div>` : ''}</td>
       <td class="mono">${kacar(f.belge_kodu || '—')}</td>
       <td class="mono">${kacar(f.vergi_no || '—')}</td>
-      <td class="sag">${(FIRMA_VERI.admin && f.id !== FIRMA_VERI.aktif)
-        ? `<button class="mini-btn" onclick="firmaGec(${f.id})">Bu firmaya geç</button>` : ''}</td>
+      <td class="sag">${FIRMA_VERI.admin
+        ? `<button class="mini-btn" onclick="firmaAyarAc(${f.id})">Ayarlar</button>
+           <button class="mini-btn" style="color:var(--kirmizi)"
+             onclick="firmaSilAc(${f.id})">Sil</button>` : ''}</td>
     </tr>`).join('')
     : '<tr><td colspan="4" class="bos">Firma kaydı yok</td></tr>';
 
@@ -1642,6 +1907,7 @@ async function firmaListesiYukle() {
   if (!kutu) return;
   if (!FIRMA_VERI.admin) { kutu.innerHTML = ''; return; }
   kutu.innerHTML = `<button class="btn-yeni" onclick="firmaEkleAc()">+ Yeni Firma</button>`;
+  sistemAyarYukle();
 }
 
 function firmaEkleAc() {
@@ -1711,13 +1977,53 @@ async function yeniFirmaKaydet() {
   }
 }
 
-async function firmaGec(id) {
+/* ── FİRMA SİL (YP3) ──
+   Silme firma seçim ekranından BURAYA taşındı. Oradaki yeri
+   yanlıştı: o ekran "nerede çalışacağım" ekranı ve kartın İÇİNDE
+   duran Sil, girmek için basılacak düğmenin üstündeydi.
+
+   "Bu firmaya geç" düğmesi de kalktı. Panel firma bağlamının
+   DIŞINDA; içeriden bir firmaya girmek, panelden çıkarken nereye
+   döneceğini belirsizleştiriyordu. Firmaya giriş tek kapıdan:
+   firma seçim ekranı.
+
+   Döküm ÖNCE gösteriliyor. "1.240 kayıt silinecek" ile "bu firma
+   boş" arasındaki fark, onay penceresinin tek işi. */
+async function firmaSilAc(id) {
+  const f = ((FIRMA_VERI && FIRMA_VERI.firmalar) || [])
+            .find(x => x.id === id);
+  const ad = (f && f.ad) || ('#' + id);
+  let o;
   try {
-    const d = await api('/api/firma/sec', {
-      method: 'POST', body: JSON.stringify({ firma_id: id }) });
-    if (d && d.ok) location.reload();
-    else bildir((d && d.mesaj) || 'Geçilemedi', true);
-  } catch (e) { bildir('Geçilemedi', true); }
+    o = await api('/api/firma/' + id + '/ozet');
+  } catch (e) { bildir('Firma bilgisi okunamadı', true); return; }
+  if (!o || !o.ok) { bildir((o && o.mesaj) || 'Firma bilgisi okunamadı', true); return; }
+  /* Sunucu engeli (son firma, içinde bulunduğun firma, birilerinin
+     TEK firması) onay penceresinden ÖNCE söylenir — kullanıcıyı
+     "Evet"e tıklatıp sonra reddetmek kaba olurdu. */
+  if (o.engel) { bildir(o.engel, true); return; }
+
+  /* Düğmenin yazısı da KAYIT SAYISINA bağlı. Boş firmada sunucu
+     yedek ALMIYOR (toplam > 0 şartı); "Yedekle ve sil" yazmak
+     alınmayan bir yedeği söz vermek olurdu. */
+  let metin;
+  if (o.kayit_sayisi > 0) {
+    const d = Object.entries(o.dagilim || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 12)
+      .map(([t, n]) => `${t} ${n.toLocaleString('tr-TR')}`).join(' · ');
+    metin = `${ad} firmasında ${o.kayit_sayisi.toLocaleString('tr-TR')}`
+          + ` kayıt var:\n\n${d}\n\nHepsi silinecek. Silmeden önce tam`
+          + ` veritabanı yedeği alınır; yedek alınamazsa silme yapılmaz.`;
+  } else {
+    metin = `${ad} firmasında hiç kayıt yok. Doğrudan silinecek.`;
+  }
+  if (!await onayla(metin, { baslik: 'Firmayı sil', tehlike: true,
+        tamam: o.kayit_sayisi > 0 ? 'Yedekle ve sil' : 'Sil' })) return;
+  try {
+    const d = await api('/api/firma/' + id, { method: 'DELETE' });
+    if (d && d.ok) { bildir(d.mesaj || 'Firma silindi'); await firmaListesiYukle(); }
+    else bildir((d && d.mesaj) || 'Silinemedi', true);
+  } catch (e) { bildir('Silinemedi', true); }
 }
 </script>
 {% endblock %}

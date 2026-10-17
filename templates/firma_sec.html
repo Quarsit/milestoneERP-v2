@@ -49,77 +49,22 @@ h1{font-family:var(--baslik);font-size:1.6rem;font-weight:800;letter-spacing:-.0
 .ayrac{display:flex;align-items:center;gap:12px;color:var(--soluk);
   font-size:.8rem;margin:22px 0 14px}
 .ayrac::before,.ayrac::after{content:"";flex:1;height:1px;background:var(--cizgi)}
-.ekle-btn{width:100%;background:transparent;border:1px dashed var(--cizgi-koyu);
-  border-radius:12px;padding:14px;font-family:inherit;font-size:.92rem;
-  font-weight:600;color:var(--soluk);cursor:pointer;transition:all .14s}
-.ekle-btn:hover{border-color:var(--verde);color:var(--verde);background:var(--yuzey)}
-.form{background:var(--yuzey);border:1px solid var(--cizgi);border-radius:12px;padding:18px}
-.form h2{font-family:var(--baslik);font-size:1.05rem;margin-bottom:6px}
-.form p{color:var(--soluk);font-size:.83rem;margin-bottom:14px;line-height:1.5}
-.ikili{display:grid;grid-template-columns:1fr 110px;gap:12px}
-.alan{margin-bottom:12px}
-.alan label{display:block;font-size:.76rem;font-weight:600;letter-spacing:.04em;
-  text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
-.alan input{width:100%;padding:10px 12px;border:1px solid var(--cizgi-koyu);
-  border-radius:8px;font-family:inherit;font-size:.95rem;background:var(--taban);
+/* ── YÖNETİM PANELİ DÜĞMESİ (YP3) ──
+   Burası "+ Yeni firma ekle"nin yeriydi. Form, onay penceresi ve
+   Sil düğmesiyle birlikte kalktı; bu ekranın tek işi seçtirmek.
+   Firma açma/silme ve kullanıcı işleri panelde. */
+.panel-btn{display:block;width:100%;text-align:center;text-decoration:none;
+  background:transparent;border:1px dashed var(--cizgi-koyu);border-radius:12px;
+  padding:14px;font-family:inherit;cursor:pointer;transition:all .14s}
+.panel-btn:hover{border-color:var(--verde);background:var(--yuzey)}
+.panel-btn .pb-ad{display:block;font-size:.95rem;font-weight:700;
   color:var(--murekkep)}
-.alan input:focus{outline:0;border-color:var(--verde);background:var(--yuzey)}
-.dugmeler{display:flex;gap:8px;margin-top:4px}
-.bas{background:var(--verde);color:#fff;border:0;border-radius:8px;padding:11px 18px;
-  font-family:inherit;font-size:.92rem;font-weight:600;cursor:pointer}
-.bas:hover{background:var(--verde-koyu)}
-.bas:disabled{opacity:.6;cursor:wait}
-.vaz{background:transparent;color:var(--soluk);border:1px solid var(--cizgi-koyu);
-  border-radius:8px;padding:11px 18px;font-family:inherit;font-size:.92rem;cursor:pointer}
+.panel-btn:hover .pb-ad{color:var(--verde)}
+.panel-btn .pb-alt{display:block;font-size:.8rem;color:var(--soluk);
+  margin-top:3px;line-height:1.45}
 .hata{background:var(--kirmizi-bg);color:var(--kirmizi);border-radius:8px;
   padding:10px 13px;font-size:.87rem;margin-bottom:12px}
 .gizli{display:none}
-/* Sil — kartın içinde ama kartın tıklamasını YUTAR (firmaSil'de
-   stopPropagation); yoksa silinecek firmaya geçilirdi. */
-.sil{font-size:.78rem;font-weight:600;color:var(--soluk);border:1px solid var(--cizgi);
-  border-radius:6px;padding:3px 9px;cursor:pointer;transition:all .14s}
-.sil:hover{color:var(--kirmizi);border-color:var(--kirmizi);background:var(--kirmizi-bg)}
-/* MF7: bu kurallar ÖNCE `.kutu` adıyla yazılmıştı — ama `.kutu`
-   sayfanın ANA KAPSAYICISI (yukarıda .kutu{max-width:560px},
-   <main class="kutu">). Sonra geldiği için kazandı ve <main> yatay
-   satıra döndü: başlık, açıklama ve kartlar yan yana sıkıştı.
-   Yeni sınıfa yeni ad. */
-.onay-kutu{display:flex;gap:9px;align-items:flex-start;padding:8px 0;cursor:pointer;
-  font-size:.84rem;font-weight:400;color:var(--murekkep);text-transform:none;
-  letter-spacing:0}
-.onay-kutu input{margin-top:2px;width:15px;height:15px;cursor:pointer;flex:0 0 auto}
-.onay-kutu span{line-height:1.45}
-.ipucu{color:var(--soluk);font-size:.79rem;line-height:1.45;margin-top:2px}
-
-/* ── ONAY PENCERESİ ──
-   Tarayıcının confirm/alert'i KULLANILMIYOR: js_denetim J4 ekseni
-   bunları "sessiz hayır" sayıyor — tarayıcı engelleyebiliyor ve
-   dökümü düzgün gösteremiyor. Bu sayfa bağımsız olduğu için
-   base.html'deki onayla() de yok; penceresi kendi içinde. */
-.ortu{position:fixed;inset:0;background:rgba(25,28,26,.45);display:flex;
-  align-items:center;justify-content:center;padding:20px;z-index:80}
-.ortu.gizli{display:none}
-.pencere{background:var(--yuzey);border-radius:14px;max-width:460px;width:100%;
-  box-shadow:0 24px 60px rgba(25,28,26,.3);overflow:hidden}
-.pencere .bas{padding:18px 20px 12px}
-.pencere .bas h2{font-family:var(--baslik);font-size:1.1rem;margin-bottom:4px}
-.pencere .bas .hedef{color:var(--kirmizi);font-weight:700}
-.pencere .gov{padding:0 20px 4px;font-size:.88rem;line-height:1.55;color:var(--murekkep)}
-.pencere .gov p{margin-bottom:10px}
-.pencere .gov .iyi{color:var(--soluk);font-size:.83rem}
-.dokum{max-height:190px;overflow:auto;border:1px solid var(--cizgi);
-  border-radius:8px;margin-bottom:10px}
-.dokum table{width:100%;border-collapse:collapse;font-size:.83rem}
-.dokum td{padding:5px 11px;border-bottom:1px solid var(--cizgi)}
-.dokum tr:last-child td{border-bottom:0}
-.dokum td.s{text-align:right;font-family:var(--mono);color:var(--soluk)}
-.pencere .ayak{display:flex;gap:8px;justify-content:flex-end;
-  padding:14px 20px 18px}
-.teh{background:var(--kirmizi);color:#fff;border:0;border-radius:8px;
-  padding:10px 17px;font-family:inherit;font-size:.9rem;font-weight:600;cursor:pointer}
-.teh:hover{filter:brightness(.92)}
-.teh:disabled{opacity:.6;cursor:wait}
-@media (max-width:480px){.ikili{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -154,77 +99,35 @@ h1{font-family:var(--baslik);font-size:1.6rem;font-weight:800;letter-spacing:-.0
         <span class="ad">{{ f.ad }}</span>
         <span class="not">{{ f.unvan or '—' }}{% if f.vergi_no %} · VKN {{ f.vergi_no }}{% endif %}</span>
       </span>
-      {# KF1: "varsayılan" rozeti ve onun Sil düğmesini gizlemesi
-         KALKTI — bayrak kaldırıldı. Sil silinemeyecek bir firmaya
-         basılırsa sunucu sebebini söylüyor ("içinde bulunduğun
-         firma", "son firma", "şu kullanıcıların tek firması").
-
-         KF2: Sil YALNIZCA ADMIN'de. Ekran artık herkese açık; firma
-         silmeyi herkese göstermek, basınca 403 yiyecek bir düğme
-         koymak olurdu. #}
-      {% if admin %}
-      <span class="sil" role="button" tabindex="0" title="Firmayı sil"
-            onclick="firmaSil({{ f.id }}, '{{ f.ad|replace("'", "\\'") }}', event)">Sil</span>
-      {% endif %}
+      {# ── SİL BURADAN KALKTI (YP3) ──
+         Bu ekranın tek işi "nerede çalışacağım" sorusunu
+         sormak. Sil, kartın İÇİNDE, girmek için basılacak
+         düğmenin üstünde duruyordu. Firma açmak/silmek artık
+         Yönetim panelinde — ikisi de firmaya AİT olmayan,
+         firma üstü işler. #}
       <span class="kod">{{ f.kod or '—' }}</span>
     </button>
     {% endfor %}
 
-    {# KF2: yeni firma açmak admin işi. #}
+    {# ── YÖNETİM PANELİ (YP1 · YP3) ──
+       Panelin varlık sebebi "herhangi bir firmaya girmeden
+       yönetmek"; o yüzden bağlantısı BURADA, firmaya girmeden
+       önce duruyor.
+
+       YP3 · "+ Yeni firma ekle" BURADAN KALKTI, formuyla
+       birlikte. Firma açmak firmaya AİT olmayan bir iş; aynı
+       formun ikinci bir kopyasını bu ekranda tutmak, panelle
+       bu ekranın ayrı ayrı bakım isteyen iki yüzü olması
+       demekti. Artık tek yer: panelin Firmalar sekmesi. #}
     {% if admin %}
     <div class="ayrac">ya da</div>
-    <button class="ekle-btn" id="ekleBtn" onclick="formAc()">+ Yeni firma ekle</button>
+    <a class="panel-btn" href="/yonetim">
+      <span class="pb-ad">Yönetim paneli</span>
+      <span class="pb-alt">Firma ekle ve sil · kullanıcılar ve
+        yetkiler · yedekler</span>
+    </a>
     {% endif %}
-
-    <div class="form gizli" id="form">
-      <h2>Yeni firma</h2>
-      <p><b>Belge kodu</b> zorunlu ve kısa olmalı (örn. K). Bu kod belge
-         kimliklerinin köküne girer — <span style="font-family:var(--mono)">SIP-K-STN26-01</span>
-         — ve her firmanın numarasının kendi başına ilerlemesini sağlar.
-         Kodsuz iki firmanın numaraları çakışır.</p>
-      <div class="ikili">
-        <div class="alan"><label for="nAd">Firma adı *</label>
-          <input id="nAd" placeholder="İkinci Mermer A.Ş."></div>
-        <div class="alan"><label for="nKod">Belge kodu *</label>
-          <input id="nKod" maxlength="4" placeholder="K" style="text-transform:uppercase"></div>
-      </div>
-      <div class="alan"><label for="nUnvan">Ticari ünvan</label>
-        <input id="nUnvan" placeholder="Belgelerde görünen tam ünvan"></div>
-      <div class="alan"><label for="nVno">Vergi no</label>
-        <input id="nVno" placeholder="1234567890"></div>
-      <!-- MF6: yeni firma bomboş açılıyordu; 170 cari ve bütün tanım
-           listeleri yeniden girilecekti. -->
-      <div class="alan">
-        <label>Mevcut firmadan ortak kullanılsın</label>
-        <label class="onay-kutu"><input type="checkbox" id="nOrtakCari" checked>
-          <span>Cari listesi — mevcut müşteri ve tedarikçiler bu firmaya da
-          bağlanır. Sonrasında her firma kendi müşterisini ekler.</span></label>
-        <label class="onay-kutu"><input type="checkbox" id="nOrtakListe" checked>
-          <span>Tanım listeleri — cins, yüzey, ülke, ödeme şekli her
-          firmada aynı kalır; bir kez girilen her yerde görünür.</span></label>
-        <div class="ipucu">İşaretlemezsen bu firma kendi listesini
-          kullanır; kuruluşta mevcut listelerin bir kopyası yazılır.</div>
-      </div>
-      <div class="dugmeler">
-        <button class="bas" id="kaydetBtn" onclick="kaydet()">Ekle ve bu firmaya geç</button>
-        <button class="vaz" onclick="formKapat()">Vazgeç</button>
-      </div>
-    </div>
   </main>
-
-  <div class="ortu gizli" id="silOrtu" onclick="if(event.target===this)silKapat()">
-    <div class="pencere" role="dialog" aria-label="Firma sil">
-      <div class="bas">
-        <h2>Firmayı sil</h2>
-        <div class="hedef" id="silAd"></div>
-      </div>
-      <div class="gov" id="silGovde"></div>
-      <div class="ayak">
-        <button class="vaz" onclick="silKapat()">Vazgeç</button>
-        <button class="teh" id="silBtn" onclick="silOnayla()">Yedekle ve sil</button>
-      </div>
-    </div>
-  </div>
 
 <script>
 /* ── CSRF (MF3C) ──
@@ -238,16 +141,6 @@ function hataGoster(m) {
   const h = document.getElementById('hata');
   h.textContent = m; h.classList.remove('gizli');
 }
-function formAc() {
-  document.getElementById('form').classList.remove('gizli');
-  document.getElementById('ekleBtn').classList.add('gizli');
-  document.getElementById('nAd').focus();
-}
-function formKapat() {
-  document.getElementById('form').classList.add('gizli');
-  document.getElementById('ekleBtn').classList.remove('gizli');
-  document.getElementById('hata').classList.add('gizli');
-}
 
 async function gonder(yol, govde) {
   const y = await fetch(yol, {
@@ -259,62 +152,6 @@ async function gonder(yol, govde) {
   return y.json();
 }
 
-let SIL_HEDEF = null;
-
-function silKapat() {
-  document.getElementById('silOrtu').classList.add('gizli');
-  SIL_HEDEF = null;
-}
-
-async function firmaSil(id, ad, e) {
-  /* Düğme kartın İÇİNDE: tıklama kartın onclick'ine de giderdi ve
-     silinecek firmaya GEÇİLİRDİ. */
-  if (e) { e.stopPropagation(); e.preventDefault(); }
-  document.getElementById('hata').classList.add('gizli');
-  let o;
-  try {
-    const y = await fetch('/api/firma/' + id + '/ozet');
-    o = await y.json();
-  } catch (err) { hataGoster('Firma bilgisi okunamadı'); return; }
-  if (!o || !o.ok) { hataGoster((o && o.mesaj) || 'Firma bilgisi okunamadı'); return; }
-  if (o.engel) { hataGoster(o.engel); return; }
-
-  SIL_HEDEF = id;
-  document.getElementById('silAd').textContent = ad;
-  const g = document.getElementById('silGovde');
-  if (o.kayit_sayisi > 0) {
-    const d = Object.entries(o.dagilim || {})
-      .sort((a, b) => b[1] - a[1])
-      .map(([t, n]) => `<tr><td>${t}</td><td class="s">${n.toLocaleString('tr-TR')}</td></tr>`)
-      .join('');
-    g.innerHTML = `
-      <p>Bu firmada <b>${o.kayit_sayisi.toLocaleString('tr-TR')}</b> kayıt var:</p>
-      <div class="dokum"><table>${d}</table></div>
-      <p class="iyi">Silmeden önce <b>tam veritabanı yedeği</b> alınacak.
-         Yanlışlıkla silersen Ayarlar → Yedekleme'den o yedeğe
-         dönebilirsin. Yedek alınamazsa silme yapılmaz.</p>`;
-  } else {
-    g.innerHTML = '<p>Bu firmada hiç kayıt yok. Doğrudan silinecek.</p>';
-  }
-  document.getElementById('silOrtu').classList.remove('gizli');
-}
-
-async function silOnayla() {
-  if (!SIL_HEDEF) return;
-  const b = document.getElementById('silBtn');
-  b.disabled = true; b.textContent = 'Siliniyor…';
-  try {
-    const y = await fetch('/api/firma/' + SIL_HEDEF, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF }
-    });
-    const d = await y.json();
-    if (d && d.ok) { location.reload(); return; }
-    silKapat(); hataGoster((d && d.mesaj) || 'Silinemedi');
-  } catch (err) { silKapat(); hataGoster('Silinemedi'); }
-  b.disabled = false; b.textContent = 'Yedekle ve sil';
-}
-
 async function sec(id, btn) {
   if (btn) { btn.disabled = true; }
   try {
@@ -323,34 +160,6 @@ async function sec(id, btn) {
     hataGoster((d && d.mesaj) || 'Firma seçilemedi');
   } catch (e) { hataGoster('Firma seçilemedi'); }
   if (btn) { btn.disabled = false; }
-}
-
-async function kaydet() {
-  const ad = (document.getElementById('nAd').value || '').trim();
-  const kod = (document.getElementById('nKod').value || '').trim().toUpperCase();
-  if (!ad) { hataGoster('Firma adı gir.'); return; }
-  if (!kod) { hataGoster('Belge kodu gir — yoksa belge numaraları çakışır.'); return; }
-  const b = document.getElementById('kaydetBtn');
-  b.disabled = true; b.textContent = 'Ekleniyor…';
-  try {
-    const d = await gonder('/api/firma', {
-      ad: ad, belge_kodu: kod,
-      unvan: (document.getElementById('nUnvan').value || '').trim(),
-      vergi_no: (document.getElementById('nVno').value || '').trim(),
-      ortak_cari: document.getElementById('nOrtakCari').checked,
-      ortak_liste: document.getElementById('nOrtakListe').checked
-    });
-    if (d && d.ok && d.id) {
-      /* Eklenen firmaya DOĞRUDAN geçilir: yeni firmanın unvanını,
-         adresini ve logosunu girecek olan kişi zaten o firmada
-         olmalı. Eski düzende A'nın ayarlarında kalıp B'nin bilgisi
-         sanarak A'yı düzenlemek çok kolaydı. */
-      await sec(d.id, null);
-      return;
-    }
-    hataGoster((d && d.mesaj) || 'Firma eklenemedi');
-  } catch (e) { hataGoster('Firma eklenemedi'); }
-  b.disabled = false; b.textContent = 'Ekle ve bu firmaya geç';
 }
 </script>
 </body>

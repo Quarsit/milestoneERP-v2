@@ -2923,3 +2923,361 @@ def test_kf3_formda_firma_kapsami_var():
     assert 'uFirmaKutulariCiz()' in ay
     # Kutular kullaniciAc içinde DOLDURULUYOR mu
     assert 'SECILI_FIRMALAR = (DUZENLENEN' in ay
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  YP · YÖNETİM PANELİ (firma üstü işler)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_yp_panel_firma_secmeden_acilir():
+    """YP1: panelin VARLIK SEBEBİ bu — firmaya girmeden yönetmek.
+
+    Seçim kapısı burayı durdursaydı panel yalnızca firma seçtikten
+    sonra açılırdı ve hiçbir işe yaramazdı."""
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+        # firma_id BİLEREK yok
+    r = c.get('/yonetim')
+    assert r.status_code == 200, r.status_code
+
+
+def test_yp_admin_olmayan_panele_giremez():
+    """YP1: panelde yapılan işler YETKİNİN KENDİSİNİ belirliyor
+    (kullanıcı açmak, yetki vermek, firma silmek). Yetki haritasına
+    bağlanmıyor, doğrudan ADMIN şartı aranıyor."""
+    c = istemci('satis', 'SATIS')
+    r = c.get('/yonetim')
+    assert r.status_code in (301, 302), r.status_code
+    assert '/yonetim' not in (r.headers.get('Location') or '')
+
+
+def test_yp_paneller_ikizlenmemis():
+    """YP2: taşınan bölümler İKİ sayfada birden basılmamalı.
+
+    Bu projede mükerrer panel çoktan can yaktı: MF4'te iki
+    `yedekGovde` yüzünden yedek listesi boş görünüyordu. Aynı
+    şablon iki rotaya hizmet ediyor ama her bölüm YALNIZCA bir
+    sayfada basılıyor; bu testin işi o sözü tutturmak."""
+    a = istemci('admin', 'ADMIN')
+    # SIRA ÖNEMLİ: /yonetim oturumdaki firma seçimini DÜŞÜRÜYOR
+    # (YP4). Önce panele girilirse /ayarlar seçim ekranına çevrilir
+    # ve bu test boş sayfayı ölçerdi.
+    aya = a.get('/ayarlar').get_data(as_text=True)
+    yon = a.get('/yonetim').get_data(as_text=True)
+
+    # Sistem düzeyi — YALNIZCA yönetimde.
+    # YP4: `fFirma` (firma ünvanı) buraya KATILDI; firmanın kimliği
+    # firmaya ait değil, firmanın KENDİSİ.
+    for kimlik in ('kullaniciGovde', 'firmaGovde', 'yedekGovde', 'fFirma'):
+        assert yon.count(f'id="{kimlik}"') == 1, kimlik
+        assert aya.count(f'id="{kimlik}"') == 0, (kimlik, 'ayarlarda da var')
+
+    # Firma düzeyi — YALNIZCA ayarlarda
+    for kimlik in ('bankaGovde', 'lookupIzgara'):
+        assert aya.count(f'id="{kimlik}"') == 1, kimlik
+        assert yon.count(f'id="{kimlik}"') == 0, (kimlik, 'yonetimde de var')
+
+
+def test_yp_sekme_kumeleri_ayrik():
+    """YP2: iki sayfanın sekmeleri ÖRTÜŞMEMELİ."""
+    import re as _re
+    a = istemci('admin', 'ADMIN')
+
+    def sekmeler(yol):
+        h = a.get(yol).get_data(as_text=True)
+        return {b for b, _ in _re.findall(
+            r'class="sekme[^"]*" data-b="([a-z]+)">([^<]+)<', h)}
+
+    # /ayarlar ÖNCE: panel firma seçimini düşürüyor (YP4).
+    aya, yon = sekmeler('/ayarlar'), sekmeler('/yonetim')
+    assert yon == {'kullanici', 'firmalar', 'yedek'}, yon
+    # YP4: "Firma Bilgileri" sekmesi panele taşındı.
+    assert aya == {'eposta', 'listeler', 'banka'}, aya
+    assert not (yon & aya), yon & aya
+
+
+def test_yp_panelden_firma_ve_kullanici_yonetilebilir():
+    """YP1/YP2: panelin beslendiği uçlar firma seçmeden ÇALIŞMALI.
+
+    Uçlar seçim kapısında muaf; muafiyet kalkarsa panel açılır ama
+    tabloları boş kalır — sessiz bir arıza."""
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+    assert c.get('/api/firma', headers=H).status_code == 200
+    assert c.get('/api/ayarlar/kullanici', headers=H).status_code == 200
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  YP3 · PANEL YALIN KABUK + FİRMA İŞLERİ TEK YERDE
+# ══════════════════════════════════════════════════════════════════════
+
+def test_yp3_panelde_ray_ve_arama_basilmaz():
+    """YP3: panelde BAŞKA MENÜ olmamalı.
+
+    Sol ray oradayken 'Depo', 'Finans', 'Satış' görünüyordu; hiçbiri
+    firma seçilmeden açılamaz, basınca seçim ekranına geri atıyordu.
+    Görünen ama çalışmayan menü, çalışmayan bir düğmeden daha kötü:
+    sistem bozukmuş gibi duruyor."""
+    a = istemci('admin', 'ADMIN')
+    aya = a.get('/ayarlar').get_data(as_text=True)   # panelden ÖNCE
+    yon = a.get('/yonetim').get_data(as_text=True)
+
+    assert 'class="ray"' not in yon
+    assert 'onclick="paletAc()"' not in yon
+    assert 'class="kabuk yalin"' in yon
+    # Ayarlar bir firmanın içinde: kabuk AYNEN kalmalı
+    assert 'class="ray"' in aya
+    assert 'onclick="paletAc()"' in aya
+    assert 'class="kabuk yalin"' not in aya
+    # Ctrl+K kısayolu hâlâ bağlı; paleti bayrak kapatıyor
+    assert 'window.YALIN_PANEL = true' in yon
+    assert 'if (window.YALIN_PANEL) return;' in yon
+
+
+def test_yp3_panelden_cikis_firma_secimine_doner():
+    """YP3/YP4: panelin TEK kapısı firma seçim ekranı.
+
+    YP3'te iki kapı vardı ve ikisi de yanlış yere açılıyordu:
+    "← MİLESTONE…" firmanın İÇİNE giriyordu (panel firma üstüyse
+    oradan bir firmaya girilememeli), "Çıkış" ise sistemden
+    atıyordu. İkisi de kalktı."""
+    # İki giriş yolu da aynı yere çıkmalı: firma seçmeden gelen de,
+    # bir firmanın içinden (sol raydan) gelen de.
+    for kurulum in (lambda: fa.app.test_client(),
+                    lambda: istemci('admin', 'ADMIN')):
+        c = kurulum()
+        with c.session_transaction() as s:
+            s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+        h = c.get('/yonetim').get_data(as_text=True)
+        assert 'geri-btn' in h, 'dönüş bağlantısı yok'
+        assert '/firma-sec' in h
+        # Firmaya açılan kapı YOK: ne dashboard bağlantısı ne de
+        # oturumu kapatan Çıkış.
+        #
+        # SINIFA DEĞİL BAĞLANTIYA bakılıyor: `.cikis-btn` kuralı
+        # <style> içinde her sayfada duruyor (tek stil bloğu, bütün
+        # sayfalar aynı kabuktan geliyor). Sınıf adını aramak,
+        # düğme basılmasa da eşleşirdi.
+        assert 'href="/cikis"' not in h, 'panelde oturum kapatma var'
+        assert 'href="/dashboard"' not in h, 'panelden firmaya giriliyor'
+
+
+def test_yp4_panele_girince_firma_secimi_dusuyor():
+    """YP4: panelde firma seçili DEĞİLDİR — değişmez kural.
+
+    Seçim korunsaydı ekranda ona açılan bir kapı doğabilirdi; YP3'te
+    tam bu oldu. Seçimi girişte düşürmek, 'firma seçili panel' diye
+    ikinci bir durumun var olmasını engelliyor."""
+    c = istemci('admin', 'ADMIN')
+    with c.session_transaction() as s:
+        assert s.get('firma_id'), 'ön koşul: firma seçili başlamalı'
+    assert c.get('/yonetim').status_code == 200
+    with c.session_transaction() as s:
+        assert not s.get('firma_id'), 'panel firma seçimini düşürmedi'
+
+
+def test_yp3_her_sayfada_TEK_bolum_acik():
+    """YP3: açık sekme ile açık bölüm AYNI olmalı.
+
+    İki ayrı arıza bu testle kapanıyor:
+      · Yönetim'de `b-firmalar` da `aktif` basılıyordu — Kullanıcılar
+        sekmesindeyken Firmalar paneli de görünüyor, üstelik
+        yükleyicisi koşmadığı için sonsuza kadar 'Yükleniyor…'
+        yazıyordu.
+      · Ayarlar'ın ilk sekmesi YP2'de `firma`ya geçti ama `aktif`
+        bölüm `b-firma` değildi: sayfa altı BOMBOŞ açılıyordu."""
+    import re as _re
+    a = istemci('admin', 'ADMIN')
+    # /ayarlar ÖNCE: panele girmek firma seçimini düşürüyor (YP4).
+    for yol in ('/ayarlar', '/yonetim'):
+        h = a.get(yol).get_data(as_text=True)
+        acik = _re.findall(r'<section class="bolum aktif" id="b-([a-z]+)"', h)
+        assert len(acik) == 1, (yol, acik)
+        sekme = _re.findall(r'class="sekme aktif" data-b="([a-z]+)"', h)
+        assert sekme == acik, (yol, sekme, acik)
+
+
+def test_yp3_firma_secim_ekraninda_ekleme_yok():
+    """YP3: firma açma/silme TEK yerde — panelde.
+
+    Aynı formun iki kopyası iki ekranda yaşarsa ikisi ayrı ayrı
+    bakım ister; biri düzeltilip öteki unutulur."""
+    a = istemci('admin', 'ADMIN')
+    h = a.get('/firma-sec').get_data(as_text=True)
+    # Metne değil YAPIYA bakıyoruz: bu dosyadaki açıklama satırları
+    # düğmenin adını anıyor, testin onlara takılması gerekmez.
+    assert 'id="ekleBtn"' not in h      # ekleme düğmesi
+    assert 'id="nAd"' not in h          # ekleme formu
+    assert 'function kaydet' not in h
+    assert 'silOnayla' not in h         # silme penceresi
+    # Ekranda GİRİLECEK hiçbir şey kalmadı; işi yalnızca seçtirmek
+    assert '<input' not in h
+    assert 'href="/yonetim"' in h       # panelin kapısı
+
+
+def test_yp3_firma_panelden_silinebilir():
+    """YP3: silme panele taşındı — firma SEÇMEDEN de işlemeli.
+
+    Uç seçim kapısında muaf; muafiyet kalkarsa düğme görünür ama
+    basınca 409 döner."""
+    from models import Firma
+    a = istemci('admin', 'ADMIN')
+    r = a.post('/api/firma', headers=H, json={
+        'ad': 'YP3 SILINECEK', 'belge_kodu': 'Y3',
+        'ortak_cari': False, 'ortak_liste': False})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    yeni = r.get_json()['id']
+
+    firmasiz = fa.app.test_client()
+    with firmasiz.session_transaction() as s:
+        s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+    o = firmasiz.get(f'/api/firma/{yeni}/ozet', headers=H)
+    assert o.status_code == 200, o.get_data(as_text=True)
+    assert not o.get_json().get('engel'), o.get_json().get('engel')
+
+    d = firmasiz.delete(f'/api/firma/{yeni}', headers=H)
+    assert d.status_code == 200, d.get_data(as_text=True)
+    assert d.get_json().get('ok'), d.get_json()
+    with fa.app.app_context():
+        assert Firma.query.get(yeni) is None
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  YP4 · FİRMA AYARLARI PANELDEN, FİRMAYA GİRMEDEN
+# ══════════════════════════════════════════════════════════════════════
+
+def test_yp4_baska_firmanin_ayari_firmaya_girmeden_duzenlenir():
+    """YP4: `firma_id` hedefi belirler — oturumdaki seçim değil.
+
+    Bu testin asıl işi YAZILANIN DOĞRU FİRMAYA gittiğini ölçmek.
+    Kimlik taşınmazsa uç eski davranışına düşüp AKTİF firmayı
+    düzenler; panelde aktif firma olmadığı için de ya boşa yazar ya
+    da — seçim kalmış olsaydı — yanlış firmanın ünvanını değiştirirdi.
+    MF3B'de can yakan tuzak buydu."""
+    from models import Firma
+    a = istemci('admin', 'ADMIN')
+    r = a.post('/api/firma', headers=H, json={
+        'ad': 'YP4 HEDEF', 'belge_kodu': 'Y4',
+        'ortak_cari': False, 'ortak_liste': False})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    hedef = r.get_json()['id']
+    with fa.app.app_context():
+        baska = (Firma.query.filter(Firma.id != hedef, Firma.aktif.is_(True))
+                 .order_by(Firma.id).first())
+        assert baska, 'ön koşul: en az iki firma'
+        baska_id, baska_unvan = baska.id, baska.unvan
+
+    # Panel: firma SEÇİLİ DEĞİL
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+
+    d = c.post('/api/ayarlar/firma', headers=H, json={
+        'firma_id': hedef, 'satici_firma': 'YP4 HEDEF A.Ş.',
+        'satici_adres': 'DENİZLİ'})
+    assert d.status_code == 200, d.get_data(as_text=True)
+
+    with fa.app.app_context():
+        assert Firma.query.get(hedef).unvan == 'YP4 HEDEF A.Ş.'
+        # Komşu firma DOKUNULMAMIŞ olmalı
+        assert Firma.query.get(baska_id).unvan == baska_unvan
+
+    g = c.get(f'/api/ayarlar/firma?firma_id={hedef}', headers=H)
+    assert g.status_code == 200
+    assert g.get_json()['satici_firma'] == 'YP4 HEDEF A.Ş.'
+
+
+def test_yp4_kdv_ve_avans_sistem_geneli_kaliyor():
+    """YP4: KDV oranı ve avans eşiği FİRMA AYARI DEĞİL.
+
+    ÖLÇÜLDÜ (18.10): panelden firma B için %18 yazıldı, firma A da
+    %18 okudu — çünkü ikisi de `Veriler`de firma_id'si NULL tek
+    satırda duruyor. Damga `Veriler`i bilerek atlıyor
+    (models._firma_damgasi), yani bu satırlar hiçbir zaman firmaya
+    damgalanmıyor.
+
+    Bu yüzden ikisi bir firmanın ayar kutusunda DEĞİL, panelde
+    "Tüm firmalar için" başlığı altında duruyor. Test, yarın biri
+    onları firma kutusuna taşımak isterse önce bu gerçeğe çarpsın
+    diye burada: davranış değişecekse veri taşıma gerekiyor."""
+    from models import Firma
+    a = istemci('admin', 'ADMIN')
+    r = a.post('/api/firma', headers=H, json={
+        'ad': 'YP4 KDV', 'belge_kodu': 'Y4K',
+        'ortak_cari': False, 'ortak_liste': False})
+    hedef = r.get_json()['id']
+
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+    assert c.post('/api/ayarlar/kdv_oran', headers=H,
+                  json={'oran': 18}).status_code == 200
+
+    with fa.app.app_context():
+        ilk = Firma.query.filter(Firma.id != hedef).order_by(Firma.id).first()
+    for fid in (hedef, ilk.id):
+        okundu = c.get(f'/api/ayarlar/kdv_oran?firma_id={fid}', headers=H)
+        assert float(okundu.get_json()['oran']) == 18.0, fid
+
+    # Ekran da öyle söylüyor: oran firma kutusunda değil, "Tüm
+    # firmalar için" panelinde.
+    h = a.get('/yonetim').get_data(as_text=True)
+    assert 'id="sistemAyarPanel"' in h
+    assert h.index('id="sistemAyarPanel"') < h.index('id="fKdv"')
+    assert h.index('id="firmaAyarKutu"') > h.index('id="fKdv"')
+
+
+def test_yp4_baska_firmanin_ayarini_yonetici_olmayan_duzenleyemez():
+    """YP4: `firma_id` yetki yükseltme kapısı OLMAMALI.
+
+    Kendi firmasının ayarını düzenleyebilen bir kullanıcı, kimliği
+    değiştirerek başka firmanın ünvanını değiştirememeli."""
+    from models import Firma
+    with fa.app.app_context():
+        hedef = Firma.query.filter_by(aktif=True).order_by(Firma.id).first().id
+    c = istemci('mudur_yp4', 'MUDUR')
+    r = c.post('/api/ayarlar/firma', headers=H,
+               json={'firma_id': hedef, 'satici_firma': 'OLMAZ'})
+    assert r.status_code == 403, r.status_code
+    with fa.app.app_context():
+        assert Firma.query.get(hedef).unvan != 'OLMAZ'
+
+
+def test_yp4_olmayan_firma_kimligi_reddedilir():
+    """YP4: doğrulanmamış kimlikle bağlam çevirmek, olmayan bir
+    firmaya yazma damgası basmak olurdu."""
+    c = fa.app.test_client()
+    with c.session_transaction() as s:
+        s['kullanici'] = 'admin'; s['rol'] = 'ADMIN'; s['_csrf'] = 't'
+    assert c.get('/api/ayarlar/firma?firma_id=999999',
+                 headers=H).status_code == 404
+    assert c.get('/api/ayarlar/firma?firma_id=abc',
+                 headers=H).status_code == 400
+
+
+def test_yp4_kullanici_listesi_firma_bazli():
+    """YP4: kullanıcılar firma seçilerek listeleniyor.
+
+    Süzme istemcide; uç zaten her kullanıcının `firma_kapsam` ve
+    `firmalar` alanlarını veriyor. Test ikisini birden sabitliyor:
+    ekranda seçim kutusu ve süzgeç VAR, uçta da süzmeyi besleyen
+    alanlar VAR. Alanlardan biri uçtan düşerse liste sessizce
+    herkesi gösterirdi."""
+    a = istemci('admin', 'ADMIN')
+    h = a.get('/yonetim').get_data(as_text=True)
+    assert 'id="kullaniciFirmaSecim"' in h
+    assert 'function _kfGorunur' in h
+    assert 'kullaniciFirmaDegisti' in h
+    # Hiçbir firmaya atanmamış kullanıcı EKRANDAN KAYBOLMAMALI:
+    # seçim kutusunda kendi satırı var.
+    assert 'Firması olmayanlar' in h
+
+    d = a.get('/api/ayarlar/kullanici', headers=H)
+    assert d.status_code == 200
+    kayitlar = d.get_json()
+    assert kayitlar, 'ön koşul: en az bir kullanıcı'
+    for u in kayitlar:
+        assert 'firma_kapsam' in u, u.get('ad')
+        assert isinstance(u.get('firmalar'), list), u.get('ad')

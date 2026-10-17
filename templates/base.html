@@ -50,6 +50,29 @@ a{color:inherit;text-decoration:none}
 
 .kabuk{display:grid;grid-template-columns:76px minmax(0,1fr);min-height:100vh}
 
+/* ── YALIN KABUK · YÖNETİM PANELİ (YP3) ──
+   Panel firma bağlamının DIŞINDA çalışıyor. Sol ray oradayken
+   "Depo", "Finans", "Satış" düğmeleri duruyordu — hepsi firma
+   seçilmeden açılamayan ekranlar. Basınca seçim ekranına geri
+   atılıyorlardı: görünen ama çalışmayan menü.
+
+   Ray basılmadığı için ilk sütun da kalkmalı; yoksa 76px'lik boş
+   bir şerit kalırdı. */
+.kabuk.yalin{grid-template-columns:minmax(0,1fr)}
+.yalin-marka{display:flex;align-items:center;gap:11px;flex:1;min-width:0}
+.yalin-marka .im{width:30px;height:30px;border-radius:8px;background:var(--murekkep);
+  display:flex;align-items:center;justify-content:center;flex:0 0 30px}
+.yalin-marka .im svg{stroke:#fff}
+.yalin-marka .ad{font-family:var(--baslik);font-weight:700;font-size:1rem;
+  letter-spacing:-.01em}
+.yalin-marka .etiket{font-size:.78rem;color:var(--soluk)}
+.geri-btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--cizgi-koyu);
+  background:var(--yuzey);border-radius:8px;padding:7px 13px;font-size:.84rem;
+  font-weight:600;color:var(--murekkep);text-decoration:none;white-space:nowrap;
+  transition:border-color .15s,color .15s}
+.geri-btn:hover{border-color:var(--verde);color:var(--verde)}
+@media (max-width:760px){.yalin-marka .etiket{display:none}}
+
 /* ─── Sol ray: 5 çalışma alanı ─── */
 /* z-index:39 ZORUNLU — kaldırmayın.
    position:sticky, z-index'i auto olsa bile KENDİ YIĞIN BAĞLAMINI
@@ -671,8 +694,15 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
 {% set a_kasa   = ['cari','kasa'] %}
 {% set a_analiz = ['raporlar','karlilik'] %}
 {% macro alan_var(moduller) %}{% for m in moduller %}{% if y.get(m,'gizli') != 'gizli' %}1{% endif %}{% endfor %}{% endmacro %}
+{# ── YALIN MOD (YP3) ──
+   Yönetim paneli firma bağlamının DIŞINDA. Ray ve arama
+   basılmıyor: hepsi firma seçilmeden açılamayan ekranlara
+   gidiyordu. `|default('')` ŞART — base.html'i PANEL tanımlamadan
+   kullanan onlarca sayfa var. #}
+{% set yalin = (PANEL|default('') == 'yonetim') %}
 
-<div class="kabuk">
+<div class="kabuk{% if yalin %} yalin{% endif %}">
+  {% if not yalin %}
   <nav class="ray" aria-label="Çalışma alanları">
     <a href="/dashboard" class="marka" title="Milestone" aria-label="Ana sayfa"></a>
     <div class="ray-grup">
@@ -754,13 +784,17 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
     </button>
     {% if y.get('ayarlar','gizli') != 'gizli' or admin %}
     <div class="ray-oge">
-    <a href="/ayarlar" class="ray-btn {% if yol.startswith('/ayarlar') or yol.startswith('/denetim') %}aktif{% endif %}">
+    <a href="/ayarlar" class="ray-btn {% if yol.startswith('/ayarlar') or yol.startswith('/denetim') or yol.startswith('/yonetim') %}aktif{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z"/></svg>
       <span>Ayarlar</span>
     </a>
     <div class="ray-ucan" style="top:auto;bottom:-6px"><div class="ray-ucan-ic">
       <div class="ray-ucan-bas">Sistem</div>
       <a href="/ayarlar" class="{% if yol.startswith('/ayarlar') %}aktif{% endif %}"><span class="nokta"></span>Ayarlar</a>
+      {# YP1: Yönetim paneli — firma üstü işler. Yalnızca admin. #}
+      {% if admin %}
+      <a href="/yonetim" class="{% if yol.startswith('/yonetim') %}aktif{% endif %}"><span class="nokta"></span>Yönetim</a>
+      {% endif %}
       {% if admin or y.get('denetim','gizli') != 'gizli' %}
       <a href="/denetim" class="{% if yol.startswith('/denetim') %}aktif{% endif %}"><span class="nokta"></span>Denetim Kaydı</a>
       {% endif %}
@@ -768,15 +802,43 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
     </div>
     {% endif %}
   </nav>
+  {% endif %}
 
   <div>
     <header class="ust">
+      {% if yalin %}
+      {# Panelde arama kutusu da yok: palet blok/kasa/müşteri arıyor,
+         hepsi firmaya bağlı veri. Yerine nerede olunduğunu söyleyen
+         sabit bir başlık. #}
+      <div class="yalin-marka">
+        <span class="im"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="1.9"><path d="M3 21h18"/>
+          <path d="M5 21V7l7-4 7 4v14"/><path d="M10 21v-6h4v6"/></svg></span>
+        <span class="ad">Yönetim</span>
+        <span class="etiket">· firma üstü ayarlar</span>
+      </div>
+      {% else %}
       <button class="arama" onclick="paletAc()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <span class="arama-metin">Ara — blok no, kasa no, müşteri, fatura no, sipariş…</span>
         <kbd>Ctrl K</kbd>
       </button>
+      {% endif %}
       <div class="ust-sag">
+        {# ── PANELDEN ÇIKIŞ (YP3 · YP4) ──
+           YP3'te iki düğme vardı ve ikisi de yanlıştı:
+
+             "← MİLESTONE…"  firmanın İÇİNE giriyordu. Panelin
+                 içinden bir firmaya girilebiliyorsa panel firma
+                 üstü değildir; o düğme kalktı.
+             "Çıkış"  sistemden atıyordu. Panelden çıkmak isteyen
+                 oturumu kapatmış oluyordu; o da kalktı.
+
+           Geriye TEK kapı kaldı ve hep aynı yere açılıyor: firma
+           seçim ekranı. Oturum kapatma orada duruyor. #}
+        {% if yalin %}
+        <a href="/firma-sec" class="geri-btn">← Firma seçimine dön</a>
+        {% endif %}
         {# ── FİRMA ÇİPİ (MF3 · KF2) ──
            Tek firma varsa HİÇ basılmaz: bugünkü üst bar aynen kalır.
 
@@ -786,8 +848,11 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
            geçebileceği firmalar var. Eskiden admin olmayan için
            `disabled` idi ve iki firması olan bir muhasebeci, ikisi
            arasında geçmek için çıkış yapıp yeniden girmek zorunda
-           kalıyordu. #}
-        {% if firma_listesi and firma_listesi|length > 1 %}
+           kalıyordu.
+
+           YP3: panelde basılmaz. Panel firmaların ÜSTÜNDE duruyor;
+           orada "çalışılan firma" diye bir şey yok. #}
+        {% if not yalin and firma_listesi and firma_listesi|length > 1 %}
         <div style="position:relative">
           <button class="firma-cip" data-secilebilir="1"
                   onclick="firmaMenuAc(event)" title="Çalışılan firma — değiştir">
@@ -847,7 +912,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
         </div>
         {% block header_right %}{% endblock %}
         <button class="avatar" title="{{ session.get('kullanici','') }}">{{ (session.get('kullanici','?')|first)|upper }}</button>
+        {# YP4: panelde oturum kapatma YOK. "Çıkış" orada "panelden
+           çık" sanılıp basılıyordu ve kullanıcıyı sistemden
+           atıyordu. Panelin tek kapısı yukarıdaki dönüş
+           bağlantısı; oturum, firma seçim ekranından kapatılır. #}
+        {% if not yalin %}
         <a href="/cikis" class="cikis-btn">Çıkış</a>
+        {% endif %}
       </div>
     </header>
 
@@ -1088,6 +1159,10 @@ window.ADMIN = {{ (menu_admin|default(false))|tojson }};
 /* MF6: cari kartindaki firma kutulari yeni kayitta AKTIF
    firmayi isaretli getirir — kullanici zaten orada calisiyor. */
 window.AKTIF_FIRMA = {{ (aktif_firma.id if aktif_firma else 0)|tojson }};
+/* YP3: yalın kabuk (yönetim paneli). Arama düğmesi basılmıyor ama
+   Ctrl+K kısayolu hâlâ bağlı — paleti oradan da açtırmıyoruz;
+   aradığı şeylerin hepsi (blok, kasa, müşteri) firmaya bağlı. */
+window.YALIN_PANEL = {{ (yalin|default(false))|tojson }};
 function yazabilir(modul){ return window.ADMIN || window.YETKI[modul] === 'yazma'; }
 
 /* ══ BİLDİRİMLER (BL1) ══
@@ -1541,6 +1616,7 @@ async function globalAra(sorgu) {
 }
 
 function paletAc() {
+  if (window.YALIN_PANEL) return;   // YP3
   document.getElementById('paletOrtu').classList.add('acik');
   const g = document.getElementById('paletGiris');
   g.value = ''; pSecili = 0; P_KAYIT = []; pSonSorgu = '';

@@ -483,6 +483,53 @@ for _ad, _aciklama in (('_firma_listesi_ozet', 'banner çipi'),
 
 bulgu += _f6
 
+# ══════════════════════════════════════════════════════════════════════
+#  F7 · FİRMA BAĞLAMINI ÇEVİREN YERLER
+# ══════════════════════════════════════════════════════════════════════
+#
+# `g._mf2_firma`, "şu an hangi firmadayım" sorusunun önbelleği ve HEM
+# okuma süzgeci HEM yazma damgası oradan besleniyor. Yazan her yer,
+# o isteğin bütün sorgularını başka bir firmaya çeviriyor demektir.
+#
+# F3'ten FARKI: `firma_atla()` süzgeci KAPATIR (tüm firmalar görünür),
+# burası ÇEVİRİR (yalnızca hedef firma). İkincisi daha dar ama yetki
+# denetimi olmazsa daha tehlikeli: yanlış firmaya YAZDIRIR.
+#
+# Meşru yazan: `aktif_firma_id()` kendi önbelleği + yönetim panelinin
+# `_panel_firma_baglami` kancası. Başkası çıkarsa ADMIN şartı aranmış
+# mı diye bakılmalı.
+MF2_BEKLENEN = 2
+print()
+print("─" * 70)
+print(" F7 · FİRMA BAĞLAMINI ÇEVİRENLER (g._mf2_firma)")
+print("─" * 70)
+_yazan = [(i + 1, s2.strip()) for i, s2 in enumerate(KAYNAK.split('\n'))
+          if re.search(r'g\._mf2_firma\s*=', _kodsuz(s2))]
+print(f"   {len(_yazan)} yazan (beklenen {MF2_BEKLENEN})")
+_f7 = 0
+if len(_yazan) != MF2_BEKLENEN:
+    for n, s2 in _yazan:
+        print(f"     {n:>6}  {s2[:62]}")
+    print()
+    print("   ✗ Liste değişmiş. Her yazan, o isteğin TÜM sorgularını")
+    print("     başka firmaya çevirir — yetki denetimi şart.")
+    _f7 += 1
+else:
+    print("   ✓ temiz — yazan yerler gözden geçirilmiş listeyle aynı")
+
+# Panel kancası ADMIN arıyor mu
+_g = _govde(KAYNAK, '_panel_firma_baglami')
+if _g is None:
+    print("   ⚠ _panel_firma_baglami bulunamadı — atlandı")
+elif "!= 'ADMIN'" not in _g:
+    print("   ✗ _panel_firma_baglami ADMIN şartı ARAMIYOR")
+    print("     `firma_id` yollayan herkes başka firmanın ayarını")
+    print("     düzenleyebilirdi — yetki yükseltme.")
+    _f7 += 1
+else:
+    print("   ✓ panel kancası ADMIN şartı arıyor")
+bulgu += _f7
+
 print()
 print("═" * 70)
 if bulgu:

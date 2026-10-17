@@ -4400,10 +4400,12 @@ def create_app():
                 #              yok; istenen de buydu — tek firma
                 #              varsa varsayılan ihtiyacı kalmıyor.
                 #              (Admin bu kuralın dışında: tek firma
-                #              olsa da ekranı görür, çünkü YENİ
-                #              FİRMA oradan açılıyor ve bunu bir
-                #              firmanın içine girmeden yapabilmek
-                #              gerekiyor — MF3C.)
+                #              olsa da ekranı görür. YP3'te sebebi
+                #              değişti — yeni firma artık orada
+                #              açılmıyor — ama ekran hâlâ ZORUNLU:
+                #              YÖNETİM PANELİNİN kapısı orada ve
+                #              panele bir firmaya girmeden
+                #              ulaşabilmek gerekiyor.)
                 #   çok      → seçim ekranı.
                 #
                 # Önceki seçim HER GİRİŞTE silinir: "tamamen seçilen
@@ -4426,11 +4428,18 @@ def create_app():
     def firma_sec_ekran():
         """Girişten sonra hangi firmada çalışılacağını seçtirir.
 
-        Yeni firma da BURADAN açılır — bir firmanın ayarlarının
-        içinden değil. Eski düzende A'nın ayarlarındayken B ekleniyor,
-        hemen altındaki "Firma Bilgileri" formu ise hâlâ A'yı
-        düzenliyordu; yeni firmanın unvanını oraya yazmak A'nın
-        unvanını sessizce değiştirirdi.
+        YP3 · YENİ FİRMA ARTIK BURADA DEĞİL. Form (ve firma silme)
+        Yönetim paneline taşındı; bu ekranda yalnızca panelin
+        bağlantısı var. Sebep: firma açmak/silmek bir firmaya AİT
+        OLMAYAN bir iş ve aynı formun iki kopyasını iki ekranda
+        sürdürmek, ikisinin ayrı ayrı bakım istemesi demekti.
+
+        Taşınırken korunan kural: form hangi ekranda olursa olsun
+        BİR FİRMANIN AYARLARININ İÇİNDE olamaz. Eski düzende A'nın
+        ayarlarındayken B ekleniyor, hemen altındaki "Firma
+        Bilgileri" formu ise hâlâ A'yı düzenliyordu; yeni firmanın
+        unvanını oraya yazmak A'nın unvanını sessizce değiştirirdi.
+        Panel firma bağlamının dışında olduğu için bu tuzak yok.
         """
         if _auth_required():
             return _auth_required()
@@ -4445,9 +4454,11 @@ def create_app():
             kayitlar = (Firma.query.filter(Firma.aktif.is_(True),
                                            Firma.id.in_(_izinli or [0]))
                         .order_by(Firma.sira, Firma.id).all())
-        # MF3C: admin'de tek firma varken de açılır — ekranın işi
-        # yalnızca seçtirmek değil, YENİ FİRMA buradan açılıyor ve
-        # bunu bir firmanın içine girmeden yapabilmek gerekiyor.
+        # MF3C · YP3: admin'de tek firma varken de açılır — ekranın
+        # işi yalnızca seçtirmek değil, YÖNETİM PANELİNİN kapısı da
+        # burası ve panele bir firmanın içine girmeden ulaşabilmek
+        # gerekiyor. (MF3C'de sebep "yeni firma buradan açılıyor"du;
+        # form panele taşındı, kapı kaldı.)
         #
         # KF2: admin OLMAYAN ve tek firması olan kullanıcı buraya hiç
         # gelmiyor (giriş akışı doğrudan içeri alıyor). Yine de adres
@@ -5015,12 +5026,76 @@ def create_app():
             return redirect(url_for('dashboard'))
         return render_template('raporlar.html')
 
+    @app.route('/yonetim')
+    def yonetim_sayfa():
+        """YÖNETİM PANELİ — firma ÜSTÜ işler (YP1).
+
+        Firma ekle/sil, kullanıcı ekle/sil, yetkiler ve yedekler
+        bir firmaya AİT DEĞİL; sisteme ait. Bugüne kadar Ayarlar'ın
+        içindeydiler ve Ayarlar bir firmanın içinde açılıyor: banner
+        bir firma gösteriyor, süzgeç çalışıyor, kimlik formu "aktif
+        firmayı" düzenliyor. Uyumsuzdu ve can yaktı — MF3B'de
+        A firmasının ayarlarındayken B eklenebiliyor, hemen
+        altındaki form ise hâlâ A'yı düzenliyordu.
+        
+        Burası firma bağlamının DIŞINDA: firma seçmeden açılabiliyor
+        (seçim kapısı bu yolu muaf tutuyor) ve içeri girildiğinde
+        oturumdaki firma seçimi KORUNUYOR — panelden çıkınca
+        kullanıcı kaldığı firmaya döner.
+
+        YP3 · KABUK DA YALIN. Şablon `PANEL='yonetim'` görünce
+        base.html sol rayı ve aramayı BASMIYOR. Ray oradayken
+        "Depo", "Finans", "Satış" görünüyordu; hiçbiri firma
+        seçilmeden açılamaz, basınca seçim ekranına geri atıyordu —
+        görünen ama çalışmayan menü. Panelden tek çıkış, üst
+        bardaki dönüş bağlantısı: firma seçilmemişse seçim
+        ekranına, seçilmişse kalınan firmaya.
+
+        AYRIM ÖLÇÜTÜ — "bu ayar bir firmaya mı ait, sisteme mi":
+        tablosu `firma_id` taşıyorsa firmaya aittir ve Ayarlar'da
+        kalır (banka, veriler/listeler, firma kimliği). Taşımıyorsa
+        sisteme aittir ve buraya gelir (kullanicilar, firma).
+
+        SIFIRLAMA BURAYA GELMEDİ, bilerek: `sifirla2.py` pg_dump
+        alıp geri alınamaz silme yapıyor ve kendi doğrulamasını
+        koşturuyor. Web düğmesinin arkasına koymak, yanlışlıkla
+        basılabilecek bir yere koymak olurdu.
+        """
+        if _auth_required():
+            return _auth_required()
+        # Yalnızca ADMIN. Yetki haritasına bağlamıyoruz: burada
+        # yapılan işler (kullanıcı açmak, yetki vermek, firma
+        # silmek) yetkinin KENDİSİNİ belirliyor.
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return redirect(url_for('dashboard'))
+        # ── YP4 · PANELE GİRERKEN FİRMA BAĞLAMI DÜŞER ──
+        # YP3'te oturumdaki seçim korunuyordu ve üst barda "←
+        # MİLESTONE…" diye bir düğme çıkıyordu; basınca firmanın
+        # İÇİNE giriyor, bütün menüler açılıyordu. Panelin içinden
+        # bir firmaya girilebiliyorsa panel firma üstü değildir.
+        #
+        # Seçimi burada düşürmek kuralı DEĞİŞMEZ hâle getiriyor:
+        # panelde firma seçili değildir. Böylece "firma seçilmiş
+        # panel" diye ikinci bir durum kalmıyor ve ekranda firmaya
+        # açılan hiçbir kapı doğamıyor. Çıkışta seçim ekranına
+        # düşülüyor, firma oradan seçiliyor — istenen akış buydu.
+        session.pop('firma_id', None)
+        # YP2: AYNI ŞABLON, farklı yüz. Panelleri ikinci bir
+        # dosyaya kopyalamak bu projede çoktan can yaktı (MF4'te
+        # mükerrer `yedekGovde` yedek listesini boş gösteriyordu).
+        # `PANEL` değişkeni hangi sekmelerin basılacağını seçiyor;
+        # her bölüm yalnızca BİR sayfada basıldığı için ikizlenme
+        # yapısal olarak imkânsız.
+        return render_template('ayarlar.html', alt_yetkiler=ALT_YETKILER,
+                               PANEL='yonetim')
+
     @app.route('/ayarlar')
     def ayarlar_sayfa():
         if _auth_required(): return _auth_required()
         if not _yetki_var_mi('ayarlar', 'okuma'):
             return redirect(url_for('dashboard'))
-        return render_template('ayarlar.html', alt_yetkiler=ALT_YETKILER)
+        return render_template('ayarlar.html', alt_yetkiler=ALT_YETKILER,
+                               PANEL='ayarlar')
 
     @app.route('/proforma')
     def proforma_sayfa():
@@ -7062,10 +7137,99 @@ def create_app():
     # ── MUAF YOLLAR (KF2) ──
     # Seçim kapısı bu yolları engellemez; aksi halde seçim ekranının
     # kendisi de engellenir ve kullanıcı sonsuz yönlendirmede kalır.
+    # ── YP4 · PANELDEN DÜZENLENEN FİRMA AYARLARI ──
+    # Bu dört uç "aktif firmanın" ayarını okur/yazar. Yönetim paneli
+    # aynı uçları `firma_id` ile çağırıyor ve o zaman HEDEF firma
+    # istekte belirtiliyor (aşağıda `_panel_firma_baglami`).
+    #
+    # NEDEN YENİ UÇ AÇMADIM: aynı doğrulamanın (belge kodu çakışması,
+    # logo biçimi/boyutu, oran aralığı) ikinci bir kopyası olurdu ve
+    # bu projede ikiz kopyalar hep ayrışıyor — biri düzeltilip öteki
+    # unutuluyor (MF4'teki mükerrer panel, YP3'teki ikiz firma formu).
+    PANEL_AYAR_UCLARI = ('/api/ayarlar/firma', '/api/ayarlar/logo',
+                         '/api/ayarlar/kdv_oran', '/api/ayarlar/uretim_avans')
+
     FIRMA_SECIM_MUAF = (
         '/firma-sec', '/api/firma/sec', '/api/firma/liste', '/api/firma',
         '/giris', '/cikis', '/static/', '/favicon', '/saglik',
+        # ── YP1 · YÖNETİM PANELİ ──
+        # Panelin varlık sebebi "herhangi bir firmaya girmeden
+        # yönetmek". Kapı burayı da durdursaydı panel yalnızca
+        # firma seçtikten sonra açılırdı ve hiçbir işe yaramazdı.
+        # Sakıncası yok: paneldeki uçların hepsi ADMIN şartı arıyor
+        # ve hiçbiri firmaya bağlı veri okumuyor.
+        '/yonetim', '/api/ayarlar/kullanici', '/api/yedek',
+        # ── YP4 · FİRMA KİMLİK UÇLARI ──
+        # Firma Bilgileri (ünvan, belge kodu, adres, logo, KDV,
+        # avans) panele taşındı; panelde firma seçili DEĞİL, yani
+        # kapı bu uçları da durdurursa form hiç açılmaz.
+        #
+        # Muafiyet neden sızıntı açmıyor:
+        #   · `firma_id` YOKSA eski davranış sürüyor ve aktif firma
+        #     0'dır — `Firma.query.get(0)` None, Veriler sorguları
+        #     boş. Yani seçimsiz çağrı boş form döndürür.
+        #   · `firma_id` VARSA aşağıdaki `_panel_firma_baglami`
+        #     ADMIN şartı arıyor ve firmayı doğruluyor.
+        *PANEL_AYAR_UCLARI,
     )
+
+    @app.before_request
+    def _panel_firma_baglami():
+        """Panelden gelen `firma_id` bu isteğin firmasını belirler (YP4).
+
+        `aktif_firma_id()` sonucu istek başına `g._mf2_firma`'da
+        önbellekli ve HEM okuma süzgeci HEM yazma damgası oradan
+        besleniyor. Önbelleği burada doldurmak ikisini birden
+        çeviriyor; ayrı ayrı çevirmeye kalkmak, okunan firmayla
+        yazılan firmanın ayrışması demek olurdu.
+
+        `firma_atla()` İLE KARIŞTIRMAYIN — tam tersi iş yapıyor:
+
+          firma_atla()  süzgeci KAPATIR     → tüm firmalar görünür
+          burası        süzgeci ÇEVİRİR     → yalnızca hedef firma
+
+        Yani kaçış kapısı değil: kapsam yine tek firma, sadece
+        hedefini oturumdaki seçim belirlemiyor. Panelin varlık sebebi
+        bu — bir firmanın ünvanını, belge kodunu, logosunu ve KDV
+        oranını O FİRMAYA GİRMEDEN düzenlemek. Eski düzende önce o
+        firmaya geçmek şarttı ve MF3B'de can yakan tuzak buydu:
+        A'nın ayarlarındayken B'yi düzenlediğini sanmak.
+
+        Tek yazma noktası burası; firma_denetim F7 başka yazan
+        olmadığını denetliyor.
+        """
+        if request.path not in PANEL_AYAR_UCLARI:
+            return None
+        _ham = request.args.get('firma_id')
+        if _ham is None and request.method in ('POST', 'PUT', 'DELETE'):
+            _g = request.get_json(silent=True) or {}
+            _ham = _g.get('firma_id')
+        if _ham in (None, ''):
+            return None                 # eski davranış: aktif firma
+        if 'kullanici' not in session:
+            return None                 # oturum yok: _auth_required işi
+        # Başka firmanın ayarını açmak YÖNETİCİ işi. Yetki haritasına
+        # bağlamıyoruz: 'ayarlar' yazma yetkisi olan bir kullanıcı
+        # kendi firmasının ayarını düzenleyebilir ama BAŞKA firmanın
+        # ünvanını değiştirmek firma üstü bir yetkidir.
+        if (session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'error': 'yetkisiz',
+                            'mesaj': 'Başka bir firmanın ayarını '
+                            'düzenlemek için yönetici yetkisi '
+                            'gerekiyor.'}), 403
+        try:
+            _fid = int(_ham)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Geçersiz firma'}), 400
+        # Firma GERÇEKTEN var mı: doğrulamadan bağlamı çevirmek,
+        # olmayan bir kimliğe yazma damgası basmak olurdu.
+        # `firma` tablosu süzgeç kapsamı dışında (bkz. _firma_suzgeci),
+        # o yüzden atlama gerekmiyor.
+        if not Firma.query.filter(Firma.id == _fid,
+                                  Firma.aktif.is_(True)).first():
+            return jsonify({'ok': False, 'mesaj': 'Firma bulunamadı'}), 404
+        g._mf2_firma = _fid
+        return None
 
     @app.before_request
     def _firma_secim_guard():
@@ -16803,7 +16967,18 @@ def create_app():
             # firma_denetim F6 bu kalıntıyı yakaladı — KF2'de dokuz
             # çağrı yerini güncellemiştim, bu dokuzuncu gözden
             # kaçmıştı.
-            _f = session.get('firma_id')
+            # ── YP4 · KAYNAK `aktif_firma_id()`, OTURUM DEĞİL ──
+            # Burası `session.get('firma_id')` okuyordu ve bu, "hangi
+            # firmadayım" sorusunun İKİNCİ bir hesabıydı. Yönetim
+            # paneli bir firmanın ayarını `firma_id` ile düzenlerken
+            # aradaki fark ÖLÇÜLDÜ: süzgeç ve damga hedef firmayı
+            # gösterirken burası oturuma bakıp "seçim yok" diyor,
+            # ortak havuza düşüyordu — panelden girilen KDV oranı
+            # firma_id'siz yazılıp BÜTÜN firmalarda görünüyordu.
+            #
+            # Tek kaynak: çözümleyici. Oturumdaki seçim zaten onun
+            # ilk girdisi, yani seçim varken davranış aynı.
+            _f = aktif_firma_id()
             if _f:
                 with db.engine.connect() as _b:
                     _r = _b.execute(sa_text(
