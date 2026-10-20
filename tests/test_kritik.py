@@ -4356,3 +4356,273 @@ def test_or3_kaybolan_kaynak_acikca_soyleniyor():
     h2 = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
     assert any('artık sistemde yok' in u and 'SVOR3' in u
                for u in h2['uyarilar']), h2['uyarilar']
+
+
+def test_or4_sunucunun_hata_mesaji_ustu_ortulmuyor():
+    """OR4: `api()` hatayı zaten bildiriyor; üstüne yazma.
+
+    `api()` hata mesajını kullanıcıya gösterip `istek_hatasi` adlı
+    bir İŞARET fırlatıyor. Onu `e.message` diye basmak, sunucunun
+    söylediği gerçek sebebin üstünü örtüyordu: ekranda yalnız
+    'istek_hatasi' kalıyor ve hata teşhis edilemiyordu (ölçüldü —
+    sermaye hareketi eklerken tam bu oldu).
+
+    Ev kuralı: `catch (e) { /* api() zaten bildiriyor */ }`."""
+    import io as _io, re as _re
+    h = _io.open('templates/ortaklik.html', encoding='utf-8').read()
+    kotu = _re.findall(r'catch \(e\) \{[^}]*bildir\(e\.message', h)
+    assert not kotu, f'{len(kotu)} yerde api() hatasının üstüne yazılıyor'
+    # İşaretin kendisi hiçbir yerde kullanıcıya gösterilmemeli
+    assert 'istek_hatasi' not in h
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  OR5 · SÜTUN GENİŞLİĞİ — SQLite'ın GÖRMEDİĞİ HATA
+# ══════════════════════════════════════════════════════════════════════
+
+def test_or5_metin_sutunlari_yazilacak_degerleri_tasiyor():
+    """OR5: VARCHAR genişliği, kodun yazabileceği en uzun değeri almalı.
+
+    SQLite uzunluk kısıtını UYGULAMIYOR; PostgreSQL uyguluyor. Bu
+    yüzden dar bir sütun testlerden geçer, üretimde 500 verir —
+    `ortaklik_sermaye.yon` String(8) iken 'geri_aldi' (9 karakter)
+    tam bunu yaptı.
+
+    Bu test o boşluğu yapısal olarak kapatıyor: veritabanı
+    gerekmiyor, sözlükle genişliği karşılaştırıyor."""
+    import io as _io, re as _re
+    kaynak = _io.open('models.py', encoding='utf-8').read()
+
+    # Kodun bu sütunlara yazabileceği SABİT değerler. Yeni bir değer
+    # eklerken buraya da eklenmeli — testin görevi bunu zorlamak.
+    SOZLUK = {
+        'Ortaklik': {
+            'anapara_yontemi': ['ayri', 'once_iade'],
+            'durum': ['Acik', 'Kapandi'],
+            'doviz': ['USD', 'EUR', 'TRY']},
+        'OrtaklikIs': {
+            'kaynak_tip': ['SIPARIS', 'SEVKIYAT', 'PROFORMA']},
+        'OrtaklikVergi': {
+            'matrah_tipi': ['kar', 'ciro', 'sabit'],
+            'durum': ['tahmini', 'kesinlesti', 'odendi'],
+            'doviz': ['USD', 'EUR', 'TRY']},
+        'OrtaklikSermaye': {
+            'taraf': ['ortak', 'biz'],
+            'yon': ['koydu', 'geri_aldi'],
+            'doviz': ['USD', 'EUR', 'TRY']},
+        'OrtaklikDagitim': {
+            'taraf': ['ortak', 'biz'],
+            'doviz': ['USD', 'EUR', 'TRY']},
+    }
+
+    dar = []
+    for sinif, alanlar in SOZLUK.items():
+        _b = kaynak.index(f'class {sinif}(')
+        _s = kaynak.index('\nclass ', _b + 1) if '\nclass ' in kaynak[_b + 1:] else len(kaynak)
+        govde = kaynak[_b:_s]
+        for alan, degerler in alanlar.items():
+            e = _re.search(r'\b%s\s*=\s*db\.Column\(db\.String\((\d+)\)' % alan, govde)
+            assert e, f'{sinif}.{alan} bulunamadı'
+            boy, enuzun = int(e.group(1)), max(degerler, key=len)
+            if len(enuzun) > boy:
+                dar.append(f'{sinif}.{alan}: String({boy}) ama '
+                           f"'{enuzun}' {len(enuzun)} karakter")
+    assert not dar, 'Dar sütun(lar): ' + ' · '.join(dar)
+
+
+def test_or5_varsayilan_degerler_sutuna_sigiyor():
+    """OR5: bir sütunun `default`'u kendi genişliğini aşamaz.
+
+    Aynı sınıf hata, genel hâli: SQLite'ta görünmez, PostgreSQL'de
+    kayıt açılamaz. Bütün modeli tarıyor."""
+    import io as _io, re as _re
+    kaynak = _io.open('models.py', encoding='utf-8').read()
+    kotu = []
+    for e in _re.finditer(
+            r"db\.Column\(db\.String\((\d+)\)[^)\n]*?default=(['\"])(.*?)\2",
+            kaynak):
+        boy, deger = int(e.group(1)), e.group(3)
+        if len(deger) > boy:
+            satir = kaynak[:e.start()].count('\n') + 1
+            kotu.append(f"models.py:{satir} String({boy}) <- '{deger}'")
+    assert not kotu, 'Varsayılanı sığmayan sütun(lar): ' + ' · '.join(kotu)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  OR6 · FASON VE DİĞER ÖDEMELER KATKI DEFTERİNE GİRİYOR
+# ══════════════════════════════════════════════════════════════════════
+
+def _or6_kur(sip_id, stok_id, tutar, maliyet):
+    """Sipariş + satış kaydı + o satışın stoğu."""
+    from models import Siparis, SatisKaydi
+    with fa.app.app_context():
+        db.session.add(Siparis(id=sip_id, musteri='ACIK CARI', doviz='USD',
+                               toplam_tutar=tutar, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 4, 1)))
+        db.session.flush()
+        db.session.add(SatisKaydi(
+            id=f'{sip_id}-S1', siparis_id=sip_id, stok_id=stok_id,
+            stok_tip='PLAKA', cins='TEST', musteri='ACIK CARI',
+            satis_tarihi=date(2026, 4, 5), tutar=tutar, tutar_usd=tutar,
+            doviz='USD', maliyet_usd=maliyet, kar_usd=tutar - maliyet))
+        db.session.commit()
+
+
+def test_or6_maliyet_katkiya_aliniyor_ve_iki_kez_girmiyor():
+    """OR6: fason gideri elle yazılmıyor, maliyetten alınıyor.
+
+    Bir maliyeti KİMİN ödediği maliyet kaydında yazmıyor —
+    nakliyeyi ortak, fasonu biz ödemiş olabiliriz. Bu yüzden
+    otomatik değil, tarafı işaretleyerek alınıyor."""
+    from models import Maliyet, OrtaklikSermaye
+    _or6_kur('SIPOR6A', 'PLK-OR6-1', 20000, 13000)
+    with fa.app.app_context():
+        db.session.add(Maliyet(id='MAL-OR6-1', baglanti_tip='stok',
+                               baglanti_id='PLK-OR6-1',
+                               maliyet_tip='Kesim / Fason / Üretim',
+                               maliyet_tarihi=date(2026, 3, 10),
+                               tutar=3000, doviz='USD', usd_karsilik=3000,
+                               aktif=True))
+        db.session.add(Maliyet(id='MAL-OR6-2', baglanti_tip='siparis',
+                               baglanti_id='SIPOR6A', maliyet_tip='Nakliye',
+                               maliyet_tarihi=date(2026, 3, 12),
+                               tutar=500, doviz='USD', usd_karsilik=500,
+                               aktif=True))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Fason ortaklığı', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'once_iade'}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR6A'})
+
+    # Hem STOĞA hem SİPARİŞE bağlı maliyetler görünmeli
+    d = c.get(f'/api/ortaklik/{oid}/maliyetler').get_json()
+    idler = sorted(x['id'] for x in d['data'])
+    assert idler == ['MAL-OR6-1', 'MAL-OR6-2'], idler
+    assert all(x['katki_id'] is None for x in d['data'])
+
+    # Fason BİZE, nakliye ORTAĞA
+    r = c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'biz', 'maliyet_idler': ['MAL-OR6-1']})
+    assert r.status_code == 200 and r.get_json()['eklenen'] == 1
+    r2 = c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'ortak', 'maliyet_idler': ['MAL-OR6-2']})
+    assert r2.status_code == 200 and r2.get_json()['eklenen'] == 1
+
+    # AYNI maliyet ikinci kez giremez
+    r3 = c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'biz', 'maliyet_idler': ['MAL-OR6-1']})
+    assert r3.get_json()['eklenen'] == 0, r3.get_json()
+    assert 'zaten' in ' '.join(r3.get_json()['atlanan'])
+    with fa.app.app_context():
+        assert OrtaklikSermaye.query.filter_by(
+            ortaklik_id=oid, maliyet_id='MAL-OR6-1').count() == 1
+
+    # Başka bir işin gideri bu hesaba giremez
+    with fa.app.app_context():
+        db.session.add(Maliyet(id='MAL-YABANCI', baglanti_tip='stok',
+                               baglanti_id='BASKA-STOK', maliyet_tip='Nakliye',
+                               maliyet_tarihi=date(2026, 3, 1), tutar=999,
+                               doviz='USD', usd_karsilik=999, aktif=True))
+        db.session.commit()
+    r4 = c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'biz', 'maliyet_idler': ['MAL-YABANCI']})
+    assert r4.get_json()['eklenen'] == 0
+    assert 'bağlı değil' in ' '.join(r4.get_json()['atlanan'])
+
+
+def test_or6_iki_taraf_da_koydugunu_geri_aliyor_ve_nakit_kapaniyor():
+    """OR6: ortak sermayeyi, biz fasonu koyuyoruz — ikisi de geri döner.
+
+    Nakit denkliği: CİRO = (ortağın katkısı + bizim katkımız) +
+    net kâr + vergi. Bu tutmazsa ya biri iki kez sayılmıştır ya da
+    biri hiç sayılmamıştır."""
+    from models import Maliyet
+    _or6_kur('SIPOR6B', 'PLK-OR6-2', 50000, 32000)
+    with fa.app.app_context():
+        db.session.add(Maliyet(id='MAL-OR6-3', baglanti_tip='stok',
+                               baglanti_id='PLK-OR6-2',
+                               maliyet_tip='Kesim / Fason / Üretim',
+                               maliyet_tarihi=date(2026, 3, 10),
+                               tutar=12000, doviz='USD', usd_karsilik=12000,
+                               aktif=True))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Nakit denkliği', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'once_iade'}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR6B'})
+    # Ortak blok parasını koydu (elle), fasonu biz ödedik (maliyetten)
+    c.post(f'/api/ortaklik/{oid}/sermaye', headers=H, json={
+        'taraf': 'ortak', 'yon': 'koydu', 'tutar': 20000,
+        'tarih': '2026-03-01'})
+    c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'biz', 'maliyet_idler': ['MAL-OR6-3']})
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['ciro'] == 50000 and h['brut_kar'] == 18000, h
+    assert h['sermaye']['ortak'] == 20000, h['sermaye']
+    assert h['sermaye']['biz'] == 12000, h['sermaye']
+    # Her iki taraf da koyduğunu + payını alıyor
+    assert h['odenecek']['ortak'] == 20000 + 9000, h['odenecek']
+    assert h['odenecek']['biz'] == 12000 + 9000, h['odenecek']
+    # NAKİT DENKLİĞİ: maliyetin içinde olan katkılar + kâr = ciro
+    katki = h['sermaye']['ortak'] + h['sermaye']['biz']
+    assert katki + h['brut_kar'] + (h['maliyet'] - katki) == h['ciro']
+
+
+def test_or6_tipsiz_ve_iptal_maliyet_dogru_elenir():
+    """OR6: süzgeç iki şeyi birden doğru yapmalı.
+
+    · `~tip.in_(...)` TEK BAŞINA tipi BOŞ satırı da eler (SQL'de
+      NULL NOT IN (...) → NULL). Tipsiz girilmiş bir fason gideri
+      listede hiç görünmez, eksik olduğu da anlaşılmazdı.
+    · `aktif=False` kayıt İPTAL EDİLMİŞ maliyettir; listede
+      çıkarsa iptal edilmiş bir gider katkı sayılabilirdi.
+
+    İkisi de ÖLÇÜLDÜ, ikisi de düzeltildi."""
+    from models import Maliyet
+    _or6_kur('SIPOR6C', 'PLK-OR6-3', 9000, 5000)
+    with fa.app.app_context():
+        db.session.add_all([
+            Maliyet(id='MAL-TIPSIZ', baglanti_tip='stok',
+                    baglanti_id='PLK-OR6-3', maliyet_tip=None,
+                    maliyet_tarihi=date(2026, 3, 5), tutar=700,
+                    doviz='USD', usd_karsilik=700, aktif=True),
+            Maliyet(id='MAL-IPTAL', baglanti_tip='stok',
+                    baglanti_id='PLK-OR6-3', maliyet_tip='Nakliye',
+                    maliyet_tarihi=date(2026, 3, 6), tutar=800,
+                    doviz='USD', usd_karsilik=800, aktif=False),
+            Maliyet(id='MAL-KDV', baglanti_tip='stok',
+                    baglanti_id='PLK-OR6-3', maliyet_tip='Iade KDV',
+                    maliyet_tarihi=date(2026, 3, 7), tutar=900,
+                    doviz='USD', usd_karsilik=900, aktif=True)])
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H,
+                 json={'ad': 'Süzgeç'}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR6C'})
+
+    idler = [x['id'] for x in
+             c.get(f'/api/ortaklik/{oid}/maliyetler').get_json()['data']]
+    assert 'MAL-TIPSIZ' in idler, ('tipsiz kayıt elenmiş', idler)
+    assert 'MAL-IPTAL' not in idler, ('iptal kayıt görünüyor', idler)
+    assert 'MAL-KDV' not in idler, ('KDV kalemi görünüyor', idler)
+
+
+def test_or6_ekranda_bizim_taraf_da_gorunuyor():
+    """OR6: fason bedelini biz ödediğimizde "biz ne alacağız" ekranda olmalı.
+
+    Motor `odenecek['biz']`'i hep hesaplıyordu ama döküm yalnız
+    ortağın satırlarını yazıyordu — OR6 öncesi biz para koymadığımız
+    için fark edilmemişti. Katkı koyduğumuz anda o satırlar şart."""
+    import io as _io
+    h = _io.open('templates/ortaklik.html', encoding='utf-8').read()
+    for parca in ('Bize ödenecek', 'Bizim bakiye (kalan)',
+                  'h.odenecek.biz', 'h.bakiye.biz'):
+        assert parca in h, parca
+    # Katkımız da dağıtımımız da yoksa gürültü çıkarmasın
+    assert '(h.sermaye.biz || h.dagitilan.biz)' in h

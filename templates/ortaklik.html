@@ -191,6 +191,36 @@
   </div>
 </div>
 
+<!-- ── MALİYETTEN KATKI ── -->
+<div class="modal-ortu" id="maliyetModal">
+  <div class="modal" style="width:720px">
+    <div class="modal-bas">
+      <h3>Maliyetlerden katkı ekle</h3>
+      <p>Bu ortaklığın işlerine işlenmiş maliyet kayıtları.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="yardim" style="margin-bottom:10px">Bir maliyeti
+        <b>kimin ödediği</b> maliyet kaydında yazmıyor — nakliyeyi ortak,
+        fasonu biz ödemiş olabiliriz. Bu yüzden hepsi kendiliğinden
+        alınmıyor; ödeyen tarafı seçip işaretlediklerini ekliyorsun.</div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Ödeyen taraf</label>
+          <select id="mkTaraf">
+            <option value="biz">Biz</option>
+            <option value="ortak">Ortak</option></select></div>
+        <div class="form-alan"><label>&nbsp;</label>
+          <button class="blok-btn" onclick="maliyetHepsiniSec()">Tümünü seç / bırak</button></div>
+      </div>
+      <table class="or-mini"><tbody id="mkGovde"></tbody></table>
+      <div class="yardim" id="mkNot">Yükleniyor…</div>
+    </div>
+    <div class="modal-alt">
+      <button class="blok-btn" onclick="maliyetSeciciKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="maliyetKatkiEkle()">Seçilenleri ekle</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── KALEM EKLE (vergi / iş / sermaye / dağıtım) ── -->
 <div class="modal-ortu" id="kalemModal">
   <div class="modal" style="width:520px">
@@ -227,7 +257,7 @@ async function yukle() {
   const durum = document.getElementById('fDurum').value;
   let d;
   try { d = await api('/api/ortaklik' + (durum ? '?durum=' + durum : '')); }
-  catch (e) { bildir(e.message || 'Liste alınamadı', true); return; }
+  catch (e) { return; }                 /* api() zaten bildirdi */
   TUM = d.data || [];
   ciz();
 }
@@ -256,7 +286,7 @@ function ciz() {
 async function detayAc(id) {
   let d;
   try { d = await api('/api/ortaklik/' + encodeURIComponent(id)); }
-  catch (e) { bildir(e.message || 'Detay alınamadı', true); return; }
+  catch (e) { return; }                 /* api() zaten bildirdi */
   ACIK = d.data;
   const o = ACIK, h = o.hesap, dv = o.doviz;
 
@@ -294,7 +324,7 @@ async function detayAc(id) {
       <div class="or-satir alt"><span class="et">Ortak pay (%${h.ortak_pay})</span>
         <span class="tt">${para2(h.paylar.ortak, dv)}</span></div>
       ${h.anapara_yontemi === 'once_iade' ? `
-      <div class="or-satir alt"><span class="et">Ortağın iade edilecek anaparası</span>
+      <div class="or-satir alt"><span class="et">Ortağın iade edilecek katkısı</span>
         <span class="tt">${para2(h.kalan_anapara.ortak, dv)}</span></div>` : ''}
       <div class="or-satir kalin"><span class="et">Ortağa ödenecek</span>
         <span class="tt">${para2(h.odenecek.ortak, dv)}</span></div>
@@ -302,6 +332,25 @@ async function detayAc(id) {
         <span class="tt">${para2(h.dagitilan.ortak, dv)}</span></div>
       <div class="or-satir kalin"><span class="et">Ortak bakiye (kalan)</span>
         <span class="tt">${para2(h.bakiye.ortak, dv)}</span></div>
+      ${/* OR6: BİZİM tarafımız da görünmeli. Fason bedelini biz
+             ödediğimizde bu satırlar olmadan "biz ne alacağız"
+             sorusunun cevabı ekranda hiç yoktu — motor hesaplıyordu
+             ama kimse göremiyordu. Katkımız yoksa gürültü olmasın
+             diye yalnız katkı ya da dağıtım varsa çıkıyor. */ ''}
+      ${(h.sermaye.biz || h.dagitilan.biz) ? `
+      <div class="or-satir" style="border-top:1px solid var(--cizgi)">
+        <span class="et" style="font-size:.74rem;text-transform:uppercase;
+              letter-spacing:.05em;font-weight:700">Bizim tarafımız</span>
+        <span class="tt"></span></div>
+      ${h.anapara_yontemi === 'once_iade' ? `
+      <div class="or-satir alt"><span class="et">Bizim iade edilecek katkımız</span>
+        <span class="tt">${para2(h.kalan_anapara.biz, dv)}</span></div>` : ''}
+      <div class="or-satir kalin"><span class="et">Bize ödenecek</span>
+        <span class="tt">${para2(h.odenecek.biz, dv)}</span></div>
+      <div class="or-satir alt"><span class="et">Şimdiye kadar alınan</span>
+        <span class="tt">${para2(h.dagitilan.biz, dv)}</span></div>
+      <div class="or-satir kalin"><span class="et">Bizim bakiye (kalan)</span>
+        <span class="tt">${para2(h.bakiye.biz, dv)}</span></div>` : ''}
     </div>`;
 
   const isler = (o.isler || []).map(i => `<tr>
@@ -311,7 +360,8 @@ async function detayAc(id) {
     </tr>`).join('') || '<tr><td colspan="3" style="color:var(--soluk)">iş bağlanmadı</td></tr>';
 
   const serm = (o.sermaye_hareketleri || []).map(s => `<tr>
-      <td>${s.taraf === 'ortak' ? 'Ortak' : 'Biz'} · ${s.yon === 'koydu' ? 'koydu' : 'geri aldı'}</td>
+      <td>${s.taraf === 'ortak' ? 'Ortak' : 'Biz'} · ${s.yon === 'koydu' ? 'koydu' : 'geri aldı'}${
+        s.maliyet_id ? `<span class="or-ham">maliyet ${kacar(s.maliyet_id)}</span>` : ''}</td>
       <td class="mono">${kacar(s.tarih || '')}</td>
       <td class="sag">${s.cevrildi ? para2(s.usd, 'USD') : para2(s.tutar, s.doviz)}${
         s.cevrildi ? `<span class="or-ham">${para2(s.tutar, s.doviz)}</span>` : ''}</td>
@@ -341,8 +391,14 @@ async function detayAc(id) {
     <div class="yardim" style="margin-bottom:6px">Kurumlar vergisi yıllık kâr
       üzerinden hesaplanır; tek bir işe pay etmek bir kabuldür. Kalem
       kesinleşene kadar <b>tahmini</b> kalsın.</div>
-    <div class="or-bolum">Sermaye
-      <button class="blok-btn" onclick="kalemAc('sermaye')">+ Hareket</button></div>
+    <div class="or-bolum">Katkılar — sermaye ve ödenen giderler
+      <button class="blok-btn" onclick="maliyetSeciciAc()">Maliyetlerden ekle</button>
+      <button class="blok-btn" onclick="kalemAc('sermaye')">+ Elle</button></div>
+    <div class="yardim" style="margin-bottom:6px">Bu bölüm kârdan İKİNCİ
+      bir indirim değil — işe harcanan paranın <b>kimden çıktığını</b>
+      tutuyor. Fason gibi giderler maliyet kaydı üzerinden brüt kârı
+      <b>zaten düşürmüş</b> durumda; burada görünmeleri, dağıtımda o
+      parayı ödeyene geri dönmesi içindir.</div>
     <table class="or-mini"><tbody>${serm}</tbody></table>
     <div class="or-bolum">Dağıtımlar
       <button class="blok-btn" onclick="kalemAc('dagitim')">+ Dağıtım</button></div>
@@ -434,7 +490,7 @@ async function ortKaydet() {
       await api('/api/ortaklik', {method: 'POST', body: JSON.stringify(g)});
       bildir(g.ad + ' eklendi');
     }
-  } catch (e) { bildir(e.message || 'Kaydedilemedi', true); return; }
+  } catch (e) { return; }               /* api() zaten bildirdi */
   ortKapat(); cekmeceKapat(); yukle();
 }
 
@@ -443,7 +499,7 @@ async function ortSil() {
   if (!await onayla(`"${ACIK.ad}" ortaklığı ve bütün kalemleri silinecek.\n\nDevam edilsin mi?`,
                     {tehlike: true})) return;
   try { await api('/api/ortaklik/' + encodeURIComponent(ACIK.id), {method: 'DELETE'}); }
-  catch (e) { bildir(e.message || 'Silinemedi', true); return; }
+  catch (e) { return; }                 /* api() zaten bildirdi */
   bildir('Silindi'); cekmeceKapat(); yukle();
 }
 
@@ -542,6 +598,78 @@ function kalemAc(tip) {
   if (tip === 'is') isListesiYukle();
 }
 
+/* ── MALİYETTEN KATKI (OR6) ──
+   Fason ve benzeri giderler `maliyetler` modülünde zaten duruyor ve
+   brüt kârı düşürüyor. Burada yapılan iş onları KÂRDAN TEKRAR
+   DÜŞMEK değil, ödeyeni kaydetmek: dağıtımda önce herkesin koyduğu
+   geri döner, kalan kâr paylaşılır. */
+let MK_LISTE = [];
+
+async function maliyetSeciciAc() {
+  if (!ACIK) return;
+  document.getElementById('maliyetModal').classList.add('acik');
+  document.getElementById('mkNot').textContent = 'Yükleniyor…';
+  document.getElementById('mkGovde').innerHTML = '';
+  let d;
+  try { d = await api(`/api/ortaklik/${encodeURIComponent(ACIK.id)}/maliyetler`); }
+  catch (e) { document.getElementById('mkNot').textContent =
+                'Liste alınamadı'; return; }
+  MK_LISTE = d.data || [];
+  maliyetSeciciCiz();
+}
+
+function maliyetSeciciKapat() {
+  document.getElementById('maliyetModal').classList.remove('acik');
+}
+
+function maliyetSeciciCiz() {
+  const g = document.getElementById('mkGovde');
+  const not = document.getElementById('mkNot');
+  if (!MK_LISTE.length) {
+    g.innerHTML = '';
+    not.textContent = 'Bu ortaklığın işlerine işlenmiş maliyet kaydı yok.';
+    return;
+  }
+  const kalan = MK_LISTE.filter(x => !x.katki_id).length;
+  not.textContent = `${MK_LISTE.length} maliyet kaydı · ` +
+    `${MK_LISTE.length - kalan} tanesi katkı defterinde`;
+  g.innerHTML = MK_LISTE.map(x => `<tr${x.katki_id ? ' style="opacity:.5"' : ''}>
+      <td style="width:28px">${x.katki_id ? '✓'
+        : `<input type="checkbox" class="mk-sec" value="${kacar(x.id)}">`}</td>
+      <td>${kacar(x.tip || '—')}
+        <span class="or-ham">${kacar(x.id)}${
+          x.fatura_no ? ' · ' + kacar(x.fatura_no) : ''}</span></td>
+      <td class="mono">${kacar(x.tarih || '')}</td>
+      <td class="mono">${kacar(x.baglanti_id)}</td>
+      <td class="sag">${para2(x.tutar, x.doviz)}</td>
+      <td>${x.katki_id ? 'eklendi' : ''}</td>
+    </tr>`).join('');
+}
+
+function maliyetHepsiniSec() {
+  const kutular = [...document.querySelectorAll('.mk-sec')];
+  const hepsi = kutular.every(k => k.checked);
+  kutular.forEach(k => { k.checked = !hepsi; });
+}
+
+async function maliyetKatkiEkle() {
+  if (!ACIK) return;
+  const secili = [...document.querySelectorAll('.mk-sec')]
+    .filter(k => k.checked).map(k => k.value);
+  if (!secili.length) { bildir('Maliyet seç', true); return; }
+  let d;
+  try {
+    d = await api(`/api/ortaklik/${encodeURIComponent(ACIK.id)}/maliyet_katki`,
+      {method: 'POST', body: JSON.stringify({
+        taraf: document.getElementById('mkTaraf').value,
+        maliyet_idler: secili})});
+  } catch (e) { return; }               /* api() zaten bildirdi */
+  bildir(`${d.eklenen} katkı eklendi`);
+  maliyetSeciciKapat();
+  detayAc(ACIK.id);
+  yukle();
+}
+
 /* ── BAĞLANABİLİR İŞLER (OR3) ──
    Numarayı elle yazdırmak iki yükü birden kullanıcıya bırakıyordu:
    numarayı hatırlamak ve o işin BAŞKA bir ortaklığa bağlı olup
@@ -635,7 +763,7 @@ async function kalemKaydet() {
              tarih: _deger('kTarih') || null, aciklama: _deger('kAciklama')};
   }
   try { await api(yol, {method: 'POST', body: JSON.stringify(govde)}); }
-  catch (e) { bildir(e.message || 'Eklenemedi', true); return; }
+  catch (e) { return; }                 /* api() zaten bildirdi */
   kalemKapat();
   detayAc(ACIK.id);
   yukle();
@@ -647,7 +775,7 @@ async function _kalemSil(yol, soru) {
   try {
     await api('/api/ortaklik/' + encodeURIComponent(ACIK.id) + yol,
               {method: 'DELETE'});
-  } catch (e) { bildir(e.message || 'Silinemedi', true); return; }
+  } catch (e) { return; }               /* api() zaten bildirdi */
   detayAc(ACIK.id); yukle();
 }
 
@@ -661,7 +789,7 @@ async function cariyeIsle(id) {
   try {
     await api(`/api/ortaklik/${encodeURIComponent(ACIK.id)}/dagitim/${id}/cariye`,
               {method: 'POST'});
-  } catch (e) { bildir(e.message || 'İşlenemedi', true); return; }
+  } catch (e) { return; }               /* api() zaten bildirdi */
   bildir('Cariye işlendi');
   detayAc(ACIK.id);
 }
@@ -673,7 +801,7 @@ async function cariyeGeriAl(id) {
   try {
     await api(`/api/ortaklik/${encodeURIComponent(ACIK.id)}/dagitim/${id}/cariye`,
               {method: 'DELETE'});
-  } catch (e) { bildir(e.message || 'Geri alınamadı', true); return; }
+  } catch (e) { return; }               /* api() zaten bildirdi */
   bildir('Geri alındı');
   detayAc(ACIK.id);
 }

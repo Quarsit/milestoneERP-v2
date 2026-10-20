@@ -3919,6 +3919,8 @@ def create_app():
             eklenecek = [
                 # (tablo, sutun, SQL tipi)
                 ('kasa', 'banka_id', 'INTEGER'),
+                # OR6: katkı satırı bir maliyet kaydından türeyebilir
+                ('ortaklik_sermaye', 'maliyet_id', 'VARCHAR(20)'),
                 ('kasa_hareket', 'siparis_id', 'VARCHAR(20)'),
                 ('kasa_hareket', 'evrak_no', 'VARCHAR(50)'),
                 ('proforma', 'ana_pi_id', 'VARCHAR(20)'),
@@ -3956,6 +3958,40 @@ def create_app():
                 with db.engine.begin() as baglanti:
                     baglanti.execute(_text(f'ALTER TABLE {tablo} ADD COLUMN {sutun} {tip}'))
                 print(f'Migrasyon: {tablo}.{sutun} sutunu eklendi.')
+
+            # ── OR5 · SÜTUN GENİŞLETME ──
+            # `db.create_all()` yalnız eksik TABLO kurar, var olan bir
+            # sütunun tipini DEĞİŞTİRMEZ. Dar kalmış bir VARCHAR,
+            # PostgreSQL'de kaydı reddeder (SQLite kabul eder — bu
+            # yüzden yalnız üretimde görülür).
+            #
+            # VARCHAR genişletmek PostgreSQL'de tabloyu yeniden
+            # yazmaz; anında biter.
+            genisletilecek = [
+                # (tablo, sutun, yeni uzunluk)
+                ('ortaklik_sermaye', 'yon', 12),
+            ]
+            if _dialect in ('postgresql', 'postgres'):
+                for _t, _s, _uz in genisletilecek:
+                    if _t not in mufettis.get_table_names():
+                        continue
+                    _k = {c['name']: c for c in mufettis.get_columns(_t)}
+                    _mevcut = _k.get(_s)
+                    if not _mevcut:
+                        continue
+                    _boy = getattr(_mevcut.get('type'), 'length', None)
+                    if _boy is None or _boy >= _uz:
+                        continue
+                    try:
+                        with db.engine.begin() as baglanti:
+                            baglanti.execute(_text(
+                                f'ALTER TABLE {_t} ALTER COLUMN {_s} '
+                                f'TYPE VARCHAR({_uz})'))
+                        print(f'Migrasyon: {_t}.{_s} -> VARCHAR({_uz}) '
+                              f'(eski {_boy}).')
+                    except Exception as _e:
+                        app.logger.warning(
+                            f'Sutun genisletilemedi ({_t}.{_s}): {_e}')
 
             # Geriye donuk: revizyon alanlari bos olan proformalari kok (Rev.0) yap
             if 'proforma' in mufettis.get_table_names():
@@ -15043,6 +15079,9 @@ def create_app():
             d['sermaye_hareketleri'] = [
                 {'id': s.id, 'taraf': s.taraf, 'yon': s.yon,
                  'tutar': s.tutar or 0, 'doviz': s.doviz or 'USD',
+                 # OR6: maliyetten türeyen satır elle silinebilir ama
+                 # ekranda KAYNAĞI görünsün.
+                 'maliyet_id': getattr(s, 'maliyet_id', None),
                  # OR2: USD karşılığı burada da dönüyor — vergi ve
                  # dağıtım satırları gösteriyor, sermaye göstermiyor
                  # olsaydı aynı tablo iki farklı dilde konuşurdu.
@@ -15180,6 +15219,121 @@ def create_app():
         return jsonify({'ok': True})
 
     # ── BAĞLI İŞLER ──
+    # OR6: kâr hesabı bu iki maliyet tipini DIŞARIDA bırakıyor
+    # (Devreden/İade KDV maliyet değil). Katkı listesi de aynı
+    # kuralı kullanmalı; başka türlü aynı iş için iki ayrı maliyet
+    # rakamı görünürdü.
+    ORTAKLIK_MALIYET_HARIC = ('Devreden KDV', 'Iade KDV')
+
+    def _ortaklik_maliyet_kayitlari(ort):
+        """Ortaklığın işlerine bağlı maliyet kayıtları.
+
+        Maliyet iki şekilde bağlanabiliyor: doğrudan siparişe, ya da
+        o işte satılan STOĞA. Kâr hesabı ikisini de topluyor; burada
+        da ikisi birden toplanıyor.
+        """
+        satislar, isler = _ortaklik_satislari(ort)
+        anahtarlar = {i.kaynak_id for i in isler}
+        anahtarlar |= {s.stok_id for s in satislar if s.stok_id}
+        if not anahtarlar:
+            return []
+        # ── İKİ SÜZGEÇ, İKİSİ DE ÖLÇÜLDÜ ──
+        # 1) `~tip.in_(...)` TEK BAŞINA, tipi BOŞ olan satırı da eler:
+        #    SQL'de NULL NOT IN (...) sonucu NULL'dır, satır düşer.
+        #    Tipsiz girilmiş bir fason gideri listede hiç görünmez ve
+        #    katkıya alınamazdı — eksik olduğu da fark edilmezdi.
+        # 2) `aktif=False` kayıtlar İPTAL EDİLMİŞ maliyetlerdir;
+        #    uygulamanın geri kalanı onları her yerde süzüyor. Burada
+        #    süzülmezse iptal edilmiş bir gider katkı sayılabilirdi.
+        return Maliyet.query.filter(
+            Maliyet.baglanti_id.in_(list(anahtarlar)),
+            Maliyet.aktif.is_(True),
+            db.or_(Maliyet.maliyet_tip.is_(None),
+                   ~Maliyet.maliyet_tip.in_(ORTAKLIK_MALIYET_HARIC))
+        ).order_by(Maliyet.maliyet_tarihi.desc(), Maliyet.id.desc()).all()
+
+    @app.route('/api/ortaklik/<oid>/maliyetler', methods=['GET'])
+    def api_ortaklik_maliyetler(oid):
+        """Bu ortaklığın işlerine işlenmiş maliyetler.
+
+        `katki_id` dolu olanlar katkı defterine ALINMIŞ demektir.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        o = _ortaklik_bul(oid)
+        if not o:
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+
+        alinmis = {s.maliyet_id: s.id for s in OrtaklikSermaye.query.filter(
+            OrtaklikSermaye.ortaklik_id == oid,
+            OrtaklikSermaye.maliyet_id.isnot(None)).all()}
+
+        kayitlar = []
+        for m in _ortaklik_maliyet_kayitlari(o):
+            kayitlar.append({
+                'id': m.id, 'tip': m.maliyet_tip or '',
+                'tarih': _iso(m.maliyet_tarihi),
+                'tutar': m.tutar or 0, 'doviz': m.doviz or 'USD',
+                'usd': m.usd_karsilik or 0,
+                'baglanti_id': m.baglanti_id or '',
+                'fatura_no': m.fatura_no or '',
+                'aciklama': m.aciklama or '',
+                'katki_id': alinmis.get(m.id)})
+        return jsonify({'ok': True, 'data': kayitlar,
+                        'alinmis_adedi': len([k for k in kayitlar
+                                              if k['katki_id']])})
+
+    @app.route('/api/ortaklik/<oid>/maliyet_katki', methods=['POST'])
+    def api_ortaklik_maliyet_katki(oid):
+        """Seçilen maliyet kayıtlarını KATKI olarak defterе işler.
+
+        HEPSİNİ otomatik almıyoruz: bir maliyeti kimin ödediği
+        kayıtta yazmıyor. Nakliyeyi ortak, fasonu biz ödemiş
+        olabiliriz; tarafı kullanıcı söylüyor.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        o = _ortaklik_bul(oid)
+        if not o:
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        d = request.get_json(silent=True) or {}
+        taraf = (d.get('taraf') or 'biz').strip()
+        if taraf not in ('ortak', 'biz'):
+            return jsonify({'ok': False, 'mesaj': 'Taraf geçersiz'}), 400
+        idler = d.get('maliyet_idler') or []
+        if not isinstance(idler, list) or not idler:
+            return jsonify({'ok': False, 'mesaj': 'Maliyet seçilmedi'}), 400
+
+        # Yalnızca BU ortaklığın işlerine bağlı maliyetler alınabilir:
+        # başka bir işin gideri bu hesaba giremesin.
+        uygun = {m.id: m for m in _ortaklik_maliyet_kayitlari(o)}
+        alinmis = {s.maliyet_id for s in OrtaklikSermaye.query.filter(
+            OrtaklikSermaye.ortaklik_id == oid,
+            OrtaklikSermaye.maliyet_id.isnot(None)).all()}
+
+        eklenen, atlanan = 0, []
+        for mid in idler:
+            m = uygun.get(mid)
+            if m is None:
+                atlanan.append(f'{mid} (bu ortaklığın işine bağlı değil)')
+                continue
+            if mid in alinmis:
+                atlanan.append(f'{mid} (zaten eklenmiş)')
+                continue
+            db.session.add(OrtaklikSermaye(
+                ortaklik_id=oid, taraf=taraf, yon='koydu',
+                tutar=m.tutar or 0, doviz=m.doviz or 'USD',
+                tarih=m.maliyet_tarihi or date.today(),
+                maliyet_id=m.id,
+                aciklama=(f'{m.maliyet_tip or "Maliyet"} · {m.id}'
+                          + (f' · {m.fatura_no}' if m.fatura_no else ''))))
+            alinmis.add(mid)
+            eklenen += 1
+        db.session.commit()
+        return jsonify({'ok': True, 'eklenen': eklenen, 'atlanan': atlanan})
+
     @app.route('/api/ortaklik/<oid>/baglanabilir', methods=['GET'])
     def api_ortaklik_baglanabilir(oid):
         """OR3 — bağlanabilecek işler, SEÇİLEBİLİR hâlde.

@@ -1631,17 +1631,38 @@ class OrtaklikVergi(FirmaKapsamli, db.Model):
 
 
 class OrtaklikSermaye(FirmaKapsamli, db.Model):
-    """Anapara hareketi: kim ne koydu, ne zaman geri aldı."""
+    """KATKI defteri: kim ne koydu, ne zaman geri aldı.
+
+    Yalnız nakit sermaye değil — işe harcanan her kalem buraya
+    girebiliyor. Tipik ortaklık şöyle işliyor: ortak sermaye koyuyor,
+    o parayla blok/plaka alınıyor, mal fason işleniyor ve FASON
+    BEDELİNİ BİZ ödüyoruz.
+
+    ── ÇİFT SAYIM DEĞİL ──
+    Fason gideri `maliyetler` tablosunda duruyor ve oradan
+    `satis_kaydi.maliyet_usd`'ye giriyor; yani KÂRI ZATEN
+    DÜŞÜRÜYOR. Burada tutulan şey kârdan ikinci bir indirim değil,
+    O PARAYI KİMİN ÖDEDİĞİ. Dağıtımda önce herkesin koyduğu geri
+    döner, kalan kâr paylaşılır.
+
+    `maliyet_id` dolu olan satır bir maliyet kaydından TÜREMİŞTİR;
+    elle yazılmaz, aynı maliyet iki kez katkıya çevrilemez.
+    """
     __tablename__ = 'ortaklik_sermaye'
     id          = db.Column(db.Integer, primary_key=True)
     ortaklik_id = db.Column(db.String(20), db.ForeignKey('ortaklik.id'),
                             nullable=False, index=True)
     taraf       = db.Column(db.String(8), default='ortak')  # ortak|biz
-    yon         = db.Column(db.String(8), default='koydu')  # koydu|geri_aldi
+    # OR5: 'geri_aldi' DOKUZ karakter — String(8) PostgreSQL'de
+    # reddediyordu (SQLite sessizce kabul ettiği için testler
+    # geçiyordu). Genişlik, taşıyacağı en uzun değere göre.
+    yon         = db.Column(db.String(12), default='koydu')  # koydu|geri_aldi
     tutar       = db.Column(Para, default=0)
     doviz       = db.Column(db.String(5), default='USD')
     tarih       = db.Column(db.Date, default=date.today)
     aciklama    = db.Column(db.Text)
+    # OR6: bu katkı hangi maliyet kaydından türedi (boşsa elle girilmiş)
+    maliyet_id  = db.Column(db.String(20), nullable=True, index=True)
     olusturma   = db.Column(db.DateTime, default=datetime.now)
 
 
