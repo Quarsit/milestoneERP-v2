@@ -3846,3 +3846,94 @@ def test_b3_baslangic_bos_kalinan_yerden_devam():
         nolar = sorted(p.slab_no for p in
                        PlakaStok.query.filter_by(blok_no='K7004').all())
         assert nolar == [1, 2, 3, 4, 5, 6], nolar
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  B4 · SIFIR PLAKA NUMARASI HER EKRANDA GÖRÜNÜR
+# ══════════════════════════════════════════════════════════════════════
+
+def test_b4_sifir_slab_hicbir_yerde_yutulmuyor():
+    """B4: slab_no = 0 'yok' sayılmamalı.
+
+    B3 ortak yardımcıyı 0'a hazır yaptı ama onu ÇAĞIRAN yerlerdeki
+    doğruluk denetimleri (`if s.slab_no:`, `p.slab_no or ''`) olduğu
+    gibi kaldı. 0 hem Python'da hem JS'te falsy — ekranda plaka no
+    hiç yazılmadı, K6461-00 yerine sadece K6461 göründü.
+
+    Bu test 0'ı GERÇEKTEN kaydedip her uçtan geri okuyor; biçim
+    kuralını değil, sıfırın hayatta kalmasını ölçüyor."""
+    from models import PlakaStok
+    with fa.app.app_context():
+        for _i in (0, 1):
+            db.session.add(PlakaStok(
+                id=f'PLKB4{_i}', firma_id=1, cins='TEST', blok_no='K8000',
+                slab_no=_i, boy=298, yukseklik=169, kalinlik=2,
+                metraj_m2=5.04, alis_fiyati=20, doviz='USD',
+                durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+
+    # 1 · stok listesi: 0 sayı olarak gelmeli, '' değil
+    d = c.get('/api/stok?tip=PLAKA&per_page=300').get_json()
+    kayit = [x for x in d['data'] if x['id'] == 'PLKB40']
+    assert kayit, 'kayıt listede yok'
+    assert kayit[0]['slab_no'] == 0, kayit[0]['slab_no']
+
+    # 2 · kesim kaynak listesi
+    kl = c.get('/api/kesim/kaynak_listesi?tip=PLAKA').get_json()
+    kk = [x for x in kl['kaynaklar'] if x['id'] == 'PLKB40']
+    assert kk and kk[0]['slab_no'] == 0, kk
+
+    # 3 · global arama: kod K8000-00 olmalı
+    ar = c.get('/api/ara?q=K8000').get_json()
+    adlar = [k.get('ad') for g in ar.get('gruplar', [])
+             for k in g.get('kayitlar', [])]
+    assert 'K8000-00' in adlar, adlar
+
+    # 4 · Excel dışa aktarma: "Blok-Slab" sütunu
+    xl = c.get('/api/export/stok?tip=PLAKA&fmt=xlsx')
+    assert xl.status_code == 200, xl.status_code
+    import io as _io, openpyxl as _ox
+    ws = _ox.load_workbook(_io.BytesIO(xl.data)).active
+    kodlar = [r[0] for r in ws.iter_rows(min_row=2, values_only=True)]
+    assert 'K8000-00' in kodlar, kodlar[:10]
+
+
+def test_b4_sifir_slab_ekranda_yaziliyor():
+    """B4: ekran tarafı — `stokNo` 0'ı yutmamalı.
+
+    Hata tam buradaydı: `x.slab_no ? ... : x.blok_no` 0'ı yanlış
+    saydığı için K6461-00 yerine K6461 yazıyordu."""
+    import shutil as _shutil, subprocess as _sp, os as _os, json as _json
+    node = _shutil.which('node') or '/opt/node22/bin/node'
+    if not _os.path.exists(node):
+        import pytest as _pytest
+        _pytest.skip('node yok')
+    betik = r"""
+const fs = require('fs'), vm = require('vm');
+const base = fs.readFileSync('templates/base.html', 'utf8');
+const stok = fs.readFileSync('templates/stok.html', 'utf8');
+const kes = (m, bas, son) => m.slice(m.indexOf(bas), m.indexOf(son, m.indexOf(bas)));
+const kum = {}; vm.createContext(kum);
+vm.runInContext(kes(base, 'function slabVar(', '/* ══ BANKA/KASA'), kum);
+vm.runInContext(kes(base, 'function plakaKodu(', '/* ══ BANKA/KASA'), kum);
+vm.runInContext(kes(stok, 'function stokNo(', 'const RENK'), kum);
+console.log(JSON.stringify({
+  sifir:  kum.stokNo({tip:'PLAKA', blok_no:'K6461', slab_no:0}),
+  bir:    kum.stokNo({tip:'PLAKA', blok_no:'K6461', slab_no:1}),
+  yok:    kum.stokNo({tip:'PLAKA', blok_no:'K6461', slab_no:null, id:'PLK-1'}),
+  bosMtn: kum.stokNo({tip:'PLAKA', blok_no:'K6461', slab_no:'', id:'PLK-1'}),
+  blok:   kum.stokNo({tip:'BLOK',  blok_no:'K6461'}),
+  varSifir: kum.slabVar(0), varBos: kum.slabVar(''), varNull: kum.slabVar(null),
+}));
+"""
+    r = _sp.run([node, '-e', betik], capture_output=True, text=True, cwd='.')
+    assert r.returncode == 0, r.stderr[:400]
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    assert d['sifir'] == 'K6461-00', d['sifir']
+    assert d['bir'] == 'K6461-01', d['bir']
+    assert d['yok'] == 'K6461' and d['bosMtn'] == 'K6461'
+    assert d['blok'] == 'K6461'
+    # `slabVar` 0'ı VAR sayar — hatanın özü buydu
+    assert d['varSifir'] is True
+    assert d['varBos'] is False and d['varNull'] is False

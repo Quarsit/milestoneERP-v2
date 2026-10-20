@@ -860,8 +860,7 @@ const DURUM_AD = { 'Serbest':'Serbest', 'Rezerve':'Rezerve', 'Satildi':'Satıld�
 function stokNo(x) {
   if (!x) return '—';
   if (x.tip === 'EBATLI') return x.kasa_no || x.blok_no || x.id;
-  if (x.tip === 'PLAKA')  return x.slab_no ? plakaKodu(x.blok_no, x.slab_no)
-                                           : (x.blok_no || x.id);
+  if (x.tip === 'PLAKA')  return plakaKodu(x.blok_no, x.slab_no) || x.id;
   return x.blok_no || x.id;
 }
 const RENK = { 'ray-yesil':'--verde', 'ray-kehribar':'--kehribar', 'ray-mavi':'--mavi',
@@ -1379,7 +1378,7 @@ async function izAc(stokId, tip) {
     <div class="alan-grid" style="margin-bottom:14px">
       <div class="alan"><label>Ürün</label><div>${kacar(s.cins || '—')}${s.ozellik ? ' · ' + kacar(s.ozellik) : ''}</div></div>
       <div class="alan"><label>Blok / Kasa</label><div class="mono">${kacar(s.blok_no || '—')}</div></div>
-      ${s.slab_no ? `<div class="alan"><label>Plaka No</label><div class="mono">${kacar(String(s.slab_no))}</div></div>` : ''}
+      ${slabVar(s.slab_no) ? `<div class="alan"><label>Plaka No</label><div class="mono">${kacar(String(s.slab_no))}</div></div>` : ''}
       ${s.olcu ? `<div class="alan"><label>Ölçü</label><div class="mono">${kacar(s.olcu)} cm</div></div>` : ''}
       <div class="alan"><label>Durum</label><div>${kacar(s.durum || '—')}</div></div>
     </div>
@@ -1389,7 +1388,7 @@ async function izAc(stokId, tip) {
         <div><div>${kacar(m.fatura_no || 'belgesiz')}</div>
         <div style="color:var(--soluk);font-size:.76rem">${kacar(m.tarih || '')}</div></div>
         <span class="m">${para2(m.tutar, m.doviz)}</span></div>`).join('')}` : ''}`;
-  const basNo = s.slab_no ? `${kacar(s.blok_no || '')} · Plaka ${kacar(String(s.slab_no))}`
+  const basNo = slabVar(s.slab_no) ? `${kacar(s.blok_no || '')} · Plaka ${kacar(String(s.slab_no))}`
                          : kacar(s.blok_no || s.id);
   cekmeceAc(`Kaynak zinciri · ${basNo}`,
             `${kacar(s.cins || '')}${s.olcu ? ' · ' + kacar(s.olcu) + ' cm' : ''} · ${kacar(s.id)}`, govde,

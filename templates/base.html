@@ -1351,6 +1351,12 @@ function plakaKodu(blokNo, slabNo) {
   return b ? `${b}-${s}` : s;
 }
 
+/* B4: "plaka no VAR MI" — `if (slab_no)` demek 0'ı yok saymak
+   demekti ve B3'ten sonra 0 geçerli bir numara. */
+function slabVar(v) {
+  return v !== null && v !== undefined && String(v).trim() !== '';
+}
+
 /* ══ BANKA/KASA ETİKETİ (BK4) ══
    Açılır listelerde AYNI banka, AYNI şube, AYNI dövizde birden
    çok hesap olabiliyor. Yalnızca banka adı yazınca doğru hesabı

@@ -1662,7 +1662,7 @@ def create_app():
                 return s.blok_no or baglanti_id
             s = PlakaStok.query.get(baglanti_id)
             if s:
-                if getattr(s, 'slab_no', None):
+                if getattr(s, 'slab_no', None) is not None:
                     return _plaka_kodu(s.blok_no, s.slab_no) or baglanti_id
                 return s.blok_no or baglanti_id
             s = EbatliStok.query.get(baglanti_id)
@@ -9654,7 +9654,9 @@ def create_app():
                     'birim_maliyet': p.alis_fiyati or 0, 'doviz': p.doviz,
                     'durum': p.durum, 'konum': p.konum,
                     'boy': p.boy, 'yukseklik': p.yukseklik, 'kalinlik': p.kalinlik,
-                    'slab_no': p.slab_no or '', 'blok_no': p.blok_no or '',
+                    # B4: `or ''` sıfırı siliyordu.
+                    'slab_no': '' if p.slab_no is None else p.slab_no,
+                    'blok_no': p.blok_no or '',
                     'ozellik': p.ozellik or ''
                 })
         return jsonify({'ok': True, 'kaynaklar': sonuc})
@@ -14703,7 +14705,7 @@ def create_app():
             for s in PlakaStok.query.filter(PlakaStok.id.in_(stok_idler)).all():
                 stok_birim_map[s.id] = (s.metraj_m2 or 0, 'm²')
                 _pno = s.blok_no or s.id
-                if getattr(s, 'slab_no', None):
+                if getattr(s, 'slab_no', None) is not None:
                     _pno = _plaka_kodu(s.blok_no, s.slab_no) or s.id
                 stok_bilgi_map[s.id] = {
                     'no': _pno, 'tip': 'PLAKA', 'cins': s.cins,
@@ -22343,7 +22345,9 @@ def create_app():
             ozellik = getattr(stok, 'ozellik', '') or ''
             # EBATLI'da blok_no yok, kasa_no (referans kodu) var
             blok_no = getattr(stok, 'blok_no', None) or getattr(stok, 'kasa_no', None) or ''
-            slab_no = getattr(stok, 'slab_no', '') or ''
+            # B4: `or ''` sıfırı siliyordu.
+            _sn = getattr(stok, 'slab_no', None)
+            slab_no = '' if _sn is None else _sn
             mense = getattr(stok, 'mense', None) or 'TURKIYE'   # MS1
 
             if r.stok_tip == 'PLAKA':
@@ -22373,9 +22377,13 @@ def create_app():
                 g['sqft'] = q2(g['sqft'] + (m2 * M2_TO_SQFT if m2 else 0))
                 # Slab baslangici: gruptaki en kucuk slab no
                 try:
-                    if slab_no and str(slab_no).isdigit():
+                    # B4: 0 geçerli bir plaka numarası; `if slab_no`
+                    # onu atlıyor ve grubun başlangıcını 1'e kaydırıyordu.
+                    if slab_no is not None and str(slab_no).strip().isdigit():
                         mevcut = g.get('slab_no')
-                        if not mevcut or not str(mevcut).isdigit() or int(slab_no) < int(mevcut):
+                        if (mevcut is None or str(mevcut).strip() == ''
+                                or not str(mevcut).strip().isdigit()
+                                or int(slab_no) < int(mevcut)):
                             g['slab_no'] = slab_no
                 except Exception:
                     pass
