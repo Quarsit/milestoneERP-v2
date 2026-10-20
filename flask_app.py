@@ -52,6 +52,8 @@ from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
 from models import Konteyner
 from models import Firma, CariFirma   # MF3
+from models import (Ortaklik, OrtaklikIs, OrtaklikVergi,   # OR1: is ortakligi
+                    OrtaklikSermaye, OrtaklikDagitim)
 import tcmb_kur   # TK1: ortak TCMB kur cekici
 import yedek as yedek_modul
 import threading
@@ -15012,6 +15014,595 @@ def create_app():
     #  Ayrıca: eski yol her pay için AYRI cari hareket yazıyordu —
     #  tek tedarikçi faturası cari ekranında N satıra bölünüyordu.
     #  Burada cari hareketi BİR kez, faturanın tamamı için yazılır.
+    # ══════════════════════════════════════════════════════════
+    #  OR1 · İŞ ORTAKLIĞI — UÇLAR
+    #
+    #  Yetki `karlilik` modülüne bağlı: ortaklık hesabı kâr
+    #  rakamını gösteriyor, onu görmeye yetkisi olmayan birinin
+    #  buradan görmesi kapıyı arkadan açmak olurdu.
+    # ══════════════════════════════════════════════════════════
+    ORTAKLIK_ANAPARA = ('ayri', 'once_iade')
+    ORTAKLIK_MATRAH = ('kar', 'ciro', 'sabit')
+
+    def _ortaklik_dict(o, hesap=False):
+        d = {'id': o.id, 'ad': o.ad, 'ortak_ad': o.ortak_ad or '',
+             'ortak_cari_id': o.ortak_cari_id,
+             'bizim_pay': o.bizim_pay or 0, 'ortak_pay': o.ortak_pay or 0,
+             'doviz': o.doviz or 'USD',
+             'anapara_yontemi': o.anapara_yontemi or 'ayri',
+             'durum': o.durum or 'Acik',
+             'baslangic': _iso(o.baslangic), 'bitis': _iso(o.bitis),
+             'aciklama': o.aciklama or ''}
+        if hesap:
+            d['hesap'] = _ortaklik_hesap(o)
+            d['isler'] = [{'id': i.id, 'kaynak_tip': i.kaynak_tip,
+                           'kaynak_id': i.kaynak_id,
+                           'aciklama': i.aciklama or ''}
+                          for i in OrtaklikIs.query.filter_by(
+                              ortaklik_id=o.id).order_by(OrtaklikIs.id).all()]
+            d['sermaye_hareketleri'] = [
+                {'id': s.id, 'taraf': s.taraf, 'yon': s.yon,
+                 'tutar': s.tutar or 0, 'doviz': s.doviz or 'USD',
+                 'tarih': _iso(s.tarih), 'aciklama': s.aciklama or ''}
+                for s in OrtaklikSermaye.query.filter_by(
+                    ortaklik_id=o.id).order_by(OrtaklikSermaye.tarih,
+                                               OrtaklikSermaye.id).all()]
+        return d
+
+    def _ortaklik_bul(oid):
+        return Ortaklik.query.filter_by(id=oid).first()
+
+    @app.route('/api/ortaklik', methods=['GET'])
+    def api_ortaklik_liste():
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        q = Ortaklik.query
+        if request.args.get('durum'):
+            q = q.filter_by(durum=request.args.get('durum'))
+        kayitlar = []
+        for o in q.order_by(Ortaklik.baslangic.desc(), Ortaklik.id.desc()).all():
+            d = _ortaklik_dict(o)
+            h = _ortaklik_hesap(o)
+            # Listede ÖZET yeter; tam döküm detayda.
+            d['ozet'] = {'ciro': h['ciro'], 'brut_kar': h['brut_kar'],
+                         'net_kar': h['net_kar'],
+                         'ortak_bakiye': h['bakiye']['ortak'],
+                         'is_adedi': h['is_adedi'],
+                         'uyari_adedi': len(h['uyarilar'])}
+            kayitlar.append(d)
+        return jsonify({'ok': True, 'data': kayitlar})
+
+    @app.route('/api/ortaklik/<oid>', methods=['GET'])
+    def api_ortaklik_detay(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        o = _ortaklik_bul(oid)
+        if not o:
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        return jsonify({'ok': True, 'data': _ortaklik_dict(o, hesap=True)})
+
+    def _ortaklik_govde_oku(d, zorunlu_ad=True):
+        """Ortak alan doğrulaması. Döner: (govde, hata_mesaji)."""
+        ad = (d.get('ad') or '').strip()
+        if zorunlu_ad and not ad:
+            return None, 'Ortaklık adı zorunlu'
+        try:
+            bizim = float(d.get('bizim_pay') if d.get('bizim_pay') is not None else 50)
+            ortak = float(d.get('ortak_pay') if d.get('ortak_pay') is not None else 50)
+        except (TypeError, ValueError):
+            return None, 'Paylar sayısal olmalı'
+        if bizim < 0 or ortak < 0:
+            return None, 'Paylar negatif olamaz'
+        if bizim + ortak > 100:
+            return None, 'Payların toplamı %100\'ü aşamaz'
+        yon = (d.get('anapara_yontemi') or 'ayri').strip()
+        if yon not in ORTAKLIK_ANAPARA:
+            return None, f'Anapara yöntemi: {", ".join(ORTAKLIK_ANAPARA)}'
+        return {'ad': ad, 'bizim_pay': bizim, 'ortak_pay': ortak,
+                'anapara_yontemi': yon,
+                'ortak_ad': (d.get('ortak_ad') or '').strip(),
+                'ortak_cari_id': (d.get('ortak_cari_id') or '').strip() or None,
+                'doviz': (d.get('doviz') or 'USD').strip().upper()[:5],
+                'aciklama': (d.get('aciklama') or '').strip()}, None
+
+    @app.route('/api/ortaklik', methods=['POST'])
+    def api_ortaklik_ekle():
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        d = request.get_json(silent=True) or {}
+        govde, hata = _ortaklik_govde_oku(d)
+        if hata:
+            return jsonify({'ok': False, 'mesaj': hata}), 400
+        o = Ortaklik(id=_okunur_id('ORT', Ortaklik),
+                     baslangic=_parse_date(d.get('baslangic')) or date.today(),
+                     bitis=_parse_date(d.get('bitis')),
+                     kullanici=session.get('kullanici'), **govde)
+        db.session.add(o)
+        _log_audit('EKLE', 'ortaklik', o.id, yeni={'ad': o.ad, 'ortak': o.ortak_ad})
+        db.session.commit()
+        return jsonify({'ok': True, 'id': o.id})
+
+    @app.route('/api/ortaklik/<oid>', methods=['PUT'])
+    def api_ortaklik_guncelle(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        o = _ortaklik_bul(oid)
+        if not o:
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        d = request.get_json(silent=True) or {}
+        govde, hata = _ortaklik_govde_oku(d)
+        if hata:
+            return jsonify({'ok': False, 'mesaj': hata}), 400
+        for k, v in govde.items():
+            setattr(o, k, v)
+        if 'durum' in d and d['durum'] in ('Acik', 'Kapandi'):
+            o.durum = d['durum']
+        if 'baslangic' in d:
+            o.baslangic = _parse_date(d.get('baslangic')) or o.baslangic
+        if 'bitis' in d:
+            o.bitis = _parse_date(d.get('bitis'))
+        _log_audit('GUNCELLE', 'ortaklik', o.id, yeni={'ad': o.ad})
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    @app.route('/api/ortaklik/<oid>', methods=['DELETE'])
+    def api_ortaklik_sil(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        o = _ortaklik_bul(oid)
+        if not o:
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        # Cariye İŞLENMİŞ dağıtımı olan ortaklık silinemez: silmek,
+        # cari ekranında karşılığı olmayan bir borç bırakırdı.
+        islenmis = OrtaklikDagitim.query.filter(
+            OrtaklikDagitim.ortaklik_id == oid,
+            OrtaklikDagitim.cari_hareket_id.isnot(None)).count()
+        if islenmis:
+            return jsonify({'ok': False, 'mesaj':
+                            f'{islenmis} dağıtım cariye işlenmiş. Önce onları '
+                            f'geri alın.'}), 409
+        for model in (OrtaklikDagitim, OrtaklikSermaye,
+                      OrtaklikVergi, OrtaklikIs):
+            model.query.filter_by(ortaklik_id=oid).delete()
+        db.session.delete(o)
+        _log_audit('SIL', 'ortaklik', oid, eski={'ad': o.ad})
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    # ── BAĞLI İŞLER ──
+    @app.route('/api/ortaklik/<oid>/is', methods=['POST'])
+    def api_ortaklik_is_ekle(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _ortaklik_bul(oid):
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        d = request.get_json(silent=True) or {}
+        tip = (d.get('kaynak_tip') or '').strip().upper()
+        kid = (d.get('kaynak_id') or '').strip()
+        if tip not in ('SIPARIS', 'SEVKIYAT', 'PROFORMA'):
+            return jsonify({'ok': False, 'mesaj':
+                            'Kaynak tipi: SIPARIS, SEVKIYAT veya PROFORMA'}), 400
+        if not kid:
+            return jsonify({'ok': False, 'mesaj': 'Kaynak no zorunlu'}), 400
+        # Kaynak GERÇEKTEN var mı: olmayan bir numarayı bağlamak,
+        # cirosu hep 0 çıkan bir ortaklıkla biterdi.
+        _model = {'SIPARIS': Siparis, 'SEVKIYAT': Sevkiyat,
+                  'PROFORMA': Proforma}[tip]
+        if not _model.query.filter_by(id=kid).first():
+            return jsonify({'ok': False, 'mesaj':
+                            f'{tip} {kid} bulunamadı'}), 404
+        # AYNI iş iki ortaklığa bağlanamaz: aynı kârı iki kez paylaşmak
+        # olurdu.
+        _var = OrtaklikIs.query.filter_by(kaynak_tip=tip, kaynak_id=kid).first()
+        if _var:
+            if _var.ortaklik_id == oid:
+                return jsonify({'ok': False, 'mesaj': 'Bu iş zaten bağlı'}), 409
+            return jsonify({'ok': False, 'mesaj':
+                            f'Bu iş {_var.ortaklik_id} ortaklığına bağlı. '
+                            f'Aynı kâr iki kez paylaşılamaz.'}), 409
+        i = OrtaklikIs(ortaklik_id=oid, kaynak_tip=tip, kaynak_id=kid,
+                       aciklama=(d.get('aciklama') or '').strip())
+        db.session.add(i)
+        db.session.commit()
+        return jsonify({'ok': True, 'id': i.id})
+
+    @app.route('/api/ortaklik/<oid>/is/<int:is_id>', methods=['DELETE'])
+    def api_ortaklik_is_sil(oid, is_id):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        i = OrtaklikIs.query.filter_by(id=is_id, ortaklik_id=oid).first()
+        if not i:
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        db.session.delete(i)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    # ── VERGİ KALEMLERİ ──
+    @app.route('/api/ortaklik/<oid>/vergi', methods=['POST'])
+    def api_ortaklik_vergi_ekle(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _ortaklik_bul(oid):
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        d = request.get_json(silent=True) or {}
+        ad = (d.get('ad') or '').strip()
+        if not ad:
+            return jsonify({'ok': False, 'mesaj': 'Vergi adı zorunlu'}), 400
+        mt = (d.get('matrah_tipi') or 'kar').strip()
+        if mt not in ORTAKLIK_MATRAH:
+            return jsonify({'ok': False, 'mesaj':
+                            f'Matrah: {", ".join(ORTAKLIK_MATRAH)}'}), 400
+        try:
+            oran = float(d.get('oran') or 0)
+            tutar = float(d.get('tutar') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Oran/tutar sayısal olmalı'}), 400
+        # 'sabit' tutar ister, ötekiler oran — yanlış alanı doldurup
+        # sıfır vergi hesaplanmasın.
+        if mt == 'sabit' and tutar <= 0:
+            return jsonify({'ok': False, 'mesaj':
+                            'Sabit kalemde tutar sıfırdan büyük olmalı'}), 400
+        if mt != 'sabit' and oran <= 0:
+            return jsonify({'ok': False, 'mesaj':
+                            'Oran sıfırdan büyük olmalı'}), 400
+        v = OrtaklikVergi(
+            ortaklik_id=oid, ad=ad, matrah_tipi=mt, oran=oran, tutar=tutar,
+            doviz=(d.get('doviz') or 'USD').strip().upper()[:5],
+            durum=(d.get('durum') or 'tahmini').strip(),
+            odeme_tarihi=_parse_date(d.get('odeme_tarihi')),
+            aciklama=(d.get('aciklama') or '').strip())
+        db.session.add(v)
+        db.session.commit()
+        return jsonify({'ok': True, 'id': v.id})
+
+    @app.route('/api/ortaklik/<oid>/vergi/<int:vid>', methods=['PUT', 'DELETE'])
+    def api_ortaklik_vergi_duzenle(oid, vid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        v = OrtaklikVergi.query.filter_by(id=vid, ortaklik_id=oid).first()
+        if not v:
+            return jsonify({'ok': False, 'mesaj': 'Kalem bulunamadı'}), 404
+        if request.method == 'DELETE':
+            db.session.delete(v)
+            db.session.commit()
+            return jsonify({'ok': True})
+        d = request.get_json(silent=True) or {}
+        if 'ad' in d and (d.get('ad') or '').strip():
+            v.ad = d['ad'].strip()
+        if d.get('matrah_tipi') in ORTAKLIK_MATRAH:
+            v.matrah_tipi = d['matrah_tipi']
+        for alan in ('oran', 'tutar'):
+            if alan in d:
+                try:
+                    setattr(v, alan, float(d.get(alan) or 0))
+                except (TypeError, ValueError):
+                    return jsonify({'ok': False, 'mesaj':
+                                    f'{alan} sayısal olmalı'}), 400
+        if d.get('durum') in ('tahmini', 'kesinlesti', 'odendi'):
+            v.durum = d['durum']
+        if 'odeme_tarihi' in d:
+            v.odeme_tarihi = _parse_date(d.get('odeme_tarihi'))
+        if 'aciklama' in d:
+            v.aciklama = (d.get('aciklama') or '').strip()
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    # ── SERMAYE HAREKETLERİ ──
+    @app.route('/api/ortaklik/<oid>/sermaye', methods=['POST'])
+    def api_ortaklik_sermaye_ekle(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _ortaklik_bul(oid):
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        d = request.get_json(silent=True) or {}
+        try:
+            tutar = float(d.get('tutar') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Tutar sayısal olmalı'}), 400
+        if tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Tutar sıfırdan büyük olmalı'}), 400
+        taraf = (d.get('taraf') or 'ortak').strip()
+        yon = (d.get('yon') or 'koydu').strip()
+        if taraf not in ('ortak', 'biz') or yon not in ('koydu', 'geri_aldi'):
+            return jsonify({'ok': False, 'mesaj': 'Taraf/yön geçersiz'}), 400
+        s = OrtaklikSermaye(
+            ortaklik_id=oid, taraf=taraf, yon=yon, tutar=tutar,
+            doviz=(d.get('doviz') or 'USD').strip().upper()[:5],
+            tarih=_parse_date(d.get('tarih')) or date.today(),
+            aciklama=(d.get('aciklama') or '').strip())
+        db.session.add(s)
+        db.session.commit()
+        return jsonify({'ok': True, 'id': s.id})
+
+    @app.route('/api/ortaklik/<oid>/sermaye/<int:sid>', methods=['DELETE'])
+    def api_ortaklik_sermaye_sil(oid, sid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        s = OrtaklikSermaye.query.filter_by(id=sid, ortaklik_id=oid).first()
+        if not s:
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        db.session.delete(s)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    # ── DAĞITIM ──
+    @app.route('/api/ortaklik/<oid>/dagitim', methods=['POST'])
+    def api_ortaklik_dagitim_ekle(oid):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        o = _ortaklik_bul(oid)
+        if not o:
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        d = request.get_json(silent=True) or {}
+        try:
+            tutar = float(d.get('tutar') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'mesaj': 'Tutar sayısal olmalı'}), 400
+        if tutar <= 0:
+            return jsonify({'ok': False, 'mesaj': 'Tutar sıfırdan büyük olmalı'}), 400
+        taraf = (d.get('taraf') or 'ortak').strip()
+        if taraf not in ('ortak', 'biz'):
+            return jsonify({'ok': False, 'mesaj': 'Taraf geçersiz'}), 400
+        dg = OrtaklikDagitim(
+            ortaklik_id=oid, taraf=taraf, tutar=tutar,
+            doviz=(d.get('doviz') or o.doviz or 'USD').strip().upper()[:5],
+            tarih=_parse_date(d.get('tarih')) or date.today(),
+            aciklama=(d.get('aciklama') or '').strip(),
+            kullanici=session.get('kullanici'))
+        db.session.add(dg)
+        db.session.flush()
+        _log_audit('EKLE', 'ortaklik_dagitim', str(dg.id),
+                   yeni={'ortaklik': oid, 'taraf': taraf, 'tutar': tutar})
+        db.session.commit()
+        return jsonify({'ok': True, 'id': dg.id})
+
+    @app.route('/api/ortaklik/<oid>/dagitim/<int:did>', methods=['DELETE'])
+    def api_ortaklik_dagitim_sil(oid, did):
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        dg = OrtaklikDagitim.query.filter_by(id=did, ortaklik_id=oid).first()
+        if not dg:
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+        if dg.cari_hareket_id:
+            return jsonify({'ok': False, 'mesaj':
+                            'Bu dağıtım cariye işlenmiş. Önce geri alın.'}), 409
+        db.session.delete(dg)
+        db.session.commit()
+        return jsonify({'ok': True})
+
+    @app.route('/api/ortaklik/<oid>/dagitim/<int:did>/cariye', methods=['POST', 'DELETE'])
+    def api_ortaklik_dagitim_cariye(oid, did):
+        """Dağıtımı cari borç olarak işler — ya da geri alır.
+
+        İSTEĞE BAĞLI: hesap bu sayfada yapılıyor, cariye aktarmak
+        ayrı bir karar. Geri alma, oluşturulan hareketi siler ve
+        bağı boşaltır; iki kayıt arasında sessiz bir fark kalmaz.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'yazma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _yetki_var_mi('cari', 'yazma'):
+            return jsonify({'ok': False, 'mesaj':
+                            'Cariye işlemek için cari yazma yetkisi gerekir'}), 403
+        o = _ortaklik_bul(oid)
+        dg = OrtaklikDagitim.query.filter_by(id=did, ortaklik_id=oid).first()
+        if not o or not dg:
+            return jsonify({'ok': False, 'mesaj': 'Kayıt bulunamadı'}), 404
+
+        if request.method == 'DELETE':
+            if not dg.cari_hareket_id:
+                return jsonify({'ok': False, 'mesaj':
+                                'Bu dağıtım cariye işlenmemiş'}), 400
+            ch = CariHareket.query.filter_by(id=dg.cari_hareket_id).first()
+            if ch:
+                db.session.delete(ch)
+            _log_audit('SIL', 'cari_hareket', dg.cari_hareket_id,
+                       eski={'kaynak': 'ortaklik_dagitim', 'dagitim': did})
+            dg.cari_hareket_id = None
+            db.session.commit()
+            return jsonify({'ok': True})
+
+        if dg.cari_hareket_id:
+            return jsonify({'ok': False, 'mesaj': 'Zaten işlenmiş'}), 409
+        if dg.taraf != 'ortak':
+            return jsonify({'ok': False, 'mesaj':
+                            'Yalnızca ORTAĞA yapılan dağıtım cariye işlenir'}), 400
+        if not o.ortak_cari_id:
+            return jsonify({'ok': False, 'mesaj':
+                            'Ortaklıkta cari kartı seçili değil'}), 400
+        cari = Cari.query.filter_by(id=o.ortak_cari_id).first()
+        if not cari:
+            return jsonify({'ok': False, 'mesaj': 'Cari bulunamadı'}), 404
+
+        # ALACAK: ortağa ödenecek tutar bizim için borçtur.
+        ch = CariHareket(
+            id=_yeni_id('CH'), hareket_tarihi=dg.tarih or date.today(),
+            cari_unvan=cari.unvan, cari_id=cari.id,
+            islem_tip='Ortaklık kâr payı', evrak_no=o.id,
+            aciklama=(dg.aciklama or '') or f'{o.ad} — kâr payı dağıtımı',
+            borc=0, alacak=dg.tutar or 0, doviz=dg.doviz or 'USD')
+        db.session.add(ch)
+        db.session.flush()
+        dg.cari_hareket_id = ch.id
+        _log_audit('EKLE', 'cari_hareket', ch.id,
+                   yeni={'kaynak': 'ortaklik_dagitim', 'ortaklik': oid,
+                         'tutar': dg.tutar})
+        db.session.commit()
+        return jsonify({'ok': True, 'cari_hareket_id': ch.id})
+
+    @app.route('/ortaklik')
+    def ortaklik_sayfa():
+        """İş ortaklıkları — kâr paylaşım hesabı."""
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('karlilik', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('ortaklik.html')
+
+    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════
+    #  OR1 · İŞ ORTAKLIĞI — KÂR PAYLAŞIM HESABI
+    #
+    #  Zincir, her basamağı ayrı ayrı görünecek şekilde döner:
+    #
+    #      ciro − maliyet = BRÜT KÂR
+    #      brüt kâr − vergiler = NET KÂR
+    #      net kâr × pay% = tarafların payı
+    #      (+ anapara, yönteme göre) = ÖDENECEK
+    #
+    #  Ara basamakları saklamak, "bu rakam nereden çıktı" sorusunu
+    #  cevapsız bırakırdı — ortakla paylaşılan bir hesapta en çok
+    #  sorulan soru o.
+    #
+    #  KÂR BURADA YENİDEN HESAPLANMIYOR: `satis_kaydi` zaten satır
+    #  satır tutuyor ve maliyet zincirinden türüyor. İkinci bir
+    #  hesap, /karlilik ile bu sayfanın farklı rakam göstermesiyle
+    #  biterdi.
+    # ══════════════════════════════════════════════════════════
+    def _iso(d):
+        return d.isoformat() if d else None
+
+    def _ortaklik_satislari(ort):
+        """Ortaklığa bağlı işlerin SatisKaydi satırları."""
+        isler = OrtaklikIs.query.filter_by(ortaklik_id=ort.id).all()
+        if not isler:
+            return [], []
+        sip = [i.kaynak_id for i in isler if i.kaynak_tip == 'SIPARIS']
+        sev = [i.kaynak_id for i in isler if i.kaynak_tip == 'SEVKIYAT']
+        prf = [i.kaynak_id for i in isler if i.kaynak_tip == 'PROFORMA']
+        kosul = []
+        if sip: kosul.append(SatisKaydi.siparis_id.in_(sip))
+        if sev: kosul.append(SatisKaydi.sevkiyat_id.in_(sev))
+        if prf: kosul.append(SatisKaydi.proforma_id.in_(prf))
+        if not kosul:
+            return [], isler
+        return SatisKaydi.query.filter(db.or_(*kosul)).all(), isler
+
+    def _ortaklik_hesap(ort):
+        """Ortaklığın tam hesabı. Para birimi USD (satış kaydı öyle tutuyor)."""
+        satislar, isler = _ortaklik_satislari(ort)
+
+        ciro = q2(sum((s.tutar_usd or 0) for s in satislar))
+        maliyet = q2(sum((s.maliyet_usd or 0) for s in satislar))
+        brut_kar = q2(sum((s.kar_usd or 0) for s in satislar))
+
+        # ── VERGİLER ──
+        # Her kalem kendi matrahından hesaplanır. Hesaplanan tutar
+        # kalemin üstünde DURMAZ, burada üretilir: oran değişince
+        # eski tutar geride kalmasın.
+        vergiler, vergi_top, vergi_kesin = [], 0, 0
+        for v in OrtaklikVergi.query.filter_by(ortaklik_id=ort.id).order_by(
+                OrtaklikVergi.id).all():
+            if v.matrah_tipi == 'ciro':
+                matrah, tut = ciro, q2(ciro * (v.oran or 0) / 100)
+            elif v.matrah_tipi == 'sabit':
+                matrah, tut = None, q2(v.tutar or 0)
+            else:   # 'kar'
+                # Zararda kâr vergisi doğmaz; negatif oranı negatif
+                # vergiye çevirmek, zararı kâr gibi dağıtırdı.
+                matrah = brut_kar
+                tut = q2(brut_kar * (v.oran or 0) / 100) if brut_kar > 0 else 0
+            vergi_top += tut
+            if v.durum in ('kesinlesti', 'odendi'):
+                vergi_kesin += tut
+            vergiler.append({
+                'id': v.id, 'ad': v.ad, 'matrah_tipi': v.matrah_tipi,
+                'oran': v.oran or 0, 'matrah': matrah, 'tutar': tut,
+                'durum': v.durum, 'odeme_tarihi': _iso(v.odeme_tarihi),
+                'aciklama': v.aciklama or ''})
+        vergi_top = q2(vergi_top)
+        net_kar = q2(brut_kar - vergi_top)
+
+        # ── SERMAYE ──
+        sermaye = {'ortak': 0, 'biz': 0}
+        sermaye_iade = {'ortak': 0, 'biz': 0}
+        for sm in OrtaklikSermaye.query.filter_by(ortaklik_id=ort.id).all():
+            hedef = sermaye if sm.yon == 'koydu' else sermaye_iade
+            hedef[sm.taraf if sm.taraf in hedef else 'ortak'] += (sm.tutar or 0)
+        kalan_anapara = {t: q2(sermaye[t] - sermaye_iade[t]) for t in sermaye}
+
+        # ── PAYLAR ──
+        bizim_pay = ort.bizim_pay or 0
+        ortak_pay = ort.ortak_pay or 0
+        paylar = {
+            'biz': q2(net_kar * bizim_pay / 100),
+            'ortak': q2(net_kar * ortak_pay / 100)}
+
+        # ── ÖDENECEK ──
+        # 'once_iade': ortağa önce anaparası döner, sonra kâr payı.
+        # 'ayri'     : anapara ayrı takip edilir, dağıtım yalnız kâr payı.
+        # KÂR İKİ YÖNTEMDE DE AYNI; değişen yalnız ödenecek tutar.
+        if ort.anapara_yontemi == 'once_iade':
+            odenecek = {t: q2(paylar[t] + kalan_anapara.get(t, 0))
+                        for t in paylar}
+        else:
+            odenecek = dict(paylar)
+
+        # ── YAPILAN DAĞITIMLAR ──
+        dagitilan = {'ortak': 0, 'biz': 0}
+        dagitimlar = []
+        for d in OrtaklikDagitim.query.filter_by(ortaklik_id=ort.id).order_by(
+                OrtaklikDagitim.tarih, OrtaklikDagitim.id).all():
+            dagitilan[d.taraf if d.taraf in dagitilan else 'ortak'] += (d.tutar or 0)
+            dagitimlar.append({
+                'id': d.id, 'taraf': d.taraf, 'tutar': d.tutar or 0,
+                'doviz': d.doviz or 'USD', 'tarih': _iso(d.tarih),
+                'aciklama': d.aciklama or '',
+                'cari_hareket_id': d.cari_hareket_id,
+                'cariye_islendi': bool(d.cari_hareket_id)})
+
+        # ── UYARILAR ──
+        # Sessiz kalınacak şeyler değil: ortakla paylaşılan bir hesapta
+        # eksik pay ya da tahmini vergi, sonradan anlaşmazlık doğurur.
+        uyarilar = []
+        _pay_top = q2(bizim_pay + ortak_pay)
+        if _pay_top != 100:
+            uyarilar.append(
+                f'Paylar toplamı %{_pay_top} — %100 değil. '
+                f'Üçüncü bir tarafa ayrılan pay yoksa bu bir eksiklik.')
+        _tahmini = q2(vergi_top - vergi_kesin)
+        if _tahmini > 0:
+            uyarilar.append(
+                f'Vergilerin {_tahmini:,.2f} USD\'lik kısmı TAHMİNİ. '
+                f'Kesinleşince paylar değişir.')
+        if not satislar and isler:
+            uyarilar.append(
+                'Bağlı işlerin henüz satış kaydı yok — teslim edilmemiş '
+                'olabilir. Ciro ve kâr 0 görünüyor.')
+        if not isler:
+            uyarilar.append('Bu ortaklığa henüz iş bağlanmadı.')
+
+        return {
+            'ciro': ciro, 'maliyet': maliyet, 'brut_kar': brut_kar,
+            'vergiler': vergiler, 'vergi_toplam': vergi_top,
+            'vergi_kesinlesen': q2(vergi_kesin),
+            'vergi_tahmini': q2(vergi_top - vergi_kesin),
+            'net_kar': net_kar,
+            'bizim_pay': bizim_pay, 'ortak_pay': ortak_pay,
+            'paylar': paylar,
+            'sermaye': {t: q2(sermaye[t]) for t in sermaye},
+            'sermaye_iade': {t: q2(sermaye_iade[t]) for t in sermaye_iade},
+            'kalan_anapara': kalan_anapara,
+            'anapara_yontemi': ort.anapara_yontemi,
+            'odenecek': odenecek,
+            'dagitilan': {t: q2(dagitilan[t]) for t in dagitilan},
+            'bakiye': {t: q2(odenecek[t] - dagitilan[t]) for t in odenecek},
+            'dagitimlar': dagitimlar,
+            'satis_adedi': len(satislar), 'is_adedi': len(isler),
+            'uyarilar': uyarilar}
+
     # ══════════════════════════════════════════════════════════
     def _maliyet_dagitim_olcusu(hedefler):
         """Seçilen stokların ortak dağıtım ölçüsünü bulur.

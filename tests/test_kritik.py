@@ -3937,3 +3937,201 @@ console.log(JSON.stringify({
     # `slabVar` 0'ı VAR sayar — hatanın özü buydu
     assert d['varSifir'] is True
     assert d['varBos'] is False and d['varNull'] is False
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  OR1 · İŞ ORTAKLIĞI — KÂR PAYLAŞIMI
+# ══════════════════════════════════════════════════════════════════════
+
+def _or1_kur(sip_id, satislar, firma_id=1):
+    """Bir sipariş + ona bağlı satış kayıtları kurar.
+
+    satislar: [(tutar_usd, maliyet_usd)] — kâr farktan türetilir,
+    tıpkı gerçek akışta olduğu gibi.
+    """
+    from models import Siparis, SatisKaydi
+    with fa.app.app_context():
+        db.session.add(Siparis(id=sip_id, musteri='ACIK CARI', doviz='USD',
+                               toplam_tutar=sum(t for t, _ in satislar),
+                               durum='Onaylandi',
+                               siparis_tarihi=date(2026, 4, 1)))
+        db.session.flush()
+        for n, (tutar, maliyet) in enumerate(satislar, 1):
+            db.session.add(SatisKaydi(
+                id=f'{sip_id}-S{n}', siparis_id=sip_id, stok_tip='PLAKA',
+                cins='TEST', musteri='ACIK CARI', satis_tarihi=date(2026, 4, 5),
+                tutar=tutar, tutar_usd=tutar, doviz='USD',
+                maliyet_usd=maliyet, kar_usd=tutar - maliyet,
+                marj_yuzde=((tutar - maliyet) / tutar * 100) if tutar else 0))
+        db.session.commit()
+
+
+def test_or1_hesap_zinciri_basamak_basamak():
+    """OR1: ciro → maliyet → brüt kâr → vergiler → net kâr → paylar.
+
+    Her basamak ayrı ayrı doğrulanıyor: ortakla paylaşılan bir
+    hesapta yalnız sonucu ölçmek, hatanın hangi basamakta olduğunu
+    gizlerdi."""
+    _or1_kur('SIPOR1', [(10000, 6000), (5000, 3000)])
+    c = istemci('admin', 'ADMIN')
+
+    r = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'OR1 testi', 'ortak_ad': 'FINANSOR', 'bizim_pay': 60,
+        'ortak_pay': 40, 'anapara_yontemi': 'ayri'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    oid = r.get_json()['id']
+
+    assert c.post(f'/api/ortaklik/{oid}/is', headers=H, json={
+        'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR1'}).status_code == 200
+
+    # Üç matrah tipi birden
+    assert c.post(f'/api/ortaklik/{oid}/vergi', headers=H, json={
+        'ad': 'Kurumlar', 'matrah_tipi': 'kar', 'oran': 25}).status_code == 200
+    assert c.post(f'/api/ortaklik/{oid}/vergi', headers=H, json={
+        'ad': 'Stopaj', 'matrah_tipi': 'ciro', 'oran': 1}).status_code == 200
+    assert c.post(f'/api/ortaklik/{oid}/vergi', headers=H, json={
+        'ad': 'İade alınamayan KDV', 'matrah_tipi': 'sabit',
+        'tutar': 200, 'durum': 'odendi'}).status_code == 200
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['ciro'] == 15000, h['ciro']
+    assert h['maliyet'] == 9000, h['maliyet']
+    assert h['brut_kar'] == 6000, h['brut_kar']
+    # 6000×25% = 1500 · 15000×1% = 150 · sabit 200 → 1850
+    assert h['vergi_toplam'] == 1850, h['vergi_toplam']
+    assert h['net_kar'] == 4150, h['net_kar']
+    assert h['paylar']['biz'] == 2490 and h['paylar']['ortak'] == 1660, h['paylar']
+    # Sabit kalem 'odendi', ötekiler 'tahmini'
+    assert h['vergi_kesinlesen'] == 200 and h['vergi_tahmini'] == 1650
+    assert any('TAHMİNİ' in u for u in h['uyarilar']), h['uyarilar']
+
+
+def test_or1_anapara_iki_yontem_kari_degistirmez():
+    """OR1: anapara yöntemi KÂRI değil, ÖDENECEĞİ değiştirir.
+
+    Kolayca ters gidebilecek yer burası: sermayeyi kârdan düşmek,
+    ortağın parasını gider gibi saymak olurdu."""
+    _or1_kur('SIPOR2', [(10000, 6000)])
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Anapara testi', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'ayri'})
+    oid = r.get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR2'})
+    c.post(f'/api/ortaklik/{oid}/sermaye', headers=H, json={
+        'taraf': 'ortak', 'yon': 'koydu', 'tutar': 6000})
+
+    h1 = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h1['net_kar'] == 4000 and h1['paylar']['ortak'] == 2000
+    assert h1['odenecek']['ortak'] == 2000, h1['odenecek']
+
+    # Yöntemi değiştir — kâr AYNI kalmalı, ödenecek anaparayı da içermeli
+    assert c.put(f'/api/ortaklik/{oid}', headers=H, json={
+        'ad': 'Anapara testi', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'once_iade'}).status_code == 200
+    h2 = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h2['net_kar'] == h1['net_kar'], (h1['net_kar'], h2['net_kar'])
+    assert h2['paylar']['ortak'] == 2000
+    assert h2['odenecek']['ortak'] == 8000, h2['odenecek']   # 6000 + 2000
+    assert h2['kalan_anapara']['ortak'] == 6000
+
+
+def test_or1_zararda_kar_vergisi_dogmaz():
+    """OR1: zararda kâr üzerinden vergi hesaplanmaz.
+
+    Negatif kârı orana çarpmak NEGATİF vergi üretir ve zararı kâr
+    gibi dağıtırdı."""
+    _or1_kur('SIPOR3', [(4000, 7000)])    # 3000 zarar
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Zarar testi', 'bizim_pay': 50, 'ortak_pay': 50}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR3'})
+    c.post(f'/api/ortaklik/{oid}/vergi', headers=H, json={
+        'ad': 'Kurumlar', 'matrah_tipi': 'kar', 'oran': 25})
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['brut_kar'] == -3000, h['brut_kar']
+    assert h['vergi_toplam'] == 0, h['vergi_toplam']
+    assert h['net_kar'] == -3000
+    # Zarar da paylaşılır — payı sıfırlamak zararı bize yıkardı
+    assert h['paylar']['ortak'] == -1500, h['paylar']
+
+
+def test_or1_ayni_is_iki_ortakliga_baglanamaz():
+    """OR1: bir iş tek ortaklığa bağlanır — aynı kâr iki kez
+    paylaşılamaz."""
+    _or1_kur('SIPOR4', [(1000, 500)])
+    c = istemci('admin', 'ADMIN')
+    a = c.post('/api/ortaklik', headers=H, json={'ad': 'A'}).get_json()['id']
+    b = c.post('/api/ortaklik', headers=H, json={'ad': 'B'}).get_json()['id']
+    assert c.post(f'/api/ortaklik/{a}/is', headers=H, json={
+        'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR4'}).status_code == 200
+    r = c.post(f'/api/ortaklik/{b}/is', headers=H, json={
+        'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR4'})
+    assert r.status_code == 409, r.get_data(as_text=True)
+    # Var olmayan kaynak da bağlanamaz
+    assert c.post(f'/api/ortaklik/{b}/is', headers=H, json={
+        'kaynak_tip': 'SIPARIS', 'kaynak_id': 'YOK-123'}).status_code == 404
+
+
+def test_or1_cariye_isleme_istege_bagli_ve_geri_alinabilir():
+    """OR1: dağıtım cariye İSTEĞE BAĞLI işlenir, geri alınabilir.
+
+    Geri alma hareketi gerçekten silmeli: kalırsa cari ekranında
+    karşılığı olmayan bir borç durur."""
+    from models import CariHareket, OrtaklikDagitim
+    _or1_kur('SIPOR5', [(10000, 6000)])
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Cari testi', 'ortak_cari_id': 'C1', 'ortak_ad': 'ACIK CARI',
+        'bizim_pay': 50, 'ortak_pay': 50}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR5'})
+    did = c.post(f'/api/ortaklik/{oid}/dagitim', headers=H, json={
+        'taraf': 'ortak', 'tutar': 2000}).get_json()['id']
+
+    # Henüz cariye işlenmedi
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['dagitimlar'][0]['cariye_islendi'] is False
+    assert h['bakiye']['ortak'] == 0, h['bakiye']   # 2000 pay − 2000 dağıtım
+
+    r = c.post(f'/api/ortaklik/{oid}/dagitim/{did}/cariye', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    chid = r.get_json()['cari_hareket_id']
+    with fa.app.app_context():
+        ch = CariHareket.query.filter_by(id=chid).first()
+        assert ch is not None and ch.alacak == 2000, ch
+        assert ch.cari_id == 'C1'
+
+    # İkinci kez işlenemez
+    assert c.post(f'/api/ortaklik/{oid}/dagitim/{did}/cariye',
+                  headers=H).status_code == 409
+    # İşlenmişken silinemez
+    assert c.delete(f'/api/ortaklik/{oid}/dagitim/{did}',
+                    headers=H).status_code == 409
+
+    # Geri al → hareket GERÇEKTEN silinir
+    assert c.delete(f'/api/ortaklik/{oid}/dagitim/{did}/cariye',
+                    headers=H).status_code == 200
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(id=chid).first() is None
+        assert OrtaklikDagitim.query.get(did).cari_hareket_id is None
+
+
+def test_or1_paylar_yuzde_yuzu_asamaz_ve_eksik_pay_uyarir():
+    """OR1: toplam %100'ü aşamaz; aşmayan eksiklik SESSİZ kalmaz.
+
+    Eksik payı kendiliğinden 100'e tamamlamak, üçüncü bir tarafa
+    ayrılmış payı görünmez yapardı — bu yüzden uyarı veriliyor,
+    düzeltme yapılmıyor."""
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Asan', 'bizim_pay': 70, 'ortak_pay': 40})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Eksik', 'bizim_pay': 50, 'ortak_pay': 30}).get_json()['id']
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert any('%80' in u for u in h['uyarilar']), h['uyarilar']

@@ -1536,6 +1536,137 @@ class CariKisi(db.Model):
 #  Fatura kesilmesini engellemek, eksik bagdan kotu olurdu.
 #  Acikta kalanlari bulmak icin: crm_bag_denetim.py
 # ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+#  OR1 · İŞ ORTAKLIĞI — KÂR PAYLAŞIMI
+#
+#  Bazı işlerde müşteriyi ve talebi biz buluyoruz, finansmanı başka
+#  bir kişi/şirket sağlıyor; kâr paylaşılıyor. Bu tablolar o hesabı
+#  tutuyor.
+#
+#  KÂR YENİDEN HESAPLANMIYOR. Gelir, maliyet ve kâr zaten
+#  `satis_kaydi` içinde satır satır duruyor (maliyet zincirinden
+#  türüyor). Ortaklık o rakamların ÜZERİNE oturur; ikinci bir kâr
+#  hesabı yazmak, iki ekranın farklı rakam göstermesiyle biterdi.
+# ══════════════════════════════════════════════════════════════════
+class Ortaklik(FirmaKapsamli, db.Model):
+    """Bir iş ortaklığı: bir ortak, bir ya da birden çok iş.
+
+    Tek işte de dönemsel çalışmada da aynı kayıt kullanılır — fark
+    altına kaç iş bağladığında.
+    """
+    __tablename__ = 'ortaklik'
+    id            = db.Column(db.String(20), primary_key=True)
+    ad            = db.Column(db.String(150), nullable=False)
+    ortak_cari_id = db.Column(db.String(20), db.ForeignKey('cariler.id'),
+                              nullable=True, index=True)
+    # Cari kartı olmayan ortak da olabiliyor; ad her zaman yazılır.
+    ortak_ad      = db.Column(db.String(200))
+    # Paylar yüzde. İkisinin toplamı 100 olmak zorunda değil:
+    # üçüncü bir tarafa ayrılan pay varsa fark açıkta kalır ve
+    # ekranda UYARI olarak görünür — sessizce 100'e tamamlamak,
+    # eksik payı görünmez yapardı.
+    bizim_pay     = db.Column(Olcu, default=50)
+    ortak_pay     = db.Column(Olcu, default=50)
+    doviz         = db.Column(db.String(5), default='USD')
+    # ANAPARA YÖNTEMİ — her ortaklıkta ayrı seçilir:
+    #   'once_iade' : tahsilattan önce ortağın koyduğu sermaye iade
+    #                 edilir, ortağa ödenecek = anapara + kâr payı
+    #   'ayri'      : sermaye ayrı takip edilir, dağıtım yalnız kâr payı
+    # İKİ YÖNTEMDE DE KÂR AYNIDIR; değişen, ortağa ÖDENECEK tutar.
+    anapara_yontemi = db.Column(db.String(12), default='ayri')
+    durum         = db.Column(db.String(12), default='Acik')   # Acik|Kapandi
+    baslangic     = db.Column(db.Date, default=date.today)
+    bitis         = db.Column(db.Date, nullable=True)
+    aciklama      = db.Column(db.Text)
+    kullanici     = db.Column(db.String(50))
+    olusturma     = db.Column(db.DateTime, default=datetime.now)
+    guncelleme    = db.Column(db.DateTime, default=datetime.now,
+                              onupdate=datetime.now)
+
+
+class OrtaklikIs(FirmaKapsamli, db.Model):
+    """Ortaklığa bağlanan iş: bir sipariş ya da bir sevkiyat.
+
+    Bağ KAYNAK ÜZERİNDEN kurulur, satış kaydı kopyalanmaz: satış
+    sonradan düzeltilirse (iade, fiyat farkı) ortaklık hesabı da
+    kendiliğinden düzelir.
+    """
+    __tablename__ = 'ortaklik_is'
+    id          = db.Column(db.Integer, primary_key=True)
+    ortaklik_id = db.Column(db.String(20), db.ForeignKey('ortaklik.id'),
+                            nullable=False, index=True)
+    kaynak_tip  = db.Column(db.String(12))    # SIPARIS | SEVKIYAT | PROFORMA
+    kaynak_id   = db.Column(db.String(30), index=True)
+    aciklama    = db.Column(db.Text)
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+
+class OrtaklikVergi(FirmaKapsamli, db.Model):
+    """Kârdan düşülecek vergi kalemi.
+
+    `matrah_tipi` neyin üzerinden hesaplandığını söyler:
+        'kar'   → brüt kâr × oran      (kurumlar vergisi gibi)
+        'ciro'  → satış tutarı × oran  (stopaj gibi)
+        'sabit' → doğrudan `tutar`     (iade alınamayan KDV gibi,
+                                        rakamı kendin yazarsın)
+
+    `durum` tahmini mi kesinleşmiş mi ayırır. Kurumlar vergisi YILLIK
+    kâr üzerinden hesaplanır; onu tek bir işe pay etmek bir KABULdür.
+    Bu yüzden kalem önce 'tahmini' durur, vergi kesinleşince
+    'kesinlesti'ye çekilir ve fark dağıtımda görünür.
+    """
+    __tablename__ = 'ortaklik_vergi'
+    id          = db.Column(db.Integer, primary_key=True)
+    ortaklik_id = db.Column(db.String(20), db.ForeignKey('ortaklik.id'),
+                            nullable=False, index=True)
+    ad          = db.Column(db.String(100), nullable=False)
+    matrah_tipi = db.Column(db.String(8), default='kar')   # kar|ciro|sabit
+    oran        = db.Column(Olcu, default=0)               # yüzde
+    tutar       = db.Column(Para, default=0)               # 'sabit' için
+    doviz       = db.Column(db.String(5), default='USD')
+    durum       = db.Column(db.String(12), default='tahmini')  # tahmini|kesinlesti|odendi
+    odeme_tarihi = db.Column(db.Date, nullable=True)
+    aciklama    = db.Column(db.Text)
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+
+class OrtaklikSermaye(FirmaKapsamli, db.Model):
+    """Anapara hareketi: kim ne koydu, ne zaman geri aldı."""
+    __tablename__ = 'ortaklik_sermaye'
+    id          = db.Column(db.Integer, primary_key=True)
+    ortaklik_id = db.Column(db.String(20), db.ForeignKey('ortaklik.id'),
+                            nullable=False, index=True)
+    taraf       = db.Column(db.String(8), default='ortak')  # ortak|biz
+    yon         = db.Column(db.String(8), default='koydu')  # koydu|geri_aldi
+    tutar       = db.Column(Para, default=0)
+    doviz       = db.Column(db.String(5), default='USD')
+    tarih       = db.Column(db.Date, default=date.today)
+    aciklama    = db.Column(db.Text)
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+
+class OrtaklikDagitim(FirmaKapsamli, db.Model):
+    """Ortağa yapılan/yapılacak ödeme.
+
+    `cari_hareket_id` BOŞ OLABİLİR: hesap bu sayfada yapılır, cariye
+    aktarmak isteğe bağlı. Dolu olması, bu dağıtımın cari borç olarak
+    işlendiği anlamına gelir; geri alınınca hareket silinir ve alan
+    yeniden boşalır.
+    """
+    __tablename__ = 'ortaklik_dagitim'
+    id          = db.Column(db.Integer, primary_key=True)
+    ortaklik_id = db.Column(db.String(20), db.ForeignKey('ortaklik.id'),
+                            nullable=False, index=True)
+    taraf       = db.Column(db.String(8), default='ortak')  # ortak|biz
+    tutar       = db.Column(Para, default=0)
+    doviz       = db.Column(db.String(5), default='USD')
+    tarih       = db.Column(db.Date, default=date.today)
+    aciklama    = db.Column(db.Text)
+    cari_hareket_id = db.Column(db.String(20), nullable=True, index=True)
+    kullanici   = db.Column(db.String(50))
+    olusturma   = db.Column(db.DateTime, default=datetime.now)
+
+
 from sqlalchemy import event as _event, text as _text
 from sqlalchemy import inspect as _inspect   # DT1: durum degisti mi?
 

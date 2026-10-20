@@ -1,0 +1,594 @@
+{% extends "base.html" %}
+{% block title %}İş Ortaklıkları{% endblock %}
+
+{% block head %}
+<style>
+/* ── İŞ ORTAKLIKLARI (OR1) ─────────────────────────────────────────
+   Müşteriyi ve talebi biz buluyoruz, finansmanı ortak sağlıyor, kâr
+   paylaşılıyor. Bu sayfa o hesabı tutuyor.
+
+   TASARIM KARARI: hesabın HER BASAMAĞI ekranda duruyor
+   (ciro → maliyet → brüt kâr → vergiler → net kâr → paylar).
+   Yalnız sonucu göstermek, ortakla paylaşılan bir rakamda "bu
+   nereden çıktı" sorusunu cevapsız bırakırdı — ve o soru bu tür
+   hesaplarda en çok sorulan sorudur. */
+  .or-ust{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 14px}
+  .or-sec{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:8px 11px;font-family:var(--govde);font-size:.86rem;
+    background:var(--yuzey);color:var(--murekkep);cursor:pointer}
+  .or-sec:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+
+  .or-tablo{width:100%;border-collapse:collapse;font-size:.88rem}
+  .or-tablo th{text-align:left;padding:9px 12px;font-size:.7rem;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);
+    border-bottom:1px solid var(--cizgi);white-space:nowrap}
+  .or-tablo th.sag,.or-tablo td.sag{text-align:right}
+  .or-tablo td{padding:11px 12px;border-bottom:1px solid var(--cizgi);vertical-align:middle}
+  .or-tablo tbody tr{cursor:pointer}
+  .or-tablo tbody tr:hover{background:var(--notr-bg)}
+  .or-ad{font-weight:700}
+  .or-tutar{font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}
+  .or-bos{padding:34px;text-align:center;color:var(--soluk);font-size:.9rem}
+  .or-etiket{display:inline-block;font-size:.68rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;padding:3px 8px;border-radius:20px;
+    background:var(--notr-bg);color:var(--soluk);white-space:nowrap}
+  .or-etiket.acik{background:var(--verde-acik);color:var(--verde-koyu)}
+
+  /* ── HESAP DÖKÜMÜ ── */
+  .or-hesap{border:1px solid var(--cizgi);border-radius:var(--r);
+    background:var(--yuzey);padding:4px 0;margin:10px 0 14px}
+  .or-satir{display:flex;align-items:baseline;gap:12px;padding:8px 16px;
+    font-size:.88rem}
+  .or-satir .et{flex:1;color:var(--soluk)}
+  .or-satir .tt{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+  .or-satir.kalin{border-top:1px solid var(--cizgi);font-weight:700}
+  .or-satir.kalin .et{color:var(--murekkep)}
+  .or-satir.kalin .tt{font-size:1.02rem}
+  .or-satir.alt{padding-left:30px;font-size:.84rem}
+  .or-satir.alt .et::before{content:'└ ';color:var(--cizgi-koyu)}
+  .or-eksi .tt{color:var(--kirmizi)}
+  /* `.et` daralabilsin ama TUTAR hiç kırılmasın: uzun vergi adı
+     satırı alt alta dökerse hesap okunmaz hâle geliyordu. */
+  .or-satir .et{min-width:0}
+  .or-sil{cursor:pointer;color:var(--kirmizi);font-size:.76rem;
+    white-space:nowrap;opacity:.75}
+  .or-sil:hover{opacity:1;text-decoration:underline}
+  .or-sonuc{background:var(--verde-acik)}
+  .or-sonuc .et,.or-sonuc .tt{color:var(--verde-koyu)}
+
+  .or-uyari{display:flex;gap:9px;align-items:flex-start;padding:10px 14px;
+    border-radius:var(--r-kucuk);background:var(--kehribar-acik,#FFF6E5);
+    border:1px solid var(--kehribar,#E0A526);font-size:.84rem;margin-bottom:8px}
+  .or-uyari b{display:block}
+
+  .or-bolum{margin:18px 0 8px;font-size:.74rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);display:flex;align-items:center;
+    gap:10px}
+  .or-bolum button{margin-left:auto}
+  .or-bolum .blok-btn{flex:0 0 auto;min-width:0;padding:6px 12px;font-size:.78rem}
+  .or-mini .blok-btn{flex:0 0 auto;min-width:0;padding:5px 10px;font-size:.76rem}
+  .or-mini{width:100%;border-collapse:collapse;font-size:.84rem}
+  .or-mini td{padding:7px 10px;border-bottom:1px solid var(--cizgi)}
+  .or-mini td.sag{text-align:right;font-variant-numeric:tabular-nums}
+  .or-mini .sil{color:var(--kirmizi);cursor:pointer;font-size:.8rem}
+
+  .modal-ortu{position:fixed;inset:0;background:rgba(25,28,26,.4);display:none;
+    z-index:45;place-items:center;padding:20px}
+  .modal-ortu.acik{display:grid}
+  .modal{width:600px;max-width:100%;background:var(--yuzey);border-radius:14px;
+    box-shadow:var(--golge-buyuk,0 18px 50px rgba(0,0,0,.18));
+    max-height:88vh;overflow:auto}
+  .modal-bas{padding:18px 22px 10px}
+  .modal-bas h3{font-family:var(--baslik);font-size:1.1rem;margin:0}
+  .modal-bas p{font-size:.82rem;color:var(--soluk);margin:4px 0 0}
+  .modal-alt{padding:14px 22px 18px;display:flex;gap:10px;justify-content:flex-end;
+    border-top:1px solid var(--cizgi)}
+  .form-satir{display:grid;gap:12px;margin-bottom:12px}
+  .form-satir.f2{grid-template-columns:1fr 1fr}
+  .form-satir.f3{grid-template-columns:1fr 1fr 1fr}
+  .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .form-alan input,.form-alan select,.form-alan textarea{width:100%;
+    border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);
+    padding:9px 11px;font-family:var(--govde);font-size:.88rem;
+    background:var(--yuzey);color:var(--murekkep)}
+  .form-alan input:focus,.form-alan select:focus,.form-alan textarea:focus{
+    outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .yardim{font-size:.76rem;color:var(--soluk);margin-top:4px;line-height:1.45}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">İş Ortaklıkları</h1>
+<p class="g-alt">Ortakla yürütülen işlerin kâr paylaşım hesabı. Kâr rakamı
+  satış kayıtlarından gelir — burada yeniden hesaplanmaz, o yüzden Karlılık
+  ekranıyla her zaman aynı rakamı gösterir.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="or-ust">
+  <select id="fDurum" class="or-sec" onchange="yukle()">
+    <option value="">Tümü</option>
+    <option value="Acik" selected>Açık</option>
+    <option value="Kapandi">Kapandı</option>
+  </select>
+  <button class="btn-yeni" style="margin-left:auto" onclick="yeniAc()">+ Yeni Ortaklık</button>
+</div>
+
+<div class="tablo-kutu">
+  <table class="or-tablo">
+    <thead><tr>
+      <th>Ortaklık</th><th>Ortak</th><th>Pay</th>
+      <th class="sag">Ciro</th><th class="sag">Brüt Kâr</th>
+      <th class="sag">Net Kâr</th><th class="sag">Ortak Bakiye</th>
+      <th>Durum</th>
+    </tr></thead>
+    <tbody id="govde"></tbody>
+  </table>
+  <div id="bos" class="or-bos" style="display:none">Henüz ortaklık kaydı yok.</div>
+</div>
+
+<!-- ── YENİ / DÜZENLE ── -->
+<div class="modal-ortu" id="ortModal">
+  <div class="modal">
+    <div class="modal-bas">
+      <h3 id="mBaslik">Yeni Ortaklık</h3>
+      <p>Kâr, bağlanan işlerin satış kayıtlarından türer.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Ortaklık adı *</label>
+          <input id="mAd" placeholder="ABC Mermer — konteyner işi"></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Ortak (cari)</label>
+          <select id="mCari"></select>
+          <div class="yardim">Cariye işlemek istersen seçili olmalı.</div></div>
+        <div class="form-alan"><label>Ortak adı</label>
+          <input id="mOrtakAd" placeholder="Cari kartı yoksa elle yaz"></div>
+      </div>
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Bizim pay %</label>
+          <input id="mBizPay" type="number" step="0.01" min="0" value="50"></div>
+        <div class="form-alan"><label>Ortak pay %</label>
+          <input id="mOrtakPay" type="number" step="0.01" min="0" value="50"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="mDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Anapara yöntemi</label>
+          <select id="mAnapara">
+            <option value="ayri">Anapara ayrı takip edilir — dağıtım yalnız kâr payı</option>
+            <option value="once_iade">Önce anapara iade edilir — dağıtım = anapara + kâr payı</option>
+          </select>
+          <div class="yardim">İki yöntemde de KÂR aynıdır; değişen, ortağa
+            ödenecek tutar.</div></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Başlangıç</label>
+          <input id="mBaslangic" type="date"></div>
+        <div class="form-alan"><label>Bitiş</label>
+          <input id="mBitis" type="date"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Açıklama</label>
+          <textarea id="mAciklama" rows="2"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="blok-btn" onclick="ortKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="mKaydet" onclick="ortKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── KALEM EKLE (vergi / iş / sermaye / dağıtım) ── -->
+<div class="modal-ortu" id="kalemModal">
+  <div class="modal" style="width:520px">
+    <div class="modal-bas"><h3 id="kBaslik">Ekle</h3><p id="kAlt"></p></div>
+    <div class="modal-gov" id="kGovde"></div>
+    <div class="modal-alt">
+      <button class="blok-btn" onclick="kalemKapat()">Vazgeç</button>
+      <button class="btn-yeni" onclick="kalemKaydet()">Ekle</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   İŞ ORTAKLIKLARI — OR1
+
+   Uçlar:
+     /api/ortaklik                      liste (özetli)
+     /api/ortaklik/<id>                 detay (tam hesap dökümü)
+     /api/ortaklik/<id>/is|vergi|sermaye|dagitim
+     /api/ortaklik/<id>/dagitim/<n>/cariye   isteğe bağlı cari kaydı
+   ══════════════════════════════════════════════════════════════════ */
+let TUM = [], ACIK = null, DUZENLE = null, KALEM_TIP = null, CARILER = [];
+
+function para2(n, d) {
+  const s = (Number(n) || 0).toLocaleString('tr-TR',
+    {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return s + ' ' + (d || 'USD');
+}
+
+async function yukle() {
+  const durum = document.getElementById('fDurum').value;
+  let d;
+  try { d = await api('/api/ortaklik' + (durum ? '?durum=' + durum : '')); }
+  catch (e) { bildir(e.message || 'Liste alınamadı', true); return; }
+  TUM = d.data || [];
+  ciz();
+}
+
+function ciz() {
+  const g = document.getElementById('govde');
+  document.getElementById('bos').style.display = TUM.length ? 'none' : '';
+  g.innerHTML = TUM.map(o => {
+    const z = o.ozet || {};
+    return `<tr onclick="detayAc('${kacar(o.id)}')">
+      <td><div class="or-ad">${kacar(o.ad)}</div>
+          <div style="color:var(--soluk);font-size:.78rem">${kacar(o.id)} · ${z.is_adedi || 0} iş${
+            z.uyari_adedi ? ` · <span style="color:var(--kehribar,#B8860B)">${z.uyari_adedi} uyarı</span>` : ''}</div></td>
+      <td>${kacar(o.ortak_ad || '—')}</td>
+      <td class="mono">%${o.bizim_pay} / %${o.ortak_pay}</td>
+      <td class="sag or-tutar">${para2(z.ciro, o.doviz)}</td>
+      <td class="sag or-tutar">${para2(z.brut_kar, o.doviz)}</td>
+      <td class="sag or-tutar" style="color:var(--verde)">${para2(z.net_kar, o.doviz)}</td>
+      <td class="sag or-tutar">${para2(z.ortak_bakiye, o.doviz)}</td>
+      <td><span class="or-etiket ${o.durum === 'Acik' ? 'acik' : ''}">${kacar(o.durum)}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+/* ── DETAY: hesabın her basamağı ── */
+async function detayAc(id) {
+  let d;
+  try { d = await api('/api/ortaklik/' + encodeURIComponent(id)); }
+  catch (e) { bildir(e.message || 'Detay alınamadı', true); return; }
+  ACIK = d.data;
+  const o = ACIK, h = o.hesap, dv = o.doviz;
+
+  const uyarilar = (h.uyarilar || []).map(u =>
+    `<div class="or-uyari"><span>⚠</span><span>${kacar(u)}</span></div>`).join('');
+
+  const vergiSatir = (h.vergiler || []).map(v => `
+    <div class="or-satir alt or-eksi">
+      <span class="et">${kacar(v.ad)}${
+        v.matrah_tipi === 'sabit' ? ' (sabit)'
+          : ` (%${v.oran} × ${v.matrah_tipi === 'ciro' ? 'ciro' : 'brüt kâr'})`}${
+        v.durum === 'tahmini' ? ' · <b style="color:var(--kehribar,#B8860B)">tahmini</b>' : ''}</span>
+      <span class="tt">− ${para2(v.tutar, dv)}</span>
+      <span class="or-sil" onclick="vergiSil(${v.id})">sil</span>
+    </div>`).join('');
+
+  const hesapHTML = `
+    <div class="or-hesap">
+      <div class="or-satir"><span class="et">Ciro (${h.satis_adedi} satış kaydı)</span>
+        <span class="tt">${para2(h.ciro, dv)}</span></div>
+      <div class="or-satir or-eksi"><span class="et">Maliyet</span>
+        <span class="tt">− ${para2(h.maliyet, dv)}</span></div>
+      <div class="or-satir kalin"><span class="et">Brüt kâr</span>
+        <span class="tt">${para2(h.brut_kar, dv)}</span></div>
+      ${vergiSatir || '<div class="or-satir alt"><span class="et">vergi kalemi yok</span><span class="tt">—</span></div>'}
+      <div class="or-satir kalin or-sonuc"><span class="et">Net kâr</span>
+        <span class="tt">${para2(h.net_kar, dv)}</span></div>
+      <div class="or-satir alt"><span class="et">Bizim pay (%${h.bizim_pay})</span>
+        <span class="tt">${para2(h.paylar.biz, dv)}</span></div>
+      <div class="or-satir alt"><span class="et">Ortak pay (%${h.ortak_pay})</span>
+        <span class="tt">${para2(h.paylar.ortak, dv)}</span></div>
+      ${h.anapara_yontemi === 'once_iade' ? `
+      <div class="or-satir alt"><span class="et">Ortağın iade edilecek anaparası</span>
+        <span class="tt">${para2(h.kalan_anapara.ortak, dv)}</span></div>` : ''}
+      <div class="or-satir kalin"><span class="et">Ortağa ödenecek</span>
+        <span class="tt">${para2(h.odenecek.ortak, dv)}</span></div>
+      <div class="or-satir alt"><span class="et">Şimdiye kadar dağıtılan</span>
+        <span class="tt">${para2(h.dagitilan.ortak, dv)}</span></div>
+      <div class="or-satir kalin"><span class="et">Ortak bakiye (kalan)</span>
+        <span class="tt">${para2(h.bakiye.ortak, dv)}</span></div>
+    </div>`;
+
+  const isler = (o.isler || []).map(i => `<tr>
+      <td class="mono">${kacar(i.kaynak_tip)} ${kacar(i.kaynak_id)}</td>
+      <td>${kacar(i.aciklama || '')}</td>
+      <td class="sag"><span class="sil" onclick="isSil(${i.id})">çöz</span></td>
+    </tr>`).join('') || '<tr><td colspan="3" style="color:var(--soluk)">iş bağlanmadı</td></tr>';
+
+  const serm = (o.sermaye_hareketleri || []).map(s => `<tr>
+      <td>${s.taraf === 'ortak' ? 'Ortak' : 'Biz'} · ${s.yon === 'koydu' ? 'koydu' : 'geri aldı'}</td>
+      <td class="mono">${kacar(s.tarih || '')}</td>
+      <td class="sag">${para2(s.tutar, s.doviz)}</td>
+      <td class="sag"><span class="sil" onclick="sermayeSil(${s.id})">sil</span></td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--soluk)">sermaye hareketi yok</td></tr>';
+
+  const dag = (h.dagitimlar || []).map(x => `<tr>
+      <td>${x.taraf === 'ortak' ? 'Ortak' : 'Biz'}</td>
+      <td class="mono">${kacar(x.tarih || '')}</td>
+      <td class="sag">${para2(x.tutar, x.doviz)}</td>
+      <td class="sag">${x.cariye_islendi
+        ? `<span class="or-etiket acik">caride</span>
+           <span class="sil" onclick="cariyeGeriAl(${x.id})">geri al</span>`
+        : `<button class="blok-btn" onclick="cariyeIsle(${x.id})">cariye işle</button>
+           <span class="sil" onclick="dagitimSil(${x.id})">sil</span>`}</td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--soluk)">dağıtım yok</td></tr>';
+
+  const govde = `
+    ${uyarilar}
+    ${hesapHTML}
+    <div class="or-bolum">Bağlı işler
+      <button class="blok-btn" onclick="kalemAc('is')">+ İş bağla</button></div>
+    <table class="or-mini"><tbody>${isler}</tbody></table>
+    <div class="or-bolum">Vergi kalemleri
+      <button class="blok-btn" onclick="kalemAc('vergi')">+ Vergi</button></div>
+    <div class="yardim" style="margin-bottom:6px">Kurumlar vergisi yıllık kâr
+      üzerinden hesaplanır; tek bir işe pay etmek bir kabuldür. Kalem
+      kesinleşene kadar <b>tahmini</b> kalsın.</div>
+    <div class="or-bolum">Sermaye
+      <button class="blok-btn" onclick="kalemAc('sermaye')">+ Hareket</button></div>
+    <table class="or-mini"><tbody>${serm}</tbody></table>
+    <div class="or-bolum">Dağıtımlar
+      <button class="blok-btn" onclick="kalemAc('dagitim')">+ Dağıtım</button></div>
+    <table class="or-mini"><tbody>${dag}</tbody></table>`;
+
+  const eylem = `<button class="blok-btn" onclick="duzenleAc()">Düzenle</button>
+    <button class="blok-btn" style="color:var(--kirmizi)" onclick="ortSil()">Sil</button>`;
+  cekmeceAc(o.ad, `${o.id} · ${o.ortak_ad || 'ortak belirtilmedi'} · %${o.bizim_pay}/%${o.ortak_pay}`,
+            govde, eylem);
+}
+
+/* ── YENİ / DÜZENLE ── */
+async function carileriYukle() {
+  if (CARILER.length) return;
+  try {
+    const d = await api('/api/cari?per_page=300');
+    CARILER = d.data || [];
+  } catch (e) { CARILER = []; }
+}
+
+async function yeniAc() {
+  DUZENLE = null;
+  await carileriYukle();
+  document.getElementById('mBaslik').textContent = 'Yeni Ortaklık';
+  ['mAd', 'mOrtakAd', 'mAciklama', 'mBitis'].forEach(i =>
+    document.getElementById(i).value = '');
+  document.getElementById('mBizPay').value = 50;
+  document.getElementById('mOrtakPay').value = 50;
+  document.getElementById('mDoviz').value = 'USD';
+  document.getElementById('mAnapara').value = 'ayri';
+  document.getElementById('mBaslangic').value = new Date().toISOString().slice(0, 10);
+  cariSecimCiz('');
+  document.getElementById('ortModal').classList.add('acik');
+}
+
+async function duzenleAc() {
+  if (!ACIK) return;
+  DUZENLE = ACIK.id;
+  await carileriYukle();
+  document.getElementById('mBaslik').textContent = 'Ortaklığı Düzenle';
+  document.getElementById('mAd').value = ACIK.ad || '';
+  document.getElementById('mOrtakAd').value = ACIK.ortak_ad || '';
+  document.getElementById('mBizPay').value = ACIK.bizim_pay;
+  document.getElementById('mOrtakPay').value = ACIK.ortak_pay;
+  document.getElementById('mDoviz').value = ACIK.doviz || 'USD';
+  document.getElementById('mAnapara').value = ACIK.anapara_yontemi || 'ayri';
+  document.getElementById('mBaslangic').value = ACIK.baslangic || '';
+  document.getElementById('mBitis').value = ACIK.bitis || '';
+  document.getElementById('mAciklama').value = ACIK.aciklama || '';
+  cariSecimCiz(ACIK.ortak_cari_id || '');
+  document.getElementById('ortModal').classList.add('acik');
+}
+
+function cariSecimCiz(secili) {
+  document.getElementById('mCari').innerHTML =
+    '<option value="">— cari kartı yok —</option>' +
+    CARILER.map(c => `<option value="${kacar(c.id)}"${
+      c.id === secili ? ' selected' : ''}>${kacar(c.unvan)}</option>`).join('');
+}
+
+function ortKapat() { document.getElementById('ortModal').classList.remove('acik'); }
+
+async function ortKaydet() {
+  const g = {
+    ad: document.getElementById('mAd').value.trim(),
+    ortak_cari_id: document.getElementById('mCari').value,
+    ortak_ad: document.getElementById('mOrtakAd').value.trim(),
+    bizim_pay: parseFloat(document.getElementById('mBizPay').value) || 0,
+    ortak_pay: parseFloat(document.getElementById('mOrtakPay').value) || 0,
+    doviz: document.getElementById('mDoviz').value,
+    anapara_yontemi: document.getElementById('mAnapara').value,
+    baslangic: document.getElementById('mBaslangic').value || null,
+    bitis: document.getElementById('mBitis').value || null,
+    aciklama: document.getElementById('mAciklama').value.trim()
+  };
+  if (!g.ad) { bildir('Ortaklık adı zorunlu', true); return; }
+  /* Cari seçiliyse ortak adını ondan tamamla — iki yerde iki ad
+     tutmak, hangisinin doğru olduğunu belirsizleştirirdi. */
+  if (g.ortak_cari_id && !g.ortak_ad) {
+    const c = CARILER.find(x => x.id === g.ortak_cari_id);
+    if (c) g.ortak_ad = c.unvan;
+  }
+  try {
+    if (DUZENLE) {
+      await api('/api/ortaklik/' + encodeURIComponent(DUZENLE),
+                {method: 'PUT', body: JSON.stringify(g)});
+      bildir('Güncellendi');
+    } else {
+      await api('/api/ortaklik', {method: 'POST', body: JSON.stringify(g)});
+      bildir(g.ad + ' eklendi');
+    }
+  } catch (e) { bildir(e.message || 'Kaydedilemedi', true); return; }
+  ortKapat(); cekmeceKapat(); yukle();
+}
+
+async function ortSil() {
+  if (!ACIK) return;
+  if (!await onayla(`"${ACIK.ad}" ortaklığı ve bütün kalemleri silinecek.\n\nDevam edilsin mi?`,
+                    {tehlike: true})) return;
+  try { await api('/api/ortaklik/' + encodeURIComponent(ACIK.id), {method: 'DELETE'}); }
+  catch (e) { bildir(e.message || 'Silinemedi', true); return; }
+  bildir('Silindi'); cekmeceKapat(); yukle();
+}
+
+/* ── KALEM EKLEME ── */
+const KALEM_ALAN = {
+  is: {baslik: 'İş bağla', alt: 'Sipariş, sevkiyat ya da proforma numarası.', html: `
+    <div class="form-satir f2">
+      <div class="form-alan"><label>Tip</label><select id="kTip">
+        <option value="SIPARIS">Sipariş</option>
+        <option value="SEVKIYAT">Sevkiyat</option>
+        <option value="PROFORMA">Proforma</option></select></div>
+      <div class="form-alan"><label>Numara *</label><input id="kNo" placeholder="SIP-26-01"></div>
+    </div>
+    <div class="form-satir"><div class="form-alan"><label>Açıklama</label>
+      <input id="kAciklama"></div></div>`},
+  vergi: {baslik: 'Vergi kalemi', alt: 'Kârdan düşülecek kalem.', html: `
+    <div class="form-satir"><div class="form-alan"><label>Ad *</label>
+      <input id="kAd" placeholder="Kurumlar vergisi"></div></div>
+    <div class="form-satir f3">
+      <div class="form-alan"><label>Matrah</label><select id="kMatrah" onchange="vergiAlanDegis()">
+        <option value="kar">Brüt kâr × oran</option>
+        <option value="ciro">Ciro × oran</option>
+        <option value="sabit">Sabit tutar</option></select></div>
+      <div class="form-alan" id="kOranAlan"><label>Oran %</label>
+        <input id="kOran" type="number" step="0.01" min="0" value="25"></div>
+      <div class="form-alan" id="kTutarAlan" style="display:none"><label>Tutar</label>
+        <input id="kTutar" type="number" step="0.01" min="0"></div>
+    </div>
+    <div class="form-satir f2">
+      <div class="form-alan"><label>Durum</label><select id="kDurum">
+        <option value="tahmini">Tahmini</option>
+        <option value="kesinlesti">Kesinleşti</option>
+        <option value="odendi">Ödendi</option></select>
+        <div class="yardim">Tahmini kalemler dağıtımda uyarı olarak görünür.</div></div>
+      <div class="form-alan"><label>Ödeme tarihi</label><input id="kTarih" type="date"></div>
+    </div>`},
+  sermaye: {baslik: 'Sermaye hareketi', alt: 'Kim koydu, kim geri aldı.', html: `
+    <div class="form-satir f2">
+      <div class="form-alan"><label>Taraf</label><select id="kTaraf">
+        <option value="ortak">Ortak</option><option value="biz">Biz</option></select></div>
+      <div class="form-alan"><label>Yön</label><select id="kYon">
+        <option value="koydu">Koydu</option><option value="geri_aldi">Geri aldı</option></select></div>
+    </div>
+    <div class="form-satir f2">
+      <div class="form-alan"><label>Tutar *</label>
+        <input id="kTutar" type="number" step="0.01" min="0"></div>
+      <div class="form-alan"><label>Tarih</label><input id="kTarih" type="date"></div>
+    </div>
+    <div class="form-satir"><div class="form-alan"><label>Açıklama</label>
+      <input id="kAciklama"></div></div>`},
+  dagitim: {baslik: 'Dağıtım', alt: 'Ortağa yapılan/yapılacak ödeme.', html: `
+    <div class="form-satir f2">
+      <div class="form-alan"><label>Taraf</label><select id="kTaraf">
+        <option value="ortak">Ortak</option><option value="biz">Biz</option></select></div>
+      <div class="form-alan"><label>Tutar *</label>
+        <input id="kTutar" type="number" step="0.01" min="0"></div>
+    </div>
+    <div class="form-satir f2">
+      <div class="form-alan"><label>Tarih</label><input id="kTarih" type="date"></div>
+      <div class="form-alan"><label>Açıklama</label><input id="kAciklama"></div>
+    </div>
+    <div class="yardim">Kaydettikten sonra istersen "cariye işle" ile cari borç
+      oluşturabilirsin — zorunlu değil.</div>`}
+};
+
+function kalemAc(tip) {
+  KALEM_TIP = tip;
+  const k = KALEM_ALAN[tip];
+  document.getElementById('kBaslik').textContent = k.baslik;
+  document.getElementById('kAlt').textContent = k.alt;
+  document.getElementById('kGovde').innerHTML = k.html;
+  const t = document.getElementById('kTarih');
+  if (t && !t.value) t.value = new Date().toISOString().slice(0, 10);
+  document.getElementById('kalemModal').classList.add('acik');
+}
+
+function kalemKapat() { document.getElementById('kalemModal').classList.remove('acik'); }
+
+function vergiAlanDegis() {
+  const m = document.getElementById('kMatrah').value;
+  document.getElementById('kOranAlan').style.display = m === 'sabit' ? 'none' : '';
+  document.getElementById('kTutarAlan').style.display = m === 'sabit' ? '' : 'none';
+}
+
+function _deger(id) {
+  const e = document.getElementById(id);
+  return e ? e.value : '';
+}
+
+async function kalemKaydet() {
+  if (!ACIK) return;
+  const kok = '/api/ortaklik/' + encodeURIComponent(ACIK.id) + '/';
+  let yol, govde;
+  if (KALEM_TIP === 'is') {
+    yol = kok + 'is';
+    govde = {kaynak_tip: _deger('kTip'), kaynak_id: _deger('kNo').trim(),
+             aciklama: _deger('kAciklama')};
+    if (!govde.kaynak_id) { bildir('Numara zorunlu', true); return; }
+  } else if (KALEM_TIP === 'vergi') {
+    yol = kok + 'vergi';
+    govde = {ad: _deger('kAd').trim(), matrah_tipi: _deger('kMatrah'),
+             oran: parseFloat(_deger('kOran')) || 0,
+             tutar: parseFloat(_deger('kTutar')) || 0,
+             durum: _deger('kDurum'), odeme_tarihi: _deger('kTarih') || null};
+    if (!govde.ad) { bildir('Vergi adı zorunlu', true); return; }
+  } else if (KALEM_TIP === 'sermaye') {
+    yol = kok + 'sermaye';
+    govde = {taraf: _deger('kTaraf'), yon: _deger('kYon'),
+             tutar: parseFloat(_deger('kTutar')) || 0,
+             tarih: _deger('kTarih') || null, aciklama: _deger('kAciklama')};
+  } else {
+    yol = kok + 'dagitim';
+    govde = {taraf: _deger('kTaraf'), tutar: parseFloat(_deger('kTutar')) || 0,
+             tarih: _deger('kTarih') || null, aciklama: _deger('kAciklama')};
+  }
+  try { await api(yol, {method: 'POST', body: JSON.stringify(govde)}); }
+  catch (e) { bildir(e.message || 'Eklenemedi', true); return; }
+  kalemKapat();
+  detayAc(ACIK.id);
+  yukle();
+}
+
+async function _kalemSil(yol, soru) {
+  if (!ACIK) return;
+  if (!await onayla(soru, {tehlike: true})) return;
+  try {
+    await api('/api/ortaklik/' + encodeURIComponent(ACIK.id) + yol,
+              {method: 'DELETE'});
+  } catch (e) { bildir(e.message || 'Silinemedi', true); return; }
+  detayAc(ACIK.id); yukle();
+}
+
+const isSil = id => _kalemSil('/is/' + id, 'Bu işin bağı çözülecek. Devam?');
+const vergiSil = id => _kalemSil('/vergi/' + id, 'Vergi kalemi silinecek. Devam?');
+const sermayeSil = id => _kalemSil('/sermaye/' + id, 'Sermaye hareketi silinecek. Devam?');
+const dagitimSil = id => _kalemSil('/dagitim/' + id, 'Dağıtım silinecek. Devam?');
+
+async function cariyeIsle(id) {
+  if (!ACIK) return;
+  try {
+    await api(`/api/ortaklik/${encodeURIComponent(ACIK.id)}/dagitim/${id}/cariye`,
+              {method: 'POST'});
+  } catch (e) { bildir(e.message || 'İşlenemedi', true); return; }
+  bildir('Cariye işlendi');
+  detayAc(ACIK.id);
+}
+
+async function cariyeGeriAl(id) {
+  if (!ACIK) return;
+  if (!await onayla('Cari hareketi silinecek, dağıtım kaydı kalacak.\n\nDevam?',
+                    {tehlike: true})) return;
+  try {
+    await api(`/api/ortaklik/${encodeURIComponent(ACIK.id)}/dagitim/${id}/cariye`,
+              {method: 'DELETE'});
+  } catch (e) { bildir(e.message || 'Geri alınamadı', true); return; }
+  bildir('Geri alındı');
+  detayAc(ACIK.id);
+}
+
+yukle();
+</script>
+{% endblock %}

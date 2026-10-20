@@ -167,6 +167,12 @@ SILINECEK_TABLOLAR = [
     'siparis_kayit',
     # KDV iade
     'kdv_iade_dosya',
+    # OR1 · İş ortaklığı — hepsi İŞLEM verisi, tanım değil. Ortağın
+    # KENDİSİ cari kartında duruyor ve o korunuyor; burada silinen,
+    # o ortakla yapılan işlerin hesabı. Sıra önemli: alt tablolar
+    # önce, ortaklık en son.
+    'ortaklik_dagitim', 'ortaklik_sermaye', 'ortaklik_vergi',
+    'ortaklik_is', 'ortaklik',
     # Maliyet
     'maliyetler',
     # Stok

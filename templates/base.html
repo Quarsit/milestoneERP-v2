@@ -760,13 +760,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       {% endif %}
       {% if alan_var(a_analiz)|trim %}
       <div class="ray-oge">
-      <a href="/raporlar" class="ray-btn {% if yol.startswith('/raporlar') or yol.startswith('/karlilik') %}aktif{% endif %}">
+      <a href="/raporlar" class="ray-btn {% if yol.startswith('/raporlar') or yol.startswith('/karlilik') or yol.startswith('/ortaklik') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>
         <span>Analiz</span>
       </a>
       <div class="ray-ucan"><div class="ray-ucan-ic">
         <div class="ray-ucan-bas">Analiz</div>
-        {% for hedef, ad, modul in [('/raporlar','Raporlar','raporlar'), ('/karlilik','Karlılık','karlilik')] %}
+        {% for hedef, ad, modul in [('/raporlar','Raporlar','raporlar'), ('/karlilik','Karlılık','karlilik'), ('/ortaklik','İş Ortaklıkları','karlilik')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
           <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
           {% endif %}
@@ -951,8 +951,9 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
                                ('/kasa-defteri','Kasa Defteri','kasa'),
                                ('/nakit','Nakit Akışı','kasa'),
                                ('/sabit-gider','Sabit Giderler','kasa')] %}
-    {% elif yol.startswith('/raporlar') or yol.startswith('/karlilik') %}
-      {% set alan_sekmeleri = [('/raporlar','Raporlar','raporlar'), ('/karlilik','Karlılık','karlilik')] %}
+    {% elif yol.startswith('/raporlar') or yol.startswith('/karlilik')
+            or yol.startswith('/ortaklik') %}
+      {% set alan_sekmeleri = [('/raporlar','Raporlar','raporlar'), ('/karlilik','Karlılık','karlilik'), ('/ortaklik','İş Ortaklıkları','karlilik')] %}
     {% elif yol.startswith('/ayarlar') or yol.startswith('/denetim') %}
       {% set alan_sekmeleri = [('/ayarlar','Ayarlar','ayarlar'), ('/denetim','Denetim Kaydı','denetim')] %}
     {% endif %}
@@ -1605,6 +1606,7 @@ const P_SAYFA = [
   { g:'Sayfalar', ad:'Çek / Senet',  ek:'portföy · vade',    ik:'▤', yol:'/cek',       m:'kasa' },
   { g:'Sayfalar', ad:'Raporlar',     ek:'stok · satış · cari', ik:'▥', yol:'/raporlar', m:'raporlar' },
   { g:'Sayfalar', ad:'Karlılık',     ek:'kâr analizi',       ik:'▥', yol:'/karlilik',  m:'karlilik' },
+  { g:'Sayfalar', ad:'İş Ortaklıkları', ek:'kâr paylaşımı',   ik:'▥', yol:'/ortaklik',  m:'karlilik' },
   { g:'Sayfalar', ad:'Ayarlar',      ek:'kullanıcı · firma', ik:'⚙', yol:'/ayarlar',   m:'ayarlar' },
 ];
 let P_KAYIT = null;      // canlı arama sonuçları (backend'den)
