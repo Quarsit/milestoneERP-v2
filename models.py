@@ -314,7 +314,32 @@ class BlokStok(FirmaKapsamli, db.Model):
     alis_fiyat_birim = db.Column(db.String(5), default='ton')
     kdv_dahil_mi    = db.Column(db.Boolean, default=False)
     kdv_oran        = db.Column(Olcu, default=0)
-    alis_tipi       = db.Column(db.String(20), default='yurtici_kdvli')
+    # UR1: SUTUN VARSAYILANI KALDIRILDI. Varsayilan dururken
+    # alis_tipi'ne None yazilamiyordu — SQLAlchemy degeri
+    # verilmemis sayip 'yurtici_kdvli' basiyordu (olculdu).
+    # Bu, URETILEN mali satin alinmis gibi gosteriyordu ve
+    # kesimden cikan butun plakalar bugun oyle duruyor.
+    #
+    # Artik NULL = 'alis tipi yok' demek. Satin almada deger
+    # ucun kendisi yaziyor; okuma tarafi zaten `kaynak`a bakip
+    # satin alma satirlarinda 'yurtici_kdvli'ye dusuyor.
+    alis_tipi       = db.Column(db.String(20))
+    # ── UR1 · KAYNAK: SATIN ALMA mı ÜRETİM mi ──
+    # `alis_tipi` bir KDV siniflandirmasi: yaptigi tek is, deger
+    # 'yurtici_kdvli' degilse KDV oranini sifira cekmek. "Uretim"i
+    # oraya bes'inci deger olarak koymak kazara calisirdi ama alan
+    # yalan soylemeye baslardi — uretilen mal bir ALIS TIPI tasimis
+    # olurdu.
+    #
+    # Uretim ile alis DORT yerde ayrisiyor, birde degil: tedarikci
+    # borcu, fatura, KDV ve `alis_fiyati`nin ANLAMI (alis fiyati mi,
+    # uretim maliyeti mi). O yuzden ayri alan.
+    #
+    # NULL = 'satinalma'. Otomatik migrasyon sutunu DEFAULT'suz
+    # ekliyor, yani mevcut satirlar NULL kalir; eski davranis
+    # korunsun diye NULL satin alma sayiliyor (`ortak_liste` ile
+    # ayni desen). Okurken daima `kaynak or 'satinalma'`.
+    kaynak          = db.Column(db.String(12), default='satinalma')
     kdv_tutar       = db.Column(Para, default=0)
     matrah          = db.Column(Para, default=0)
     doviz           = db.Column(db.String(5), default='USD')
@@ -354,7 +379,10 @@ class PlakaStok(FirmaKapsamli, db.Model):
     alis_fiyat_birim = db.Column(db.String(5), default='m2')
     kdv_dahil_mi    = db.Column(db.Boolean, default=False)
     kdv_oran        = db.Column(Olcu, default=0)
-    alis_tipi       = db.Column(db.String(20), default='yurtici_kdvli')
+    # UR1: varsayilan yok — bkz. BlokStok.alis_tipi.
+    alis_tipi       = db.Column(db.String(20))
+    # UR1: kaynak — bkz. BlokStok'taki gerekce.
+    kaynak          = db.Column(db.String(12), default='satinalma')
     kdv_tutar       = db.Column(Para, default=0)
     matrah          = db.Column(Para, default=0)
     doviz           = db.Column(db.String(5), default='USD')
@@ -394,7 +422,10 @@ class EbatliStok(FirmaKapsamli, db.Model):
     alis_fiyat_birim = db.Column(db.String(5), default='m2')
     kdv_dahil_mi    = db.Column(db.Boolean, default=False)
     kdv_oran        = db.Column(Olcu, default=0)
-    alis_tipi       = db.Column(db.String(20), default='yurtici_kdvli')
+    # UR1: varsayilan yok — bkz. BlokStok.alis_tipi.
+    alis_tipi       = db.Column(db.String(20))
+    # UR1: kaynak — bkz. BlokStok'taki gerekce.
+    kaynak          = db.Column(db.String(12), default='satinalma')
     kdv_tutar       = db.Column(Para, default=0)
     matrah          = db.Column(Para, default=0)
     doviz           = db.Column(db.String(5), default='USD')

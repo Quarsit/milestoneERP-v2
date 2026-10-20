@@ -390,8 +390,43 @@
       <!-- ADIM 4 — ORTAK BİLGİLER -->
       <div class="tp-adim" id="tAdimOrtak" style="display:none">
         <div class="tp-adim-bas"><span class="tp-no">4</span> Tüm Satırlar İçin Ortak Bilgiler</div>
-        <div class="form-satir f3">
+
+        <!-- ── UR1 · KAYNAK ──
+             Bu seçim formun yarısını açıp kapatıyor, o yüzden EN ÜSTTE
+             ve tek başına: altındaki alanların hangisinin anlamlı
+             olduğunu o belirliyor.
+
+             "Üretim"i Alış Tipi'ne beşinci seçenek olarak koymadım.
+             `alis_tipi` bir KDV sınıflandırması (kodda yaptığı tek iş,
+             değer 'yurtici_kdvli' değilse KDV'yi sıfırlamak); üretim
+             ise bir alış DEĞİL. Aralarındaki fark dört alana yayılıyor:
+             tedarikçi borcu, fatura, KDV ve fiyatın ANLAMI. -->
+        <div class="form-satir f2" style="margin-bottom:4px">
           <div class="form-alan">
+            <label>Kaynak</label>
+            <select id="tKaynak" onchange="topluKaynakDegisti()">
+              <option value="satinalma">Satın alma — tedarikçiden alındı</option>
+              <option value="uretim">Üretim — kendi ürettiğimiz mal</option>
+            </select>
+          </div>
+          <div class="form-alan" id="tKaynakNot" style="display:none">
+            <!-- UR1: `.not` sınıfı bu şablonda TANIMLI DEĞİL (ayarlar
+                 ekranında var). Sınıf adını yazmakla yetinseydim not
+                 kutusuz, düz metin olarak akardı — ölçüldü. -->
+            <div style="margin:20px 0 0;background:var(--kehribar-bg,#FDF6E3);
+                 color:var(--kehribar,#8A6D1F);border-radius:var(--r-kucuk,8px);
+                 padding:10px 12px;font-size:.79rem;line-height:1.5">
+              Üretimde tedarikçi borcu, fatura ve KDV yok; aşağıdaki
+              fiyat <b>üretim maliyeti</b> olarak yazılır.
+              <b>Sistemde kayıtlı bir bloktan kesilen plakalar buraya
+              girilmez</b> — onlar Depo → Kesim'den geçer, yoksa blok
+              stokta kesilmemiş gibi kalır.
+            </div>
+          </div>
+        </div>
+
+        <div class="form-satir f3">
+          <div class="form-alan" id="tCariAlan">
             <label>Tedarikçi / Üretici (cari)</label>
             <select id="tCari" onchange="topluOnizle()"><option value="">— yok —</option></select>
           </div>
@@ -404,7 +439,7 @@
                Çeki listelerinde fiyat genelde olmaz; ayrı sözleşmeden
                gelir. Excel'de fiyat sütunu yoksa ürünler SIFIR fiyatla
                giriyordu ve stok değeri 0 çıkıyordu. -->
-          <div class="form-alan"><label>Alış Fiyatı (ortak)
+          <div class="form-alan"><label id="tFiyatEtiket">Alış Fiyatı (ortak)
             <span style="font-weight:400;color:var(--soluk)">· Excel'de yoksa</span></label>
             <input id="tFiyat" type="number" step="0.0001" placeholder="örn. 47,50"
                    oninput="topluOnizle()"></div>
@@ -417,7 +452,7 @@
             </select>
           </div>
         </div>
-        <div class="form-satir f3">
+        <div class="form-satir f3" id="tFaturaSatir">
           <div class="form-alan"><label>Alış Tipi</label>
             <select id="tAlisTipi" onchange="topluKdvDurum()">
               <option value="yurtici_kdvli">Yurt içi — KDV'li</option>
@@ -437,10 +472,12 @@
             <input id="tFaturaNo" data-buyuk-harf="hayir" placeholder="opsiyonel"></div>
         </div>
         <div class="form-satir f3">
-          <div class="form-alan"><label>KDV Oranı (%)</label>
+          <!-- UR1: KDV alanları tek tek gizleniyor, SATIR değil —
+               "Konum" üretimde de anlamlı ve bu satırda duruyor. -->
+          <div class="form-alan" id="tKdvAlan"><label>KDV Oranı (%)</label>
             <input id="tKdv" type="number" step="0.1" min="0" max="100" value="20"
                    data-buyuk-harf="hayir" onchange="topluOnizle()"></div>
-          <div class="form-alan" style="display:flex;align-items:flex-end">
+          <div class="form-alan" id="tKdvDahilAlan" style="display:flex;align-items:flex-end">
             <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
               <input id="tKdvDahil" type="checkbox" style="width:16px;height:16px" onchange="topluOnizle()">
               Fiyatlar KDV dahil
@@ -456,7 +493,7 @@
           <div class="form-alan" style="grid-column:1 / -1;display:flex;align-items:flex-end">
             <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
               <input id="tNakliyeDahil" type="checkbox" style="width:16px;height:16px" onchange="topluOnizle()">
-              Alış fiyatına nakliye dahil
+              <span id="tNakliyeEtiket">Alış fiyatına nakliye dahil</span>
               <span style="color:var(--soluk);font-size:.78rem;font-weight:400">· bilgi amaçlı, maliyeti etkilemez</span>
             </label>
           </div>
@@ -464,7 +501,7 @@
         <div class="form-satir f3">
           <div class="form-alan"><label>Giriş Tarihi</label>
             <input id="tGirisTarih" type="date" data-buyuk-harf="hayir"></div>
-          <div class="form-alan"><label>Alış / Fatura Tarihi</label>
+          <div class="form-alan"><label id="tAlisTarihEtiket">Alış / Fatura Tarihi</label>
             <input id="tAlisTarih" type="date" data-buyuk-harf="hayir"></div>
           <div class="form-alan" id="tBaslangicAlan">
             <label>Başlangıç Plaka No</label>
@@ -609,7 +646,15 @@
         <div class="form-alan"><label>Döviz</label>
           <select id="sDoviz" onchange="hesapla()"><option>USD</option><option>EUR</option><option>TRY</option></select>
         </div>
-        <div class="form-alan"><label>Alış Tipi</label>
+        <!-- UR1: kaynak, alış tipinin ÖNÜNDE. Üretim seçilirse alış
+             tipi ve KDV zaten anlamını yitiriyor, gizleniyorlar. -->
+        <div class="form-alan"><label>Kaynak</label>
+          <select id="sKaynak" onchange="kaynakDegisti()">
+            <option value="satinalma">Satın alma</option>
+            <option value="uretim">Üretim</option>
+          </select>
+        </div>
+        <div class="form-alan" id="sAlisTipiAlan"><label>Alış Tipi</label>
           <select id="sAlisTipi" onchange="alisTipiDegisti()">
             <option value="yurtici_kdvli">Yurt içi (KDV'li)</option>
             <option value="yurtici_kdvsiz">Yurt içi (KDV'siz)</option>
@@ -1634,6 +1679,24 @@ function faturaDurumDegisti() {
   }
 }
 
+/* UR1: üretimde alış tipi ve KDV satırı gizlenir; tedarikçi alanı
+   duruyor ama sunucu üretimde cari borcu zaten oluşturmuyor —
+   "kimden/nereden ürettik" bilgisini kaydetmek isteyebilirsin. */
+function kaynakDegisti() {
+  const uretim = document.getElementById('sKaynak').value === 'uretim';
+  const at = document.getElementById('sAlisTipiAlan');
+  if (at) at.style.display = uretim ? 'none' : '';
+  const kdv = document.getElementById('kdvSatir');
+  if (uretim) {
+    document.getElementById('sKdv').value = 0;
+    document.getElementById('sKdvDahil').checked = false;
+    if (kdv) kdv.style.display = 'none';
+    hesapla();
+  } else {
+    alisTipiDegisti();
+  }
+}
+
 function alisTipiDegisti() {
   const kdvli = document.getElementById('sAlisTipi').value === 'yurtici_kdvli';
   document.getElementById('kdvSatir').style.display = kdvli ? '' : 'none';
@@ -1784,6 +1847,7 @@ async function stokKaydet() {
     for (const _g of _gruplar) {
       const _govde = {
         tip: t,
+        kaynak: document.getElementById('sKaynak').value,
         uretici: document.getElementById('sUretici').value,
         cins,
         blok_no: document.getElementById('sBlokNo').value,
@@ -1951,6 +2015,45 @@ async function topluCarileriYukle() {
 }
 
 /* KDV alanları, alış tipine göre etkin/pasif olur (backend de aynısını zorlar) */
+/* ── UR1 · KAYNAK DEĞİŞTİ ──
+   Üretimde tedarikçi, alış tipi, fatura ve KDV alanları GİZLENİYOR,
+   pasifleştirilmiyor. Pasif ama görünen alan "burada bir şey var ama
+   dokunamıyorsun" der; oysa üretimde o alanların karşılığı yok.
+
+   Gizlemek yetmez, DEĞERLERİ de temizleniyor: açık kalmış bir
+   tedarikçi seçimi gizlendikten sonra da gönderilir ve üretilen mal
+   için cari borç doğururdu. (Sunucu da aynı şeyi ayrıca zorluyor —
+   iki taraf da güvenmiyor.) */
+function topluKaynakDegisti() {
+  const uretim = document.getElementById('tKaynak').value === 'uretim';
+  const goster = (id, ac) => {
+    const e = document.getElementById(id);
+    if (e) e.style.display = ac ? '' : 'none';
+  };
+  goster('tCariAlan', !uretim);
+  goster('tFaturaSatir', !uretim);
+  goster('tKdvAlan', !uretim);
+  goster('tKdvDahilAlan', !uretim);
+  goster('tKaynakNot', uretim);
+  if (uretim) {
+    document.getElementById('tCari').value = '';
+    document.getElementById('tFaturaNo').value = '';
+    document.getElementById('tKdv').value = 0;
+    document.getElementById('tKdvDahil').checked = false;
+    document.getElementById('tFaturaDurum').value = 'faturasiz';
+  }
+  const at_ = document.getElementById('tAlisTarihEtiket');
+  if (at_) at_.textContent = uretim ? 'Üretim Tarihi' : 'Alış / Fatura Tarihi';
+  const ne_ = document.getElementById('tNakliyeEtiket');
+  if (ne_) ne_.textContent = uretim
+    ? 'Maliyete nakliye dahil' : 'Alış fiyatına nakliye dahil';
+  const et = document.getElementById('tFiyatEtiket');
+  if (et) et.innerHTML = uretim
+    ? 'Üretim Maliyeti (ortak) <span style="font-weight:400;color:var(--soluk)">· birim başına</span>'
+    : 'Alış Fiyatı (ortak) <span style="font-weight:400;color:var(--soluk)">· Excel\'de yoksa</span>';
+  topluOnizle();
+}
+
 function topluKdvDurum() {
   const kdvli = document.getElementById('tAlisTipi').value === 'yurtici_kdvli';
   document.getElementById('tKdv').disabled = !kdvli;
@@ -2289,16 +2392,21 @@ async function topluKaydet() {
   const cari = document.getElementById('tCari').value;
   const faturaDurum = document.getElementById('tFaturaDurum').value;
 
+  const _uretimKip = document.getElementById('tKaynak').value === 'uretim';
   let uyari = `${TP_SATIRLAR.length} kayıt ${tip} olarak stoğa eklenecek.`;
-  if (cari && faturaDurum !== 'faturasiz') uyari += `\n\n"${cari}" carisine alış borcu oluşturulacak.`;
+  if (_uretimKip) uyari += `\n\nKaynak: ÜRETİM — tedarikçi borcu, fatura ve KDV oluşmaz.`
+                         + `\nGirilen fiyat üretim maliyeti olarak yazılır.`;
+  else if (cari && faturaDurum !== 'faturasiz') uyari += `\n\n"${cari}" carisine alış borcu oluşturulacak.`;
   else if (!cari) uyari += `\n\nTedarikçi seçilmedi — cari borcu OLUŞMAYACAK.`;
   uyari += '\n\nDevam edilsin mi?';
   if (!await onayla(uyari)) return;
 
-  const kdvli = document.getElementById('tAlisTipi').value === 'yurtici_kdvli';
+  const uretim = document.getElementById('tKaynak').value === 'uretim';
+  const kdvli = !uretim && document.getElementById('tAlisTipi').value === 'yurtici_kdvli';
   const ortak = {
     tip: tip,
-    uretici: cari,
+    kaynak: uretim ? 'uretim' : 'satinalma',
+    uretici: uretim ? '' : cari,
     doviz: document.getElementById('tDoviz').value,
     fiyat_birim: document.getElementById('tFiyatBirim').value,
     alis_tipi: document.getElementById('tAlisTipi').value,
@@ -2353,6 +2461,51 @@ async function topluKaydet() {
     return slabSayac[bn];
   };
 
+  /* ── UR1 · ÇİFT SAYIM KAPISI, SATIR SATIR DEĞİL BİR KEZ ──
+     Sunucu da aynı kontrolü yapıyor ama orada satır satır çalışır:
+     200 plakalık bir aktarımda 200 ayrı 409 hatası görürdün, hepsi
+     aynı cümleyi tekrar ederek. Soru bir kez sorulmalı.
+
+     Kapı yalnızca ÜRETİM kipinde anlamlı: satın alınan plakanın blok
+     numarasının stoktaki bir blokla aynı olması olağan (o bloğu da
+     satın almış olabilirsin). Sorun, ÜRETTİĞİNİ söylediğin plakanın
+     bloğunun hâlâ kesilmemiş görünmesi. */
+  let blokOnayi = false;
+  if (uretim && tip === 'PLAKA') {
+    document.getElementById('tIlerlemeYazi').textContent = 'Blok stoğu kontrol ediliyor…';
+    try {
+      const bloklar = await api('/api/stok?tip=BLOK&per_page=1000');
+      const stokta = new Map();
+      (bloklar.data || []).forEach(b => {
+        const bn = String(b.blok_no || '').trim().toUpperCase();
+        if (bn && b.durum !== 'Teslim Edildi') stokta.set(bn, b);
+      });
+      const carpisan = [...new Set(TP_SATIRLAR
+        .map(k => String(k.blok_no || '').trim().toUpperCase())
+        .filter(bn => bn && stokta.has(bn)))];
+      if (carpisan.length) {
+        const liste = carpisan.slice(0, 8).join(', ')
+          + (carpisan.length > 8 ? ` …ve ${carpisan.length - 8} tane daha` : '');
+        const devam = await onayla(
+          `Şu blok(lar) stokta duruyor: ${liste}\n\n`
+          + 'Bu bloklardan kesilen plakaları buradan girersen bloklar '
+          + 'stokta kesilmemiş gibi kalır — aynı malı iki kez saymış '
+          + 'olursun. Plakaların maliyeti de bloktan türemez, girdiğin '
+          + 'rakam olur ve kesim izi oluşmaz.\n\n'
+          + 'Doğru yol: Depo → Kesim.\n\n'
+          + 'Bunlar başka bloklarsa (numara tekrarı) yine de devam '
+          + 'edebilirsin. Devam edilsin mi?',
+          { tehlike: true, tamam: 'Yine de aktar', iptal: 'Vazgeç' });
+        if (!devam) {
+          document.getElementById('tIlerleme').style.display = 'none';
+          btn.disabled = false; btn.textContent = 'İçe Aktar';
+          return;
+        }
+        blokOnayi = true;
+      }
+    } catch (e) { /* okunamazsa sunucudaki kapı yine korur */ }
+  }
+
   let basarili = 0, hatali = 0;
   const hataListe = [];
   const olusanIdler = [];
@@ -2388,6 +2541,10 @@ async function topluKaydet() {
       // TN1: nakliye dahil işaretliyse tekil formdaki notun aynısı düşülür.
       aciklama: [k.aciklama || ortakAciklama || '', ortak.nakliye_dahil ? NAKLIYE_NOT : '']
                   .filter(Boolean).join(' ').trim(),
+      /* UR1: uyarı yukarıda BİR KEZ gösterilip onaylandıysa satırlar
+         sunucudaki kapıdan geçsin. Onay yoksa gönderilmiyor — kapı
+         orada ayakta kalıyor. */
+      blok_uyarisi_onaylandi: blokOnayi || undefined,
     });
     try {
       /* DİKKAT: oluşturma uç noktası /api/stok DEĞİL, /api/stok/ekle'dir.

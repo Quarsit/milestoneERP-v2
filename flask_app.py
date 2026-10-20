@@ -5405,7 +5405,14 @@ def create_app():
             item['ek_maliyet_toplam'] = q2(ek_maliyet_toplam)
             item['kdv_devreden_usd'] = q2(kdv_devreden_map.get(s.id, 0))
             item['kdv_iade_usd'] = q2(kdv_iade_map.get(s.id, 0))
-            item['alis_tipi'] = getattr(s, 'alis_tipi', None) or 'yurtici_kdvli'
+            # UR1: ÜRETİLEN malın alış tipi YOK. `or 'yurtici_kdvli'`
+            # varsayılanı satın alınanlar için doğru ama üretimde
+            # yalan söylerdi — ekran üretilen plakayı 'Yurt içi
+            # KDV'li alış' diye gösterirdi.
+            item['kaynak'] = getattr(s, 'kaynak', None) or 'satinalma'
+            item['alis_tipi'] = (None if item['kaynak'] == 'uretim'
+                                 else (getattr(s, 'alis_tipi', None)
+                                       or 'yurtici_kdvli'))
             item['fatura_no'] = getattr(s, 'fatura_no', None) or ''
             item['fatura_durumu'] = getattr(s, 'fatura_durumu', None) or 'faturali'
             item['alis_tarihi'] = s.alis_tarihi.isoformat() if getattr(s, 'alis_tarihi', None) else None
@@ -5743,12 +5750,36 @@ def create_app():
             except (ValueError, TypeError):
                 return varsayilan
 
+        # ─── UR1 · KAYNAK: SATIN ALMA mı ÜRETİM mi ───
+        # Üretilen mal SATIN ALINMADI: tedarikçisi, faturası, KDV'si
+        # ve cari borcu yok. `alis_fiyati` de alış fiyatı değil,
+        # ÜRETİM MALİYETİ anlamına geliyor.
+        #
+        # Karar BURADA tek sefer veriliyor; aşağıdaki üç dal
+        # (BLOK/PLAKA/EBATLI) onu okuyor. Dallara ayrı ayrı yazmak,
+        # birinde unutulunca o ürün tipinde sessizce tedarikçi borcu
+        # doğurması demekti.
+        _kaynak = (data.get('kaynak') or 'satinalma').strip()
+        if _kaynak not in ('satinalma', 'uretim'):
+            _kaynak = 'satinalma'
+        _uretim = (_kaynak == 'uretim')
+
         # ─── FATURA DURUMU + TARİHLER (mal/fatura zaman farkı yönetimi) ───
         # fatura_durumu: 'faturali' (mal+fatura birlikte) | 'faturasiz' (mal geldi, fatura bekliyor)
         #                | 'mal_bekliyor' (fatura kesildi, mal henüz gelmedi)
         _fatura_durumu = (data.get('fatura_durumu') or 'faturali').strip()
         if _fatura_durumu not in ('faturali', 'faturasiz', 'mal_bekliyor'):
             _fatura_durumu = 'faturali'
+        if _uretim:
+            # ÜRETİMDE FATURA YOK. 'faturasiz' burada 'fatura bekliyor'
+            # değil, 'fatura diye bir şey yok' demek — tedarikçi cari
+            # hareketi de bu değer sayesinde hiç doğmuyor.
+            #
+            # Ekranda alan zaten gizli; yine de istemciye
+            # güvenmiyoruz. Açık kalmış eski bir sekme ya da elle
+            # atılan bir istek 'faturali' yollayabilir ve o zaman
+            # üretilen mal için tedarikçiye borç yazılırdı.
+            _fatura_durumu = 'faturasiz'
         # giris_tarihi: malın depoya girdiği gün (verilmezse bugün)
         _giris_tarihi = _parse_date(data.get('giris_tarihi')) or date.today()
         # alis_tarihi: fatura/borç tarihi (verilmezse giriş tarihi ile aynı)
@@ -5780,6 +5811,33 @@ def create_app():
                 PlakaStok.durum != 'Teslim Edildi'
             ).count()
             # PLAKA için engelleme YOK, sadece bilgi (frontend'de gösterilebilir)
+
+            # ── UR1 · ÇİFT SAYIM KAPISI ──
+            # Üretim kipinde girilen plakanın blok numarası STOKTA
+            # DURAN bir bloğa aitse, o blok kesilmiş demektir ama
+            # sistemde hâlâ kesilmemiş gibi duruyor: aynı mal iki kez
+            # sayılır. Üstelik plakaların maliyeti bloğun maliyetinden
+            # türemez, elle yazılan rakam olur ve kesim izi (kesim_detay)
+            # hiç oluşmaz.
+            #
+            # Doğru yol Kesim modülü. Burada DURUYORUZ.
+            #
+            # Neden sert ret değil de onaylanabilir ret: blok numaraları
+            # kullanıcının kendi numaraları ve yıllar içinde
+            # tekrarlanabiliyor. Gerçekten başka bir blok söz konusuysa
+            # işi tamamen kapatmak doğru olmaz — ama sessizce geçmek de
+            # olmaz. Ekran uyarıyı gösteriyor, kullanıcı bilerek
+            # onaylarsa `blok_uyarisi_onaylandi` ile geliyor ('kısmi
+            # aktarım' ile aynı desen).
+            if _uretim and not data.get('blok_uyarisi_onaylandi'):
+                _duran = BlokStok.query.filter(
+                    BlokStok.blok_no == _blok_no,
+                    BlokStok.durum != 'Teslim Edildi').first()
+                if _duran:
+                    return jsonify({
+                        'ok': False, 'error': 'blok_stokta',
+                        'blok_id': _duran.id, 'blok_durum': _duran.durum,
+                        'mesaj': f'"{_blok_no}" bloğu stokta duruyor (ID: {_duran.id}, durum: {_duran.durum}). Bu bloktan kesilen plakaları içe aktarırsan blok stokta kesilmemiş gibi kalır ve aynı malı iki kez saymış olursun; plakaların maliyeti de bloktan türemez. Doğru yol Depo → Kesim. Blok başka bir blok ise uyarıyı onaylayıp devam edebilirsin.'}), 409
         # EBATLI: referans kodu sistemi otomatik benzersiz üretir, duplicate kontrolü gereksiz
         # ─── /VERİ DOĞRULAMA ──────────────────────────────────────────
 
@@ -5797,6 +5855,13 @@ def create_app():
                 alis_tipi = (data.get('alis_tipi') or 'yurtici_kdvli').strip()
                 # KDV'siz alis tipleri icin oranni zorla 0 yap
                 if alis_tipi != 'yurtici_kdvli':
+                    kdv_oran = 0
+                    kdv_dahil_mi = False
+                if _uretim:
+                    # UR1: uretilen malin ALIS TIPI yok. NULL yaziliyor;
+                    # 'yurtici_kdvli' birakmak (kesimin bugun yaptigi sey)
+                    # uretilen mali satin alinmis gibi gosteriyordu.
+                    alis_tipi = None
                     kdv_oran = 0
                     kdv_dahil_mi = False
                 # Birim fiyat KDV hariç (matrah) saklanır
@@ -5822,7 +5887,8 @@ def create_app():
                                 fatura_no=(data.get('fatura_no') or '').strip() or None,
                                 giris_tarihi=_giris_tarihi, alis_tarihi=_alis_tarihi,
                                 fatura_durumu=_fatura_durumu,
-                                aciklama=data.get('aciklama', ''), alis_tipi=alis_tipi)
+                                aciklama=data.get('aciklama', ''), alis_tipi=alis_tipi,
+                                kaynak=_kaynak)
                 stok.mense = _mense_normal(data.get('mense'))   # MS1
                 db.session.add(stok)
                 db.session.flush()
@@ -5859,6 +5925,13 @@ def create_app():
                 if alis_tipi != 'yurtici_kdvli':
                     kdv_oran = 0
                     kdv_dahil_mi = False
+                if _uretim:
+                    # UR1: uretilen malin ALIS TIPI yok. NULL yaziliyor;
+                    # 'yurtici_kdvli' birakmak (kesimin bugun yaptigi sey)
+                    # uretilen mali satin alinmis gibi gosteriyordu.
+                    alis_tipi = None
+                    kdv_oran = 0
+                    kdv_dahil_mi = False
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
                     # KDV dahil girilmis: ayristir
@@ -5887,7 +5960,8 @@ def create_app():
                                      fatura_no=(data.get('fatura_no') or '').strip() or None,
                                      giris_tarihi=_giris_tarihi, alis_tarihi=_alis_tarihi,
                                      fatura_durumu=_fatura_durumu,
-                                     durum='Serbest', aciklama=data.get('aciklama', ''), alis_tipi=alis_tipi)
+                                     durum='Serbest', aciklama=data.get('aciklama', ''), alis_tipi=alis_tipi,
+                                     kaynak=_kaynak)
                     stok.mense = _mense_normal(data.get('mense'))   # MS1
                     db.session.add(stok)
                     db.session.flush()
@@ -5943,6 +6017,13 @@ def create_app():
                 if alis_tipi != 'yurtici_kdvli':
                     kdv_oran = 0
                     kdv_dahil_mi = False
+                if _uretim:
+                    # UR1: uretilen malin ALIS TIPI yok. NULL yaziliyor;
+                    # 'yurtici_kdvli' birakmak (kesimin bugun yaptigi sey)
+                    # uretilen mali satin alinmis gibi gosteriyordu.
+                    alis_tipi = None
+                    kdv_oran = 0
+                    kdv_dahil_mi = False
                 fiyat_girilen = _sayi('fiyat')
                 fiyat_birim = data.get('fiyat_birim', 'm2')
                 doviz = data.get('doviz','USD')
@@ -5972,7 +6053,7 @@ def create_app():
                         alis_fiyat_birim=fiyat_birim,
                         doviz=doviz,
                         kdv_dahil_mi=kdv_dahil_mi, kdv_oran=kdv_oran,
-                        alis_tipi=alis_tipi,
+                        alis_tipi=alis_tipi, kaynak=_kaynak,
                         kdv_tutar=q2(kdv_t_k), matrah=q2(matrah_k),
                         # H2-M2: EBATLI dalinda eksikti — kutu formda vardi,
                         # gonderiliyordu, ama burada gecirilmedigi icin veri

@@ -3281,3 +3281,154 @@ def test_yp4_kullanici_listesi_firma_bazli():
     for u in kayitlar:
         assert 'firma_kapsam' in u, u.get('ad')
         assert isinstance(u.get('firmalar'), list), u.get('ad')
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  UR1 · ÜRETİM / SATIN ALMA AYRIMI
+# ══════════════════════════════════════════════════════════════════════
+
+def _ur1_tedarikci():
+    """Testlik ürün tedarikçisi — borç karşılaştırması için."""
+    from models import Cari
+    with fa.app.app_context():
+        c = Cari.query.filter_by(unvan='UR1 TEDARIK A.S.').first()
+        if not c:
+            # Cari FİRMA KAPSAMLI DEĞİL (kart ortak, görünürlük
+            # cari_firma üyeliğiyle) — firma_id alanı yok.
+            c = Cari(id='UR1T', unvan='UR1 TEDARIK A.S.',
+                     urun_tedarikcisi=True, cari_tip='Tedarikçi')
+            db.session.add(c)
+            db.session.commit()
+        return c.unvan
+
+
+def test_ur1_uretim_tedarikci_borcu_dogurmaz():
+    """UR1: üretilen mal SATIN ALINMADI — cari borcu doğmamalı.
+
+    Kontrol grubu da var: AYNI gövde `kaynak='satinalma'` ile
+    gönderilince borç OLUŞUYOR. Olmasaydı test, borcun hiç
+    oluşmadığı bir yolu ölçüp 'üretim çalışıyor' derdi."""
+    from models import CariHareket, PlakaStok
+    unvan = _ur1_tedarikci()
+    c = istemci('admin', 'ADMIN')
+
+    def _govde(kaynak, blok):
+        return {'tip': 'PLAKA', 'kaynak': kaynak, 'uretici': unvan,
+                'cins': 'UR1 TEST', 'blok_no': blok, 'boy': 300,
+                'yukseklik': 180, 'kalinlik': 2, 'adet': 1,
+                'fiyat': 50, 'fiyat_birim': 'm2', 'doviz': 'USD',
+                'alis_tipi': 'yurtici_kdvli', 'kdv_oran': 20,
+                'fatura_durumu': 'faturali', 'fatura_no': 'UR1-001'}
+
+    with fa.app.app_context():
+        once = CariHareket.query.filter_by(cari_unvan=unvan).count()
+
+    # 1 · SATIN ALMA → borç OLUŞUR (kontrol)
+    r = c.post('/api/stok/ekle', headers=H, json=_govde('satinalma', 'UR1-SA'))
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(cari_unvan=unvan).count() == once + 1
+
+    # 2 · ÜRETİM → borç OLUŞMAZ, KDV yazılmaz, alış tipi boş kalır
+    r = c.post('/api/stok/ekle', headers=H, json=_govde('uretim', 'UR1-UR'))
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(cari_unvan=unvan).count() == once + 1, \
+            'üretimde tedarikçiye borç yazıldı'
+        p = PlakaStok.query.filter_by(blok_no='UR1-UR').first()
+        assert p is not None
+        assert p.kaynak == 'uretim', p.kaynak
+        assert (p.kdv_tutar or 0) == 0, p.kdv_tutar
+        assert (p.kdv_oran or 0) == 0, p.kdv_oran
+        # Üretilen malın ALIŞ TİPİ yok; 'yurtici_kdvli' bırakmak onu
+        # satın alınmış gibi gösterirdi (kesimin bugün yaptığı hata).
+        assert p.alis_tipi is None, p.alis_tipi
+        assert p.alis_fiyati == 50, p.alis_fiyati   # üretim maliyeti
+
+
+def test_ur1_uretimde_fatura_durumu_istemciye_birakilmaz():
+    """UR1: 'faturali' yollayan eski bir sekme borç doğurmamalı.
+
+    Ekranda alan gizli ama sunucu istemciye güvenmiyor — gizlemek
+    bir güvenlik önlemi değil, bir görüntü tercihi."""
+    from models import PlakaStok
+    unvan = _ur1_tedarikci()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'PLAKA', 'kaynak': 'uretim', 'uretici': unvan,
+        'cins': 'UR1 TEST', 'blok_no': 'UR1-ZORLA', 'boy': 300,
+        'yukseklik': 180, 'kalinlik': 2, 'adet': 1, 'fiyat': 10,
+        'fiyat_birim': 'm2', 'doviz': 'USD',
+        'fatura_durumu': 'faturali', 'fatura_no': 'OLMAMALI'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        p = PlakaStok.query.filter_by(blok_no='UR1-ZORLA').first()
+        assert p.fatura_durumu == 'faturasiz', p.fatura_durumu
+
+
+def test_ur1_stokta_duran_bloktan_uretim_girisi_durdurulur():
+    """UR1: çift sayım kapısı.
+
+    Blok stokta duruyorsa ondan kesilen plakalar içe aktarmayla
+    girilmemeli: blok kesilmemiş gibi kalır, aynı mal iki kez
+    sayılır ve plakaların maliyeti bloktan türemez."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    rb = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'BLOK', 'cins': 'UR1 BLOK', 'blok_no': 'UR1-KAPI',
+        'boy': 300, 'yukseklik': 150, 'en': 120, 'tonaj': 14,
+        'fiyat': 400, 'fiyat_birim': 'ton', 'doviz': 'USD'})
+    assert rb.status_code == 200, rb.get_data(as_text=True)
+
+    govde = {'tip': 'PLAKA', 'kaynak': 'uretim', 'cins': 'UR1 TEST',
+             'blok_no': 'UR1-KAPI', 'boy': 300, 'yukseklik': 180,
+             'kalinlik': 2, 'adet': 1, 'fiyat': 30, 'fiyat_birim': 'm2',
+             'doviz': 'USD'}
+
+    r = c.post('/api/stok/ekle', headers=H, json=govde)
+    assert r.status_code == 409, r.get_data(as_text=True)
+    assert r.get_json().get('error') == 'blok_stokta'
+    with fa.app.app_context():
+        assert PlakaStok.query.filter_by(blok_no='UR1-KAPI').count() == 0
+
+    # SATIN ALMA kipinde kapı ÇALIŞMAZ: aynı numaralı bloğu satın
+    # almış olman olağan, orada çift sayım yok.
+    r2 = c.post('/api/stok/ekle', headers=H,
+                json=dict(govde, kaynak='satinalma'))
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+
+    # Bilinçli onay geçişe izin verir (numara tekrarı olabilir).
+    r3 = c.post('/api/stok/ekle', headers=H,
+                json=dict(govde, blok_uyarisi_onaylandi=True))
+    assert r3.status_code == 200, r3.get_data(as_text=True)
+
+
+def test_ur1_stok_listesi_uretimi_alis_gibi_gostermez():
+    """UR1: liste ucu üretilen mala alış tipi uydurmamalı."""
+    c = istemci('admin', 'ADMIN')
+    c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'PLAKA', 'kaynak': 'uretim', 'cins': 'UR1 LISTE',
+        'blok_no': 'UR1-LST', 'boy': 300, 'yukseklik': 180,
+        'kalinlik': 2, 'adet': 1, 'fiyat': 20, 'fiyat_birim': 'm2',
+        'doviz': 'USD'})
+    d = c.get('/api/stok?tip=PLAKA&per_page=500', headers=H)
+    assert d.status_code == 200
+    satir = [x for x in (d.get_json().get('data') or [])
+             if x.get('blok_no') == 'UR1-LST']
+    assert satir, 'eklenen plaka listede yok'
+    assert satir[0]['kaynak'] == 'uretim', satir[0].get('kaynak')
+    assert satir[0]['alis_tipi'] is None, satir[0].get('alis_tipi')
+
+
+def test_ur1_ekranda_kaynak_secimi_var():
+    """UR1: alan modelde var, formda yoksa öksüz kalır (form_denetim
+    D2 ile aynı gerekçe). İki form da seçimi sunmalı ve gönderme
+    gövdesine koymalı."""
+    import io as _io
+    h = _io.open('templates/stok.html', encoding='utf-8').read()
+    assert 'id="tKaynak"' in h          # içe aktarma
+    assert 'id="sKaynak"' in h          # tekil stok
+    assert 'function topluKaynakDegisti' in h
+    assert 'function kaynakDegisti' in h
+    assert "kaynak: uretim ? 'uretim' : 'satinalma'" in h
+    assert "kaynak: document.getElementById('sKaynak').value" in h
