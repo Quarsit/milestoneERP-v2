@@ -4254,3 +4254,105 @@ def test_or2_sabit_vergi_kalemi_de_cevrilir():
     assert v['cevrildi'] is True
     assert h['net_kar'] == 5800, h['net_kar']    # 6000 − 200
     assert h['cevrim_yapildi'] is True
+
+
+def test_or3_baglanabilir_liste_bagli_isleri_elemeli():
+    """OR3: iş numarası elle yazılmıyor, listeden seçiliyor.
+
+    Liste ZATEN BAĞLI işleri eliyor: eskiden seçilebilen bir
+    numara kaydet'e basınca 409 dönüyordu — hatayı seçim anında
+    değil, kaydetme anında öğreniyordun."""
+    _or1_kur('SIPOR8', [(5000, 3000)])
+    _or1_kur('SIPOR9', [(7000, 4000)])
+    c = istemci('admin', 'ADMIN')
+    a = c.post('/api/ortaklik', headers=H,
+               json={'ad': 'Seçici A'}).get_json()['id']
+    b = c.post('/api/ortaklik', headers=H,
+               json={'ad': 'Seçici B'}).get_json()['id']
+
+    d = c.get(f'/api/ortaklik/{a}/baglanabilir?tip=SIPARIS').get_json()
+    idler = [x['id'] for x in d['data']]
+    assert 'SIPOR8' in idler and 'SIPOR9' in idler, idler
+    # Satış kaydı olan işler işaretli geliyor
+    s8 = [x for x in d['data'] if x['id'] == 'SIPOR8'][0]
+    assert s8['satis_var'] is True and s8['musteri'] == 'ACIK CARI'
+
+    # SIPOR8'i A'ya bağla → B'nin listesinden DÜŞMELİ
+    assert c.post(f'/api/ortaklik/{a}/is', headers=H, json={
+        'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR8'}).status_code == 200
+    d2 = c.get(f'/api/ortaklik/{b}/baglanabilir?tip=SIPARIS').get_json()
+    idler2 = [x['id'] for x in d2['data']]
+    assert 'SIPOR8' not in idler2, idler2
+    assert 'SIPOR9' in idler2, idler2
+
+    # Geçersiz tip reddedilir
+    assert c.get(f'/api/ortaklik/{a}/baglanabilir?tip=HEBELE').status_code == 400
+
+
+def test_or3_ortakliga_bagli_proforma_silinemez():
+    """OR3: bağlı proforma silinirse ortaklığın cirosu SEBEPSİZ düşer.
+
+    Proforma silinince satış kaydı KALIYOR ama `proforma_id`
+    boşaltılıyor (kâr izi kaybolmasın diye, doğru). Ortaklık o bağ
+    üzerinden okuduğu için ciro sessizce sıfırlanırdı. Siparişte bu
+    kapı zaten vardı, proformada yoktu."""
+    from models import Proforma, SatisKaydi
+    with fa.app.app_context():
+        db.session.add(Proforma(id='PROR3', musteri='ACIK CARI', cari_id='C1',
+                                toplam=9000, doviz='USD', durum='Taslak'))
+        db.session.flush()
+        db.session.add(SatisKaydi(
+            id='PROR3-S1', proforma_id='PROR3', stok_tip='PLAKA', cins='TEST',
+            musteri='ACIK CARI', satis_tarihi=date(2026, 4, 5),
+            tutar=9000, tutar_usd=9000, doviz='USD',
+            maliyet_usd=5000, kar_usd=4000))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Proforma bağı', 'bizim_pay': 50,
+        'ortak_pay': 50}).get_json()['id']
+    assert c.post(f'/api/ortaklik/{oid}/is', headers=H, json={
+        'kaynak_tip': 'PROFORMA', 'kaynak_id': 'PROR3'}).status_code == 200
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['ciro'] == 9000 and h['brut_kar'] == 4000, h
+
+    r = c.delete('/api/proforma/PROR3', headers=H)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert r.get_json().get('error') == 'ortakliga_bagli'
+    # Ciro yerinde duruyor
+    h2 = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h2['ciro'] == 9000
+
+    # Bağ çözülünce silinebilir
+    isler = c.get(f'/api/ortaklik/{oid}').get_json()['data']['isler']
+    assert c.delete(f"/api/ortaklik/{oid}/is/{isler[0]['id']}",
+                    headers=H).status_code == 200
+    assert c.delete('/api/proforma/PROR3', headers=H).status_code == 200
+
+
+def test_or3_kaybolan_kaynak_acikca_soyleniyor():
+    """OR3: bağlı iş sistemden kalkmışsa 'satış kaydı yok' demek
+    yanıltıcıdır — iş ortadan kalkmıştır, bunu söylemeli."""
+    from models import Sevkiyat
+    with fa.app.app_context():
+        db.session.add(Sevkiyat(id='SVOR3', musteri='ACIK CARI',
+                                sevk_tarihi=date(2026, 4, 1),
+                                durum='Hazirlaniyor'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H,
+                 json={'ad': 'Kayıp kaynak'}).get_json()['id']
+    assert c.post(f'/api/ortaklik/{oid}/is', headers=H, json={
+        'kaynak_tip': 'SEVKIYAT', 'kaynak_id': 'SVOR3'}).status_code == 200
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert any('satış kaydı yok' in u for u in h['uyarilar']), h['uyarilar']
+
+    # Sevkiyat ortadan kalkarsa mesaj DEĞİŞMELİ
+    with fa.app.app_context():
+        db.session.delete(Sevkiyat.query.filter_by(id='SVOR3').first())
+        db.session.commit()
+    h2 = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert any('artık sistemde yok' in u and 'SVOR3' in u
+               for u in h2['uyarilar']), h2['uyarilar']

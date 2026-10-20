@@ -15180,6 +15180,83 @@ def create_app():
         return jsonify({'ok': True})
 
     # ── BAĞLI İŞLER ──
+    @app.route('/api/ortaklik/<oid>/baglanabilir', methods=['GET'])
+    def api_ortaklik_baglanabilir(oid):
+        """OR3 — bağlanabilecek işler, SEÇİLEBİLİR hâlde.
+
+        Numarayı elle yazdırmak iki şeyi birden kullanıcıya
+        yıkıyordu: numarayı hatırlamak ve o işin zaten başka bir
+        ortaklığa bağlı olup olmadığını bilmek. İkincisi ancak
+        kaydet'e basınca 409 olarak ortaya çıkıyordu.
+
+        Burada ZATEN BAĞLI işler listeden düşüyor: seçilebilen her
+        satır gerçekten bağlanabilir.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('karlilik', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        if not _ortaklik_bul(oid):
+            return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
+        tip = (request.args.get('tip') or 'SIPARIS').strip().upper()
+        if tip not in ('SIPARIS', 'SEVKIYAT', 'PROFORMA'):
+            return jsonify({'ok': False, 'mesaj': 'Geçersiz tip'}), 400
+
+        # Hangi işler zaten bağlı (HERHANGİ bir ortaklığa)
+        bagli = {b.kaynak_id for b in OrtaklikIs.query.filter_by(
+            kaynak_tip=tip).all()}
+
+        kayitlar = []
+        if tip == 'SIPARIS':
+            for s in Siparis.query.order_by(
+                    Siparis.siparis_tarihi.desc(), Siparis.id.desc()
+                    ).limit(300).all():
+                if s.id in bagli:
+                    continue
+                kayitlar.append({
+                    'id': s.id, 'musteri': s.musteri or '',
+                    'tarih': _iso(s.siparis_tarihi),
+                    'tutar': s.toplam_tutar or 0, 'doviz': s.doviz or 'USD',
+                    'durum': s.durum or ''})
+        elif tip == 'PROFORMA':
+            for p in Proforma.query.order_by(
+                    Proforma.olusturma.desc(), Proforma.id.desc()
+                    ).limit(300).all():
+                if p.id in bagli:
+                    continue
+                kayitlar.append({
+                    # Proforma'da `tarih` sütunu yok; oluşturma damgası var.
+                    'id': p.id, 'musteri': p.musteri or '',
+                    'tarih': _iso(p.olusturma.date() if p.olusturma else None),
+                    'tutar': getattr(p, 'toplam', 0) or 0,
+                    'doviz': p.doviz or 'USD', 'durum': p.durum or ''})
+        else:
+            for v in Sevkiyat.query.order_by(
+                    Sevkiyat.sevk_tarihi.desc(), Sevkiyat.id.desc()
+                    ).limit(300).all():
+                if v.id in bagli:
+                    continue
+                kayitlar.append({
+                    'id': v.id, 'musteri': v.musteri or '',
+                    'tarih': _iso(v.sevk_tarihi), 'tutar': 0,
+                    'doviz': '', 'durum': v.durum or ''})
+
+        # Her kayda SATIŞ KAYDI olup olmadığını da söyle: cirosu
+        # olmayan bir işi bağlamak yanlış değil (teslim edilmemiş
+        # olabilir) ama seçerken bilmek gerekir.
+        for k in kayitlar:
+            if tip == 'SIPARIS':
+                k['satis_var'] = SatisKaydi.query.filter_by(
+                    siparis_id=k['id']).count() > 0
+            elif tip == 'PROFORMA':
+                k['satis_var'] = SatisKaydi.query.filter_by(
+                    proforma_id=k['id']).count() > 0
+            else:
+                k['satis_var'] = SatisKaydi.query.filter_by(
+                    sevkiyat_id=k['id']).count() > 0
+
+        return jsonify({'ok': True, 'data': kayitlar,
+                        'bagli_adedi': len(bagli)})
+
     @app.route('/api/ortaklik/<oid>/is', methods=['POST'])
     def api_ortaklik_is_ekle(oid):
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -15634,7 +15711,20 @@ def create_app():
             uyarilar.append(
                 f'Vergilerin {_tahmini:,.2f} USD\'lik kısmı TAHMİNİ. '
                 f'Kesinleşince paylar değişir.')
-        if not satislar and isler:
+        # OR3: bağlı kaynak hâlâ duruyor mu? Yoksa "satış kaydı yok"
+        # demek yanıltıcı olur — iş ortadan kalkmıştır.
+        _kayip = []
+        for i in isler:
+            _m = {'SIPARIS': Siparis, 'SEVKIYAT': Sevkiyat,
+                  'PROFORMA': Proforma}.get(i.kaynak_tip)
+            if _m is not None and not _m.query.filter_by(id=i.kaynak_id).first():
+                _kayip.append(f'{i.kaynak_tip} {i.kaynak_id}')
+        if _kayip:
+            uyarilar.append(
+                'Bağlı iş(ler) artık sistemde yok: ' + ', '.join(_kayip) +
+                '. Ciro bu işlerden gelmiyor; bağı çözün ya da kaydı '
+                'geri getirin.')
+        elif not satislar and isler:
             uyarilar.append(
                 'Bağlı işlerin henüz satış kaydı yok — teslim edilmemiş '
                 'olabilir. Ciro ve kâr 0 görünüyor.')
@@ -19674,6 +19764,18 @@ def create_app():
             _r.proforma_id = None
         # Konteyner PLANI proformanin parcasi — proformayla birlikte gider.
         Konteyner.query.filter_by(proforma_id=proforma_id).delete(synchronize_session=False)
+        # ── OR3 · ORTAKLIĞA BAĞLI PROFORMA SİLİNEMEZ ──
+        # Aşağıda satış kaydının `proforma_id`'si boşaltılıyor (kâr
+        # izi kalsın diye, doğru). Ama o proforma bir ortaklığa
+        # bağlıysa ortaklığın cirosu SEBEBİ GÖRÜNMEDEN sıfıra
+        # düşerdi: satış kaydı duruyor, bağ yok. Siparişte bu kapı
+        # zaten var (satış kaydı varsa silme reddediliyor).
+        _ort = OrtaklikIs.query.filter_by(
+            kaynak_tip='PROFORMA', kaynak_id=proforma_id).first()
+        if _ort:
+            return jsonify({'ok': False, 'error': 'ortakliga_bagli',
+                'mesaj': f'Bu proforma {_ort.ortaklik_id} ortaklığına bağlı; '
+                         f'silinemez. Önce ortaklıktaki bağı çözün.'}), 400
         # Satis kaydi (kar/zarar izi) KALIR, yalnizca bag kopar.
         for _sk in SatisKaydi.query.filter_by(proforma_id=proforma_id).all():
             _sk.proforma_id = None
