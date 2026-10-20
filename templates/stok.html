@@ -531,9 +531,9 @@
             <input id="tAlisTarih" type="date" data-buyuk-harf="hayir"></div>
           <div class="form-alan" id="tBaslangicAlan">
             <label>Başlangıç Plaka No</label>
-            <input id="tBaslangicNo" type="number" min="1" step="1" data-buyuk-harf="hayir"
+            <input id="tBaslangicNo" type="number" min="0" step="1" data-buyuk-harf="hayir"
                    placeholder="boş = otomatik devam"
-                   title="Plaka numaralandırması bu numaradan başlar. Örneğin ilk 15 plakayı almadıysanız 16 yazın. Boş bırakılırsa o blokta kayıtlı en büyük numaradan devam eder.">
+                   title="Plaka numaralandırması bu numaradan başlar. Örneğin ilk 15 plakayı almadıysanız 16 yazın. 0 da geçerlidir. Boş bırakılırsa o blokta kayıtlı en büyük numaradan devam eder.">
           </div>
         </div>
         <div class="form-satir f3">
@@ -643,7 +643,8 @@
         <div class="form-alan" id="adetAlan" style="display:none"><label>Stok Adedi</label><input id="sAdet" type="number" value="1" oninput="hesapla()"></div>
         <div class="form-alan" id="kasaAdediAlan" style="display:none"><label>Kasa Adedi</label><input id="sKasaAdedi" type="number" min="1" value="1" oninput="hesapla()"></div>
         <div class="form-alan" id="kasaIciAlan" style="display:none"><label>Kasa İçi Adet</label><input id="sKasaIci" type="number" min="1" value="1" oninput="hesapla()"></div>
-        <div class="form-alan" id="basNoAlan" style="display:none"><label id="basNoLabel">Başlangıç Slab No</label><input id="sBasNo" type="number" value="1"></div>
+        <div class="form-alan" id="basNoAlan" style="display:none"><label id="basNoLabel">Başlangıç Slab No</label><input id="sBasNo" type="number" min="0" value="1"
+               title="İlk plakanın numarası. 0 da geçerlidir."></div>
         <div class="form-alan"><label id="olcuLabel">Hacim (m³)</label><input id="sOlcu" readonly></div>
       </div>
 
@@ -859,7 +860,7 @@ const DURUM_AD = { 'Serbest':'Serbest', 'Rezerve':'Rezerve', 'Satildi':'Satıld�
 function stokNo(x) {
   if (!x) return '—';
   if (x.tip === 'EBATLI') return x.kasa_no || x.blok_no || x.id;
-  if (x.tip === 'PLAKA')  return x.slab_no ? `${x.blok_no || ''}#${x.slab_no}`.replace(/^#/, '')
+  if (x.tip === 'PLAKA')  return x.slab_no ? plakaKodu(x.blok_no, x.slab_no)
                                            : (x.blok_no || x.id);
   return x.blok_no || x.id;
 }
@@ -1649,9 +1650,21 @@ function olcuGrupEkle(yuk, boy, kal, adet) {
   olcuGrupOzetle();
 }
 
+/* ── BAŞLANGIÇ PLAKA NO (B3) ──
+   `parseInt(...) || 1` sıfırı 1'e çeviriyordu: yazdığın numara
+   haber verilmeden değişiyordu. 0 geçerli bir plaka numarası.
+   Alan boşsa 1 varsayılır (tekil formda "devam et" kuralı yok —
+   orada blok no'yu da elle giriyorsun). */
+function _basNoOku(id) {
+  const el = document.getElementById(id);
+  const n = parseInt(el ? el.value : '', 10);
+  if (!Number.isFinite(n) || n < 0) return 1;
+  return n;
+}
+
 /* Tüm grupları sırayla oku; numaraları ve toplamları hesapla. */
 function olcuGruplariOku() {
-  const bas = parseInt(document.getElementById('sBasNo').value) || 1;
+  const bas = _basNoOku('sBasNo');
   const gruplar = [{
     yuk: parseFloat(document.getElementById('sYuk').value) || 0,
     boy: parseFloat(document.getElementById('sBoy').value) || 0,
@@ -1930,7 +1943,7 @@ async function stokKaydet() {
         adet: t === 'PLAKA' ? (parseInt(document.getElementById('sAdet').value) || 1) : 1,
         kasa_adedi: t === 'EBATLI' ? (parseInt(document.getElementById('sKasaAdedi').value) || 1) : 1,
         kasa_ici_adet: t === 'EBATLI' ? (parseInt(document.getElementById('sKasaIci').value) || 1) : 1,
-        baslangic_no: parseInt(document.getElementById('sBasNo').value) || 1,
+        baslangic_no: _basNoOku('sBasNo'),
         aciklama: document.getElementById('sAciklama').value,
         nakliye_dahil: document.getElementById('sNakliyeDahil').checked,
         fiyat,
@@ -2508,7 +2521,9 @@ async function topluKaydet() {
           örneğin ilk 15 fire ise 16'dan başlanır.)
        • Boş bırakıldıysa → o blokta kayıtlı en büyük numaradan devam edilir. */
   const elleBaslangic = parseInt(document.getElementById('tBaslangicNo').value, 10);
-  const baslangicVar = Number.isFinite(elleBaslangic) && elleBaslangic > 0;
+  /* B3: 0 GEÇERLİ bir başlangıç. Eskiden `> 0` olduğu için 0 yazmak
+     "girilmedi" sayılıyor ve sessizce otomatik devama düşüyordu. */
+  const baslangicVar = Number.isFinite(elleBaslangic) && elleBaslangic >= 0;
 
   const mevcutMax = {};
   const slabSayac = {};

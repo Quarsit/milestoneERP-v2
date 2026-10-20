@@ -3690,3 +3690,159 @@ def test_b2_yeni_tanim_akisi_kopyalanmamis():
         # Ekleme akışı şablonun içinde yeniden yazılmamış
         assert 'function _listeYeniEkle' not in h, yol
         assert "api('/api/lookup" not in h, yol
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  B3 · PLAKA KODU TEK YERDEN · ÜRETİM NO SADE · BAŞLANGIÇ 0
+# ══════════════════════════════════════════════════════════════════════
+
+def test_b3_plaka_kodu_tek_kaynaktan():
+    """B3: `blok#slab` dizesi artık elle kurulmuyor.
+
+    Yedi ayrı yerde kuruluyordu (stok listesi, global arama, maliyet,
+    proforma, Excel dışa aktarma, içe aktarma uyarısı, denetim
+    kaydı). Biçim değişince altısını düzeltip birini unutmak, aynı
+    plakanın iki ekranda iki ayrı kodla görünmesiyle biterdi."""
+    import io as _io, re as _re
+    fa_ = _io.open('flask_app.py', encoding='utf-8').read()
+    assert 'def _plaka_kodu(' in fa_
+    # Elle kurulan hiçbir kalıp kalmamış
+    assert not _re.search(r"#\{s\.slab_no", fa_), 'flask_app: elle kurulan kod'
+    assert not _re.search(r"\{blok_no\} #\{slab_no\}", fa_), 'flask_app: uyarı metni'
+
+    base = _io.open('templates/base.html', encoding='utf-8').read()
+    assert 'function plakaKodu(' in base
+    for yol in ('templates/stok.html', 'templates/proforma.html'):
+        h = _io.open(yol, encoding='utf-8').read()
+        assert 'plakaKodu(' in h, yol
+        assert not _re.search(r"\}#\$\{.*slab_no", h), (yol, 'elle kurulan kod')
+        assert 'function plakaKodu' not in h, (yol, 'ikinci kopya')
+
+
+def test_b3_plaka_kodu_bicimi():
+    """B3: kod `blok-İKİ HANE`; 0 da geçerli bir numara."""
+    import shutil as _shutil, subprocess as _sp, os as _os, json as _json
+    # Sunucudaki ikizi `create_app` kapsamında; onun davranışı aşağıdaki
+    # uçtan uca testlerde ölçülüyor. Burada EKRAN tarafı node ile
+    # koşuluyor — `js_denetim` yalnız ayrıştırılabilirliğe bakıyor.
+    node = _shutil.which('node') or '/opt/node22/bin/node'
+    if not _os.path.exists(node):
+        import pytest as _pytest
+        _pytest.skip('node yok')
+    betik = r"""
+const fs = require('fs'), vm = require('vm');
+const h = fs.readFileSync('templates/base.html', 'utf8');
+const bas = h.indexOf('function plakaKodu(');
+const son = h.indexOf('/* ══ BANKA/KASA ETİKETİ', bas);
+const kum = {}; vm.createContext(kum);
+vm.runInContext(h.slice(bas, son), kum);
+console.log(JSON.stringify({
+  bir: kum.plakaKodu('K6461', 1),
+  sifir: kum.plakaKodu('K6461', 0),
+  oniki: kum.plakaKodu('K6461', 12),
+  yuz: kum.plakaKodu('K6461', 100),
+  noYok: kum.plakaKodu('K6461', null),
+  blokYok: kum.plakaKodu('', 3),
+}));
+"""
+    r = _sp.run([node, '-e', betik], capture_output=True, text=True, cwd='.')
+    assert r.returncode == 0, r.stderr[:400]
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+    assert d['bir'] == 'K6461-01', d['bir']
+    assert d['sifir'] == 'K6461-00', d['sifir']
+    assert d['oniki'] == 'K6461-12' and d['yuz'] == 'K6461-100'
+    assert d['noYok'] == 'K6461' and d['blokYok'] == '03'
+
+
+def test_b3_uretim_no_orijinal_blok_no():
+    """B3: üretim blok no artık dilimlenmiş kesim numarası DEĞİL.
+
+    Eskiden `blok_no + '-U' + kesim_id[-4:]` idi; o dilim token
+    ortasından kesip K6461-U1-01 üretiyordu."""
+    from models import BlokStok, PlakaStok, Kesim
+    with fa.app.app_context():
+        db.session.add(BlokStok(id='BLKB3A', blok_no='K7001', cins='TEST',
+                                boy=300, yukseklik=150, en=120, hacim_m3=5.4,
+                                tonaj=14.5, alis_fiyati=400,
+                                alis_fiyat_birim='ton', doviz='USD',
+                                durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': ['BLKB3A'],
+        'kesim_tarihi': '2026-03-05',
+        # uretim_blok_no GÖNDERİLMİYOR — otomatik kural ölçülüyor
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 250,
+                      'yukseklik': 160, 'kalinlik': 2, 'adet': 3}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    with fa.app.app_context():
+        kesim = Kesim.query.get(d['kesim_id'])
+        assert kesim.uretim_blok_no == 'K7001', kesim.uretim_blok_no
+        assert '-U' not in kesim.uretim_blok_no
+        for o in d['olusan_stoklar']:
+            p = PlakaStok.query.get(o['id'])
+            assert p.blok_no == 'K7001', p.blok_no
+
+
+def test_b3_baslangic_no_sifir_aynen_gider():
+    """B3: 0 geçerli bir plaka numarası — sessizce 1'e çekilmemeli."""
+    from models import BlokStok, PlakaStok
+    with fa.app.app_context():
+        db.session.add(BlokStok(id='BLKB3B', blok_no='K7002', cins='TEST',
+                                boy=300, yukseklik=150, en=120, hacim_m3=5.4,
+                                tonaj=14.5, alis_fiyati=400,
+                                alis_fiyat_birim='ton', doviz='USD',
+                                durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': ['BLKB3B'],
+        'kesim_tarihi': '2026-03-05', 'baslangic_slab': 0,
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 250,
+                      'yukseklik': 160, 'kalinlik': 2, 'adet': 3}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        nolar = sorted(p.slab_no for p in
+                       PlakaStok.query.filter_by(blok_no='K7002').all())
+        assert nolar == [0, 1, 2], nolar
+
+    # Tekil stok formu da 0'ı kabul etmeli
+    r2 = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'PLAKA', 'cins': 'TEST', 'blok_no': 'K7003', 'boy': 250,
+        'yukseklik': 160, 'kalinlik': 2, 'adet': 2, 'baslangic_no': 0,
+        'fiyat': 20, 'fiyat_birim': 'm2', 'doviz': 'USD',
+        'uretici': 'ALBSTONE', 'alis_tipi': 'ithalat'})
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+    with fa.app.app_context():
+        nolar = sorted(p.slab_no for p in
+                       PlakaStok.query.filter_by(blok_no='K7003').all())
+        assert nolar == [0, 1], nolar
+
+
+def test_b3_baslangic_bos_kalinan_yerden_devam():
+    """B3: üretim no artık orijinal blok no olduğu için aynı blok
+    no'lu plakalar yan yana gelebilir. Başlangıç BOŞ bırakılırsa
+    numara kalınan yerden devam etmeli — yoksa ikinci kesim birinci
+    kesimin numaralarını tekrar ederdi."""
+    from models import BlokStok, PlakaStok
+    with fa.app.app_context():
+        for _i, _id in enumerate(('BLKB3C1', 'BLKB3C2')):
+            db.session.add(BlokStok(id=_id, blok_no='K7004', cins='TEST',
+                                    boy=300, yukseklik=150, en=120,
+                                    hacim_m3=5.4, tonaj=14.5, alis_fiyati=400,
+                                    alis_fiyat_birim='ton', doviz='USD',
+                                    durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    govde = lambda kid: {
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': [kid],
+        'kesim_tarihi': '2026-03-05', 'baslangic_slab': '',
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 250,
+                      'yukseklik': 160, 'kalinlik': 2, 'adet': 3}]}
+    assert c.post('/api/kesim', headers=H, json=govde('BLKB3C1')).status_code == 200
+    assert c.post('/api/kesim', headers=H, json=govde('BLKB3C2')).status_code == 200
+    with fa.app.app_context():
+        nolar = sorted(p.slab_no for p in
+                       PlakaStok.query.filter_by(blok_no='K7004').all())
+        assert nolar == [1, 2, 3, 4, 5, 6], nolar

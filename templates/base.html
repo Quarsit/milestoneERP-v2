@@ -1332,6 +1332,25 @@ function gunFarkiZaman(damga) {
 }
 function kacar(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
+/* ══ PLAKA KODU (B3) ══
+   Plakanın depoda okunan kodu: K6461-01
+
+   Sunucudaki `_plaka_kodu` ile AYNI kural. Ekranlarda da tek
+   kopya duruyor: stok listesi ve proforma ikisi de `blok#slab`
+   diye elle kuruyordu ve biçim değişince birini unutmak, aynı
+   plakanın iki ekranda iki ayrı kodla görünmesiyle biterdi.
+
+   Plaka no İKİ HANE: K6461-00, K6461-01, K6461-12. */
+function plakaKodu(blokNo, slabNo) {
+  const b = String(blokNo == null ? '' : blokNo).trim();
+  if (slabNo === null || slabNo === undefined || String(slabNo).trim() === '')
+    return b;
+  const n = parseInt(slabNo, 10);
+  const s = Number.isFinite(n) ? String(n).padStart(2, '0')
+                               : String(slabNo).trim();
+  return b ? `${b}-${s}` : s;
+}
+
 /* ══ BANKA/KASA ETİKETİ (BK4) ══
    Açılır listelerde AYNI banka, AYNI şube, AYNI dövizde birden
    çok hesap olabiliyor. Yalnızca banka adı yazınca doğru hesabı

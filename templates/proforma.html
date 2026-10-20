@@ -1855,7 +1855,7 @@ function stokSecSuz() {
 /** Ekranda gösterilecek stok kodu (stok sayfasındakiyle aynı biçim). */
 function stokKodu(x) {
   if (x.tip === 'PLAKA' || x.slab_no !== undefined) {
-    return x.blok_no ? `${x.blok_no}#${x.slab_no || ''}` : (x.id || '');
+    return x.blok_no ? plakaKodu(x.blok_no, x.slab_no) : (x.id || '');
   }
   return x.blok_no || x.kasa_no || x.id || '';
 }

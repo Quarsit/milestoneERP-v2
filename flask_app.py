@@ -1663,7 +1663,7 @@ def create_app():
             s = PlakaStok.query.get(baglanti_id)
             if s:
                 if getattr(s, 'slab_no', None):
-                    return f"{s.blok_no or ''}#{s.slab_no}".lstrip('#')
+                    return _plaka_kodu(s.blok_no, s.slab_no) or baglanti_id
                 return s.blok_no or baglanti_id
             s = EbatliStok.query.get(baglanti_id)
             if s:
@@ -2277,6 +2277,29 @@ def create_app():
                 hareket.id = aday
         except Exception as e:
             app.logger.warning(f'Cari hareket numarası üretilemedi: {e}')
+
+    def _plaka_kodu(blok_no, slab_no):
+        """B3 — plakanın depoda okunan kodu: K6461-01
+
+        Bu dize YEDİ ayrı yerde elle kuruluyordu (stok listesi, global
+        arama, maliyet ekranı, proforma, Excel dışa aktarma, içe
+        aktarma uyarısı, denetim kaydı) ve hepsi `blok#slab` diyordu.
+        Biçim değişince altısını düzeltip birini unutmak, aynı
+        plakanın iki ekranda iki ayrı kodla görünmesiyle biterdi — bu
+        projede en kötü hata biçimi bu (MF4'te iki `yedekGovde`,
+        YP3'te iki firma formu).
+
+        Plaka no İKİ HANE yazılır: K6461-00, K6461-01, K6461-12.
+        Numara yoksa yalnız blok no döner.
+        """
+        b = str(blok_no or '').strip()
+        if slab_no is None or str(slab_no).strip() == '':
+            return b
+        try:
+            s = f'{int(slab_no):02d}'
+        except (TypeError, ValueError):
+            s = str(slab_no).strip()
+        return f'{b}-{s}' if b else s
 
     def _stok_okunur_id(on_ek, model, kok, sira=None):
         """RN1 — stok kimliği depoda okunan numaradan türer.
@@ -5911,7 +5934,11 @@ def create_app():
             elif tip == 'PLAKA':
                 # PLAKA: 'adet' kadar ayri plaka kaydi olustur
                 adet = int(_sayi('adet', 1)) or 1
-                bas_no = int(_sayi('baslangic_no', 1)) or 1
+                # B3: 0 geçerli bir plaka numarasıdır; `or 1` onu
+                # sessizce 1'e çeviriyordu.
+                bas_no = int(_sayi('baslangic_no', 1))
+                if bas_no < 0:
+                    bas_no = 0
                 boy, yuk = _sayi('boy'), _sayi('yukseklik')
                 m2 = (boy * yuk) / 10000
                 fiyat_girilen = _sayi('fiyat')
@@ -6684,13 +6711,13 @@ def create_app():
             anahtar = (blok_no.upper(), slab_no)
             if anahtar in gorulen_anahtarlar:
                 return None, (f'aynı dosyada tekrar eden plaka: '
-                              f'{blok_no} #{slab_no}')
+                              f'{_plaka_kodu(blok_no, slab_no)}')
             varolan = PlakaStok.query.filter(
                 db.func.upper(PlakaStok.blok_no) == blok_no.upper(),
                 PlakaStok.slab_no == slab_no).first()
             if varolan:
                 return None, (f'bu plaka depoda zaten var: '
-                              f'{blok_no} #{slab_no} ({varolan.id})')
+                              f'{_plaka_kodu(blok_no, slab_no)} ({varolan.id})')
             gorulen_anahtarlar.add(anahtar)
 
         m2 = (boy * yuk) / 10000
@@ -9903,20 +9930,50 @@ def create_app():
             # Kullanıcı modal'dan girer; verilmediyse otomatik üret veya orijinali kullan.
             uretim_blok_no = (data.get('uretim_blok_no') or '').strip()
             if not uretim_blok_no:
-                # Otomatik üretim no = orijinal_blok_no + '-U' (üretim) + kesim_id son 3 hane
-                if kaynak_tip_db == 'BLOK' and ana_kaynak.blok_no:
-                    uretim_blok_no = f"{ana_kaynak.blok_no}-U{kesim_id[-4:]}"
-                else:
-                    uretim_blok_no = ana_kaynak.blok_no or ana_kaynak.id
+                # B3 — ÜRETİM NO ARTIK ORİJİNAL BLOK NO.
+                #
+                # Eskiden `blok_no + '-U' + kesim_id[-4:]` idi ve o dilim
+                # token ortasından kesiyordu: KSM-K6461-01 → '1-01', yani
+                # K6461'in son hanesi de içeri giriyordu ve kod
+                # K6461-U1-01-01 gibi okunmaz hâle geliyordu. Üstelik
+                # 20 karakterlik kimlik bütçesini yiyordu: firma belge
+                # kodu devreye girince okunur kimlik üretilemiyordu.
+                #
+                # Kesilen blok TAMAMEN tükeniyor, yani aynı blok ikinci
+                # kez kesilemez; ayırt edici bir üretim eki gerekmiyor.
+                # Aynı blok no'lu plakalar yine de yan yana gelirse
+                # ayrımı SLAB NUMARASI yapar — bu yüzden başlangıç no
+                # boşsa mevcut en büyük numaradan devam ediliyor
+                # (aşağıda).
+                uretim_blok_no = ana_kaynak.blok_no or ana_kaynak.id
 
             # SLAB NUMARALANDIRMA: başlangıç no'dan başla, atlanan (eksik) no'ları atla.
             # Örn. başlangıç=1, atlanan=[3,5] → 1,2,4,6,7...
-            try:
-                _slab_sira = int(data.get('baslangic_slab') or 1)
-                if _slab_sira < 1:
+            # B3 — YAZILAN DEĞER AYNEN KULLANILIR, 0 DAHİL.
+            # `or 1` sıfırı sessizce 1 yapıyordu: kullanıcının yazdığı
+            # numarayı haber vermeden değiştirmek, bu formdaki en kötü
+            # davranış.
+            #
+            # Alan BOŞ bırakılırsa o blok no'da kayıtlı EN BÜYÜK
+            # numaradan devam edilir — toplu içe aktarmadaki kuralın
+            # aynısı. Üretim no artık orijinal blok no olduğu için
+            # (yukarı bak) bu kural çakışmayı önleyen şeyin kendisi:
+            # aynı blok no'lu plakalar yan yana gelse bile numaraları
+            # ardışık ilerler.
+            _bas_ham = data.get('baslangic_slab')
+            _bas_ham = '' if _bas_ham is None else str(_bas_ham).strip()
+            if _bas_ham == '':
+                _enb = db.session.query(db.func.max(PlakaStok.slab_no)).filter(
+                    db.func.upper(PlakaStok.blok_no) ==
+                    str(uretim_blok_no or '').upper()).scalar()
+                _slab_sira = int(_enb) + 1 if _enb is not None else 1
+            else:
+                try:
+                    _slab_sira = int(float(_bas_ham))
+                except (ValueError, TypeError):
                     _slab_sira = 1
-            except (ValueError, TypeError):
-                _slab_sira = 1
+                if _slab_sira < 0:
+                    _slab_sira = 0
             _atlanan_set = set()
             _atlanan_ham = data.get('atlanan_slablar') or ''
             if _atlanan_ham:
@@ -14647,7 +14704,7 @@ def create_app():
                 stok_birim_map[s.id] = (s.metraj_m2 or 0, 'm²')
                 _pno = s.blok_no or s.id
                 if getattr(s, 'slab_no', None):
-                    _pno = f"{s.blok_no or ''}#{s.slab_no}".strip('#')
+                    _pno = _plaka_kodu(s.blok_no, s.slab_no) or s.id
                 stok_bilgi_map[s.id] = {
                     'no': _pno, 'tip': 'PLAKA', 'cins': s.cins,
                     'matrah': s.matrah or 0, 'doviz': s.doviz or 'USD',
@@ -16885,7 +16942,7 @@ def create_app():
                     or_(PlakaStok.blok_no.ilike(like), PlakaStok.id.ilike(like),
                         PlakaStok.cins.ilike(like))).limit(12).all():
                 eslesen_stok_idler.append(s.id)
-                _no = f"{s.blok_no or ''}#{s.slab_no}".lstrip('#') if s.slab_no else (s.blok_no or s.id)
+                _no = _plaka_kodu(s.blok_no, s.slab_no) or s.id
                 stok_kayitlari.append({
                     'ad': _no, 'ikon': '▦',
                     'ek': f"PLAKA · {s.cins or ''} · {s.durum or ''}".strip(' ·'),
@@ -26376,7 +26433,7 @@ def create_app():
                 for s in _x_suz(PlakaStok.query).order_by(PlakaStok.blok_no.asc(),
                                                           PlakaStok.slab_no.asc(),
                                                           PlakaStok.id.asc()).all():
-                    blok_slab = f"{s.blok_no or ''}#{s.slab_no or ''}" if s.blok_no else (s.slab_no or '')
+                    blok_slab = _plaka_kodu(s.blok_no, s.slab_no)
                     rows.append([blok_slab, s.cins or '', s.ozellik or '', s.uretici or '',
                                  _f(s.boy, True), _f(s.yukseklik, True),
                                  _f(s.metraj_m2, True), _f(s.kalinlik, True), s.durum or '',

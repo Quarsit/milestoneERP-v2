@@ -134,7 +134,7 @@
       <div class="kutu" id="uretimNoKutu">
         <h5>Üretim Blok No</h5>
         <div style="display:flex;gap:8px;align-items:center">
-          <input id="fUretimNo" placeholder="Boş bırakılırsa otomatik üretilir — örn. A-2026-001-U1"
+          <input id="fUretimNo" placeholder="Boş bırakılırsa kaynağın blok no'su kullanılır"
                  style="flex:1;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--mono);font-size:.85rem;font-weight:600">
           <button type="button" class="ekle-btn" style="margin:0;white-space:nowrap" onclick="uretimNoOner()">Otomatik öner</button>
         </div>
@@ -144,7 +144,9 @@
       <div class="kutu" id="slabKutu">
         <h5>Plaka Numaralandırma</h5>
         <div class="form-satir f2">
-          <div class="form-alan"><label>Başlangıç No</label><input id="fSlabBas" type="number" min="1" value="1"></div>
+          <div class="form-alan"><label>Başlangıç No</label><input id="fSlabBas" type="number" min="0"
+                 placeholder="boş = otomatik devam"
+                 title="İlk plakanın numarası. 0 da geçerlidir. Boş bırakılırsa bu blok no'da kayıtlı en büyük numaradan devam edilir."></div>
           <div class="form-alan"><label>Atlanacak No (kırılan)</label><input id="fAtlanan" placeholder="örn. 3, 61"></div>
         </div>
         <div style="font-size:.75rem;color:var(--soluk)">Plakalar başlangıçtan itibaren kesintisiz numaralanır; atlanan numaralar es geçilir.</div>
@@ -841,13 +843,19 @@ async function bekleyenUretimleriYukle() {
     : 'Şu an üretimden karşılanmayı bekleyen sipariş kalemi yok.';
 }
 
-/* Üretim blok no önerisi: orijinal no + -U + yıl kısaltması + sıra */
+/* Üretim blok no önerisi: ORİJİNAL BLOK NO (B3).
+
+   Burada üç ayrı kural dolaşıyordu: bu düğme `-U261`, sunucu
+   `-U1-01`, yorum satırı bambaşka bir şey diyordu. Üçü de aynı
+   alanı dolduruyordu ve hangisinin çalıştığı alanı elle doldurup
+   doldurmadığına bağlıydı.
+
+   Kesilen blok tamamen tükendiği için ayırt edici ek gerekmiyor;
+   plakaları birbirinden ayıran şey SLAB NUMARASI. */
 function uretimNoOner() {
   const k = KAYNAKLAR.find(x => x.id === SECILI_KAYNAK[0]);
   if (!k) { bildir('Önce kaynak seç.', true); return; }
-  const orijinal = k.no || k.id;
-  const yy = String(new Date().getFullYear()).slice(-2);
-  document.getElementById('fUretimNo').value = `${orijinal}-U${yy}1`;
+  document.getElementById('fUretimNo').value = k.no || k.id;
 }
 
 async function kesimKaydet(rezerveOnay, uretilenRez) {
@@ -860,7 +868,9 @@ async function kesimKaydet(rezerveOnay, uretilenRez) {
       kesim_yon: document.getElementById('fYon').value,
       kaynak_ids: SECILI_KAYNAK,
       uretim_blok_no: document.getElementById('fUretimNo').value.trim(),
-      baslangic_slab: parseInt(document.getElementById('fSlabBas').value) || 1,
+      /* B3: boş GÖNDERİLİR — sunucu o blokta kalınan yerden devam
+         eder. 0 da aynen gider; `|| 1` onu sessizce 1 yapıyordu. */
+      baslangic_slab: document.getElementById('fSlabBas').value.trim(),
       atlanan_slablar: document.getElementById('fAtlanan').value.trim(),
       hedefler: HEDEFLER.map(h => ({
         hedef_tip: h.hedef_tip, cins: h.cins, ozellik: h.ozellik,
