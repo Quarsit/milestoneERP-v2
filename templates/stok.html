@@ -27,6 +27,11 @@
 {% endblock %}
 
 {% block head %}
+<!-- B1: Excel eşleştirmenin ortak parçası — sayı ayrıştırma,
+     başlık tahmini, birleştirilmiş hücre doldurması. Stok ve
+     Kesim ekranlarının İKİSİ de kullanıyor; kopyalanınca bu
+     projede hep ayrıştılar. -->
+<script src="{{ url_for('static', filename='js/excel_ortak.js') }}"></script>
 <style>
   .arac-cubugu{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
   .parcali{display:flex;background:var(--notr-bg);border-radius:var(--r-kucuk);padding:3px}
@@ -306,8 +311,8 @@
     <div class="modal-gov">
       <div class="form-satir f3">
         <div class="form-alan"><label>Cins</label><input id="duzCins"></div>
-        <div class="form-alan"><label>Yüzey / Özellik</label><input id="duzOzellik"></div>
-        <div class="form-alan"><label>Menşe</label><input id="duzMense"></div>
+        <div class="form-alan" id="duzOzellikAlan"><label>Yüzey / Özellik</label><input id="duzOzellik"></div>
+        <div class="form-alan"><label>Menşe</label><select id="duzMense"></select></div>
       </div>
       <div class="form-satir f3">
         <div class="form-alan"><label>Üretici</label>
@@ -423,6 +428,27 @@
               stokta kesilmemiş gibi kalır.
             </div>
           </div>
+        </div>
+
+        <!-- ── UR2 · ORTAK CİNS VE YÜZEY ──
+             Dışarıdan gelen listelerde bu iki sütun ya yok ya da
+             tedarikçinin kendi adlandırmasıyla geliyor. Eşleştirme
+             adımında zorunluydu; artık burada tek seferde
+             verilebiliyor. Excel'de sütun VARSA o satırın değeri
+             kazanır — ortak değer yalnızca boşluğu doldurur. -->
+        <div class="form-satir f2" style="margin-bottom:4px">
+          <!-- B2: LİSTEDEN. Bu değer tek satıra değil, AKTARILAN
+               BÜTÜN SATIRLARA yazılıyor — serbest metinken buradaki
+               bir yazım hatası yüzlerce kaydı birden bozardı ve
+               "CEPPO DI GRE" ile "Ceppo di Gre" stok listesinde iki
+               ayrı ürün gibi dururdu. Son seçenek yeni tanım
+               eklemeye yarıyor. -->
+          <div class="form-alan"><label>Cins (ortak)
+            <span style="font-weight:400;color:var(--soluk)">· Excel'de yoksa</span></label>
+            <select id="tCins" onchange="topluListeDegisti('tCins','cins')"></select></div>
+          <div class="form-alan" id="tOzellikAlan"><label>Yüzey / Özellik (ortak)
+            <span style="font-weight:400;color:var(--soluk)">· Excel'de yoksa</span></label>
+            <select id="tOzellik" onchange="topluListeDegisti('tOzellik','ozellik')"></select></div>
         </div>
 
         <div class="form-satir f3">
@@ -587,8 +613,19 @@
       </div>
       <div class="form-satir f4">
         <div class="form-alan"><label id="sNoLabel">Blok No</label><input id="sBlokNo" placeholder="B-100"></div>
-        <div class="form-alan"><label>Yüzey / Özellik</label><input id="sOzellik" placeholder="Ham / Cilalı"></div>
-        <div class="form-alan"><label>Menşe</label><input id="sMense" value="TURKIYE" title="Malın menşei — bundle/crate etiketinde ve ticari faturada basılır"></div>
+        <!-- UR2: BLOK'ta yüzey/özellik gizlenir — ham blokta yüzey
+             işlemi yok, alanı göstermek doldurulacak bir şey varmış
+             gibi gösteriyordu. -->
+        <div class="form-alan" id="ozellikAlan"><label>Yüzey / Özellik</label><input id="sOzellik" placeholder="Ham / Cilalı"></div>
+        <!-- UR2: menşe artık LİSTEDEN. Elle yazılınca aynı ülke üç
+             ayrı yazımla kaydediliyordu (TURKIYE / TÜRKİYE / Turkiye)
+             ve bu değer ticari faturaya, packing list'e ve etikete
+             BASILIYOR. Liste Ayarlar → Listeler → Ülkeler'den gelir. -->
+        <div class="form-alan"><label>Menşe</label>
+          <select id="sMense" title="Malın menşei — bundle/crate etiketinde ve ticari faturada basılır"></select>
+          <div style="font-size:.72rem;color:var(--soluk);margin-top:3px">
+            Listede yoksa Ayarlar → Listeler → Ülkeler'den ekle</div>
+        </div>
         <div class="form-alan"><label>Giriş Tarihi</label><input id="sTarih" type="date"></div>
       </div>
 
@@ -1510,6 +1547,29 @@ document.getElementById('ara').addEventListener('input', e => {
 
 let URETICILER = [];
 
+/* ── UR2 · MENŞE LİSTESİ ──
+   Değer ticari faturaya, packing list'e ve etikete BASILIYOR; elle
+   yazılınca aynı ülke üç ayrı yazımla kaydediliyordu.
+
+   Listede OLMAYAN bir değer de korunur: mevcut kaydı düzenlerken
+   menşesi listede yoksa seçenek olarak eklenir. Yoksa kaydet'e
+   basmak, dokunmadığın bir alanı sessizce değiştirirdi.
+
+   TURKIYE her zaman var: ülke listesi boşsa (yeni kurulum) alan
+   bomboş kalıp menşe seçilemez hale gelirdi. */
+async function menseDoldur(id, deger) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const simdi = String(deger || 'TURKIYE').trim().toUpperCase() || 'TURKIYE';
+  let liste = [];
+  try { liste = await lookupGetir('ulke'); } catch (e) { liste = []; }
+  const kume = [...new Set(['TURKIYE',
+    ...liste.map(x => String(x).trim().toUpperCase()).filter(Boolean), simdi])];
+  el.innerHTML = kume.map(u =>
+    `<option value="${kacar(u)}">${kacar(u)}</option>`).join('');
+  el.value = simdi;
+}
+
 async function yeniAc() {
   document.getElementById('sNakliyeDahil').checked = false;
   // Cins/yüzey alanları Ayarlar > Listeler'den beslenir, girilen değer BÜYÜK HARF olur
@@ -1521,7 +1581,7 @@ async function yeniAc() {
   ['sCins','sBlokNo','sOzellik','sBoy','sYuk','sEn','sTonaj','sFiyat','sFaturaNo','sOlcu','sAciklama'].forEach(i => {
     const el = document.getElementById(i); if (el) el.value = '';
   });
-  document.getElementById('sMense').value = 'TURKIYE';   // MS1 varsayılan
+  menseDoldur('sMense', 'TURKIYE');   // MS1 varsayılan · UR2 liste
   document.getElementById('sAdet').value = 1;
   document.getElementById('sKasaAdedi').value = 1;
   document.getElementById('sKasaIci').value = 1;
@@ -1647,6 +1707,15 @@ function tipDegisti() {
   /* OG1: ölçü grupları yalnızca PLAKA'da anlamlı */
   const og = document.getElementById('olcuGrupAlan');
   if (og) { og.style.display = plaka ? '' : 'none'; if (!plaka) olcuGruplariSifirla(); }
+  /* UR2: ham blokta yüzey işlemi YOK. Alanı göstermek
+     doldurulacak bir şey varmış gibi gösteriyordu; gizlenirken
+     değeri de siliniyor, yoksa tipi BLOK'a çevirince önceki
+     seçim gönderilmeye devam ederdi. */
+  const oz = document.getElementById('ozellikAlan');
+  if (oz) {
+    oz.style.display = blok ? 'none' : '';
+    if (blok) document.getElementById('sOzellik').value = '';
+  }
   document.getElementById('kasaAdediAlan').style.display = ebatli ? '' : 'none';
   document.getElementById('kasaIciAlan').style.display = ebatli ? '' : 'none';
   document.getElementById('basNoAlan').style.display = plaka ? '' : 'none';
@@ -1925,9 +1994,16 @@ let TP_SATIRLAR = [];   // eşleştirilmiş, aktarılmaya hazır satırlar
 
 /* Sistem alanları — ürün tipine göre değişir.
    zorunlu: eşleşmezse aktarım başlamaz. */
+/* UR2: `cins` ve `ozellik` artık ZORUNLU EŞLEŞME DEĞİL.
+   Dışarıdan gelen çeki listelerinde bu iki sütun ya hiç yok ya da
+   tedarikçinin kendi adlandırmasıyla geliyor ("CEPPO DI GRE" yerine
+   "Ceppo Grey Vein" gibi). Zorunlu tutmak, listeyi önce Excel'de
+   düzenlemeye zorluyordu. İkisi de 4. adımdaki ORTAK alandan
+   verilebiliyor; satırın kendi değeri varsa o kazanır (fiyatta
+   X2 ile aynı kural). */
 const TP_ALANLAR = {
   PLAKA: [
-    ['cins',      'Cins',            true],
+    ['cins',      'Cins',            false],
     ['blok_no',   'Blok No',         false],
     ['boy',       'Boy (cm)',        true],
     ['yukseklik', 'Yükseklik (cm)',  true],
@@ -1938,7 +2014,7 @@ const TP_ALANLAR = {
     ['aciklama',  'Açıklama',        false],
   ],
   BLOK: [
-    ['cins',      'Cins',           true],
+    ['cins',      'Cins',           false],
     ['blok_no',   'Blok No',        true],
     ['boy',       'Boy (cm)',       true],
     ['yukseklik', 'Yükseklik (cm)', true],
@@ -1948,7 +2024,7 @@ const TP_ALANLAR = {
     ['aciklama',  'Açıklama',       false],
   ],
   EBATLI: [
-    ['cins',          'Cins',            true],
+    ['cins',          'Cins',            false],
     ['blok_no',       'Kasa / Referans',  false],
     ['boy',           'Boy (cm)',        true],
     ['yukseklik',     'Yükseklik (cm)',  true],
@@ -1962,21 +2038,10 @@ const TP_ALANLAR = {
 };
 
 /* Otomatik eşleştirme için anahtar kelimeler (küçük harf, Türkçe duyarsız) */
-const TP_IPUCU = {
-  cins: ['cins', 'urun', 'ürün', 'malzeme', 'tas', 'taş', 'material', 'type'],
-  blok_no: ['blok', 'block', 'kasa', 'ref', 'parti'],
-  boy: ['boy', 'uzunluk', 'length', 'en1'],
-  yukseklik: ['yukseklik', 'yükseklik', 'yuk', 'genislik', 'genişlik', 'width', 'height'],
-  en: ['en', 'derinlik', 'depth'],
-  kalinlik: ['kalinlik', 'kalınlık', 'kal', 'thickness'],
-  ozellik: ['yuzey', 'yüzey', 'ozellik', 'özellik', 'finish', 'surface'],
-  fiyat: ['fiyat', 'birim', 'price', 'tutar', 'ucret', 'ücret'],
-  adet: ['adet', 'miktar', 'qty', 'quantity'],
-  tonaj: ['ton', 'tonaj', 'agirlik', 'ağırlık', 'weight'],
-  kasa_adedi: ['kasa adedi', 'kasa sayi', 'paket'],
-  kasa_ici_adet: ['kasa ici', 'kasa içi', 'ici adet', 'içi adet'],
-  aciklama: ['aciklama', 'açıklama', 'not', 'description', 'desc'],
-};
+/* B1: ipuçları ORTAK dosyada (static/js/excel_ortak.js).
+   Kesim ekranı da aynı listeyi kullanıyor; iki kopya,
+   yeni bir sütun adını yalnız birine eklemekle biterdi. */
+const TP_IPUCU = ExcelOrtak.IPUCU;
 
 function topluAc() {
   document.getElementById('topluModal').classList.add('acik');
@@ -1991,6 +2056,13 @@ function topluAc() {
   document.getElementById('tGirisTarih').value = bugun;
   document.getElementById('tAlisTarih').value = bugun;
   document.getElementById('tBaslangicNo').value = '';
+  /* UR2: ortak cins/yüzey her açılışta temizlenir — önceki
+     aktarımın cinsi yeni listeye sessizce sızmasın. Alanlar
+     B2: ikisi de LİSTEDEN seçiliyor (serbest metin değil). */
+  topluListeDoldur('tCins', 'cins', '');
+  topluListeDoldur('tOzellik', 'ozellik', '');
+  document.getElementById('tKaynak').value = 'satinalma';
+  topluKaynakDegisti();
   topluTipDegisti();
   topluCarileriYukle();
   topluKdvDurum();
@@ -2071,17 +2143,9 @@ async function topluDosyaSecildi(inp) {
   const f = inp.files && inp.files[0];
   if (!f) return;
   document.getElementById('tDosyaAd').textContent = f.name + ' — okunuyor…';
-  const fd = new FormData();
-  fd.append('dosya', f);
   try {
-    /* S1: api() sarmalayıcısı kullanılmıyor (multipart yükleme),
-       CSRF başlığı ELLE eklenmeli. */
-    const r = await fetch('/api/v2/excel/analiz', { method: 'POST', body: fd,
-      headers: { 'X-CSRF-Token': window.CSRF_TOKEN } });
-    const d = await r.json();
-    if (!r.ok || !d.ok) { bildir(d.mesaj || 'Dosya okunamadı.', true); 
-      document.getElementById('tDosyaAd').textContent = f.name + ' — okunamadı'; return; }
-
+    /* B1: dosya çözme ortak dosyada (Kesim de aynısını kullanıyor). */
+    const d = await ExcelOrtak.dosyaAnaliz(f);
     TP_SAYFALAR = d.sayfalar || [];
     const toplam = TP_SAYFALAR.reduce((a, s) => a + s.satir_sayisi, 0);
     document.getElementById('tDosyaAd').textContent =
@@ -2116,6 +2180,12 @@ function topluTipDegisti() {
     });
     if (_fb.selectedOptions[0] && _fb.selectedOptions[0].hidden) _fb.value = blok ? 'ton' : 'm2';
   }
+  /* UR2: ham blokta yüzey işlemi yok — ortak alan da gizlenir. */
+  const _oz = document.getElementById('tOzellikAlan');
+  if (_oz) {
+    _oz.style.display = (_t === 'BLOK') ? 'none' : '';
+    if (_t === 'BLOK') document.getElementById('tOzellik').value = '';
+  }
   /* Başlangıç plaka no yalnızca PLAKA için anlamlı */
   const alan = document.getElementById('tBaslangicAlan');
   if (alan) alan.style.visibility =
@@ -2125,28 +2195,7 @@ function topluTipDegisti() {
 
 /* Excel başlığı ile sistem alanını isim benzerliğinden tahmin et */
 function topluTahmin(alanKod, basliklar) {
-  const ipuclari = TP_IPUCU[alanKod] || [];
-  const sadelestir = t => String(t || '').toLocaleLowerCase('tr')
-    .replace(/[ıİ]/g, 'i').replace(/[şŞ]/g, 's').replace(/[ğĞ]/g, 'g')
-    .replace(/[üÜ]/g, 'u').replace(/[öÖ]/g, 'o').replace(/[çÇ]/g, 'c').trim();
-  /* Üç aşamalı: önce tam eşleşme, sonra baştan eşleşme, en son içerme.
-     Tek aşamada yapılsaydı "Genişlik" başlığı içinde "en" geçtiği için
-     En alanına yanlış eşleşebilirdi. */
-  const sadeBas = basliklar.map(sadelestir);
-  const sadeIp = ipuclari.map(sadelestir);
-  for (const kural of ['tam', 'bas', 'icerik']) {
-    for (let i = 0; i < sadeBas.length; i++) {
-      const b = sadeBas[i];
-      if (!b) continue;
-      for (const s of sadeIp) {
-        if (!s) continue;
-        if (kural === 'tam' && b === s) return i;
-        if (kural === 'bas' && b.startsWith(s)) return i;
-        if (kural === 'icerik' && b.includes(s)) return i;
-      }
-    }
-  }
-  return -1;
+  return ExcelOrtak.tahmin(alanKod, basliklar, TP_IPUCU);
 }
 
 function topluEslestirmeCiz() {
@@ -2174,6 +2223,56 @@ function topluEslestirmeCiz() {
 
 /* Eşleştirmeyi uygula → TP_SATIRLAR üret, önizleme çiz */
 /* X2 — Ortak alış fiyatı. Excel'de o satırın fiyatı yoksa kullanılır. */
+/* ── B2 · ORTAK CİNS/YÜZEY LİSTEDEN ──
+   Kesim ekranındaki ikizinin aynısı (kesimListeDoldur). İkisi de
+   base.html'deki `_listeYeniEkle` akışını kullanıyor; yeni tanım
+   ekleme mantığı KOPYALANMADI — o işlev sonucu bir INPUT'a yazdığı
+   için, select'e almak üzere geçici gizli bir input veriliyor. */
+const TP_YENI = '__yeni__';
+
+async function topluListeDoldur(id, kategori, deger) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let liste = [];
+  try { liste = await lookupGetir(kategori); } catch (e) { liste = []; }
+  const simdi = String(deger === undefined ? el.value : deger || '')
+                  .trim().toUpperCase();
+  const kume = [...new Set(liste.map(x => String(x).trim().toUpperCase())
+                                .filter(Boolean)
+                                .concat(simdi ? [simdi] : []))];
+  const etiket = kategori === 'cins' ? 'cins' : 'özellik';
+  el.innerHTML = '<option value="">— seç —</option>'
+    + kume.map(v => `<option value="${kacar(v)}">${kacar(v)}</option>`).join('')
+    + `<option value="${TP_YENI}">➕ Yeni ${etiket} ekle…</option>`;
+  el.value = simdi;
+}
+
+async function topluListeDegisti(id, kategori) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.value !== TP_YENI) { topluOnizle(); return; }
+  el.value = '';
+  const gizli = document.createElement('input');
+  gizli.type = 'hidden';
+  document.body.appendChild(gizli);
+  try {
+    await _listeYeniEkle(gizli, kategori, '');
+    await topluListeDoldur(id, kategori, gizli.value || '');
+  } finally {
+    gizli.remove();
+  }
+  topluOnizle();
+}
+
+function _ortakMetin(id) {
+  const el = document.getElementById(id);
+  const v = el ? (el.value || '').trim() : '';
+  /* B2: "➕ Yeni … ekle…" bir DEĞER değil, bir KOMUT. Ekleme
+     penceresi açıkken ya da iptal edilince bu işaret kayda
+     geçmemeli. */
+  return v === TP_YENI ? '' : v;
+}
+
 function _ortakFiyat() {
   const el = document.getElementById('tFiyat');
   const v = el ? parseFloat(el.value) : 0;
@@ -2192,50 +2291,25 @@ function topluOnizle() {
   });
 
   const eksikZorunlu = alanlar.filter(([k, , z]) => z && !(k in harita)).map(([, e]) => e);
-  const sayi = v => {
-    if (v === '' || v === null || v === undefined) return 0;
-    if (typeof v === 'number') return isFinite(v) ? v : 0;
-    /* BS3: hem "1.234,56" (TR) hem "1,234.56" (EN) doğru okunur.
-       Eskiden yalnızca İLK virgül noktaya çevriliyordu:
-       "1,234.56" → "1.234.56" → 1.234 (bin kat küçük). İkisi
-       birden varsa SONUNCUSU ondalık ayırıcıdır. */
-    let t = String(v).replace(/\s/g, '').replace(/[^\d.,\-]/g, '');
-    const sv = t.lastIndexOf(','), sn = t.lastIndexOf('.');
-    if (sv >= 0 && sn >= 0) {
-      t = sv > sn ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
-    } else if (sv >= 0) {
-      t = t.replace(',', '.');
-    }
-    const n = parseFloat(t);
-    return isFinite(n) ? n : 0;
-  };
+  /* B1: sayı ayrıştırma (BS3) ve birleştirilmiş hücre doldurması
+     (X1) ORTAK dosyada — Kesim ekranı da aynılarını kullanıyor.
+     Burada kalan iş, çıkan kayıtları bu ekranın kurallarına göre
+     süzmek. */
+  const SAYISAL = ['boy', 'yukseklik', 'en', 'kalinlik', 'fiyat', 'adet',
+                   'tonaj', 'kasa_adedi', 'kasa_ici_adet'];
+  const DOLDURULACAK = ['cins', 'blok_no', 'ozellik', 'kalinlik', 'kasa_no'];
+
+  const cikti = ExcelOrtak.satirlariCikar(
+    TP_AKTIF.satirlar || [], alanlar, harita,
+    { sayisal: SAYISAL, doldurulacak: DOLDURULACAK });
+  const dolduruldu = cikti.dolduruldu;
 
   TP_SATIRLAR = [];
   const hatalar = [];
-  /* X1 — BİRLEŞTİRİLMİŞ HÜCRE (aşağı doğru doldurma)
-     Çeki listelerinde blok no ve malzeme adı birleştirilmiş hücrede
-     yazılır: tek blok, birçok satır. Excel bu değeri YALNIZCA ilk
-     satıra koyar, kalanlar boş gelir ve "cins boş" diye atlanırdı.
-     6 satırlık listeden 1 kayıt çıkıyordu.
 
-     Yalnızca birleştirilmiş hücrede kullanılan alanlar doldurulur.
-     ÖLÇÜ ve ADET doldurulmaz — onlar her satırda farklıdır, boş
-     olmaları gerçek bir hatadır. */
-  const DOLDURULACAK = ['cins', 'blok_no', 'ozellik', 'kalinlik', 'kasa_no'];
-  const oncekiDeger = {};
-  let dolduruldu = 0;
-
-  (TP_AKTIF.satirlar || []).forEach((satir, idx) => {
-    const al = kod => (kod in harita) ? satir[harita[kod]] : '';
-    const kayit = { _satir: idx + 2 };   // +2: başlık satırı + 1 tabanlı
-    alanlar.forEach(([kod]) => {
-      if (['boy', 'yukseklik', 'en', 'kalinlik', 'fiyat', 'adet', 'tonaj',
-           'kasa_adedi', 'kasa_ici_adet'].includes(kod)) kayit[kod] = sayi(al(kod));
-      else kayit[kod] = String(al(kod) ?? '').trim();
-    });
-
+  cikti.kayitlar.forEach(kayit => {
     /* ADET EŞLEŞTİRİLMEMİŞSE 1 SAYILIR.
-       Sütun haritada yoksa al('adet') boş döner, sayi('') = 0 ve
+       Sütun haritada yoksa değer boş döner, sayı 0 olur ve
        önizlemede "0 adet" görünüyordu. Kaydetme tarafı zaten
        `Math.max(1, ...)` ile 1'e düzeltiyordu — yani kayıt doğru,
        ÖNİZLEME yanlıştı. İki yerin farklı sayı göstermesi, en kötü
@@ -2243,20 +2317,17 @@ function topluOnizle() {
        Her plaka, aksi belirtilmedikçe 1 adettir. */
     if (!('adet' in harita) || !(kayit.adet > 0)) kayit.adet = 1;
 
-    /* Boşsa üstteki satırın değerini al; doluysa hatırla. */
-    let buSatirDolduruldu = false;
-    DOLDURULACAK.forEach(kod => {
-      const bos = (kod === 'kalinlik') ? !(kayit[kod] > 0) : !kayit[kod];
-      if (bos && oncekiDeger[kod] !== undefined && oncekiDeger[kod] !== '') {
-        kayit[kod] = oncekiDeger[kod];
-        buSatirDolduruldu = true;
-      } else if (!bos) {
-        oncekiDeger[kod] = kayit[kod];
-      }
-    });
-    if (buSatirDolduruldu) dolduruldu++;
+    /* UR2: satırın kendi değeri yoksa ORTAK alandan doldur.
+       Sıra önemli: eşleşen sütun → birleştirilmiş hücre doldurması
+       → ortak alan. Ortak değer en sonda, çünkü en zayıf bilgi o. */
+    if (!kayit.cins) kayit.cins = _ortakMetin('tCins');
+    if (!kayit.ozellik) kayit.ozellik = _ortakMetin('tOzellik');
 
-    if (!kayit.cins) { hatalar.push(`Satır ${kayit._satir}: cins boş`); return; }
+    if (!kayit.cins) {
+      hatalar.push(`Satır ${kayit._satir}: cins yok — Excel'de sütun `
+                 + `eşleşmedi ve ortak cins girilmedi`);
+      return;
+    }
     if (!(kayit.boy > 0) || !(kayit.yukseklik > 0)) {
       hatalar.push(`Satır ${kayit._satir}: boy/yükseklik geçersiz`); return;
     }
@@ -2696,7 +2767,7 @@ function duzenleAc(id) {
   document.getElementById('duzAlt').textContent = `${s.id} · ${s.tip}`;
   document.getElementById('duzCins').value = s.cins || '';
   document.getElementById('duzOzellik').value = s.ozellik || '';
-  document.getElementById('duzMense').value = s.mense || 'TURKIYE';
+  menseDoldur('duzMense', s.mense);   // UR2: liste + mevcut değer
   document.getElementById('duzUretici').value = s.uretici || '';
   document.getElementById('duzBlokNo').value = s.blok_no || s.kasa_no || '';
   document.getElementById('duzKonum').value = s.konum || '';
@@ -2704,6 +2775,8 @@ function duzenleAc(id) {
   document.getElementById('duzFiyat').value = s.alis_fiyati || '';
   document.getElementById('duzAciklama').value = s.aciklama || '';
   document.getElementById('duzNoLabel').textContent = s.tip === 'EBATLI' ? 'Kasa No' : 'Blok No';
+  const dOz = document.getElementById('duzOzellikAlan');
+  if (dOz) dOz.style.display = (s.tip === 'BLOK') ? 'none' : '';
   listeyeBagla('duzCins', 'cins');
   listeyeBagla('duzOzellik', 'ozellik');
   ureticiOnerileriDoldur();

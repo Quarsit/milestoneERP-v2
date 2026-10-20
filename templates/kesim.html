@@ -22,6 +22,11 @@
 {% endblock %}
 
 {% block head %}
+<!-- B1: Excel eşleştirmenin ortak parçası — sayı ayrıştırma,
+     başlık tahmini, birleştirilmiş hücre doldurması. Stok ve
+     Kesim ekranlarının İKİSİ de kullanıyor; kopyalanınca bu
+     projede hep ayrıştılar. -->
+<script src="{{ url_for('static', filename='js/excel_ortak.js') }}"></script>
 <style>
   .suz{margin-bottom:14px;display:flex}
   .suz input{margin-left:auto;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 11px;font-family:var(--govde);font-size:.85rem;min-width:220px}
@@ -39,6 +44,14 @@
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
   .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
   .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  /* B1: Excel eşleştirme kutuları — stok ekranındaki `.tp-*` ile
+     aynı ölçüler, iki ekran yan yana aynı görünsün. */
+  .tp-eslestir{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 14px}
+  .tp-cift{display:flex;align-items:center;gap:8px}
+  .tp-cift label{flex:0 0 42%;font-size:.8rem;font-weight:500}
+  .tp-cift select{flex:1;min-width:0;border:1px solid var(--cizgi-koyu);
+    border-radius:var(--r-kucuk);padding:7px 9px;font-family:var(--govde);
+    font-size:.85rem;background:var(--yuzey)}
   .kutu{border:1px dashed var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:14px;margin-bottom:14px}
   .kutu h5{font-size:.75rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:10px}
   .kaynak-liste{max-height:150px;overflow-y:auto;border:1px solid var(--cizgi);border-radius:var(--r-kucuk);padding:6px}
@@ -151,7 +164,18 @@
           <div class="form-alan" id="kasaAlan" style="display:none"><label>Kasa İçi Adet</label><input id="hKasaAdet" type="number" value="1"></div>
           <div class="form-alan"><label>Toplam m²</label><input id="hM2" readonly style="font-family:var(--mono);font-weight:600;background:var(--notr-bg)"></div>
         </div>
-        <button class="ekle-btn" onclick="hedefEkle()">+ Ürünü listeye ekle</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="ekle-btn" style="margin:0" onclick="hedefEkle()">+ Ürünü listeye ekle</button>
+          <!-- ── B1 · EXCEL'DEN TOPLU HEDEF ──
+               Kesim çıktısı ölçü ölçü değişiyor: 9 ayrı ölçü grubu
+               tek tek yazılıyordu. Aynı liste zaten Excel'de geliyor.
+
+               Buradan girilen satırlar blok stoktan DÜŞER, m²
+               maliyeti bloğun maliyetinden TÜRER ve kesim izi
+               yazılır — stok içe aktarmanın yapamadığı üç şey. -->
+          <button class="ekle-btn" style="margin:0" onclick="kesimExcelAc()">
+            Excel'den yükle</button>
+        </div>
       </div>
 
       <div id="hedefListe" style="margin-bottom:14px"></div>
@@ -165,6 +189,85 @@
     <div class="modal-alt">
       <button class="iptal-btn" onclick="modalKapat()">Vazgeç</button>
       <button class="btn-yeni" id="fKaydet" onclick="kesimKaydet()">Kesimi Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ B1 · EXCEL'DEN HEDEF SATIRI ══
+     Kesim penceresinin ÜSTÜNDE açılıyor (z-index daha yüksek):
+     kapanınca altındaki kesim formu seçimleriyle duruyor. Ayrı bir
+     sayfaya gitmek, seçili bloğu ve girilen üretim numarasını
+     kaybettirirdi. -->
+<div class="modal-ortu" id="excelModal" style="z-index:60"
+     onclick="if(event.target===this)kesimExcelKapat()">
+  <div class="modal" style="width:760px" role="dialog"
+       aria-label="Excel'den hedef satırı">
+    <div class="modal-bas">
+      <h3>Excel'den üretilecek ürünler</h3>
+      <p>Dosyayı seç · sayfayı seç · sütunları eşleştir · listeye ekle</p>
+    </div>
+    <div class="modal-gov">
+      <div class="kutu">
+        <h5>1 · Dosya</h5>
+        <input type="file" id="kDosya" accept=".xlsx,.xlsm" style="display:none"
+               onchange="kesimExcelDosya(this)">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="ekle-btn" style="margin:0"
+                  onclick="document.getElementById('kDosya').click()">Dosya Seç…</button>
+          <span id="kDosyaAd" style="font-size:.84rem;color:var(--soluk)">Henüz dosya seçilmedi</span>
+        </div>
+      </div>
+
+      <div class="kutu" id="kAdimSayfa" style="display:none">
+        <h5>2 · Sayfa</h5>
+        <div class="form-alan">
+          <select id="kSayfa" onchange="kesimExcelSayfa()"></select>
+        </div>
+      </div>
+
+      <div class="kutu" id="kAdimEslestir" style="display:none">
+        <h5>3 · Sütun eşleştirme</h5>
+        <p style="font-size:.78rem;color:var(--soluk);margin:-4px 0 10px">
+          Yıldızlı alanlar zorunlu. Cins ve yüzey Excel'de yoksa
+          aşağıdaki ortak alandan verilebilir.</p>
+        <div id="kEslestirme" class="tp-eslestir"></div>
+      </div>
+
+      <div class="kutu" id="kAdimOrtak" style="display:none">
+        <h5>4 · Tüm satırlar için ortak</h5>
+        <div class="form-satir f3">
+          <!-- ── B2 · LİSTEDEN SEÇİLİR ──
+               Bu iki değer tek tek satıra değil, AKTARILAN BÜTÜN
+               SATIRLARA yazılıyor. Serbest metinken buradaki bir
+               yazım hatası tek kaydı değil yüzlerce kaydı birden
+               bozardı; üstelik "CEPPO DI GRE" ile "Ceppo di Gre"
+               stok listesinde iki ayrı ürün gibi durur.
+
+               Listede olmayan gerçekten yeni bir tanım için
+               seçeneğin sonunda "➕ Yeni … ekle…" var: tanım
+               ortak listeye kaydediliyor, bir dahakine normal
+               seçenek olarak geliyor. -->
+          <div class="form-alan"><label>Cins (ortak)</label>
+            <select id="kCins" onchange="kesimListeDegisti('kCins','cins')"></select></div>
+          <div class="form-alan"><label>Yüzey / Özellik (ortak)</label>
+            <select id="kOzellik" onchange="kesimListeDegisti('kOzellik','ozellik')"></select></div>
+          <div class="form-alan"><label>Kalınlık (cm) · ortak</label>
+            <input id="kKalinlik" type="number" step="0.1" placeholder="Excel'de yoksa"
+                   oninput="kesimExcelOnizle()"></div>
+        </div>
+      </div>
+
+      <div class="kutu" id="kAdimOnizleme" style="display:none">
+        <h5>5 · Önizleme</h5>
+        <div id="kOzet" style="font-size:.85rem;margin-bottom:10px"></div>
+        <div id="kHatalar"></div>
+        <div id="kOnizleme"></div>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="kesimExcelKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="kEkle" disabled
+              onclick="kesimExcelUygula()">Listeye Ekle</button>
     </div>
   </div>
 </div>
@@ -432,6 +535,225 @@ function hedefEkle() {
 }
 function hedefSil(i) { HEDEFLER.splice(i, 1); hedefListeCiz(); ozetHesapla(); }
 
+/* ══════════════════════════════════════════════════════════════
+   B1 · EXCEL'DEN ÜRETİLECEK ÜRÜN SATIRLARI
+   ══════════════════════════════════════════════════════════════
+
+   Kesim çıktısı ölçü ölçü değişiyor; 9 ayrı ölçü grubunu tek tek
+   yazmak yerine zaten Excel'de gelen listeyi okuyoruz.
+
+   NEDEN STOK İÇE AKTARMA DEĞİL DE BURASI: sistemde KAYITLI bir
+   bloktan kesilen plakalar stok içe aktarmayla girilirse blok
+   stokta kesilmemiş gibi kalır (aynı mal iki kez sayılır),
+   plakaların maliyeti bloktan türemez ve kesim izi oluşmaz.
+   Buradan girilen satırlar normal kesim akışına katılıyor —
+   kaydet'e basınca blok düşüyor, maliyet bloktan dağılıyor,
+   kesim_detay yazılıyor.
+
+   Sayı ayrıştırma, başlık tahmini ve birleştirilmiş hücre
+   doldurması ORTAK dosyadan (static/js/excel_ortak.js); stok
+   ekranı da aynılarını kullanıyor. */
+const KX_ALANLAR = [
+  ['cins',          'Cins',            false],
+  ['ozellik',       'Yüzey / Özellik', false],
+  ['boy',           'Boy (cm)',        true],
+  ['yukseklik',     'Yükseklik (cm)',  true],
+  ['kalinlik',      'Kalınlık (cm)',   false],
+  ['adet',          'Adet',            false],
+  ['kasa_ici_adet', 'Kasa İçi Adet',   false],
+];
+const KX_SAYISAL = ['boy', 'yukseklik', 'kalinlik', 'adet', 'kasa_ici_adet'];
+/* Birleştirilmiş hücrede gelenler. ÖLÇÜ ve ADET yok: onlar her
+   satırda farklıdır, boş olmaları gerçek bir hatadır. */
+const KX_DOLDURULACAK = ['cins', 'ozellik', 'kalinlik'];
+
+let KX_SAYFALAR = [], KX_AKTIF = null, KX_SATIRLAR = [];
+
+/* ── B2 · ORTAK CİNS/YÜZEY LİSTEDEN ──
+   Değer bütün aktarılan satırlara yazıldığı için serbest metin
+   bırakılmadı. Listede olmayan yeni bir tanım gerekiyorsa son
+   seçenek onu ekliyor.
+
+   YENİ TANIM EKLEME AKIŞI KOPYALANMADI: base.html'deki
+   `_listeYeniEkle` pencereyi açıyor, ucu çağırıyor, ortak listeyi
+   ve öteki sekmeleri tazeliyor. Tek sorun, o işlevin sonucu bir
+   INPUT'a yazması — select'e değil. Ona geçici gizli bir input
+   veriyoruz ve sonucu oradan okuyoruz. */
+const KX_YENI = '__yeni__';
+
+async function kesimListeDoldur(id, kategori, deger) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let liste = [];
+  try { liste = await lookupGetir(kategori); } catch (e) { liste = []; }
+  const simdi = String(deger === undefined ? el.value : deger || '')
+                  .trim().toUpperCase();
+  const kume = [...new Set(liste.map(x => String(x).trim().toUpperCase())
+                                .filter(Boolean)
+                                .concat(simdi ? [simdi] : []))];
+  const etiket = kategori === 'cins' ? 'cins' : 'özellik';
+  el.innerHTML = '<option value="">— seç —</option>'
+    + kume.map(v => `<option value="${kacar(v)}">${kacar(v)}</option>`).join('')
+    + `<option value="${KX_YENI}">➕ Yeni ${etiket} ekle…</option>`;
+  el.value = simdi;
+}
+
+async function kesimListeDegisti(id, kategori) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.value !== KX_YENI) { kesimExcelOnizle(); return; }
+  el.value = '';
+  const gizli = document.createElement('input');
+  gizli.type = 'hidden';
+  document.body.appendChild(gizli);
+  try {
+    await _listeYeniEkle(gizli, kategori, '');
+    await kesimListeDoldur(id, kategori, gizli.value || '');
+  } finally {
+    gizli.remove();
+  }
+  kesimExcelOnizle();
+}
+
+function kesimExcelAc() {
+  KX_SAYFALAR = []; KX_AKTIF = null; KX_SATIRLAR = [];
+  document.getElementById('kDosya').value = '';
+  document.getElementById('kDosyaAd').textContent = 'Henüz dosya seçilmedi';
+  ['kAdimSayfa', 'kAdimEslestir', 'kAdimOrtak', 'kAdimOnizleme']
+    .forEach(i => document.getElementById(i).style.display = 'none');
+  document.getElementById('kEkle').disabled = true;
+  /* Formdaki cins/yüzey/kalınlık varsa ortak alana taşı: aynı şeyi
+     iki kez yazdırmanın anlamı yok. */
+  kesimListeDoldur('kCins', 'cins', document.getElementById('hCins').value.trim());
+  kesimListeDoldur('kOzellik', 'ozellik', document.getElementById('hOzellik').value.trim());
+  document.getElementById('kKalinlik').value = document.getElementById('hKal').value || '';
+  document.getElementById('excelModal').classList.add('acik');
+}
+
+function kesimExcelKapat() {
+  document.getElementById('excelModal').classList.remove('acik');
+}
+
+async function kesimExcelDosya(inp) {
+  const f = inp.files && inp.files[0];
+  if (!f) return;
+  document.getElementById('kDosyaAd').textContent = f.name + ' — okunuyor…';
+  try {
+    const d = await ExcelOrtak.dosyaAnaliz(f);
+    KX_SAYFALAR = d.sayfalar || [];
+    const toplam = KX_SAYFALAR.reduce((a, x) => a + x.satir_sayisi, 0);
+    document.getElementById('kDosyaAd').textContent =
+      `${d.dosya_adi} · ${KX_SAYFALAR.length} sayfa · ${toplam} satır`;
+    document.getElementById('kSayfa').innerHTML = KX_SAYFALAR
+      .map((x, i) => `<option value="${i}">${kacar(x.ad)} (${x.satir_sayisi} satır)</option>`).join('');
+    document.getElementById('kAdimSayfa').style.display = '';
+    kesimExcelSayfa();
+  } catch (e) {
+    bildir(e.message || 'Dosya yüklenemedi', true);
+    document.getElementById('kDosyaAd').textContent = f.name + ' — okunamadı';
+  }
+}
+
+function kesimExcelSayfa() {
+  const i = parseInt(document.getElementById('kSayfa').value, 10) || 0;
+  KX_AKTIF = KX_SAYFALAR[i] || null;
+  if (!KX_AKTIF) return;
+  ExcelOrtak.eslestirmeCiz(document.getElementById('kEslestirme'),
+    KX_ALANLAR, KX_AKTIF.basliklar || [], kesimExcelOnizle);
+  ['kAdimEslestir', 'kAdimOrtak', 'kAdimOnizleme']
+    .forEach(x => document.getElementById(x).style.display = '');
+  kesimExcelOnizle();
+}
+
+function kesimExcelOnizle() {
+  if (!KX_AKTIF) return;
+  const yon = document.getElementById('fYon').value;
+  const hedefTip = yon.endsWith('EBATLI') ? 'EBATLI' : 'PLAKA';
+  const harita = ExcelOrtak.haritaOku(document.getElementById('kEslestirme'));
+  const cikti = ExcelOrtak.satirlariCikar(KX_AKTIF.satirlar || [], KX_ALANLAR,
+    harita, { sayisal: KX_SAYISAL, doldurulacak: KX_DOLDURULACAK });
+
+  /* B2: "➕ Yeni … ekle…" bir DEĞER değil, bir KOMUT — kayda
+     geçmemeli. */
+  const _secim = id => {
+    const v = (document.getElementById(id).value || '').trim();
+    return v === KX_YENI ? '' : v;
+  };
+  const oCins = _secim('kCins');
+  const oOzellik = _secim('kOzellik');
+  const oKal = parseFloat(document.getElementById('kKalinlik').value) || 0;
+
+  KX_SATIRLAR = [];
+  const hatalar = [];
+  cikti.kayitlar.forEach(k => {
+    if (!k.cins) k.cins = oCins;
+    if (!k.ozellik) k.ozellik = oOzellik;
+    if (!(k.kalinlik > 0)) k.kalinlik = oKal || 2;
+    /* Adet sütunu eşleşmemişse her satır 1 parçadır — stok
+       aktarmasındaki kuralın aynısı. */
+    if (!('adet' in harita) || !(k.adet > 0)) k.adet = 1;
+
+    if (!k.cins) {
+      hatalar.push(`Satır ${k._satir}: cins yok — sütun eşleşmedi ve ortak cins girilmedi`);
+      return;
+    }
+    if (!(k.boy > 0) || !(k.yukseklik > 0)) {
+      hatalar.push(`Satır ${k._satir}: boy/yükseklik geçersiz`);
+      return;
+    }
+    k.hedef_tip = hedefTip;
+    k.kasa_ici_adet = hedefTip === 'EBATLI'
+      ? Math.max(1, Math.round(k.kasa_ici_adet || 1)) : undefined;
+    k._m2 = (k.boy * k.yukseklik * k.adet) / 10000;
+    KX_SATIRLAR.push(k);
+  });
+
+  const toplamM2 = KX_SATIRLAR.reduce((a, k) => a + k._m2, 0);
+  const toplamAdet = KX_SATIRLAR.reduce((a, k) => a + k.adet, 0);
+  document.getElementById('kOzet').innerHTML =
+    `<b>${KX_SATIRLAR.length}</b> satır · <b>${toplamAdet}</b> parça · `
+    + `<b>${toplamM2.toLocaleString('tr-TR', {maximumFractionDigits: 2})} m²</b>`
+    + (cikti.dolduruldu ? ` · ${cikti.dolduruldu} satırda birleştirilmiş hücre tamamlandı` : '');
+
+  document.getElementById('kHatalar').innerHTML = hatalar.length
+    ? `<div class="not" style="background:var(--kehribar-bg);color:var(--kehribar);
+         border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:10px">
+         ${hatalar.length} satır atlanacak:<br>${hatalar.slice(0, 6).map(kacar).join('<br>')}
+         ${hatalar.length > 6 ? `<br>…ve ${hatalar.length - 6} tane daha` : ''}</div>`
+    : '';
+
+  document.getElementById('kOnizleme').innerHTML = KX_SATIRLAR.length
+    ? KX_SATIRLAR.slice(0, 8).map(k => `
+        <div class="hedef-satir">
+          <span class="rozet rz-gri">${kacar(k.hedef_tip)}</span>
+          <div><div>${kacar(k.cins)}${k.ozellik ? ' · ' + kacar(k.ozellik) : ''}</div>
+            <div style="color:var(--soluk);font-size:.76rem">
+              ${k.adet} adet · ${k.boy}×${k.yukseklik}×${k.kalinlik} cm</div></div>
+          <span class="m">${k._m2.toLocaleString('tr-TR', {maximumFractionDigits: 2})} m²</span>
+        </div>`).join('')
+      + (KX_SATIRLAR.length > 8
+         ? `<div style="font-size:.78rem;color:var(--soluk);padding:6px 0">
+              …ve ${KX_SATIRLAR.length - 8} satır daha</div>` : '')
+    : '<div class="bos" style="padding:12px">Aktarılacak satır yok.</div>';
+
+  document.getElementById('kEkle').disabled = KX_SATIRLAR.length === 0;
+}
+
+function kesimExcelUygula() {
+  if (!KX_SATIRLAR.length) return;
+  /* Mevcut listeye EKLENİYOR, listenin yerine geçmiyor: elle
+     girilmiş satırlar durmaya devam etsin. */
+  KX_SATIRLAR.forEach(k => HEDEFLER.push({
+    hedef_tip: k.hedef_tip, cins: k.cins, ozellik: k.ozellik,
+    boy: k.boy, yukseklik: k.yukseklik, kalinlik: k.kalinlik,
+    adet: k.adet, kasa_ici_adet: k.kasa_ici_adet, _m2: k._m2
+  }));
+  const n = KX_SATIRLAR.length;
+  kesimExcelKapat();
+  hedefListeCiz(); ozetHesapla();
+  bildir(`${n} satır listeye eklendi`);
+}
+
 function hedefListeCiz() {
   const kok = document.getElementById('hedefListe');
   kok.innerHTML = HEDEFLER.length ? HEDEFLER.map((h, i) => `
@@ -443,7 +765,7 @@ function hedefListeCiz() {
           ${h.adet} adet · ${h.boy}×${h.yukseklik}×${h.kalinlik} cm${h.kasa_ici_adet ? ' · kasada ' + h.kasa_ici_adet : ''}
         </div>
       </div>
-      <span class="m">${h._m2.toLocaleString('tr-TR')} m²</span>
+      <span class="m">${h._m2.toLocaleString('tr-TR', {maximumFractionDigits: 2})} m²</span>
       <button class="sil-btn" onclick="hedefSil(${i})" title="Sil">✕</button>
     </div>`).join('') : '<div class="bos" style="padding:14px">Henüz ürün eklenmedi.</div>';
 }
@@ -456,7 +778,12 @@ function ozetHesapla() {
   const yon = document.getElementById('fYon').value;
 
   document.getElementById('ozGiren').textContent = girenM2 ? girenM2.toLocaleString('tr-TR') + ' m²' : (yon.startsWith('BLOK') ? 'blok (ton)' : '0 m²');
-  document.getElementById('ozCikan').textContent = cikanM2.toLocaleString('tr-TR') + ' m²';
+  /* B1: iki basamak. Excel'den gelen satırlarda m² uzun ondalık
+     çıkıyor ve önizleme (2 basamak) ile liste farklı sayı
+     gösteriyordu — aynı şeyin iki yerde farklı görünmesi bu
+     projede en kötü hata biçimi olarak geçiyor. */
+  document.getElementById('ozCikan').textContent =
+    cikanM2.toLocaleString('tr-TR', {maximumFractionDigits: 2}) + ' m²';
   // Fire yalnızca PLAKA→EBATLI'da anlamlı (blokta m² girişi yok)
   if (yon === 'PLAKA_EBATLI' && girenM2 > 0 && cikanM2 > 0) {
     const fire = girenM2 - cikanM2;

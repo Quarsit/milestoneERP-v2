@@ -3432,3 +3432,261 @@ def test_ur1_ekranda_kaynak_secimi_var():
     assert 'function kaynakDegisti' in h
     assert "kaynak: uretim ? 'uretim' : 'satinalma'" in h
     assert "kaynak: document.getElementById('sKaynak').value" in h
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  UR2 · ORTAK CİNS/YÜZEY · BLOKTA YÜZEY YOK · MENŞE LİSTEDEN
+# ══════════════════════════════════════════════════════════════════════
+
+def test_ur2_ice_aktarmada_cins_zorunlu_eslesme_degil():
+    """UR2: dışarıdan gelen çeki listesinde cins sütunu olmayabilir.
+
+    Zorunlu eşleşme, kullanıcıyı listeyi önce Excel'de düzenlemeye
+    zorluyordu. Artık 4. adımdaki ortak alandan verilebiliyor."""
+    import io as _io, re as _re
+    h = _io.open('templates/stok.html', encoding='utf-8').read()
+    # Üç ürün tipinde de cins ZORUNLU olmamalı
+    for kalip in (r"\['cins',\s+'Cins',\s+true\]",
+                  r"\['cins',\s+'Cins',\s+true\]"):
+        assert not _re.search(kalip, h), 'cins hâlâ zorunlu eşleşme'
+    assert 'id="tCins"' in h
+    assert 'id="tOzellik"' in h
+    assert "kayit.cins = _ortakMetin('tCins')" in h
+    assert "kayit.ozellik = _ortakMetin('tOzellik')" in h
+
+
+def test_ur2_sunucu_cinssiz_kaydi_hala_reddediyor():
+    """UR2: ekrandaki zorunluluk kalktı, VERİDEKİ kalkmadı.
+
+    Ortak alan da boş bırakılırsa ürünün tanımı yok demektir. Ekran
+    bunu önizlemede yakalıyor; sunucu da kendi kapısını koruyor —
+    uç doğrudan da çağrılabiliyor."""
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'PLAKA', 'cins': '', 'blok_no': 'UR2-CINSSIZ',
+        'boy': 300, 'yukseklik': 180, 'kalinlik': 2, 'adet': 1,
+        'fiyat': 10, 'fiyat_birim': 'm2', 'doviz': 'USD'})
+    assert r.status_code == 400, r.status_code
+    assert r.get_json().get('error') == 'cins_zorunlu'
+
+
+def test_ur2_blokta_yuzey_alani_gosterilmez():
+    """UR2: ham blokta yüzey işlemi yok.
+
+    Alanı göstermek, doldurulacak bir şey varmış gibi gösteriyordu.
+    Gizlerken DEĞERİ de siliniyor: tip BLOK'a çevrilince önceki
+    seçim gönderilmeye devam ederdi."""
+    import io as _io
+    h = _io.open('templates/stok.html', encoding='utf-8').read()
+    assert 'id="ozellikAlan"' in h            # tekil form
+    assert 'id="duzOzellikAlan"' in h         # düzenleme modalı
+    assert 'id="tOzellikAlan"' in h           # içe aktarma ortak alanı
+    assert "oz.style.display = blok ? 'none' : ''" in h
+    assert "document.getElementById('sOzellik').value = ''" in h
+
+
+def test_ur2_mense_listeden_seciliyor():
+    """UR2: menşe ticari faturaya, packing list'e ve etikete basılıyor.
+
+    Elle yazılınca aynı ülke üç ayrı yazımla kaydediliyordu. Liste
+    `ulke` tanımlarından geliyor; listede olmayan MEVCUT değer de
+    korunuyor, yoksa kaydet'e basmak dokunulmayan bir alanı sessizce
+    değiştirirdi."""
+    import io as _io
+    h = _io.open('templates/stok.html', encoding='utf-8').read()
+    assert '<select id="sMense"' in h, 'menşe hâlâ serbest metin'
+    assert '<select id="duzMense"' in h, 'düzenlemede menşe serbest metin'
+    assert 'function menseDoldur' in h
+    assert "lookupGetir('ulke')" in h
+    # TURKIYE her zaman seçenek: ülke listesi boşsa alan bomboş
+    # kalıp menşe seçilemez hale gelirdi.
+    assert "['TURKIYE'," in h
+    # Mevcut değer listede yoksa bile seçenek olarak ekleniyor
+    assert 'simdi])]' in h
+
+
+def test_ur2_mense_sunucuda_normalleniyor():
+    """UR2: ekran listeden seçtiriyor ama uç yine de normalliyor —
+    API doğrudan çağrılabilir."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'PLAKA', 'cins': 'UR2 MENSE', 'blok_no': 'UR2-MNS',
+        'boy': 300, 'yukseklik': 180, 'kalinlik': 2, 'adet': 1,
+        'fiyat': 10, 'fiyat_birim': 'm2', 'doviz': 'USD',
+        'mense': '  italya  '})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with fa.app.app_context():
+        p = PlakaStok.query.filter_by(blok_no='UR2-MNS').first()
+        assert p.mense == 'ITALYA', p.mense
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  B1 · KESİM'E EXCEL'DEN HEDEF SATIRI + ORTAK EŞLEŞTİRME PARÇASI
+# ══════════════════════════════════════════════════════════════════════
+
+def test_b1_excel_ortak_parcasi_tek_kopya():
+    """B1: sayı ayrıştırma ve birleştirilmiş hücre doldurması TEK yerde.
+
+    İkisi de ÖLÇÜLMÜŞ hata düzeltmesi taşıyor (BS3: "1,234.56" bin kat
+    küçük okunuyordu · X1: birleştirilmiş hücrede 6 satırlık listeden
+    1 kayıt çıkıyordu). İkinci bir kopya, düzeltmenin yalnız birinde
+    yaşamasıyla biterdi — bu projede MF4 ve YP3'te tam bu oldu."""
+    import io as _io, os as _os
+    yol = _os.path.join('static', 'js', 'excel_ortak.js')
+    assert _os.path.exists(yol), 'ortak dosya yok'
+    ortak = _io.open(yol, encoding='utf-8').read()
+    for parca in ('function sayi', 'function tahmin', 'function satirlariCikar',
+                  'function dosyaAnaliz'):
+        assert parca in ortak, parca
+
+    stok = _io.open('templates/stok.html', encoding='utf-8').read()
+    kesim = _io.open('templates/kesim.html', encoding='utf-8').read()
+    # İki şablon da ORTAK dosyayı yüklüyor
+    for sablon, ad in ((stok, 'stok'), (kesim, 'kesim')):
+        assert "filename='js/excel_ortak.js'" in sablon, ad
+        assert 'ExcelOrtak.' in sablon, ad
+    # Ayrıştırıcı şablonların İÇİNDE yeniden yazılmamış
+    for sablon, ad in ((stok, 'stok'), (kesim, 'kesim')):
+        assert 'lastIndexOf(\',\')' not in sablon, (ad, 'sayı ayrıştırıcı kopyalanmış')
+
+
+def test_b1_kesimde_excel_yukleme_var():
+    """B1: Kesim ekranında Excel'den hedef satırı girişi."""
+    import io as _io
+    h = _io.open('templates/kesim.html', encoding='utf-8').read()
+    assert 'id="excelModal"' in h
+    assert 'function kesimExcelAc' in h
+    assert 'function kesimExcelUygula' in h
+    assert "onclick=\"kesimExcelAc()\"" in h
+    # Satırlar listeye EKLENİYOR, listenin yerine geçmiyor
+    assert 'HEDEFLER.push(' in h
+    # Hedef tipi kesim YÖNÜNDEN geliyor, Excel'den değil
+    assert "yon.endsWith('EBATLI') ? 'EBATLI' : 'PLAKA'" in h
+
+
+def test_b1_sayi_ayristirici_davranisi():
+    """B1: ortak ayrıştırıcı GERÇEKTEN çalışıyor mu — node ile koşulur.
+
+    `js_denetim` yalnızca AYRIŞTIRILABİLİRLİK bakıyor; sözdizimi
+    geçerli ama çalışma anında patlayan kod ondan geçer (bu yamada
+    bir kez oldu: koda kazara düşen bir kelime `node --check`ten
+    geçti). Burada işlevler çağrılıyor."""
+    import json as _json, os as _os, shutil as _shutil, subprocess as _sp
+    node = _shutil.which('node') or '/opt/node22/bin/node'
+    if not _os.path.exists(node):
+        import pytest as _pytest
+        _pytest.skip('node yok')
+    # NOT: üç tırnak ÇİFT olmalı — yama paketleyicisi blokları
+    # ham tek-tırnaklı blok hâlinde sarıyor; aynısını burada
+    # kullanmak o bloğu ortasından bölerdi.
+    betik = r"""
+const fs = require('fs'), vm = require('vm');
+const kod = fs.readFileSync('static/js/excel_ortak.js', 'utf8');
+const kum = { window: {}, FormData: class {}, fetch: async () => ({}) };
+kum.globalThis = kum; vm.createContext(kum); vm.runInContext(kod, kum);
+const E = kum.window.ExcelOrtak;
+const sonuc = {
+  tr: E.sayi('1.234,56'), en: E.sayi('1,234.56'), sade: E.sayi('2,4'),
+  bos: E.sayi(''), metin: E.sayi('abc'), eksi: E.sayi('-3,5'),
+  tahminBoy: E.tahmin('boy', ['Blok no','cins','uzunluk','Yükseklik']),
+  tahminEn: E.tahmin('en', ['Genişlik','En']),
+};
+const c = E.satirlariCikar(
+  [['CEPPO','K6461','298','8'], ['','','297','4'], ['','','297','7']],
+  [['cins','Cins',false],['blok_no','Blok',false],['boy','Boy',true],['adet','Adet',false]],
+  {cins:0, blok_no:1, boy:2, adet:3},
+  {sayisal:['boy','adet'], doldurulacak:['cins','blok_no']});
+sonuc.doldurulan = c.dolduruldu;
+sonuc.cinsler = [...new Set(c.kayitlar.map(k => k.cins))];
+sonuc.satirNo = c.kayitlar.map(k => k._satir);
+console.log(JSON.stringify(sonuc));
+"""
+    r = _sp.run([node, '-e', betik], capture_output=True, text=True, cwd='.')
+    assert r.returncode == 0, r.stderr[:400]
+    d = _json.loads(r.stdout.strip().splitlines()[-1])
+
+    # BS3: iki ayırıcı biçimi de doğru
+    assert d['tr'] == 1234.56, d['tr']
+    assert d['en'] == 1234.56, d['en']
+    assert d['sade'] == 2.4 and d['eksi'] == -3.5
+    assert d['bos'] == 0 and d['metin'] == 0
+    # Başlık tahmini: "uzunluk" boya gider
+    assert d['tahminBoy'] == 2, d['tahminBoy']
+    # "Genişlik" içinde "en" geçiyor ama TAM eşleşen "En" kazanmalı
+    assert d['tahminEn'] == 1, d['tahminEn']
+    # X1: birleştirilmiş hücre üç satıra da yayıldı
+    assert d['cinsler'] == ['CEPPO'], d['cinsler']
+    assert d['doldurulan'] == 2, d['doldurulan']
+    assert d['satirNo'] == [2, 3, 4], d['satirNo']
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  B2 · İÇE AKTARMADAKİ ORTAK CİNS/YÜZEY LİSTEDEN SEÇİLİYOR
+# ══════════════════════════════════════════════════════════════════════
+
+def test_b2_ortak_cins_ve_ozellik_listeden():
+    """B2: iki içe aktarma ekranında da ortak cins/yüzey SELECT.
+
+    Bu alanın tekil formdakinden farkı: değer tek satıra değil,
+    AKTARILAN BÜTÜN SATIRLARA yazılıyor. Serbest metinde bir harf
+    hatası yüzlerce kaydı listede ayrı bir cins olarak gösterir."""
+    import io as _io, re as _re
+    for yol, doldur in (('templates/stok.html', 'topluListeDoldur'),
+                        ('templates/kesim.html', 'kesimListeDoldur')):
+        h = _io.open(yol, encoding='utf-8').read()
+        for eid in (('tCins', 'tOzellik') if 'stok' in yol else ('kCins', 'kOzellik')):
+            assert _re.search(r'<select[^>]*id="%s"' % eid, h), (yol, eid)
+            # Serbest metin kutusu geride kalmamış
+            assert not _re.search(r'<input[^>]*id="%s"' % eid, h), (yol, eid)
+        # Seçenekler listeden besleniyor, şablona gömülü değil
+        assert 'async function %s' % doldur in h, yol
+        assert "lookupGetir(kategori)" in h, yol
+
+
+def test_b2_yeni_ekle_isareti_kayda_gecmez():
+    """B2: "➕ Yeni … ekle…" bir DEĞER değil, bir KOMUT.
+
+    Pencere açıkken ya da iptal edilince seçim işaretin kendisinde
+    kalıyor; okuyucu onu boş saymazsa cinsi '__yeni__' olan satırlar
+    oluşurdu."""
+    import io as _io
+    stok = _io.open('templates/stok.html', encoding='utf-8').read()
+    kesim = _io.open('templates/kesim.html', encoding='utf-8').read()
+
+    assert "const TP_YENI = '__yeni__';" in stok
+    assert "const KX_YENI = '__yeni__';" in kesim
+    # Okuyucular işareti süzüyor
+    assert "v === TP_YENI ? '' : v" in stok
+    assert "v === KX_YENI ? '' : v" in kesim
+    # Önizleme ortak değeri DOĞRUDAN .value'dan almıyor — süzgeçten
+    assert "kayit.cins = _ortakMetin('tCins')" in stok
+    assert "kayit.ozellik = _ortakMetin('tOzellik')" in stok
+    assert "const oCins = _secim('kCins');" in kesim
+    assert "const oOzellik = _secim('kOzellik');" in kesim
+    assert 'k.cins = oCins' in kesim and 'k.ozellik = oOzellik' in kesim
+    # Ortak değerin OKUNDUĞU tek yer süzgeç; başka yerde `.value`
+    # yalnızca YAZMA olabilir (BLOK'ta yüzey alanı temizleniyor).
+    import re as _re
+    for h, ad, kimlikler in ((stok, 'stok', ('tCins', 'tOzellik')),
+                             (kesim, 'kesim', ('kCins', 'kOzellik'))):
+        for eid in kimlikler:
+            for m in _re.finditer(r"getElementById\('%s'\)\.value\s*(=(?!=))?" % eid, h):
+                assert m.group(1), (ad, eid, 'süzgeç dışında okunuyor')
+
+
+def test_b2_yeni_tanim_akisi_kopyalanmamis():
+    """B2: yeni tanım ekleme base.html'deki TEK akıştan geçiyor.
+
+    `_listeYeniEkle` pencereyi açıyor, ucu çağırıyor, ortak listeyi
+    ve öteki sekmeleri tazeliyor. İkinci bir kopya, o tazelemenin
+    yalnız bir ekranda yaşamasıyla biterdi."""
+    import io as _io
+    base = _io.open('templates/base.html', encoding='utf-8').read()
+    assert 'async function _listeYeniEkle' in base
+    for yol in ('templates/stok.html', 'templates/kesim.html'):
+        h = _io.open(yol, encoding='utf-8').read()
+        assert '_listeYeniEkle(gizli, kategori' in h, yol
+        # Ekleme akışı şablonun içinde yeniden yazılmamış
+        assert 'function _listeYeniEkle' not in h, yol
+        assert "api('/api/lookup" not in h, yol
