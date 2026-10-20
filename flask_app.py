@@ -15043,6 +15043,11 @@ def create_app():
             d['sermaye_hareketleri'] = [
                 {'id': s.id, 'taraf': s.taraf, 'yon': s.yon,
                  'tutar': s.tutar or 0, 'doviz': s.doviz or 'USD',
+                 # OR2: USD karşılığı burada da dönüyor — vergi ve
+                 # dağıtım satırları gösteriyor, sermaye göstermiyor
+                 # olsaydı aynı tablo iki farklı dilde konuşurdu.
+                 'usd': _ortaklik_usd(s.tutar or 0, s.doviz, s.tarih),
+                 'cevrildi': (s.doviz or 'USD').upper() != 'USD',
                  'tarih': _iso(s.tarih), 'aciklama': s.aciklama or ''}
                 for s in OrtaklikSermaye.query.filter_by(
                     ortaklik_id=o.id).order_by(OrtaklikSermaye.tarih,
@@ -15474,6 +15479,34 @@ def create_app():
     def _iso(d):
         return d.isoformat() if d else None
 
+    def _ortaklik_usd(tutar, doviz, tarih=None):
+        """OR2 — tutarı O GÜNÜN kuruyla USD'ye çevirir.
+
+        Hesabın tamamı USD üzerinden yapılıyor çünkü kâr `satis_kaydi`
+        içinde USD olarak duruyor. Sermaye ya da dağıtım başka
+        dövizde girilebiliyor; çevrilmeden toplanırsa 30.000 EUR ile
+        30.000 USD aynı sayı sayılır ve ortağa ödenecek tutar yanlış
+        çıkar.
+
+        KUR, SATIRIN KENDİ TARİHİNDEN alınır. Bugünün kuruyla
+        çevirmek, aylar önce konmuş bir anaparayı bugünkü kurla
+        değerlemek olurdu — ortakla paylaşılan bir hesapta en
+        tartışmalı yer burası olurdu.
+        """
+        if not tutar:
+            return 0
+        d = (doviz or 'USD').upper()
+        if d == 'USD':
+            return q2(tutar)
+        try:
+            usd_kur = _kur_getir('USD', tarih)
+            if not usd_kur:
+                return q2(tutar)      # kur yoksa olduğu gibi — sessiz sıfır değil
+            return q2(tutar * _kur_getir(d, tarih) / usd_kur)
+        except Exception as e:
+            app.logger.warning(f'Ortaklık kur çevrimi başarısız ({d}): {e}')
+            return q2(tutar)
+
     def _ortaklik_satislari(ort):
         """Ortaklığa bağlı işlerin SatisKaydi satırları."""
         isler = OrtaklikIs.query.filter_by(ortaklik_id=ort.id).all()
@@ -15503,12 +15536,19 @@ def create_app():
         # kalemin üstünde DURMAZ, burada üretilir: oran değişince
         # eski tutar geride kalmasın.
         vergiler, vergi_top, vergi_kesin = [], 0, 0
+        # OR2: USD disinda girilmis kalem var mi — vergi, sermaye ve
+        # dagitim donguleri bunu birlikte isaretliyor.
+        cevrim_yapildi = False
         for v in OrtaklikVergi.query.filter_by(ortaklik_id=ort.id).order_by(
                 OrtaklikVergi.id).all():
             if v.matrah_tipi == 'ciro':
                 matrah, tut = ciro, q2(ciro * (v.oran or 0) / 100)
             elif v.matrah_tipi == 'sabit':
-                matrah, tut = None, q2(v.tutar or 0)
+                # OR2: sabit kalem kendi dövizinde girilir, USD'ye çevrilir.
+                matrah = None
+                tut = _ortaklik_usd(v.tutar or 0, v.doviz, v.odeme_tarihi)
+                if (v.doviz or 'USD').upper() != 'USD':
+                    cevrim_yapildi = True
             else:   # 'kar'
                 # Zararda kâr vergisi doğmaz; negatif oranı negatif
                 # vergiye çevirmek, zararı kâr gibi dağıtırdı.
@@ -15520,6 +15560,11 @@ def create_app():
             vergiler.append({
                 'id': v.id, 'ad': v.ad, 'matrah_tipi': v.matrah_tipi,
                 'oran': v.oran or 0, 'matrah': matrah, 'tutar': tut,
+                # Orijinali de dönüyor: çevrilmiş rakamın yanında
+                # girilen rakamı göremezsen hangi kurun uygulandığını
+                # kontrol edemezsin.
+                'ham_tutar': v.tutar or 0, 'doviz': v.doviz or 'USD',
+                'cevrildi': (v.doviz or 'USD').upper() != 'USD',
                 'durum': v.durum, 'odeme_tarihi': _iso(v.odeme_tarihi),
                 'aciklama': v.aciklama or ''})
         vergi_top = q2(vergi_top)
@@ -15530,7 +15575,11 @@ def create_app():
         sermaye_iade = {'ortak': 0, 'biz': 0}
         for sm in OrtaklikSermaye.query.filter_by(ortaklik_id=ort.id).all():
             hedef = sermaye if sm.yon == 'koydu' else sermaye_iade
-            hedef[sm.taraf if sm.taraf in hedef else 'ortak'] += (sm.tutar or 0)
+            # OR2: her satır KENDİ TARİHİNDEKİ kurla USD'ye çevrilir.
+            _usd = _ortaklik_usd(sm.tutar or 0, sm.doviz, sm.tarih)
+            if (sm.doviz or 'USD').upper() != 'USD':
+                cevrim_yapildi = True
+            hedef[sm.taraf if sm.taraf in hedef else 'ortak'] += _usd
         kalan_anapara = {t: q2(sermaye[t] - sermaye_iade[t]) for t in sermaye}
 
         # ── PAYLAR ──
@@ -15555,10 +15604,18 @@ def create_app():
         dagitimlar = []
         for d in OrtaklikDagitim.query.filter_by(ortaklik_id=ort.id).order_by(
                 OrtaklikDagitim.tarih, OrtaklikDagitim.id).all():
-            dagitilan[d.taraf if d.taraf in dagitilan else 'ortak'] += (d.tutar or 0)
+            _usd = _ortaklik_usd(d.tutar or 0, d.doviz, d.tarih)
+            if (d.doviz or 'USD').upper() != 'USD':
+                cevrim_yapildi = True
+            dagitilan[d.taraf if d.taraf in dagitilan else 'ortak'] += _usd
             dagitimlar.append({
-                'id': d.id, 'taraf': d.taraf, 'tutar': d.tutar or 0,
-                'doviz': d.doviz or 'USD', 'tarih': _iso(d.tarih),
+                'id': d.id, 'taraf': d.taraf,
+                # `tutar` HER ZAMAN USD: ekrandaki toplamlarla aynı
+                # birimde olsun. Girilen rakam `ham_tutar`da duruyor.
+                'tutar': _usd, 'ham_tutar': d.tutar or 0,
+                'doviz': d.doviz or 'USD',
+                'cevrildi': (d.doviz or 'USD').upper() != 'USD',
+                'tarih': _iso(d.tarih),
                 'aciklama': d.aciklama or '',
                 'cari_hareket_id': d.cari_hareket_id,
                 'cariye_islendi': bool(d.cari_hareket_id)})
@@ -15583,6 +15640,11 @@ def create_app():
                 'olabilir. Ciro ve kâr 0 görünüyor.')
         if not isler:
             uyarilar.append('Bu ortaklığa henüz iş bağlanmadı.')
+        if cevrim_yapildi:
+            uyarilar.append(
+                'Bazı kalemler USD dışında girilmiş; her biri KENDİ '
+                'TARİHİNDEKİ TCMB kuruyla USD\'ye çevrildi. Satırların '
+                'yanında girilen tutar da duruyor.')
 
         return {
             'ciro': ciro, 'maliyet': maliyet, 'brut_kar': brut_kar,
@@ -15601,6 +15663,8 @@ def create_app():
             'bakiye': {t: q2(odenecek[t] - dagitilan[t]) for t in odenecek},
             'dagitimlar': dagitimlar,
             'satis_adedi': len(satislar), 'is_adedi': len(isler),
+            # Hesap HER ZAMAN USD: kâr `satis_kaydi`'nda USD duruyor.
+            'para_birimi': 'USD', 'cevrim_yapildi': cevrim_yapildi,
             'uyarilar': uyarilar}
 
     # ══════════════════════════════════════════════════════════

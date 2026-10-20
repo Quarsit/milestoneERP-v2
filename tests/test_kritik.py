@@ -4135,3 +4135,122 @@ def test_or1_paylar_yuzde_yuzu_asamaz_ve_eksik_pay_uyarir():
         'ad': 'Eksik', 'bizim_pay': 50, 'ortak_pay': 30}).get_json()['id']
     h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
     assert any('%80' in u for u in h['uyarilar']), h['uyarilar']
+
+
+def test_or2_farkli_dovizler_kendi_tarihinin_kuruyla_cevrilir():
+    """OR2: sermaye/dağıtım USD dışında girilebilir ve ÇEVRİLİR.
+
+    Önce yalnız tutar alanı vardı; motor da dövize bakmadan
+    topluyordu. Alan eklenip çevrim eklenmeseydi 30.000 EUR ile
+    30.000 USD aynı sayı sayılır, ortağa ödenecek tutar yanlış
+    çıkardı.
+
+    Kur SATIRIN KENDİ TARİHİNDEN alınır: aylar önce konmuş anaparayı
+    bugünkü kurla değerlemek, ortakla paylaşılan hesapta en
+    tartışmalı yer olurdu."""
+    from models import DovizKur
+    # TEMMUZ-AĞUSTOS PENCERESİ: kur kayıtları takım genelinde
+    # PAYLAŞILIYOR ve `_kur_getir` "tarihi <= aranan en SON kayıt"
+    # kuralıyla çalışıyor. Başka testlerin koyduğu Şubat/Mart/Mayıs
+    # kurları bu testin beklediği rakamı kaydırıyordu — bu pencereye
+    # kimse dokunmuyor. Aşağıdaki koruma, ileride biri koyarsa
+    # testin NEDEN kırıldığını söylüyor.
+    with fa.app.app_context():
+        for t, usd, eur in ((date(2026, 7, 1), 30.0, 33.0),
+                            (date(2026, 8, 1), 40.0, 48.0)):
+            for dv, val in (('USD', usd), ('EUR', eur)):
+                if not DovizKur.query.filter_by(doviz=dv, tarih=t).first():
+                    db.session.add(DovizKur(doviz=dv, tarih=t, alis=val,
+                                            satis=val, efektif=val))
+        db.session.commit()
+        _araya_giren = DovizKur.query.filter(
+            DovizKur.tarih > date(2026, 7, 1),
+            DovizKur.tarih <= date(2026, 8, 10),
+            DovizKur.tarih != date(2026, 8, 1)).all()
+        assert not _araya_giren, (
+            'Temmuz-Ağustos penceresine başka bir test kur koymuş: '
+            + str([(k.doviz, str(k.tarih)) for k in _araya_giren]))
+
+    _or1_kur('SIPOR6', [(10000, 6000)])
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Döviz testi', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'once_iade', 'doviz': 'EUR'}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR6'})
+
+    # TEMMUZ: 1000 EUR → 1000 × 33 / 30 = 1100 USD
+    assert c.post(f'/api/ortaklik/{oid}/sermaye', headers=H, json={
+        'taraf': 'ortak', 'yon': 'koydu', 'tutar': 1000, 'doviz': 'EUR',
+        'tarih': '2026-07-10'}).status_code == 200
+    # AĞUSTOS: 1000 EUR → 1000 × 48 / 40 = 1200 USD (aynı tutar, başka kur)
+    assert c.post(f'/api/ortaklik/{oid}/sermaye', headers=H, json={
+        'taraf': 'ortak', 'yon': 'koydu', 'tutar': 1000, 'doviz': 'EUR',
+        'tarih': '2026-08-10'}).status_code == 200
+    # TEMMUZ: 3000 TRY → 3000 / 30 = 100 USD
+    assert c.post(f'/api/ortaklik/{oid}/sermaye', headers=H, json={
+        'taraf': 'ortak', 'yon': 'koydu', 'tutar': 3000, 'doviz': 'TRY',
+        'tarih': '2026-07-10'}).status_code == 200
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['para_birimi'] == 'USD'
+    # 1100 + 1200 + 100 = 2400 — ham toplam 5000 olurdu
+    assert h['sermaye']['ortak'] == 2400, h['sermaye']
+    assert h['kalan_anapara']['ortak'] == 2400
+    # Net kâr 4000, ortak payı 2000, ödenecek = 2400 + 2000
+    assert h['odenecek']['ortak'] == 4400, h['odenecek']
+    assert h['cevrim_yapildi'] is True
+    assert any('TCMB' in u for u in h['uyarilar']), h['uyarilar']
+
+    # Sermaye SATIRI da USD karşılığını taşımalı: vergi ve dağıtım
+    # gösterip sermaye göstermezse aynı tablo iki dilde konuşur.
+    sh = c.get(f'/api/ortaklik/{oid}').get_json()['data']['sermaye_hareketleri']
+    temmuz = [x for x in sh if x['tarih'] == '2026-07-10' and x['doviz'] == 'EUR'][0]
+    assert temmuz['tutar'] == 1000 and temmuz['usd'] == 1100, temmuz
+    assert temmuz['cevrildi'] is True
+
+    # DAĞITIM da çevrilir ve ORİJİNALİ görünür
+    c.post(f'/api/ortaklik/{oid}/dagitim', headers=H, json={
+        'taraf': 'ortak', 'tutar': 1000, 'doviz': 'EUR',
+        'tarih': '2026-08-10'})
+    h2 = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    dg = h2['dagitimlar'][0]
+    assert dg['tutar'] == 1200 and dg['ham_tutar'] == 1000, dg
+    assert dg['doviz'] == 'EUR' and dg['cevrildi'] is True
+    assert h2['dagitilan']['ortak'] == 1200
+    assert h2['bakiye']['ortak'] == 3200, h2['bakiye']   # 4400 − 1200
+
+
+def test_or2_sabit_vergi_kalemi_de_cevrilir():
+    """OR2: 'sabit' vergi kalemi kendi dövizinde girilir.
+
+    İade alınamayan KDV TL üzerinden doğar — USD sayılırsa kâr
+    otuz kat fazla düşerdi."""
+    from models import DovizKur
+    # Kendi kurunu KENDİ koyuyor: öteki testin koyduğuna güvenmek,
+    # tek başına koşunca düşen bir test demekti.
+    with fa.app.app_context():
+        if not DovizKur.query.filter_by(doviz='USD', tarih=date(2026, 7, 1)).first():
+            db.session.add(DovizKur(doviz='USD', tarih=date(2026, 7, 1),
+                                    alis=30.0, satis=30.0, efektif=30.0))
+            db.session.commit()
+    _or1_kur('SIPOR7', [(10000, 4000)])
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Sabit vergi dövizi', 'bizim_pay': 50,
+        'ortak_pay': 50}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR7'})
+    # 6000 TRY, Temmuz kuru 30 → 200 USD
+    assert c.post(f'/api/ortaklik/{oid}/vergi', headers=H, json={
+        'ad': 'İade alınamayan KDV', 'matrah_tipi': 'sabit', 'tutar': 6000,
+        'doviz': 'TRY', 'durum': 'odendi',
+        'odeme_tarihi': '2026-07-10'}).status_code == 200
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    v = h['vergiler'][0]
+    assert v['tutar'] == 200, v          # 6000 TRY → 200 USD
+    assert v['ham_tutar'] == 6000 and v['doviz'] == 'TRY'
+    assert v['cevrildi'] is True
+    assert h['net_kar'] == 5800, h['net_kar']    # 6000 − 200
+    assert h['cevrim_yapildi'] is True

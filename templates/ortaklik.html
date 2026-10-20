@@ -50,6 +50,10 @@
   /* `.et` daralabilsin ama TUTAR hiç kırılmasın: uzun vergi adı
      satırı alt alta dökerse hesap okunmaz hâle geliyordu. */
   .or-satir .et{min-width:0}
+  /* Çevrilen kalemlerde GİRİLEN tutar da görünür: çevrilmiş
+     rakamın yanında orijinali yoksa hangi kurun uygulandığını
+     kontrol edemezsin. */
+  .or-ham{display:block;font-size:.72rem;color:var(--soluk);font-weight:400}
   .or-sil{cursor:pointer;color:var(--kirmizi);font-size:.76rem;
     white-space:nowrap;opacity:.75}
   .or-sil:hover{opacity:1;text-decoration:underline}
@@ -154,8 +158,11 @@
           <input id="mBizPay" type="number" step="0.01" min="0" value="50"></div>
         <div class="form-alan"><label>Ortak pay %</label>
           <input id="mOrtakPay" type="number" step="0.01" min="0" value="50"></div>
-        <div class="form-alan"><label>Döviz</label>
-          <select id="mDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select></div>
+        <div class="form-alan"><label>Varsayılan döviz</label>
+          <select id="mDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+          <div class="yardim">Yeni kalemlerde ön seçili gelir. <b>Hesap her
+            zaman USD</b> üzerinden yapılır — kâr satış kayıtlarında USD
+            duruyor.</div></div>
       </div>
       <div class="form-satir">
         <div class="form-alan"><label>Anapara yöntemi</label>
@@ -262,12 +269,17 @@ async function detayAc(id) {
         v.matrah_tipi === 'sabit' ? ' (sabit)'
           : ` (%${v.oran} × ${v.matrah_tipi === 'ciro' ? 'ciro' : 'brüt kâr'})`}${
         v.durum === 'tahmini' ? ' · <b style="color:var(--kehribar,#B8860B)">tahmini</b>' : ''}</span>
-      <span class="tt">− ${para2(v.tutar, dv)}</span>
+      <span class="tt">− ${para2(v.tutar, 'USD')}${
+        v.cevrildi ? `<span class="or-ham">${para2(v.ham_tutar, v.doviz)}</span>` : ''}</span>
       <span class="or-sil" onclick="vergiSil(${v.id})">sil</span>
     </div>`).join('');
 
   const hesapHTML = `
     <div class="or-hesap">
+      <div class="or-satir" style="border-bottom:1px solid var(--cizgi)">
+        <span class="et" style="font-size:.74rem;text-transform:uppercase;
+              letter-spacing:.05em;font-weight:700">Hesap para birimi</span>
+        <span class="tt">${h.para_birimi || 'USD'}</span></div>
       <div class="or-satir"><span class="et">Ciro (${h.satis_adedi} satış kaydı)</span>
         <span class="tt">${para2(h.ciro, dv)}</span></div>
       <div class="or-satir or-eksi"><span class="et">Maliyet</span>
@@ -301,14 +313,16 @@ async function detayAc(id) {
   const serm = (o.sermaye_hareketleri || []).map(s => `<tr>
       <td>${s.taraf === 'ortak' ? 'Ortak' : 'Biz'} · ${s.yon === 'koydu' ? 'koydu' : 'geri aldı'}</td>
       <td class="mono">${kacar(s.tarih || '')}</td>
-      <td class="sag">${para2(s.tutar, s.doviz)}</td>
-      <td class="sag"><span class="sil" onclick="sermayeSil(${s.id})">sil</span></td>
+      <td class="sag">${s.cevrildi ? para2(s.usd, 'USD') : para2(s.tutar, s.doviz)}${
+        s.cevrildi ? `<span class="or-ham">${para2(s.tutar, s.doviz)}</span>` : ''}</td>
+      <td class="sag"><span class="or-sil" onclick="sermayeSil(${s.id})">sil</span></td>
     </tr>`).join('') || '<tr><td colspan="4" style="color:var(--soluk)">sermaye hareketi yok</td></tr>';
 
   const dag = (h.dagitimlar || []).map(x => `<tr>
       <td>${x.taraf === 'ortak' ? 'Ortak' : 'Biz'}</td>
       <td class="mono">${kacar(x.tarih || '')}</td>
-      <td class="sag">${para2(x.tutar, x.doviz)}</td>
+      <td class="sag">${para2(x.tutar, 'USD')}${
+        x.cevrildi ? `<span class="or-ham">${para2(x.ham_tutar, x.doviz)}</span>` : ''}</td>
       <td class="sag">${x.cariye_islendi
         ? `<span class="or-etiket acik">caride</span>
            <span class="sil" onclick="cariyeGeriAl(${x.id})">geri al</span>`
@@ -456,7 +470,10 @@ const KALEM_ALAN = {
       <div class="form-alan" id="kOranAlan"><label>Oran %</label>
         <input id="kOran" type="number" step="0.01" min="0" value="25"></div>
       <div class="form-alan" id="kTutarAlan" style="display:none"><label>Tutar</label>
-        <input id="kTutar" type="number" step="0.01" min="0"></div>
+        <div style="display:flex;gap:6px">
+          <input id="kTutar" type="number" step="0.01" min="0" style="flex:1">
+          <select id="kDoviz" style="width:84px"></select>
+        </div></div>
     </div>
     <div class="form-satir f2">
       <div class="form-alan"><label>Durum</label><select id="kDurum">
@@ -473,19 +490,23 @@ const KALEM_ALAN = {
       <div class="form-alan"><label>Yön</label><select id="kYon">
         <option value="koydu">Koydu</option><option value="geri_aldi">Geri aldı</option></select></div>
     </div>
-    <div class="form-satir f2">
+    <div class="form-satir f3">
       <div class="form-alan"><label>Tutar *</label>
         <input id="kTutar" type="number" step="0.01" min="0"></div>
+      <div class="form-alan"><label>Döviz</label><select id="kDoviz"></select></div>
       <div class="form-alan"><label>Tarih</label><input id="kTarih" type="date"></div>
     </div>
     <div class="form-satir"><div class="form-alan"><label>Açıklama</label>
-      <input id="kAciklama"></div></div>`},
+      <input id="kAciklama"></div></div>
+    <div class="yardim">USD dışında girersen <b>o günün TCMB kuruyla</b>
+      USD'ye çevrilir; girdiğin tutar listede yanında durur.</div>`},
   dagitim: {baslik: 'Dağıtım', alt: 'Ortağa yapılan/yapılacak ödeme.', html: `
-    <div class="form-satir f2">
+    <div class="form-satir f3">
       <div class="form-alan"><label>Taraf</label><select id="kTaraf">
         <option value="ortak">Ortak</option><option value="biz">Biz</option></select></div>
       <div class="form-alan"><label>Tutar *</label>
         <input id="kTutar" type="number" step="0.01" min="0"></div>
+      <div class="form-alan"><label>Döviz</label><select id="kDoviz"></select></div>
     </div>
     <div class="form-satir f2">
       <div class="form-alan"><label>Tarih</label><input id="kTarih" type="date"></div>
@@ -503,6 +524,14 @@ function kalemAc(tip) {
   document.getElementById('kGovde').innerHTML = k.html;
   const t = document.getElementById('kTarih');
   if (t && !t.value) t.value = new Date().toISOString().slice(0, 10);
+  /* OR2: döviz kutusu ortaklığın varsayılanıyla açılır. Boş bırakmak,
+     her kalemde yeniden düşünmeyi gerektirirdi. */
+  const dv = document.getElementById('kDoviz');
+  if (dv) {
+    const secili = (ACIK && ACIK.doviz) || 'USD';
+    dv.innerHTML = ['USD', 'EUR', 'TRY'].map(x =>
+      `<option${x === secili ? ' selected' : ''}>${x}</option>`).join('');
+  }
   document.getElementById('kalemModal').classList.add('acik');
 }
 
@@ -533,16 +562,19 @@ async function kalemKaydet() {
     govde = {ad: _deger('kAd').trim(), matrah_tipi: _deger('kMatrah'),
              oran: parseFloat(_deger('kOran')) || 0,
              tutar: parseFloat(_deger('kTutar')) || 0,
+             doviz: _deger('kDoviz') || 'USD',
              durum: _deger('kDurum'), odeme_tarihi: _deger('kTarih') || null};
     if (!govde.ad) { bildir('Vergi adı zorunlu', true); return; }
   } else if (KALEM_TIP === 'sermaye') {
     yol = kok + 'sermaye';
     govde = {taraf: _deger('kTaraf'), yon: _deger('kYon'),
              tutar: parseFloat(_deger('kTutar')) || 0,
+             doviz: _deger('kDoviz') || 'USD',
              tarih: _deger('kTarih') || null, aciklama: _deger('kAciklama')};
   } else {
     yol = kok + 'dagitim';
     govde = {taraf: _deger('kTaraf'), tutar: parseFloat(_deger('kTutar')) || 0,
+             doviz: _deger('kDoviz') || 'USD',
              tarih: _deger('kTarih') || null, aciklama: _deger('kAciklama')};
   }
   try { await api(yol, {method: 'POST', body: JSON.stringify(govde)}); }
