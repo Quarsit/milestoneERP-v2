@@ -68,6 +68,10 @@
     .hesap .satir.alt { padding-left:30px; font-size:11px; color:#555; }
     .hesap .satir.kalin { border-top:1px solid var(--border); font-weight:bold; }
     .hesap .satir.sonuc { background:#F0F4F0; font-weight:bold; }
+    .hesap .satir.baslik { border-top:1px solid var(--border); margin-top:2px;
+                           padding-top:10px; }
+    .hesap .satir.baslik .et { font-size:10px; font-weight:bold; letter-spacing:.5px;
+                               text-transform:uppercase; color:#777; }
     .hesap .eksi .tt { color:var(--danger); }
     .uyari { border:1px solid #E0A526; background:#FFF6E5; border-radius:6px;
              padding:9px 12px; margin-bottom:10px; font-size:11px; }
@@ -147,6 +151,8 @@
 {% for u in hesap.uyarilar %}<div class="uyari">⚠ {{ u }}</div>{% endfor %}
 
 <h3 class="bolum">Hesap</h3>
+{# OR10: ekrandaki dökümle AYNI sıra. İki yerde iki ayrı sıralama,
+   aynı hesabın iki ayrı yüzü gibi okunurdu. #}
 <div class="hesap">
   <div class="satir"><span class="et">Ciro ({{ hesap.satis_adedi }} satış kaydı)</span>
     <span class="tt">{{ '%.2f'|format(hesap.ciro) }}</span></div>
@@ -164,31 +170,41 @@
   {% endfor %}
   <div class="satir kalin sonuc"><span class="et">Net kâr</span>
     <span class="tt">{{ '%.2f'|format(hesap.net_kar) }}</span></div>
-  <div class="satir alt"><span class="et">Bizim pay (%{{ hesap.bizim_pay }})</span>
-    <span class="tt">{{ '%.2f'|format(hesap.paylar.biz) }}</span></div>
-  <div class="satir alt"><span class="et">Ortak pay (%{{ hesap.ortak_pay }})</span>
-    <span class="tt">{{ '%.2f'|format(hesap.paylar.ortak) }}</span></div>
+
+  <div class="satir baslik"><span class="et">Katkılar</span><span class="tt"></span></div>
+  <div class="satir alt"><span class="et">Ortağın katkısı</span>
+    <span class="tt">{{ '%.2f'|format(hesap.sermaye.ortak) }}</span></div>
+  <div class="satir alt"><span class="et">Bizim katkımız</span>
+    <span class="tt">{{ '%.2f'|format(hesap.sermaye.biz) }}</span></div>
   {% if hesap.anapara_yontemi == 'once_iade' %}
-  <div class="satir alt"><span class="et">Ortağın iade edilecek katkısı</span>
+  <div class="satir alt"><span class="et">Ortağa iade edilecek tutar</span>
     <span class="tt">{{ '%.2f'|format(hesap.kalan_anapara.ortak) }}</span></div>
-  {% endif %}
-  <div class="satir kalin"><span class="et">Ortağa ödenecek</span>
-    <span class="tt">{{ '%.2f'|format(hesap.odenecek.ortak) }}</span></div>
-  <div class="satir alt"><span class="et">Şimdiye kadar dağıtılan</span>
-    <span class="tt">{{ '%.2f'|format(hesap.dagitilan.ortak) }}</span></div>
-  <div class="satir kalin"><span class="et">Ortak bakiye (kalan)</span>
-    <span class="tt">{{ '%.2f'|format(hesap.bakiye.ortak) }}</span></div>
-  {% if hesap.sermaye.biz or hesap.dagitilan.biz %}
-  <div class="satir kalin"><span class="et">Bizim tarafımız</span><span class="tt"></span></div>
-  {% if hesap.anapara_yontemi == 'once_iade' %}
-  <div class="satir alt"><span class="et">Bizim iade edilecek katkımız</span>
+  <div class="satir alt"><span class="et">Bize iade edilecek tutar</span>
     <span class="tt">{{ '%.2f'|format(hesap.kalan_anapara.biz) }}</span></div>
+  {% else %}
+  <div class="satir alt" style="color:#777"><span class="et">Anapara ayrı takip
+    ediliyor — iade dağıtıma girmiyor</span><span class="tt"></span></div>
   {% endif %}
-  <div class="satir alt"><span class="et">Bize ödenecek</span>
+
+  <div class="satir baslik"><span class="et">Kâr payları</span><span class="tt"></span></div>
+  <div class="satir alt"><span class="et">Ortağın kâr payı (%{{ hesap.ortak_pay }})</span>
+    <span class="tt">{{ '%.2f'|format(hesap.paylar.ortak) }}</span></div>
+  <div class="satir alt"><span class="et">Bizim kâr payımız (%{{ hesap.bizim_pay }})</span>
+    <span class="tt">{{ '%.2f'|format(hesap.paylar.biz) }}</span></div>
+
+  <div class="satir baslik"><span class="et">Hesaplaşma</span><span class="tt"></span></div>
+  <div class="satir kalin"><span class="et">Ortağın alacağı toplam</span>
+    <span class="tt">{{ '%.2f'|format(hesap.odenecek.ortak) }}</span></div>
+  <div class="satir alt"><span class="et">Ortağa ödenen toplam</span>
+    <span class="tt">{{ '%.2f'|format(hesap.dagitilan.ortak) }}</span></div>
+  <div class="satir kalin sonuc"><span class="et">Ortağa kalan bakiye</span>
+    <span class="tt">{{ '%.2f'|format(hesap.bakiye.ortak) }}</span></div>
+  <div class="satir kalin"><span class="et">Bizim alacağımız toplam</span>
     <span class="tt">{{ '%.2f'|format(hesap.odenecek.biz) }}</span></div>
-  <div class="satir alt"><span class="et">Bizim bakiye</span>
+  <div class="satir alt"><span class="et">Bize ödenen toplam</span>
+    <span class="tt">{{ '%.2f'|format(hesap.dagitilan.biz) }}</span></div>
+  <div class="satir kalin sonuc"><span class="et">Bize kalan bakiye</span>
     <span class="tt">{{ '%.2f'|format(hesap.bakiye.biz) }}</span></div>
-  {% endif %}
 </div>
 
 <h3 class="bolum">Katkılar</h3>

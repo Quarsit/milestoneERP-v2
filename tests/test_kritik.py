@@ -4621,11 +4621,18 @@ def test_or6_ekranda_bizim_taraf_da_gorunuyor():
     için fark edilmemişti. Katkı koyduğumuz anda o satırlar şart."""
     import io as _io
     h = _io.open('templates/ortaklik.html', encoding='utf-8').read()
-    for parca in ('Bize ödenecek', 'Bizim bakiye (kalan)',
-                  'h.odenecek.biz', 'h.bakiye.biz'):
+    # OR10: iki taraf artık KOŞULSUZ görünüyor. Önceden yalnız
+    # katkımız varsa çıkıyordu; döküm "Hesaplaşma" bloğunda iki
+    # tarafı simetrik gösterince o koşul gereksizleşti — ve
+    # koşullu olması "bizim tarafımız yok" diye okunabiliyordu.
+    for parca in ('Bizim alacağımız toplam', 'Bize kalan bakiye',
+                  'h.odenecek.biz', 'h.bakiye.biz', 'h.dagitilan.biz'):
         assert parca in h, parca
-    # Katkımız da dağıtımımız da yoksa gürültü çıkarmasın
-    assert '(h.sermaye.biz || h.dagitilan.biz)' in h
+    # Ekstre de AYNI satırları taşımalı: iki yerde iki ayrı sıralama,
+    # aynı hesabın iki ayrı yüzü gibi okunurdu.
+    e = _io.open('templates/ortaklik_ekstre_print.html', encoding='utf-8').read()
+    for parca in ('Bizim alacağımız toplam', 'Bize kalan bakiye'):
+        assert parca in e, ('ekstre', parca)
 
 
 # ══════════════════════════════════════════════════════════════════════

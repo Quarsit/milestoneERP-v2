@@ -72,6 +72,12 @@
     white-space:nowrap;opacity:.75}
   .or-sil:hover{opacity:1;text-decoration:underline}
   .or-sonuc{background:var(--verde-acik)}
+  /* Blok başlığı: dökümü HESAP / KATKILAR / PAYLAR / HESAPLAŞMA
+     diye ayırıyor — düz bir liste hangi rakamın neye ait olduğunu
+     okutmuyordu. */
+  .or-baslik .et{font-size:.72rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk)}
+  .or-baslik{border-top:1px solid var(--cizgi);padding-top:10px;margin-top:2px}
   .or-sonuc .et,.or-sonuc .tt{color:var(--verde-koyu)}
 
   .or-uyari{display:flex;gap:9px;align-items:flex-start;padding:10px 14px;
@@ -318,12 +324,26 @@ async function detayAc(id) {
       <span class="or-sil" onclick="vergiSil(${v.id})">sil</span>
     </div>`).join('');
 
+  /* ── DÖKÜM DÜZENİ (OR10) ──
+     Dört blok: HESAP (ciro → net kâr), KATKILAR, PAYLAR,
+     HESAPLAŞMA. Önceki düzende bizim tarafımız en alttaydı ve
+     yalnız katkımız varsa çıkıyordu; iki taraf artık simetrik ve
+     "kim ne alacak" tek blokta toplanıyor.
+
+     BRÜT KÂR satırı duruyor: vergi kalemleri onun üzerinden
+     hesaplanıyor (%25 × brüt kâr), o satır olmazsa vergi rakamı
+     havada kalır. */
+  const _iade = h.anapara_yontemi === 'once_iade';
+  const bolum = (ad) => `<div class="or-satir or-baslik"><span class="et">${ad}</span>
+      <span class="tt"></span></div>`;
+
   const hesapHTML = `
     <div class="or-hesap">
       <div class="or-satir" style="border-bottom:1px solid var(--cizgi)">
         <span class="et" style="font-size:.74rem;text-transform:uppercase;
               letter-spacing:.05em;font-weight:700">Hesap para birimi</span>
         <span class="tt">${h.para_birimi || 'USD'}</span></div>
+
       <div class="or-satir"><span class="et">Ciro (${h.satis_adedi} satış kaydı)</span>
         <span class="tt">${para2(h.ciro, dv)}</span></div>
       <div class="or-satir or-eksi"><span class="et">Maliyet</span>
@@ -333,38 +353,40 @@ async function detayAc(id) {
       ${vergiSatir || '<div class="or-satir alt"><span class="et">vergi kalemi yok</span><span class="tt">—</span></div>'}
       <div class="or-satir kalin or-sonuc"><span class="et">Net kâr</span>
         <span class="tt">${para2(h.net_kar, dv)}</span></div>
-      <div class="or-satir alt"><span class="et">Bizim pay (%${h.bizim_pay})</span>
-        <span class="tt">${para2(h.paylar.biz, dv)}</span></div>
-      <div class="or-satir alt"><span class="et">Ortak pay (%${h.ortak_pay})</span>
+
+      ${bolum('Katkılar')}
+      <div class="or-satir alt"><span class="et">Ortağın katkısı</span>
+        <span class="tt">${para2(h.sermaye.ortak, dv)}</span></div>
+      <div class="or-satir alt"><span class="et">Bizim katkımız</span>
+        <span class="tt">${para2(h.sermaye.biz, dv)}</span></div>
+      ${_iade ? `
+      <div class="or-satir alt"><span class="et">Ortağa iade edilecek tutar</span>
+        <span class="tt">${para2(h.kalan_anapara.ortak, dv)}</span></div>
+      <div class="or-satir alt"><span class="et">Bize iade edilecek tutar</span>
+        <span class="tt">${para2(h.kalan_anapara.biz, dv)}</span></div>`
+      : `<div class="or-satir alt" style="color:var(--soluk)">
+          <span class="et">Anapara AYRI takip ediliyor — iade dağıtıma girmiyor</span>
+          <span class="tt"></span></div>`}
+
+      ${bolum('Kâr payları')}
+      <div class="or-satir alt"><span class="et">Ortağın kâr payı (%${h.ortak_pay})</span>
         <span class="tt">${para2(h.paylar.ortak, dv)}</span></div>
-      ${h.anapara_yontemi === 'once_iade' ? `
-      <div class="or-satir alt"><span class="et">Ortağın iade edilecek katkısı</span>
-        <span class="tt">${para2(h.kalan_anapara.ortak, dv)}</span></div>` : ''}
-      <div class="or-satir kalin"><span class="et">Ortağa ödenecek</span>
+      <div class="or-satir alt"><span class="et">Bizim kâr payımız (%${h.bizim_pay})</span>
+        <span class="tt">${para2(h.paylar.biz, dv)}</span></div>
+
+      ${bolum('Hesaplaşma')}
+      <div class="or-satir kalin"><span class="et">Ortağın alacağı toplam</span>
         <span class="tt">${para2(h.odenecek.ortak, dv)}</span></div>
-      <div class="or-satir alt"><span class="et">Şimdiye kadar dağıtılan</span>
+      <div class="or-satir alt"><span class="et">Ortağa ödenen toplam</span>
         <span class="tt">${para2(h.dagitilan.ortak, dv)}</span></div>
-      <div class="or-satir kalin"><span class="et">Ortak bakiye (kalan)</span>
+      <div class="or-satir kalin or-sonuc"><span class="et">Ortağa kalan bakiye</span>
         <span class="tt">${para2(h.bakiye.ortak, dv)}</span></div>
-      ${/* OR6: BİZİM tarafımız da görünmeli. Fason bedelini biz
-             ödediğimizde bu satırlar olmadan "biz ne alacağız"
-             sorusunun cevabı ekranda hiç yoktu — motor hesaplıyordu
-             ama kimse göremiyordu. Katkımız yoksa gürültü olmasın
-             diye yalnız katkı ya da dağıtım varsa çıkıyor. */ ''}
-      ${(h.sermaye.biz || h.dagitilan.biz) ? `
-      <div class="or-satir" style="border-top:1px solid var(--cizgi)">
-        <span class="et" style="font-size:.74rem;text-transform:uppercase;
-              letter-spacing:.05em;font-weight:700">Bizim tarafımız</span>
-        <span class="tt"></span></div>
-      ${h.anapara_yontemi === 'once_iade' ? `
-      <div class="or-satir alt"><span class="et">Bizim iade edilecek katkımız</span>
-        <span class="tt">${para2(h.kalan_anapara.biz, dv)}</span></div>` : ''}
-      <div class="or-satir kalin"><span class="et">Bize ödenecek</span>
+      <div class="or-satir kalin"><span class="et">Bizim alacağımız toplam</span>
         <span class="tt">${para2(h.odenecek.biz, dv)}</span></div>
-      <div class="or-satir alt"><span class="et">Şimdiye kadar alınan</span>
+      <div class="or-satir alt"><span class="et">Bize ödenen toplam</span>
         <span class="tt">${para2(h.dagitilan.biz, dv)}</span></div>
-      <div class="or-satir kalin"><span class="et">Bizim bakiye (kalan)</span>
-        <span class="tt">${para2(h.bakiye.biz, dv)}</span></div>` : ''}
+      <div class="or-satir kalin or-sonuc"><span class="et">Bize kalan bakiye</span>
+        <span class="tt">${para2(h.bakiye.biz, dv)}</span></div>
     </div>`;
 
   const isler = (o.isler || []).map(i => `<tr>
