@@ -354,7 +354,7 @@ async function detayAc(id) {
     </div>`;
 
   const isler = (o.isler || []).map(i => `<tr>
-      <td class="mono">${kacar(i.kaynak_tip)} ${kacar(i.kaynak_id)}</td>
+      <td class="mono">${kacar(i.kaynak_tip)} ${kacar(i.no || i.kaynak_id)}</td>
       <td>${kacar(i.aciklama || '')}</td>
       <td class="sag"><span class="sil" onclick="isSil(${i.id})">çöz</span></td>
     </tr>`).join('') || '<tr><td colspan="3" style="color:var(--soluk)">iş bağlanmadı</td></tr>';
@@ -505,10 +505,13 @@ async function ortSil() {
 
 /* ── KALEM EKLEME ── */
 const KALEM_ALAN = {
-  is: {baslik: 'İş bağla', alt: 'Sistemdeki kayıtlardan seç.', html: `
+  is: {baslik: 'İş bağla', alt: 'Blok/plaka ya da sipariş — sistemden seç.', html: `
     <div class="form-satir f2">
       <div class="form-alan"><label>Tip</label>
         <select id="kTip" onchange="isListesiYukle()">
+        <option value="BLOK">Blok (stok)</option>
+        <option value="PLAKA">Plaka (stok)</option>
+        <option value="EBATLI">Ebatlı (stok)</option>
         <option value="SIPARIS">Sipariş</option>
         <option value="SEVKIYAT">Sevkiyat</option>
         <option value="PROFORMA">Proforma</option></select></div>
@@ -705,11 +708,13 @@ function isListesiCiz() {
   const ara = (document.getElementById('kAra') || {}).value || '';
   const s = ara.trim().toLocaleLowerCase('tr');
   const gorunen = s
-    ? IS_LISTE.filter(x => (x.id + ' ' + (x.musteri || ''))
+    ? IS_LISTE.filter(x => (x.id + ' ' + (x.no || '') + ' ' + (x.musteri || ''))
         .toLocaleLowerCase('tr').includes(s))
     : IS_LISTE;
   sec.innerHTML = gorunen.map(x => {
-    const parcalar = [x.id];
+    /* OR7: stokta ayırt edici bilgi blok no; sipariş/sevkiyatta
+       kayıt numarası. `no` yalnız stok uçlarından geliyor. */
+    const parcalar = [x.no || x.id];
     if (x.musteri) parcalar.push(x.musteri);
     if (x.tarih) parcalar.push(x.tarih);
     if (x.tutar) parcalar.push(para2(x.tutar, x.doviz));

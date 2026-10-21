@@ -15073,6 +15073,9 @@ def create_app():
             d['hesap'] = _ortaklik_hesap(o)
             d['isler'] = [{'id': i.id, 'kaynak_tip': i.kaynak_tip,
                            'kaynak_id': i.kaynak_id,
+                           # OR7: stokta kimlik (PLK-…) değil, depoda
+                           # okunan numara anlamlı.
+                           'no': _ortaklik_is_no(i),
                            'aciklama': i.aciklama or ''}
                           for i in OrtaklikIs.query.filter_by(
                               ortaklik_id=o.id).order_by(OrtaklikIs.id).all()]
@@ -15092,6 +15095,37 @@ def create_app():
                     ortaklik_id=o.id).order_by(OrtaklikSermaye.tarih,
                                                OrtaklikSermaye.id).all()]
         return d
+
+    def _stok_alis_bedeli(s, tip):
+        """Stoğun TOPLAM alış bedeli — kesimin kullandığı kuralın aynısı.
+
+        Önce `matrah` (fiyat birimi ne olursa olsun doğru hesaplanmış
+        hâli); yoksa blokta tonaj × birim fiyat, ötekilerde ölçü ×
+        birim fiyat.
+        """
+        if getattr(s, 'matrah', None):
+            return q2(s.matrah)
+        _f = s.alis_fiyati or 0
+        if tip == 'BLOK':
+            if (s.alis_fiyat_birim == 'ton') and s.tonaj:
+                return q2((s.tonaj or 0) * _f)
+            return q2((s.hacim_m3 or 0) * _f)
+        return q2((getattr(s, 'metraj_m2', 0) or 0) * _f)
+
+    def _ortaklik_is_no(i):
+        """Bağlı işin okunur numarası (stokta blok no / plaka kodu)."""
+        if i.kaynak_tip not in ORTAKLIK_STOK_TIPLERI:
+            return i.kaynak_id
+        _m = {'BLOK': BlokStok, 'PLAKA': PlakaStok,
+              'EBATLI': EbatliStok}[i.kaynak_tip]
+        s = _m.query.filter_by(id=i.kaynak_id).first()
+        if not s:
+            return i.kaynak_id
+        if i.kaynak_tip == 'PLAKA':
+            return _plaka_kodu(s.blok_no, s.slab_no) or i.kaynak_id
+        if i.kaynak_tip == 'EBATLI':
+            return getattr(s, 'kasa_no', None) or s.blok_no or i.kaynak_id
+        return s.blok_no or i.kaynak_id
 
     def _ortaklik_bul(oid):
         return Ortaklik.query.filter_by(id=oid).first()
@@ -15228,13 +15262,16 @@ def create_app():
     def _ortaklik_maliyet_kayitlari(ort):
         """Ortaklığın işlerine bağlı maliyet kayıtları.
 
-        Maliyet iki şekilde bağlanabiliyor: doğrudan siparişe, ya da
-        o işte satılan STOĞA. Kâr hesabı ikisini de topluyor; burada
-        da ikisi birden toplanıyor.
+        Maliyet üç şekilde bağlanabiliyor: doğrudan siparişe, o işte
+        satılan stoğa, ya da (OR7) ortaklığa bağlanan stoğun
+        kendisine. Üçü de toplanıyor — fason bedeli henüz satış
+        yokken bloğa işlendiğinde de bulunsun diye.
         """
         satislar, isler = _ortaklik_satislari(ort)
         anahtarlar = {i.kaynak_id for i in isler}
         anahtarlar |= {s.stok_id for s in satislar if s.stok_id}
+        anahtarlar |= _ortaklik_stok_zinciri(isler)
+        anahtarlar.discard(None)
         if not anahtarlar:
             return []
         # ── İKİ SÜZGEÇ, İKİSİ DE ÖLÇÜLDÜ ──
@@ -15352,7 +15389,7 @@ def create_app():
         if not _ortaklik_bul(oid):
             return jsonify({'ok': False, 'mesaj': 'Ortaklık bulunamadı'}), 404
         tip = (request.args.get('tip') or 'SIPARIS').strip().upper()
-        if tip not in ('SIPARIS', 'SEVKIYAT', 'PROFORMA'):
+        if tip not in ORTAKLIK_IS_TIPLERI:
             return jsonify({'ok': False, 'mesaj': 'Geçersiz tip'}), 400
 
         # Hangi işler zaten bağlı (HERHANGİ bir ortaklığa)
@@ -15383,7 +15420,7 @@ def create_app():
                     'tarih': _iso(p.olusturma.date() if p.olusturma else None),
                     'tutar': getattr(p, 'toplam', 0) or 0,
                     'doviz': p.doviz or 'USD', 'durum': p.durum or ''})
-        else:
+        elif tip == 'SEVKIYAT':
             for v in Sevkiyat.query.order_by(
                     Sevkiyat.sevk_tarihi.desc(), Sevkiyat.id.desc()
                     ).limit(300).all():
@@ -15393,6 +15430,31 @@ def create_app():
                     'id': v.id, 'musteri': v.musteri or '',
                     'tarih': _iso(v.sevk_tarihi), 'tutar': 0,
                     'doviz': '', 'durum': v.durum or ''})
+        else:
+            # OR7 · STOK. Burada "müşteri" yok; ayırt edici bilgi blok
+            # no ve cins. Tüketilmiş stok da listede kalıyor: kesilmiş
+            # bir blok ortaklığın TAM OLARAK konusudur, listeden
+            # düşerse bağlanamaz hâle gelirdi.
+            _model = {'BLOK': BlokStok, 'PLAKA': PlakaStok,
+                      'EBATLI': EbatliStok}[tip]
+            for s in _model.query.order_by(
+                    _model.giris_tarihi.desc(), _model.id.desc()).limit(300).all():
+                if s.id in bagli:
+                    continue
+                _no = s.blok_no or s.id
+                if tip == 'PLAKA' and getattr(s, 'slab_no', None) is not None:
+                    _no = _plaka_kodu(s.blok_no, s.slab_no) or s.id
+                elif tip == 'EBATLI':
+                    _no = getattr(s, 'kasa_no', None) or _no
+                kayitlar.append({
+                    'id': s.id, 'musteri': s.cins or '',
+                    'tarih': _iso(getattr(s, 'giris_tarihi', None)),
+                    # `alis_fiyati` BİRİM fiyat (ton/m² başına). Seçicide
+                    # öteki tipler TOPLAM gösteriyor; birim fiyat yazmak
+                    # "bu blok 420 dolar" diye okunurdu.
+                    'tutar': _stok_alis_bedeli(s, tip),
+                    'doviz': s.doviz or 'USD',
+                    'durum': s.durum or '', 'no': _no})
 
         # Her kayda SATIŞ KAYDI olup olmadığını da söyle: cirosu
         # olmayan bir işi bağlamak yanlış değil (teslim edilmemiş
@@ -15404,9 +15466,12 @@ def create_app():
             elif tip == 'PROFORMA':
                 k['satis_var'] = SatisKaydi.query.filter_by(
                     proforma_id=k['id']).count() > 0
-            else:
+            elif tip == 'SEVKIYAT':
                 k['satis_var'] = SatisKaydi.query.filter_by(
                     sevkiyat_id=k['id']).count() > 0
+            else:
+                k['satis_var'] = SatisKaydi.query.filter_by(
+                    stok_id=k['id']).count() > 0
 
         return jsonify({'ok': True, 'data': kayitlar,
                         'bagli_adedi': len(bagli)})
@@ -15421,15 +15486,16 @@ def create_app():
         d = request.get_json(silent=True) or {}
         tip = (d.get('kaynak_tip') or '').strip().upper()
         kid = (d.get('kaynak_id') or '').strip()
-        if tip not in ('SIPARIS', 'SEVKIYAT', 'PROFORMA'):
+        if tip not in ORTAKLIK_IS_TIPLERI:
             return jsonify({'ok': False, 'mesaj':
-                            'Kaynak tipi: SIPARIS, SEVKIYAT veya PROFORMA'}), 400
+                            'Kaynak tipi: ' + ', '.join(ORTAKLIK_IS_TIPLERI)}), 400
         if not kid:
             return jsonify({'ok': False, 'mesaj': 'Kaynak no zorunlu'}), 400
         # Kaynak GERÇEKTEN var mı: olmayan bir numarayı bağlamak,
         # cirosu hep 0 çıkan bir ortaklıkla biterdi.
         _model = {'SIPARIS': Siparis, 'SEVKIYAT': Sevkiyat,
-                  'PROFORMA': Proforma}[tip]
+                  'PROFORMA': Proforma, 'BLOK': BlokStok,
+                  'PLAKA': PlakaStok, 'EBATLI': EbatliStok}[tip]
         if not _model.query.filter_by(id=kid).first():
             return jsonify({'ok': False, 'mesaj':
                             f'{tip} {kid} bulunamadı'}), 404
@@ -15707,6 +15773,45 @@ def create_app():
     #  hesap, /karlilik ile bu sayfanın farklı rakam göstermesiyle
     #  biterdi.
     # ══════════════════════════════════════════════════════════
+    # ── OR7 · ORTAKLIĞA STOK BAĞLAMA ──
+    # Ortaklık malzeme alımında başlıyor; sipariş aylar sonra gelebiliyor.
+    # Blok sipariş beklemeden bağlanabilsin diye iş tipleri genişledi.
+    ORTAKLIK_IS_TIPLERI = ('SIPARIS', 'SEVKIYAT', 'PROFORMA',
+                           'BLOK', 'PLAKA', 'EBATLI')
+    ORTAKLIK_STOK_TIPLERI = ('BLOK', 'PLAKA', 'EBATLI')
+
+    def _ortaklik_stok_zinciri(isler):
+        """Bağlı stoklar + onlardan KESİMLE türeyenler.
+
+        Bir bloğu bağlayınca o bloktan çıkan plakalar da ortaklığa
+        aittir: fason bedeli onlara işlenir, satış onlardan olur.
+        Kullanıcıdan her kesimden sonra listeyi güncellemesini
+        beklemek, unutulduğu gün hesabın sessizce eksilmesi demekti.
+
+        Zincir `kesim_detay` üzerinden yürüyor (blok → plaka →
+        ebatlı). Tur sayısı SINIRLI: veride bir döngü oluşursa
+        sonsuza kadar dönmek yerine durur.
+        """
+        kok = {i.kaynak_id for i in isler
+               if i.kaynak_tip in ORTAKLIK_STOK_TIPLERI and i.kaynak_id}
+        if not kok:
+            return set()
+        tum = set(kok)
+        sinir = kok
+        for _ in range(4):          # blok→plaka→ebatlı için fazlasıyla yeter
+            if not sinir:
+                break
+            kesimler = {k.id for k in Kesim.query.filter(
+                Kesim.kaynak_id.in_(list(sinir))).all()}
+            if not kesimler:
+                break
+            yeni = {d.hedef_stok_id for d in KesimDetay.query.filter(
+                KesimDetay.kesim_id.in_(list(kesimler))).all()
+                if d.hedef_stok_id} - tum
+            tum |= yeni
+            sinir = yeni
+        return tum
+
     def _iso(d):
         return d.isoformat() if d else None
 
@@ -15746,12 +15851,18 @@ def create_app():
         sip = [i.kaynak_id for i in isler if i.kaynak_tip == 'SIPARIS']
         sev = [i.kaynak_id for i in isler if i.kaynak_tip == 'SEVKIYAT']
         prf = [i.kaynak_id for i in isler if i.kaynak_tip == 'PROFORMA']
+        stoklar = _ortaklik_stok_zinciri(isler)
         kosul = []
         if sip: kosul.append(SatisKaydi.siparis_id.in_(sip))
         if sev: kosul.append(SatisKaydi.sevkiyat_id.in_(sev))
         if prf: kosul.append(SatisKaydi.proforma_id.in_(prf))
+        # OR7: bağlı stok satıldığında ciro sipariş bağlanmadan da gelir.
+        if stoklar: kosul.append(SatisKaydi.stok_id.in_(list(stoklar)))
         if not kosul:
             return [], isler
+        # `or_` ile tek sorgu: aynı satış hem siparişten hem stoktan
+        # eşleşse bile SQL onu BİR KEZ döndürür. İki ayrı sorgunun
+        # sonucunu toplamak, o satışı iki kez saymak olurdu.
         return SatisKaydi.query.filter(db.or_(*kosul)).all(), isler
 
     def _ortaklik_hesap(ort):
@@ -15870,7 +15981,8 @@ def create_app():
         _kayip = []
         for i in isler:
             _m = {'SIPARIS': Siparis, 'SEVKIYAT': Sevkiyat,
-                  'PROFORMA': Proforma}.get(i.kaynak_tip)
+                  'PROFORMA': Proforma, 'BLOK': BlokStok,
+                  'PLAKA': PlakaStok, 'EBATLI': EbatliStok}.get(i.kaynak_tip)
             if _m is not None and not _m.query.filter_by(id=i.kaynak_id).first():
                 _kayip.append(f'{i.kaynak_tip} {i.kaynak_id}')
         if _kayip:

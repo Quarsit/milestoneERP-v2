@@ -4626,3 +4626,179 @@ def test_or6_ekranda_bizim_taraf_da_gorunuyor():
         assert parca in h, parca
     # Katkımız da dağıtımımız da yoksa gürültü çıkarmasın
     assert '(h.sermaye.biz || h.dagitilan.biz)' in h
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  OR7 · ORTAKLIĞA STOK BAĞLAMA (sipariş beklemeden)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_or7_blok_baglanir_ve_fason_siparis_yokken_gorunur():
+    """OR7: ortaklık malzeme alımında başlıyor, sipariş aylar sonra.
+
+    Blok bağlanamadığı sürece "Maliyetlerden ekle" BOŞ geliyordu
+    (ölçülmüştü): liste bağlı işler üzerinden çalışıyor, iş de
+    yalnız sipariş/sevkiyat/proforma olabiliyordu. Fason bedeli
+    daha satış yokken bloğa işlenir — artık bulunuyor."""
+    from models import BlokStok, Maliyet
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BLK-OR7', firma_id=1, blok_no='K7700', cins='TEST',
+            boy=300, yukseklik=180, en=170, hacim_m3=9.18, tonaj=24,
+            alis_fiyati=420, alis_fiyat_birim='ton', doviz='USD',
+            durum='Serbest', uretici='ALBSTONE'))
+        db.session.flush()
+        db.session.add(Maliyet(
+            id='MYT-OR7-1', firma_id=1, baglanti_tip='stok',
+            baglanti_id='BLK-OR7', maliyet_tip='Kesim / Fason / Üretim',
+            maliyet_tarihi=date(2026, 10, 5), tutar=4000, doviz='USD',
+            usd_karsilik=4000, aktif=True))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Blok ortaklığı', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'once_iade'}).get_json()['id']
+
+    # Blok seçicide çıkıyor ve blok NO'suyla görünüyor
+    b = c.get(f'/api/ortaklik/{oid}/baglanabilir?tip=BLOK').get_json()
+    kayit = [x for x in b['data'] if x['id'] == 'BLK-OR7']
+    assert kayit and kayit[0]['no'] == 'K7700', b['data'][:3]
+    # Seçicide TOPLAM alış bedeli görünmeli, BİRİM fiyat değil:
+    # 420 USD/ton × 24 ton = 10.080. "Bu blok 420 dolar" diye
+    # okunacak bir rakam, bağlarken yanlış blok seçtirir.
+    assert kayit[0]['tutar'] == 10080, kayit[0]['tutar']
+
+    assert c.post(f'/api/ortaklik/{oid}/is', headers=H, json={
+        'kaynak_tip': 'BLOK', 'kaynak_id': 'BLK-OR7'}).status_code == 200
+
+    # SİPARİŞ YOKKEN fason maliyeti listede
+    ml = c.get(f'/api/ortaklik/{oid}/maliyetler').get_json()
+    assert [x['id'] for x in ml['data']] == ['MYT-OR7-1'], ml['data']
+
+    # Katkıya alınabiliyor
+    r = c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'biz', 'maliyet_idler': ['MYT-OR7-1']})
+    assert r.get_json()['eklenen'] == 1, r.get_json()
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['sermaye']['biz'] == 4000, h['sermaye']
+    # Ciro yok ama uyarı doğru olanı söylüyor
+    assert h['ciro'] == 0
+    assert any('satış kaydı yok' in u for u in h['uyarilar']), h['uyarilar']
+    # Bağlı iş listesinde blok NO'su görünüyor
+    isler = c.get(f'/api/ortaklik/{oid}').get_json()['data']['isler']
+    assert isler[0]['no'] == 'K7700', isler
+
+
+def test_or7_kesimden_turetilen_plakalar_da_ortakligin():
+    """OR7: bağlanan bloktan çıkan plakalar da ortaklığa aittir.
+
+    Kullanıcıdan her kesimden sonra listeyi güncellemesini beklemek,
+    unutulduğu gün hesabın sessizce eksilmesi demekti."""
+    from models import BlokStok, PlakaStok, Maliyet, SatisKaydi
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BLK-OR7B', firma_id=1, blok_no='K7701', cins='TEST',
+            boy=300, yukseklik=180, en=170, hacim_m3=9.18, tonaj=24,
+            alis_fiyati=420, alis_fiyat_birim='ton', doviz='USD',
+            durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': ['BLK-OR7B'],
+        'kesim_tarihi': '2026-10-10',
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 280,
+                      'yukseklik': 170, 'kalinlik': 2, 'adet': 4}]})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    plaka_idler = [o['id'] for o in r.get_json()['olusan_stoklar']]
+    assert len(plaka_idler) == 4
+
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Zincir', 'bizim_pay': 50, 'ortak_pay': 50,
+        'anapara_yontemi': 'once_iade'}).get_json()['id']
+    # YALNIZCA BLOK bağlanıyor — plakalar kendiliğinden gelmeli
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'BLOK', 'kaynak_id': 'BLK-OR7B'})
+
+    # Kesimden SONRA plakaya işlenen maliyet de bulunuyor
+    with fa.app.app_context():
+        db.session.add(Maliyet(
+            id='MYT-OR7-2', firma_id=1, baglanti_tip='stok',
+            baglanti_id=plaka_idler[0], maliyet_tip='Nakliye',
+            maliyet_tarihi=date(2026, 10, 12), tutar=250, doviz='USD',
+            usd_karsilik=250, aktif=True))
+        # Plakalardan biri satıldı
+        db.session.add(SatisKaydi(
+            id='SAT-OR7', firma_id=1, stok_id=plaka_idler[0], stok_tip='PLAKA',
+            cins='TEST', musteri='ACIK CARI', satis_tarihi=date(2026, 10, 20),
+            tutar=3000, tutar_usd=3000, doviz='USD',
+            maliyet_usd=1800, kar_usd=1200))
+        db.session.commit()
+
+    ml = c.get(f'/api/ortaklik/{oid}/maliyetler').get_json()
+    assert 'MYT-OR7-2' in [x['id'] for x in ml['data']], ml['data']
+    # SİPARİŞ BAĞLANMADAN ciro geliyor
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['ciro'] == 3000 and h['brut_kar'] == 1200, h
+
+
+def test_or7_ayni_satis_iki_yoldan_iki_kez_sayilmaz():
+    """OR7: hem blok hem sipariş bağlıyken satış BİR KEZ sayılmalı.
+
+    Stok eşleşmesi siparişin yanına eklendi; iki ayrı sorgunun
+    sonucunu toplamak aynı satırı iki kez saymak olurdu. Tek
+    `or_` sorgusu bunu yapısal olarak engelliyor."""
+    from models import BlokStok, SatisKaydi, Siparis
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BLK-OR7C', firma_id=1, blok_no='K7702', cins='TEST',
+            boy=300, yukseklik=180, en=170, hacim_m3=9.18, tonaj=24,
+            alis_fiyati=420, alis_fiyat_birim='ton', doviz='USD',
+            durum='Serbest', uretici='ALBSTONE'))
+        db.session.add(Siparis(id='SIP-OR7', musteri='ACIK CARI', doviz='USD',
+                               toplam_tutar=5000, durum='Onaylandi',
+                               siparis_tarihi=date(2026, 10, 1)))
+        db.session.flush()
+        # AYNI satış hem bloğun stoğuna hem siparişe bağlı
+        db.session.add(SatisKaydi(
+            id='SAT-OR7C', firma_id=1, stok_id='BLK-OR7C', stok_tip='BLOK',
+            siparis_id='SIP-OR7', cins='TEST', musteri='ACIK CARI',
+            satis_tarihi=date(2026, 10, 20), tutar=5000, tutar_usd=5000,
+            doviz='USD', maliyet_usd=3000, kar_usd=2000))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Çift sayım', 'bizim_pay': 50,
+        'ortak_pay': 50}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'BLOK', 'kaynak_id': 'BLK-OR7C'})
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIP-OR7'})
+
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['satis_adedi'] == 1, h['satis_adedi']
+    assert h['ciro'] == 5000, h['ciro']        # 10000 olsaydı çift sayılırdı
+    assert h['brut_kar'] == 2000, h['brut_kar']
+
+
+def test_or7_stok_tekilligi_ve_varlik_kapilari():
+    """OR7: stok da tek ortaklığa bağlanır; olmayan stok bağlanamaz."""
+    from models import BlokStok
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BLK-OR7D', firma_id=1, blok_no='K7703', cins='TEST',
+            boy=300, yukseklik=180, en=170, hacim_m3=9.18, tonaj=24,
+            alis_fiyati=420, alis_fiyat_birim='ton', doviz='USD',
+            durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    a = c.post('/api/ortaklik', headers=H, json={'ad': 'SA'}).get_json()['id']
+    b = c.post('/api/ortaklik', headers=H, json={'ad': 'SB'}).get_json()['id']
+    assert c.post(f'/api/ortaklik/{a}/is', headers=H, json={
+        'kaynak_tip': 'BLOK', 'kaynak_id': 'BLK-OR7D'}).status_code == 200
+    assert c.post(f'/api/ortaklik/{b}/is', headers=H, json={
+        'kaynak_tip': 'BLOK', 'kaynak_id': 'BLK-OR7D'}).status_code == 409
+    assert c.post(f'/api/ortaklik/{b}/is', headers=H, json={
+        'kaynak_tip': 'BLOK', 'kaynak_id': 'YOK-999'}).status_code == 404
+    # Seçicide artık görünmüyor
+    idler = [x['id'] for x in
+             c.get(f'/api/ortaklik/{b}/baglanabilir?tip=BLOK').get_json()['data']]
+    assert 'BLK-OR7D' not in idler
