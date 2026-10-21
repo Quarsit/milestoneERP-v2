@@ -4865,3 +4865,104 @@ def test_or8_zincirle_kapsanan_stok_secilebilir_gorunmez():
     # Ve ciro zaten plakadan geliyor — blok tek başına yeterli
     h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
     assert h['ciro'] == 3000 and h['satis_adedi'] == 1, h
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  OR9 · ORTAKLIK RAPORU VE EKSTRESİ
+# ══════════════════════════════════════════════════════════════════════
+
+def test_or9_ortaklik_raporu_excel_ve_pdf():
+    """OR9: ortaklık listesi Excel/PDF olarak dışa aktarılabilmeli."""
+    import io as _io, openpyxl as _ox
+    _or1_kur('SIPOR9R', [(20000, 12000)])
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Rapor testi', 'ortak_ad': 'FINANSOR', 'bizim_pay': 60,
+        'ortak_pay': 40}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR9R'})
+
+    r = c.get('/api/export/ortaklik?format=xlsx')
+    assert r.status_code == 200, r.status_code
+    ws = _ox.load_workbook(_io.BytesIO(r.data)).active
+    satirlar = [[x for x in row] for row in ws.iter_rows(values_only=True)]
+    bizim = [s for s in satirlar if s and s[0] and oid in str(s[0])]
+    assert bizim, satirlar[:4]
+    # Ciro / brüt kâr sütunları dolu geliyor
+    assert '20.000' in str(bizim[0][4]) or '20000' in str(bizim[0][4]), bizim[0]
+
+    # PDF yolu weasyprint/reportlab ister. Kurulu değilse bu
+    # ORTAMIN eksiği — modülün değil; yanlış alarm vermesin.
+    try:
+        import weasyprint  # noqa: F401
+    except Exception:
+        try:
+            import reportlab  # noqa: F401
+        except Exception:
+            import pytest as _pytest
+            _pytest.skip('PDF kütüphanesi kurulu değil')
+    assert c.get('/api/export/ortaklik?format=pdf').status_code == 200
+
+
+def test_or9_ekstre_iki_kipte_calisiyor():
+    """OR9: ekstre iki kipte — ortağa gönderilecek ve iç kullanım.
+
+    İç kipin verisi şablonda GİZLENMİYOR; sunucu ortak kipinde onu
+    hiç göndermiyor. Gizlemek, şablonda bir koşul unutulduğunda
+    müşteri adını ortağın belgesine basmakla biterdi."""
+    from models import Maliyet
+    _or1_kur('SIPOR9E', [(30000, 18000)])
+    with fa.app.app_context():
+        db.session.add(Maliyet(
+            id='MYT-OR9', firma_id=1, baglanti_tip='siparis',
+            baglanti_id='SIPOR9E', maliyet_tip='Kesim / Fason / Üretim',
+            maliyet_tarihi=date(2026, 10, 5), tutar=2500, doviz='USD',
+            usd_karsilik=2500, aktif=True, fatura_no='FSN-OR9'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H, json={
+        'ad': 'Ekstre testi', 'ortak_ad': 'FINANSOR', 'bizim_pay': 50,
+        'ortak_pay': 50, 'anapara_yontemi': 'once_iade'}).get_json()['id']
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'SIPARIS', 'kaynak_id': 'SIPOR9E'})
+    c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
+        'taraf': 'biz', 'maliyet_idler': ['MYT-OR9']})
+
+    # ── ORTAK KİPİ ──
+    r = c.get(f'/ortaklik/{oid}/ekstre')
+    assert r.status_code == 200, r.status_code
+    g = r.get_data(as_text=True)
+    assert 'ORTAKLIK EKSTRESİ' in g
+    assert 'Brüt kâr' in g and 'Net kâr' in g
+    assert '12000.00' in g.replace(',', '') or '12.000' in g  # brüt kâr
+    # Müşteri adı ve fatura no ortağın belgesinde YOK
+    assert 'ACIK CARI' not in g, 'müşteri adı ortak kipinde görünüyor'
+    assert 'FSN-OR9' not in g, 'fatura no ortak kipinde görünüyor'
+    assert 'İÇ KULLANIM' not in g
+
+    # ── İÇ KİP ──
+    r2 = c.get(f'/ortaklik/{oid}/ekstre?kip=ic')
+    assert r2.status_code == 200
+    g2 = r2.get_data(as_text=True)
+    assert 'İÇ KULLANIM' in g2
+    assert 'ACIK CARI' in g2, 'iç kipte satış kaydı yok'
+    assert 'FSN-OR9' in g2, 'iç kipte maliyet kaydı yok'
+    assert 'Bağlı işler' in g2
+
+    # Geçersiz kip ortak kipine düşer (sızdırmaya yer bırakmaz)
+    g3 = c.get(f'/ortaklik/{oid}/ekstre?kip=hebele').get_data(as_text=True)
+    assert 'ACIK CARI' not in g3 and 'İÇ KULLANIM' not in g3
+
+
+def test_or9_ekstre_yetki_ve_bulunamadi():
+    """OR9: ekstre kâr rakamı taşıyor — yetkisiz göremez."""
+    c = istemci('admin', 'ADMIN')
+    oid = c.post('/api/ortaklik', headers=H,
+                 json={'ad': 'Yetki'}).get_json()['id']
+    assert c.get('/ortaklik/YOK-123/ekstre').status_code == 404
+
+    d = istemci('depocu', 'DEPO')
+    r = d.get(f'/ortaklik/{oid}/ekstre')
+    assert r.status_code in (302, 403), r.status_code
+    assert c.get('/api/export/ortaklik?format=xlsx').status_code == 200
+    assert d.get('/api/export/ortaklik?format=xlsx').status_code == 403

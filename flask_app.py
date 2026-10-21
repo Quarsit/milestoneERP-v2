@@ -15083,6 +15083,11 @@ def create_app():
                            'aciklama': i.aciklama or ''}
                           for i in OrtaklikIs.query.filter_by(
                               ortaklik_id=o.id).order_by(OrtaklikIs.id).all()]
+            # OR9: ekstrede "bu maliyet katkıya alındı mı" sütunu.
+            d['alinan_maliyetler'] = [
+                s.maliyet_id for s in OrtaklikSermaye.query.filter(
+                    OrtaklikSermaye.ortaklik_id == o.id,
+                    OrtaklikSermaye.maliyet_id.isnot(None)).all()]
             d['sermaye_hareketleri'] = [
                 {'id': s.id, 'taraf': s.taraf, 'yon': s.yon,
                  'tutar': s.tutar or 0, 'doviz': s.doviz or 'USD',
@@ -15793,6 +15798,53 @@ def create_app():
                          'tutar': dg.tutar})
         db.session.commit()
         return jsonify({'ok': True, 'cari_hareket_id': ch.id})
+
+    @app.route('/ortaklik/<oid>/ekstre')
+    def ortaklik_ekstre(oid):
+        """OR9 · ORTAKLIK EKSTRESİ — yazdırılabilir hesap dökümü.
+
+        İki kip:
+          kip=ortak (varsayılan) — ortağa gönderilecek hâli. Hesabın
+              tamamı: ciro, maliyet, vergi kalemleri, net kâr, iki
+              tarafın payı ve katkısı, dağıtımlar, bakiye.
+          kip=ic — yukarıdakinin üstüne bağlı işler, satış kayıtları
+              ve maliyet kayıtları (fatura no'larıyla). Dışarı
+              vermek için değil, kendi kontrolün için.
+
+        Cari ekstresiyle aynı yol: yazdırılabilir sayfa, tarayıcıdan
+        PDF'e basılıyor. Ayrı bir PDF makinesi kurmak, aynı belgenin
+        iki ayrı yerde iki ayrı biçimde üretilmesiyle biterdi.
+        """
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('karlilik', 'okuma'):
+            return redirect(url_for('dashboard'))
+        o = _ortaklik_bul(oid)
+        if not o:
+            return 'Ortaklık bulunamadı', 404
+        kip = (request.args.get('kip') or 'ortak').lower().strip()
+        if kip not in ('ortak', 'ic'):
+            kip = 'ortak'
+        hesap = _ortaklik_hesap(o)
+        veri = _ortaklik_dict(o, hesap=True)
+        if kip == 'ortak':
+            # Maliyetten alinan katkinin aciklamasi ic referans
+            # tasiyor: "Kesim / Fason / Üretim · MYT-26-01 · FSN-114".
+            # Ortagin belgesinde maliyet kimligi ve FATURA NO isi
+            # yok — kalemin NE OLDUGU yeter. (Test yakaladi.)
+            for _s in veri.get('sermaye_hareketleri', []):
+                _a = _s.get('aciklama') or ''
+                if ' · ' in _a:
+                    _s['aciklama'] = _a.split(' · ', 1)[0]
+        satislar, isler = _ortaklik_satislari(o)
+        return render_template(
+            'ortaklik_ekstre_print.html', o=o, hesap=hesap, veri=veri,
+            kip=kip, bugun=date.today(),
+            firma_adi=((_fk.unvan or _fk.ad) if (_fk := _firma_kayit()) else ''),
+            # İÇ KİPTE: ham kayıtlar. Ortak kipinde hiç gönderilmiyor —
+            # şablonda gizlemek yerine veriyi hiç vermemek, yanlışlıkla
+            # sızdırmayı imkânsız kılar.
+            satislar=(satislar if kip == 'ic' else []),
+            maliyetler=(_ortaklik_maliyet_kayitlari(o) if kip == 'ic' else []))
 
     @app.route('/ortaklik')
     def ortaklik_sayfa():
@@ -27356,6 +27408,8 @@ def create_app():
         'sevkiyat': 'sevkiyat',
         'satislar': 'satislar',
         'karlilik': 'karlilik',
+        # OR9: ortaklik listesi kâr rakami tasiyor — `karlilik` yetkisi.
+        'ortaklik': 'karlilik',
         'maliyet': 'maliyet',
         'kesim': 'kesim',
         'rezervasyon': 'rezervasyon',
@@ -27774,6 +27828,43 @@ def create_app():
                 ozet_satirlari.append((f'{dv} aylık yük', _f(aylik[dv], True)))
                 ozet_satirlari.append((f'{dv} yıllık yük', _f(aylik[dv] * 12, True)))
             dosya = 'sabit_giderler'
+
+        elif modul == 'ortaklik':
+            # OR9 · İŞ ORTAKLIKLARI RAPORU
+            # Yetki `karlilik`e bağlı: liste kâr rakamı taşıyor.
+            if not _yetki_var_mi('karlilik', 'okuma'):
+                return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+            baslik = 'İş Ortaklıkları'
+            headers = ['Ortaklık', 'Ortak', 'Durum', 'İş', 'Ciro (USD)',
+                       'Maliyet (USD)', 'Brüt kâr', 'Vergi', 'Net kâr',
+                       'Bizim pay', 'Ortak pay', 'Ortak katkı', 'Bizim katkı',
+                       'Ortağa ödenecek', 'Ortak bakiye']
+            sayisal = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+            _top = {}
+            for o in Ortaklik.query.order_by(
+                    Ortaklik.baslangic.desc(), Ortaklik.id.desc()).all():
+                h = _ortaklik_hesap(o)
+                rows.append([
+                    f'{o.id} · {o.ad}', o.ortak_ad or '', o.durum or '',
+                    h['is_adedi'],
+                    _f(h['ciro'], True), _f(h['maliyet'], True),
+                    _f(h['brut_kar'], True), _f(h['vergi_toplam'], True),
+                    _f(h['net_kar'], True),
+                    _f(h['paylar']['biz'], True), _f(h['paylar']['ortak'], True),
+                    _f(h['sermaye']['ortak'], True), _f(h['sermaye']['biz'], True),
+                    _f(h['odenecek']['ortak'], True),
+                    _f(h['bakiye']['ortak'], True)])
+                for _k in ('ciro', 'brut_kar', 'net_kar'):
+                    _top[_k] = _top.get(_k, 0) + h[_k]
+                _top['ortak_bakiye'] = (_top.get('ortak_bakiye', 0)
+                                        + h['bakiye']['ortak'])
+            # Hesap USD üzerinden yapılıyor; özet de öyle.
+            ozet_satirlari.append(('Toplam ciro (USD)', _f(_top.get('ciro', 0), True)))
+            ozet_satirlari.append(('Toplam brüt kâr', _f(_top.get('brut_kar', 0), True)))
+            ozet_satirlari.append(('Toplam net kâr', _f(_top.get('net_kar', 0), True)))
+            ozet_satirlari.append(('Ortaklara kalan bakiye',
+                                   _f(_top.get('ortak_bakiye', 0), True)))
+            dosya = 'is_ortakliklari'
 
         else:
             return jsonify({'ok': False, 'mesaj': f'Bilinmeyen modül: {modul}'}), 400

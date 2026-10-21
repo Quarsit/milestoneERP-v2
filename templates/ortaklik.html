@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block title %}İş Ortaklıkları{% endblock %}
 
+{% block header_right %}
+<div class="disa">
+  <button class="disa-btn" onclick="disaAc(event, 'ortaklik')" title="Dışa aktar">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+    Dışa Aktar
+  </button>
+  <div class="disa-menu" id="disaMenu-ortaklik">
+    <button onclick="disaAktar('ortaklik','xlsx')"><span style="background:#1D6F42">XLS</span> Excel indir</button>
+    <button onclick="disaAktar('ortaklik','pdf')"><span style="background:#B23A2E">PDF</span> PDF indir</button>
+  </div>
+</div>
+{% endblock %}
+
 {% block head %}
 <style>
 /* ── İŞ ORTAKLIKLARI (OR1) ─────────────────────────────────────────
@@ -408,10 +422,21 @@ async function detayAc(id) {
       <button class="blok-btn" onclick="kalemAc('dagitim')">+ Dağıtım</button></div>
     <table class="or-mini"><tbody>${dag}</tbody></table>`;
 
-  const eylem = `<button class="blok-btn" onclick="duzenleAc()">Düzenle</button>
+  const eylem = `<button class="blok-btn" onclick="ekstreAc('ortak')">Ekstre</button>
+    <button class="blok-btn" onclick="ekstreAc('ic')">Ekstre (iç)</button>
+    <button class="blok-btn" onclick="duzenleAc()">Düzenle</button>
     <button class="blok-btn" style="color:var(--kirmizi)" onclick="ortSil()">Sil</button>`;
   cekmeceAc(o.ad, `${o.id} · ${o.ortak_ad || 'ortak belirtilmedi'} · %${o.bizim_pay}/%${o.ortak_pay}`,
             govde, eylem);
+}
+
+/* Ekstre YENİ SEKMEDE açılır: çekmecedeki hesabı kaybetmeden
+   yazdırabilesin diye. İki kip — ortağa gönderilecek hâli ve
+   bağlı iş/kayıt dökümünü de gösteren iç kullanım hâli. */
+function ekstreAc(kip) {
+  if (!ACIK) return;
+  window.open(`/ortaklik/${encodeURIComponent(ACIK.id)}/ekstre?kip=${kip}`,
+              '_blank');
 }
 
 /* ── YENİ / DÜZENLE ── */

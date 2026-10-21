@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Ortaklık Ekstresi - {{ o.ad }}</title>
+  <style>
+/* ── ORTAKLIK EKSTRESİ (OR9) ───────────────────────────────────────
+   Cari ekstresiyle aynı yol: yazdırılabilir sayfa, tarayıcıdan PDF'e
+   basılıyor. Ayrı bir PDF makinesi kurmak, aynı belgenin iki yerde
+   iki ayrı biçimde üretilmesiyle biterdi.
+
+   İKİ KİP: `ortak` ortağa gönderilir, `ic` kendi kontrolün için
+   bağlı işleri ve ham kayıtları da gösterir. İç kipin verisi
+   şablonda GİZLENMİYOR — sunucu ortak kipinde onu hiç göndermiyor,
+   böylece yanlışlıkla sızdırmak imkânsız. */
+    :root { --text-main:#232824; --border:#bdc3c7; --danger:#A94438;
+            --success:#4A5D4E; --accent:#C05A36; }
+    body { font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+           color:var(--text-main); font-size:12px; line-height:1.45;
+           background:#fff; margin:0; padding:30px; }
+    @media print {
+      body { padding:0; }
+      .no-print { display:none !important; }
+      table { page-break-inside:auto; }
+      tr { page-break-inside:avoid; page-break-after:auto; }
+      thead { display:table-header-group; }
+      .text-danger { color:#A94438 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .text-success { color:#4A5D4E !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      th { background-color:#f2f2f2 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .hesap .sonuc { background:#F0F4F0 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    }
+    .header { display:flex; justify-content:space-between; align-items:flex-start;
+              border-bottom:2px solid var(--accent); padding-bottom:10px; margin-bottom:20px; }
+    .firma-info h1 { margin:0 0 5px 0; font-size:22px; text-transform:uppercase;
+                     letter-spacing:1px; }
+    .firma-info p { margin:0; color:#555; }
+    .belge-info { text-align:right; }
+    .belge-info h2 { margin:0 0 5px 0; font-size:18px; }
+    .belge-info p { margin:0; color:#555; font-weight:600; }
+    .info-grid { display:flex; justify-content:space-between; margin-bottom:20px; gap:20px; }
+    .info-box { flex:1; border:1px solid var(--border); border-radius:6px; padding:12px; }
+    .info-box h3 { margin:0 0 10px 0; font-size:14px; border-bottom:1px solid #eee;
+                   padding-bottom:5px; color:var(--success); }
+    .info-row { display:flex; margin-bottom:5px; }
+    .info-label { font-weight:bold; color:#555; width:130px; }
+    .info-value { flex:1; font-weight:600; }
+    .ozet-box { flex:0 0 280px; background:#FAF7F2; border:1px solid var(--border);
+                border-radius:6px; padding:12px; }
+    .ozet-box h3 { margin:0 0 10px 0; font-size:14px; border-bottom:1px solid #e0e0e0;
+                   padding-bottom:5px; text-align:center; color:var(--success); }
+    .ozet-row { display:flex; justify-content:space-between; margin-bottom:8px;
+                font-size:13px; font-weight:bold; }
+
+    h3.bolum { font-size:13px; text-transform:uppercase; letter-spacing:.5px;
+               color:var(--success); border-bottom:1px solid #eee; padding-bottom:4px;
+               margin:22px 0 8px; }
+    table { width:100%; border-collapse:collapse; margin-bottom:18px; font-size:11px; }
+    th, td { padding:6px 8px; border:1px solid var(--border); text-align:left; }
+    th { background:#f2f2f2; font-weight:bold; text-transform:uppercase; color:#333; }
+    td.num { text-align:right; font-weight:bold; font-variant-numeric:tabular-nums; }
+
+    /* Hesap zinciri — ekrandaki dökümün aynısı */
+    .hesap { border:1px solid var(--border); border-radius:6px; margin-bottom:18px; }
+    .hesap .satir { display:flex; padding:7px 14px; }
+    .hesap .satir .et { flex:1; }
+    .hesap .satir .tt { font-weight:bold; font-variant-numeric:tabular-nums;
+                        white-space:nowrap; }
+    .hesap .satir.alt { padding-left:30px; font-size:11px; color:#555; }
+    .hesap .satir.kalin { border-top:1px solid var(--border); font-weight:bold; }
+    .hesap .satir.sonuc { background:#F0F4F0; font-weight:bold; }
+    .hesap .eksi .tt { color:var(--danger); }
+    .uyari { border:1px solid #E0A526; background:#FFF6E5; border-radius:6px;
+             padding:9px 12px; margin-bottom:10px; font-size:11px; }
+    .dipnot { margin-top:26px; padding-top:10px; border-top:1px solid #eee;
+              font-size:10px; color:#777; line-height:1.6; }
+    .print-btn { padding:10px 20px; background:#232824; color:#fff; border:none;
+                 border-radius:4px; cursor:pointer; font-size:14px; font-weight:bold;
+                 position:fixed; bottom:20px; right:20px;
+                 box-shadow:0 4px 6px rgba(0,0,0,.1); }
+    /* Yazdır düğmesinin ÜSTÜNDE: yan yana koyunca üst üste biniyordu
+       (düğme geniş, sabit bir sağ boşluk yetmiyor). */
+    .kip-sec { position:fixed; bottom:68px; right:20px; font-size:12px;
+               background:#fff; border:1px solid var(--border); border-radius:4px;
+               padding:9px 14px; }
+    .kip-sec a { color:var(--accent); font-weight:bold; text-decoration:none; }
+  </style>
+</head>
+<body>
+<button class="print-btn no-print" onclick="window.print()">Sayfayı Yazdır / PDF Olarak Kaydet</button>
+<div class="kip-sec no-print">
+  {% if kip == 'ic' %}
+    İç kullanım kipi · <a href="?kip=ortak">ortağa gönderilecek hâli</a>
+  {% else %}
+    Ortak kipi · <a href="?kip=ic">iç kullanım hâli</a>
+  {% endif %}
+</div>
+
+<div class="header">
+  <div class="firma-info">
+    <h1>{{ firma_adi or 'Milestone' }}</h1>
+    <p>İş Ortaklığı Hesap Dökümü</p>
+  </div>
+  <div class="belge-info">
+    <h2>ORTAKLIK EKSTRESİ</h2>
+    <p>{{ o.id }}</p>
+    <p style="font-weight:normal">{{ bugun.strftime('%d.%m.%Y') }}</p>
+    {% if kip == 'ic' %}<p style="color:var(--danger)">İÇ KULLANIM</p>{% endif %}
+  </div>
+</div>
+
+<div class="info-grid">
+  <div class="info-box">
+    <h3>Ortaklık</h3>
+    <div class="info-row"><span class="info-label">Ad:</span>
+      <span class="info-value">{{ o.ad }}</span></div>
+    <div class="info-row"><span class="info-label">Ortak:</span>
+      <span class="info-value">{{ o.ortak_ad or '—' }}</span></div>
+    <div class="info-row"><span class="info-label">Pay dağılımı:</span>
+      <span class="info-value">Biz %{{ hesap.bizim_pay }} · Ortak %{{ hesap.ortak_pay }}</span></div>
+    <div class="info-row"><span class="info-label">Anapara yöntemi:</span>
+      <span class="info-value">{{ 'Önce iade, sonra kâr paylaşımı'
+        if hesap.anapara_yontemi == 'once_iade' else 'Ayrı takip' }}</span></div>
+    <div class="info-row"><span class="info-label">Başlangıç:</span>
+      <span class="info-value" style="font-weight:normal">
+        {{ o.baslangic.strftime('%d.%m.%Y') if o.baslangic else '—' }}</span></div>
+    <div class="info-row"><span class="info-label">Para birimi:</span>
+      <span class="info-value">{{ hesap.para_birimi or 'USD' }}</span></div>
+  </div>
+  <div class="ozet-box">
+    <h3>Özet</h3>
+    <div class="ozet-row"><span>Net kâr:</span>
+      <span class="text-success">{{ '%.2f'|format(hesap.net_kar) }}</span></div>
+    <div class="ozet-row"><span>Ortağın payı:</span>
+      <span>{{ '%.2f'|format(hesap.paylar.ortak) }}</span></div>
+    <div class="ozet-row"><span>Ortağın katkısı:</span>
+      <span>{{ '%.2f'|format(hesap.kalan_anapara.ortak) }}</span></div>
+    <div class="ozet-row"><span>Dağıtılan:</span>
+      <span>{{ '%.2f'|format(hesap.dagitilan.ortak) }}</span></div>
+    <div class="ozet-row" style="border-top:2px solid #ccc;padding-top:8px;
+         margin-top:8px;font-size:14px">
+      <span>Ortağa kalan:</span>
+      <span class="{{ 'text-danger' if hesap.bakiye.ortak > 0 else 'text-success' }}">
+        {{ '%.2f'|format(hesap.bakiye.ortak) }} {{ hesap.para_birimi or 'USD' }}</span></div>
+  </div>
+</div>
+
+{% for u in hesap.uyarilar %}<div class="uyari">⚠ {{ u }}</div>{% endfor %}
+
+<h3 class="bolum">Hesap</h3>
+<div class="hesap">
+  <div class="satir"><span class="et">Ciro ({{ hesap.satis_adedi }} satış kaydı)</span>
+    <span class="tt">{{ '%.2f'|format(hesap.ciro) }}</span></div>
+  <div class="satir eksi"><span class="et">Maliyet</span>
+    <span class="tt">− {{ '%.2f'|format(hesap.maliyet) }}</span></div>
+  <div class="satir kalin"><span class="et">Brüt kâr</span>
+    <span class="tt">{{ '%.2f'|format(hesap.brut_kar) }}</span></div>
+  {% for v in hesap.vergiler %}
+  <div class="satir alt eksi"><span class="et">{{ v.ad }}{% if v.matrah_tipi == 'sabit' %}
+      (sabit){% else %} (%{{ v.oran }} × {{ 'ciro' if v.matrah_tipi == 'ciro' else 'brüt kâr' }}){% endif %}{%
+      if v.durum == 'tahmini' %} · tahmini{% endif %}</span>
+    <span class="tt">− {{ '%.2f'|format(v.tutar) }}</span></div>
+  {% else %}
+  <div class="satir alt"><span class="et">vergi kalemi yok</span><span class="tt">—</span></div>
+  {% endfor %}
+  <div class="satir kalin sonuc"><span class="et">Net kâr</span>
+    <span class="tt">{{ '%.2f'|format(hesap.net_kar) }}</span></div>
+  <div class="satir alt"><span class="et">Bizim pay (%{{ hesap.bizim_pay }})</span>
+    <span class="tt">{{ '%.2f'|format(hesap.paylar.biz) }}</span></div>
+  <div class="satir alt"><span class="et">Ortak pay (%{{ hesap.ortak_pay }})</span>
+    <span class="tt">{{ '%.2f'|format(hesap.paylar.ortak) }}</span></div>
+  {% if hesap.anapara_yontemi == 'once_iade' %}
+  <div class="satir alt"><span class="et">Ortağın iade edilecek katkısı</span>
+    <span class="tt">{{ '%.2f'|format(hesap.kalan_anapara.ortak) }}</span></div>
+  {% endif %}
+  <div class="satir kalin"><span class="et">Ortağa ödenecek</span>
+    <span class="tt">{{ '%.2f'|format(hesap.odenecek.ortak) }}</span></div>
+  <div class="satir alt"><span class="et">Şimdiye kadar dağıtılan</span>
+    <span class="tt">{{ '%.2f'|format(hesap.dagitilan.ortak) }}</span></div>
+  <div class="satir kalin"><span class="et">Ortak bakiye (kalan)</span>
+    <span class="tt">{{ '%.2f'|format(hesap.bakiye.ortak) }}</span></div>
+  {% if hesap.sermaye.biz or hesap.dagitilan.biz %}
+  <div class="satir kalin"><span class="et">Bizim tarafımız</span><span class="tt"></span></div>
+  {% if hesap.anapara_yontemi == 'once_iade' %}
+  <div class="satir alt"><span class="et">Bizim iade edilecek katkımız</span>
+    <span class="tt">{{ '%.2f'|format(hesap.kalan_anapara.biz) }}</span></div>
+  {% endif %}
+  <div class="satir alt"><span class="et">Bize ödenecek</span>
+    <span class="tt">{{ '%.2f'|format(hesap.odenecek.biz) }}</span></div>
+  <div class="satir alt"><span class="et">Bizim bakiye</span>
+    <span class="tt">{{ '%.2f'|format(hesap.bakiye.biz) }}</span></div>
+  {% endif %}
+</div>
+
+<h3 class="bolum">Katkılar</h3>
+<table>
+  <thead><tr><th>Taraf</th><th>Hareket</th><th>Tarih</th><th>Açıklama</th>
+    <th style="text-align:right">Tutar</th><th style="text-align:right">USD</th></tr></thead>
+  <tbody>
+  {% for s in veri.sermaye_hareketleri %}
+    <tr>
+      <td>{{ 'Ortak' if s.taraf == 'ortak' else 'Biz' }}</td>
+      <td>{{ 'Koydu' if s.yon == 'koydu' else 'Geri aldı' }}</td>
+      <td>{{ s.tarih or '' }}</td>
+      <td>{{ s.aciklama or '' }}</td>
+      <td class="num">{{ '%.2f'|format(s.tutar) }} {{ s.doviz }}</td>
+      <td class="num">{{ '%.2f'|format(s.usd) }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" style="color:#777">katkı hareketi yok</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3 class="bolum">Dağıtımlar</h3>
+<table>
+  <thead><tr><th>Taraf</th><th>Tarih</th><th>Açıklama</th>
+    <th style="text-align:right">Tutar</th><th>Cari</th></tr></thead>
+  <tbody>
+  {% for x in hesap.dagitimlar %}
+    <tr>
+      <td>{{ 'Ortak' if x.taraf == 'ortak' else 'Biz' }}</td>
+      <td>{{ x.tarih or '' }}</td>
+      <td>{{ x.aciklama or '' }}</td>
+      <td class="num">{{ '%.2f'|format(x.tutar) }}{%
+        if x.cevrildi %} <span style="font-weight:normal;color:#777">({{
+        '%.2f'|format(x.ham_tutar) }} {{ x.doviz }}){% endif %}</span></td>
+      <td>{{ 'işlendi' if x.cariye_islendi else '—' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" style="color:#777">dağıtım yok</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if kip == 'ic' %}
+<h3 class="bolum">Bağlı işler</h3>
+<table>
+  <thead><tr><th>Tip</th><th>No</th><th>Kapsam</th><th>Açıklama</th></tr></thead>
+  <tbody>
+  {% for i in veri.isler %}
+    <tr><td>{{ i.kaynak_tip }}</td><td>{{ i.no or i.kaynak_id }}</td>
+      <td>{% if i.kapsanan %}kesildi → {{ i.kapsanan }} ürün dahil{% else %}—{% endif %}</td>
+      <td>{{ i.aciklama or '' }}</td></tr>
+  {% else %}
+    <tr><td colspan="4" style="color:#777">iş bağlanmadı</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3 class="bolum">Satış kayıtları</h3>
+<table>
+  <thead><tr><th>Tarih</th><th>Müşteri</th><th>Cins</th><th>Stok</th>
+    <th style="text-align:right">Tutar</th><th style="text-align:right">Maliyet</th>
+    <th style="text-align:right">Kâr</th></tr></thead>
+  <tbody>
+  {% for s in satislar %}
+    <tr><td>{{ s.satis_tarihi.strftime('%d.%m.%Y') if s.satis_tarihi else '' }}</td>
+      <td>{{ s.musteri or '' }}</td><td>{{ s.cins or '' }}</td>
+      <td>{{ s.stok_id or '' }}</td>
+      <td class="num">{{ '%.2f'|format(s.tutar_usd or 0) }}</td>
+      <td class="num">{{ '%.2f'|format(s.maliyet_usd or 0) }}</td>
+      <td class="num">{{ '%.2f'|format(s.kar_usd or 0) }}</td></tr>
+  {% else %}
+    <tr><td colspan="7" style="color:#777">satış kaydı yok</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3 class="bolum">Maliyet kayıtları</h3>
+<table>
+  <thead><tr><th>Tarih</th><th>Tip</th><th>Bağlı</th><th>Fatura no</th>
+    <th style="text-align:right">Tutar</th><th>Katkıda</th></tr></thead>
+  <tbody>
+  {% for m in maliyetler %}
+    <tr><td>{{ m.maliyet_tarihi.strftime('%d.%m.%Y') if m.maliyet_tarihi else '' }}</td>
+      <td>{{ m.maliyet_tip or '—' }}</td><td>{{ m.baglanti_id or '' }}</td>
+      <td>{{ m.fatura_no or '' }}</td>
+      <td class="num">{{ '%.2f'|format(m.tutar or 0) }} {{ m.doviz or '' }}</td>
+      <td>{{ 'evet' if m.id in veri.alinan_maliyetler else '—' }}</td></tr>
+  {% else %}
+    <tr><td colspan="6" style="color:#777">maliyet kaydı yok</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="dipnot">
+  Hesap <b>{{ hesap.para_birimi or 'USD' }}</b> üzerinden yapılmıştır; USD dışında
+  girilen kalemler kendi işlem tarihindeki TCMB kuruyla çevrilmiştir.
+  Kâr rakamı satış kayıtlarından türer, bu belgede yeniden hesaplanmaz.
+  {% if hesap.vergi_tahmini %}Vergilerin
+  {{ '%.2f'|format(hesap.vergi_tahmini) }} {{ hesap.para_birimi or 'USD' }}'lik kısmı
+  TAHMİNİDİR; kesinleştiğinde paylar değişir.{% endif %}
+  {% if kip == 'ortak' %}<br>Bu belge ortaklık hesabının özetidir;
+  bağlı iş ve kayıt dökümü için iç kullanım kipine bakınız.{% endif %}
+</div>
+</body>
+</html>
