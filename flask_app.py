@@ -15076,6 +15076,10 @@ def create_app():
                            # OR7: stokta kimlik (PLK-…) değil, depoda
                            # okunan numara anlamlı.
                            'no': _ortaklik_is_no(i),
+                           # OR8: bu iş kaç stoğu dolaylı kapsıyor —
+                           # "bloğu bağladım, plakalar dahil mi?"
+                           # sorusunun cevabı ekranda dursun.
+                           'kapsanan': _ortaklik_is_kapsami(i),
                            'aciklama': i.aciklama or ''}
                           for i in OrtaklikIs.query.filter_by(
                               ortaklik_id=o.id).order_by(OrtaklikIs.id).all()]
@@ -15111,6 +15115,35 @@ def create_app():
                 return q2((s.tonaj or 0) * _f)
             return q2((s.hacim_m3 or 0) * _f)
         return q2((getattr(s, 'metraj_m2', 0) or 0) * _f)
+
+    def _ortaklik_is_kapsami(i):
+        """Bu iş kesimle kaç stok türetmiş (kendisi hariç)."""
+        if i.kaynak_tip not in ORTAKLIK_STOK_TIPLERI:
+            return 0
+        return len(_ortaklik_stok_zinciri([i]) - {i.kaynak_id})
+
+    def _ortaklik_kapsanan_stoklar():
+        """OR8 — bir ortaklığa DOLAYLI dahil olan stoklar.
+
+        Blok bağlanınca ondan kesilen plakalar zaten ortaklığa
+        dahil: maliyetleri listeleniyor, satışları ciroya giriyor.
+        Ama seçicide ayrıca görünüyorlardı — hem gereksiz, hem
+        "demek ki dahil değiller" izlenimi veriyordu.
+
+        Döner: {stok_id: (ortaklik_id, kok_stok_id)}  (kökün KENDİSİ
+        hariç; o zaten doğrudan bağlı sayılıyor.)
+        """
+        kapsam = {}
+        for ort_id, in db.session.query(OrtaklikIs.ortaklik_id).filter(
+                OrtaklikIs.kaynak_tip.in_(ORTAKLIK_STOK_TIPLERI)).distinct():
+            isler = OrtaklikIs.query.filter_by(ortaklik_id=ort_id).all()
+            kokler = {i.kaynak_id for i in isler
+                      if i.kaynak_tip in ORTAKLIK_STOK_TIPLERI}
+            for sid in _ortaklik_stok_zinciri(isler) - kokler:
+                # İlk bağ kazanır; aynı stok iki zincire düşerse
+                # (veride tuhaflık) ikincisini sessizce ezmeyelim.
+                kapsam.setdefault(sid, (ort_id, None))
+        return kapsam
 
     def _ortaklik_is_no(i):
         """Bağlı işin okunur numarası (stokta blok no / plaka kodu)."""
@@ -15395,6 +15428,10 @@ def create_app():
         # Hangi işler zaten bağlı (HERHANGİ bir ortaklığa)
         bagli = {b.kaynak_id for b in OrtaklikIs.query.filter_by(
             kaynak_tip=tip).all()}
+        # OR8: doğrudan bağlı olmasa da bir bloğun kesim zinciriyle
+        # KAPSANAN stoklar da seçilebilir görünmemeli.
+        if tip in ORTAKLIK_STOK_TIPLERI:
+            bagli |= set(_ortaklik_kapsanan_stoklar())
 
         kayitlar = []
         if tip == 'SIPARIS':
@@ -15508,6 +15545,18 @@ def create_app():
             return jsonify({'ok': False, 'mesaj':
                             f'Bu iş {_var.ortaklik_id} ortaklığına bağlı. '
                             f'Aynı kâr iki kez paylaşılamaz.'}), 409
+        # OR8: zincirle zaten kapsanan stoğu ayrıca bağlamaya gerek yok.
+        # Rakamı bozmaz (eşleşme küme üzerinden tek sorguyla yapılıyor)
+        # ama listeyi şişirir ve "bağlamazsam dahil değil" yanılgısını
+        # besler. Sebebini söyleyip durduruyoruz.
+        if tip in ORTAKLIK_STOK_TIPLERI:
+            _kap = _ortaklik_kapsanan_stoklar().get(kid)
+            if _kap:
+                _o = _kap[0]
+                return jsonify({'ok': False, 'error': 'zaten_kapsanda',
+                    'mesaj': (f'Bu stok kesim zinciriyle {_o} ortaklığına '
+                              f'ZATEN dahil — bağlandığı bloktan türemiş. '
+                              f'Ayrıca bağlamaya gerek yok.')}), 409
         i = OrtaklikIs(ortaklik_id=oid, kaynak_tip=tip, kaynak_id=kid,
                        aciklama=(d.get('aciklama') or '').strip())
         db.session.add(i)

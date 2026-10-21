@@ -355,7 +355,11 @@ async function detayAc(id) {
 
   const isler = (o.isler || []).map(i => `<tr>
       <td class="mono">${kacar(i.kaynak_tip)} ${kacar(i.no || i.kaynak_id)}</td>
-      <td>${kacar(i.aciklama || '')}</td>
+      <td>${kacar(i.aciklama || '')}${
+        /* OR8: "bloğu bağladım, plakalar dahil mi?" sorusunun cevabı
+           ekranda dursun — plakaları ayrıca bağlamaya çalışmayasın. */
+        i.kapsanan ? `<span style="color:var(--soluk);font-size:.78rem">${
+          i.aciklama ? ' · ' : ''}kesildi → ${i.kapsanan} ürün ortaklığa dahil</span>` : ''}</td>
       <td class="sag"><span class="sil" onclick="isSil(${i.id})">çöz</span></td>
     </tr>`).join('') || '<tr><td colspan="3" style="color:var(--soluk)">iş bağlanmadı</td></tr>';
 

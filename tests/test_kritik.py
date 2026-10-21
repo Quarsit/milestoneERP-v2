@@ -4802,3 +4802,66 @@ def test_or7_stok_tekilligi_ve_varlik_kapilari():
     idler = [x['id'] for x in
              c.get(f'/api/ortaklik/{b}/baglanabilir?tip=BLOK').get_json()['data']]
     assert 'BLK-OR7D' not in idler
+
+
+def test_or8_zincirle_kapsanan_stok_secilebilir_gorunmez():
+    """OR8: bağlı bloktan türeyen plakalar seçicide ÇIKMAMALI.
+
+    Rakamı bozmuyordu — eşleşme küme üzerinden tek sorguyla
+    yapılıyor, ciro iki kez sayılmıyor (ölçüldü). Ama plakalar
+    seçilebilir göründüğü sürece "bağlamazsam dahil değil"
+    yanılgısını besliyordu; bağlayınca da bağlı iş listesi gereksiz
+    şişiyordu."""
+    from models import BlokStok, SatisKaydi
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BLK-OR8', firma_id=1, blok_no='K8800', cins='TEST',
+            boy=300, yukseklik=180, en=170, hacim_m3=9.18, tonaj=24,
+            alis_fiyati=420, alis_fiyat_birim='ton', doviz='USD',
+            durum='Serbest', uretici='ALBSTONE'))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': ['BLK-OR8'],
+        'kesim_tarihi': '2026-10-10',
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 280,
+                      'yukseklik': 170, 'kalinlik': 2, 'adet': 3}]})
+    plakalar = [o['id'] for o in r.get_json()['olusan_stoklar']]
+    with fa.app.app_context():
+        db.session.add(SatisKaydi(
+            id='SAT-OR8', firma_id=1, stok_id=plakalar[0], stok_tip='PLAKA',
+            cins='TEST', musteri='ACIK CARI', satis_tarihi=date(2026, 10, 20),
+            tutar=3000, tutar_usd=3000, doviz='USD',
+            maliyet_usd=1800, kar_usd=1200))
+        db.session.commit()
+
+    oid = c.post('/api/ortaklik', headers=H,
+                 json={'ad': 'Kapsam'}).get_json()['id']
+    # Blok bağlanmadan ÖNCE plakalar seçilebilir
+    once = [x['id'] for x in
+            c.get(f'/api/ortaklik/{oid}/baglanabilir?tip=PLAKA').get_json()['data']]
+    assert all(p in once for p in plakalar), once
+
+    c.post(f'/api/ortaklik/{oid}/is', headers=H,
+           json={'kaynak_tip': 'BLOK', 'kaynak_id': 'BLK-OR8'})
+
+    # Blok bağlandıktan SONRA plakalar listede YOK
+    sonra = [x['id'] for x in
+             c.get(f'/api/ortaklik/{oid}/baglanabilir?tip=PLAKA').get_json()['data']]
+    assert not any(p in sonra for p in plakalar), sonra
+
+    # Yine de bağlamaya kalkarsan SEBEBİNİ söyleyerek durduruyor
+    r2 = c.post(f'/api/ortaklik/{oid}/is', headers=H,
+                json={'kaynak_tip': 'PLAKA', 'kaynak_id': plakalar[0]})
+    assert r2.status_code == 409, r2.get_data(as_text=True)
+    assert r2.get_json().get('error') == 'zaten_kapsanda'
+    assert 'türemiş' in r2.get_json()['mesaj']
+
+    # Bağlı iş satırı kapsamı söylüyor
+    isler = c.get(f'/api/ortaklik/{oid}').get_json()['data']['isler']
+    blok = [i for i in isler if i['kaynak_id'] == 'BLK-OR8'][0]
+    assert blok['kapsanan'] == 3, blok
+
+    # Ve ciro zaten plakadan geliyor — blok tek başına yeterli
+    h = c.get(f'/api/ortaklik/{oid}').get_json()['data']['hesap']
+    assert h['ciro'] == 3000 and h['satis_adedi'] == 1, h
