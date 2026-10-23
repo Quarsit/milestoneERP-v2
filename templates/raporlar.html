@@ -30,6 +30,55 @@
   .yas-satir .bar i{display:block;height:100%;border-radius:5px}
   .yas-satir .tut{font-family:var(--mono);font-weight:600;font-size:.86rem;width:100px;text-align:right}
   @media (max-width:1000px){ .izgara-2,.izgara-esit{grid-template-columns:1fr} }
+
+  /* ── MR1 · STOK MALİYETİ ── */
+  .sm-suzgec{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+  .sm-suzgec label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--soluk);margin-bottom:4px}
+  .sm-suzgec input,.sm-suzgec select{min-width:120px}
+  .sm-suzgec .sag{margin-left:auto;display:flex;gap:8px}
+  /* Blok kutusu: başlık + altında kesimden çıkanlar */
+  .sm-blok{border:1px solid var(--cizgi);border-radius:10px;margin-bottom:10px;overflow:hidden}
+  .sm-blok:last-child{margin-bottom:0}
+  .sm-bas{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;
+    padding:10px 13px;background:var(--taban);cursor:pointer}
+  .sm-bas .ad{font-weight:700;font-size:.9rem}
+  .sm-bas .et{color:var(--soluk);font-size:.78rem}
+  .sm-bas .tut{margin-left:auto;font-family:var(--mono);font-weight:700;white-space:nowrap}
+  .sm-ic{padding:0 13px 11px;display:none}
+  .sm-blok.acik .sm-ic{display:block}
+  /* Kalem satırı — sütunlar SABİT, MG1'deki ile aynı gerekçe */
+  .sm-kalem{display:grid;grid-template-columns:minmax(0,17em) minmax(0,9em) 1fr;
+    gap:2px 10px;align-items:baseline;padding:3px 0;font-size:.82rem}
+  .sm-kalem .e{color:var(--soluk);font-size:.74rem}
+  .sm-kalem .son{justify-self:end;font-family:var(--mono);white-space:nowrap}
+  .sm-urun{display:grid;grid-template-columns:minmax(0,14em) minmax(0,8em) 1fr auto;
+    gap:2px 10px;align-items:baseline;padding:5px 0;font-size:.83rem;
+    border-top:1px solid var(--cizgi)}
+  .sm-urun .m{font-family:var(--mono)}
+  .sm-alt{margin-top:7px;padding-top:7px;border-top:1px solid var(--cizgi);
+    font-size:.78rem;color:var(--soluk)}
+  .sm-haric{color:var(--kehribar)}
+  /* Kârlılıkta açılır döküm */
+  tr.dokum > td{background:var(--taban);padding:11px 13px}
+  tr.tiklanir{cursor:pointer}
+  @media (max-width:760px){
+    .sm-kalem{grid-template-columns:1fr auto}
+    .sm-kalem > :first-child{grid-column:1 / -1}
+    .sm-urun{grid-template-columns:1fr auto}
+  }
+  /* ── YAZDIR ──
+     Ekranda sekmeler ve süzgeçler var; kâğıtta ikisi de anlamsız.
+     Yalnız AÇIK bölüm basılır. */
+  @media print{
+    .sekmeler,.sm-suzgec,.kpiler{display:none !important}
+    .bolum{display:none !important}
+    .bolum.aktif{display:block !important}
+    .sm-ic{display:block !important}
+    .panel{break-inside:avoid;border:0;padding:0}
+    .sm-blok{break-inside:avoid}
+    tr.dokum{display:table-row !important}
+  }
 </style>
 {% endblock %}
 
@@ -56,6 +105,7 @@
   <button class="sekme" data-b="sevkiyat">Konteyner</button>
   <button class="sekme" data-b="performans">Satış Performansı</button>
   <button class="sekme" data-b="maliyetanaliz">Maliyet Analizi</button>
+  <button class="sekme" data-b="stokmaliyet">Stok Maliyeti</button>
 </div>
 
 <!-- GENEL BAKIŞ -->
@@ -175,6 +225,55 @@
         <tbody id="maGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
       </table>
     </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MR1 — STOK MALİYETİ
+     Bu bilgi sistemde vardı ama tek tek, kaynak zinciri
+     çekmecesinde. Toplu ve süzülebilir hâli yoktu.
+     Bloklar başlık, kesimden çıkanlar onların altında: bloğun
+     matrahının hangi plakalara dağıldığı bir arada okunsun.
+     ══════════════════════════════════════════════════════════════ -->
+<section class="bolum" id="b-stokmaliyet">
+  <div class="panel" style="margin-bottom:14px">
+    <div class="sm-suzgec">
+      <div><label>Tip</label>
+        <select id="smTip">
+          <option value="">hepsi</option>
+          <option value="BLOK">Blok</option>
+          <option value="PLAKA">Plaka</option>
+          <option value="EBATLI">Ebatlı</option>
+        </select></div>
+      <div><label>Cins</label><input id="smCins" placeholder="tümü"></div>
+      <div><label>Üretici</label><input id="smUretici" placeholder="tümü"></div>
+      <div><label>Durum</label><input id="smDurum" placeholder="tümü"></div>
+      <div><label>Blok No</label><input id="smBlokNo" placeholder="tümü"></div>
+      <div><label>Giriş · başlangıç</label><input id="smBas" type="date"></div>
+      <div><label>Giriş · bitiş</label><input id="smBit" type="date"></div>
+      <div class="sag">
+        <button class="btn-yeni" onclick="stokMaliyetYukle()">Uygula</button>
+        <button class="iptal-btn" onclick="smTemizle()">Temizle</button>
+        <button class="iptal-btn" onclick="smExcel()">Excel</button>
+        <button class="iptal-btn" onclick="window.print()">Yazdır</button>
+      </div>
+    </div>
+  </div>
+  <div class="kpiler" id="smKpi" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+    <div class="kpi"><label>Blok</label><div class="deger" id="smBlokAdet">—</div><div class="ek" id="smBlokTut">—</div></div>
+    <div class="kpi"><label>Kesimden çıkan</label><div class="deger" id="smUrunAdet">—</div><div class="ek" id="smUrunTut">—</div></div>
+    <div class="kpi"><label>Bağımsız ürün</label><div class="deger" id="smBagAdet">—</div><div class="ek" id="smBagTut">—</div></div>
+    <div class="kpi"><label>Ek maliyet</label><div class="deger" id="smEkTut">—</div><div class="ek">alış hariç</div></div>
+  </div>
+  <div class="panel">
+    <h4>Blok ve ondan çıkanlar
+      <span style="color:var(--soluk);font-weight:400;font-size:.83rem">· başlığa tıkla, dökümü aç</span></h4>
+    <div id="smGovde"><div class="yukleniyor">Yükleniyor…</div></div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <h4>Kesimden gelmeyen ürünler
+      <span style="color:var(--soluk);font-weight:400;font-size:.83rem">· doğrudan girilmiş</span></h4>
+    <div id="smBagimsiz"><div class="yukleniyor">Yükleniyor…</div></div>
   </div>
 </section>
 
@@ -308,7 +407,8 @@ async function karlilikYukle() {
       const marj = s.marj != null ? s.marj : (satis > 0 ? (s.kar_usd || 0) / satis * 100 : 0);
       const ray = marj >= 25 ? '--verde' : marj >= 10 ? '--kehribar' : '--kirmizi';
       return `
-      <tr style="border-left-color:var(${ray})">
+      <tr class="tiklanir" data-sk="${kacar(s.id)}" style="border-left-color:var(${ray})"
+          onclick="satisDokumAc('${kacar(s.id)}', 7)" title="Maliyet dökümünü aç">
         <td class="mono" style="font-size:.8rem">${kacar(s.id)}${s.fatura_no ? '<div class="ikincil">' + kacar(s.fatura_no) + '</div>' : ''}</td>
         <td>${kacar(s.musteri || '—')}</td>
         <td>${kacar(s.cins || '—')}<div class="ikincil">${(s.miktar || 0).toLocaleString('tr-TR')} ${kacar(s.birim || '')}</div></td>
@@ -530,10 +630,172 @@ async function maliyetAnalizYukle() {
 }
 
 /* ── Sekmeler (tembel yükleme) ── */
+/* ═══════════════════════════════════════════════════════════════
+   MR1 — STOK MALİYETİ
+   ═══════════════════════════════════════════════════════════════ */
+function smSorgu() {
+  const al = i => (document.getElementById(i).value || '').trim();
+  const p = new URLSearchParams();
+  const esle = { tip: 'smTip', cins: 'smCins', uretici: 'smUretici',
+                 durum: 'smDurum', blok_no: 'smBlokNo',
+                 baslangic: 'smBas', bitis: 'smBit' };
+  Object.entries(esle).forEach(([ad, id]) => { if (al(id)) p.set(ad, al(id)); });
+  return p.toString();
+}
+function smTemizle() {
+  ['smTip','smCins','smUretici','smDurum','smBlokNo','smBas','smBit']
+    .forEach(i => document.getElementById(i).value = '');
+  stokMaliyetYukle();
+}
+function smExcel() {
+  const q = smSorgu();
+  window.location = '/api/rapor/stok_maliyet/excel' + (q ? '?' + q : '');
+}
+
+/* Kalem satırı — stok maliyet raporunda ve açılır satış dökümünde
+   AYNI biçim. İki ayrı yazım zamanla ayrışırdı. */
+function smKalemSatir(k) {
+  return `<div class="sm-kalem">
+    <span><span class="e">${kacar(k.tip || '—')}</span></span>
+    <span><span class="e">${k.fatura_no ? kacar(k.fatura_no) : 'belgesiz'}</span></span>
+    <span class="son">${para(k.usd)}${
+      k.doviz && k.doviz !== 'USD'
+        ? ` <span class="e">(${para2(k.tutar, k.doviz)})</span>` : ''}</span>
+  </div>`;
+}
+
+function smBirim(b) {
+  /* Ölçü girilmemişse birim maliyet YOK — sıfır yazmak
+     "maliyeti yok" demek olurdu. */
+  return b && b.deger != null
+    ? `${para(b.deger)} / ${b.birim}` : '<span class="e">ölçü yok</span>';
+}
+
+function smUrunSatir(u) {
+  const ol = u.olcu || {};
+  const mik = ol.metraj_m2 != null ? ol.metraj_m2 + ' m²'
+            : (ol.tonaj != null ? ol.tonaj + ' ton' : '—');
+  return `<div class="sm-urun">
+    <span class="mono" style="font-size:.8rem">${kacar(u.slab_no ? u.blok_no + ' · ' + u.slab_no : (u.kasa_no || u.id))}</span>
+    <span class="e">${kacar(mik)} · ${kacar(u.durum || '—')}</span>
+    <span class="e">${smBirim(u.birim_maliyet)}</span>
+    <span class="m" style="font-weight:600">${para(u.toplam_usd)}</span>
+  </div>`;
+}
+
+function smKart(g, acik) {
+  const u = g.urun_ozet || { adet: 0 };
+  const ad = g.tip === 'BLOK'
+    ? `Blok ${kacar(g.blok_no || g.id)}`
+    : kacar(g.slab_no ? g.blok_no + ' · ' + g.slab_no : (g.kasa_no || g.id));
+  return `<div class="sm-blok${acik ? ' acik' : ''}">
+    <div class="sm-bas" onclick="this.parentElement.classList.toggle('acik')">
+      <span class="ad">${ad}</span>
+      <span class="et">${kacar(g.cins || '—')}</span>
+      <span class="et">${kacar(g.uretici || '—')}</span>
+      <span class="et">${kacar(g.durum || '—')}</span>
+      ${u.adet ? `<span class="et">${u.adet} ürün</span>` : ''}
+      <span class="tut">${para(g.toplam_usd)}</span>
+    </div>
+    <div class="sm-ic">
+      <div class="sm-kalem"><span><span class="e">Alış bedeli</span></span>
+        <span></span><span class="son">${para(g.alim_usd)}</span></div>
+      ${(g.kalemler || []).map(smKalemSatir).join('')}
+      <div class="sm-alt">
+        <strong style="color:var(--murekkep)">Toplam ${para(g.toplam_usd)}</strong>
+        · birim ${smBirim(g.birim_maliyet)}
+        ${(g.haric || []).length ? '<span class="sm-haric"> · maliyet dışı: '
+          + g.haric.map(h => kacar(h.tip) + ' ' + para(h.usd)).join(', ')
+          + '</span>' : ''}
+      </div>
+      ${(g.urunler || []).length ? `<div style="margin-top:9px">
+         <div class="e" style="font-size:.74rem;color:var(--soluk);text-transform:uppercase;letter-spacing:.04em;font-weight:700">Kesimden çıkanlar</div>
+         ${g.urunler.map(smUrunSatir).join('')}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+async function stokMaliyetYukle() {
+  const govde = document.getElementById('smGovde');
+  const bagKutu = document.getElementById('smBagimsiz');
+  if (!gorunur('raporlar') && !gorunur('stok')) {
+    govde.innerHTML = bos('Yetkin yok.'); bagKutu.innerHTML = ''; return;
+  }
+  govde.innerHTML = '<div class="yukleniyor">Yükleniyor…</div>';
+  try {
+    const q = smSorgu();
+    const d = await api('/api/rapor/stok_maliyet' + (q ? '?' + q : ''));
+    const gen = d.genel || {};
+    const yaz = (i, v) => document.getElementById(i).textContent = v;
+    yaz('smBlokAdet', (gen.blok || {}).adet || 0);
+    yaz('smBlokTut', para((gen.blok || {}).toplam_usd || 0));
+    yaz('smUrunAdet', (gen.urun || {}).adet || 0);
+    yaz('smUrunTut', para((gen.urun || {}).toplam_usd || 0));
+    yaz('smBagAdet', (gen.bagimsiz || {}).adet || 0);
+    yaz('smBagTut', para((gen.bagimsiz || {}).toplam_usd || 0));
+    yaz('smEkTut', para(((gen.blok || {}).kalem_usd || 0)
+                      + ((gen.bagimsiz || {}).kalem_usd || 0)
+                      + ((gen.urun || {}).kalem_usd || 0)));
+    const gl = d.gruplar || [];
+    /* Tek sonuç varsa KENDİLİĞİNDEN açık gelsin: tek bir bloğu
+       süzen kullanıcı zaten dökümü görmek istiyor. */
+    govde.innerHTML = gl.length
+      ? gl.map(g => smKart(g, gl.length === 1)).join('')
+      : bos('Süzgeçlere uyan blok yok.');
+    const bl = d.bagimsiz || [];
+    bagKutu.innerHTML = bl.length
+      ? bl.map(b => smKart(b, bl.length === 1)).join('')
+      : bos('Kesimden gelmeyen ürün yok.');
+  } catch (e) { govde.innerHTML = bos('Rapor alınamadı.'); }
+}
+
+/* ═══ Kârlılıkta açılır maliyet dökümü ═══
+   Liste HAFİF kalsın diye döküm ancak tıklanınca çekiliyor. */
+async function satisDokumAc(satisId, sutun) {
+  const tr = document.querySelector(`tr[data-sk="${satisId}"]`);
+  if (!tr) return;
+  const varOlan = tr.nextElementSibling;
+  if (varOlan && varOlan.classList.contains('dokum')) {
+    varOlan.remove(); return;            // ikinci tık kapatır
+  }
+  const yeni = document.createElement('tr');
+  yeni.className = 'dokum';
+  yeni.innerHTML = `<td colspan="${sutun}"><div class="yukleniyor">Yükleniyor…</div></td>`;
+  tr.after(yeni);
+  try {
+    const d = await api(`/api/karlilik/${encodeURIComponent(satisId)}/dokum`);
+    const mal = d.maliyet || {}, o = d.ozet || {}, st = d.stok;
+    yeni.innerHTML = `<td colspan="${sutun}">
+      ${st ? `<div class="sm-alt" style="margin:0 0 7px;padding:0;border:0">
+        Stok ${kacar(st.id)}${st.blok_no ? ' · blok ' + kacar(st.blok_no) : ''}${
+        st.uretici ? ' · ' + kacar(st.uretici) : ''}</div>` : ''}
+      <div class="sm-kalem"><span><span class="e">Alış bedeli</span></span>
+        <span></span><span class="son">${para(mal.alim_usd)}</span></div>
+      ${(mal.kalemler || []).map(smKalemSatir).join('')}
+      <div class="sm-alt">
+        Maliyet <strong style="color:var(--murekkep)">${para(mal.toplam_usd)}</strong>
+        · Satış <strong style="color:var(--murekkep)">${para(o.satis_usd)}</strong>
+        · Kâr <strong style="color:var(--verde)">${para(o.kar_usd)}</strong>
+        · Marj <strong style="color:var(--murekkep)">%${(o.marj || 0).toFixed(1).replace('.', ',')}</strong>
+        ${(mal.haric || []).length ? '<span class="sm-haric"> · maliyet dışı: '
+          + mal.haric.map(h => kacar(h.tip) + ' ' + para(h.usd)).join(', ')
+          + '</span>' : ''}
+      </div>
+      ${d.tutarsizlik ? `<div class="sm-alt sm-haric">
+        DİKKAT: kayıttaki maliyet ${para(d.tutarsizlik.kayitta)},
+        şu an hesaplanan ${para(d.tutarsizlik.hesaplanan)} —
+        stoğa sonradan gider eklenmiş ve bu satış kaydı tazelenmemiş.</div>` : ''}
+    </td>`;
+  } catch (e) {
+    yeni.innerHTML = `<td colspan="${sutun}"><div class="bos">Döküm alınamadı.</div></td>`;
+  }
+}
+
 const yuklendi = { genel: false, karlilik: false, stok: false, cari: false, sevkiyat: false,
-                   performans: false, maliyetanaliz: false };
+                   performans: false, maliyetanaliz: false, stokmaliyet: false };
 const yukleyici = { genel: genelYukle, karlilik: karlilikYukle, stok: stokYukle, cari: cariYukle,
-                    sevkiyat: konteynerYukle, performans: performansYukle, maliyetanaliz: maliyetAnalizYukle };
+                    sevkiyat: konteynerYukle, performans: performansYukle, maliyetanaliz: maliyetAnalizYukle,
+                    stokmaliyet: stokMaliyetYukle };
 function bolumAc(ad) {
   document.querySelectorAll('.bolum').forEach(b => b.classList.remove('aktif'));
   document.getElementById('b-' + ad).classList.add('aktif');

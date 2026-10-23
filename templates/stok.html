@@ -106,6 +106,45 @@
 .tp-not.tp-uyari{background:var(--kehribar-bg);color:var(--kehribar)}
 @media(max-width:760px){.tp-eslestir,.tp-ozet{grid-template-columns:1fr}}
 .ek-isaret{font-size:.6rem;color:var(--kehribar);margin-left:3px;vertical-align:super}
+/* ── MG1 · MALİYETLER TİPE GÖRE GRUPLANIR ──
+   Kaynak zinciri çekmecesinde her maliyet satırı KENDİ kartıydı
+   (`.kalem-satir`). Aynı tipten iki belge iki ayrı kart açıyor,
+   tip adı her kartta tekrarlanıyor ve altı kalem çekmeceyi baştan
+   aşağı dolduruyordu.
+
+   Artık tip BİR KEZ yazılıyor, belgeler altında satır satır
+   duruyor. Altı kart yerine beş kutu, her biri iki satır yüksekliğinde.
+
+   Esnek kutu + sarma: çekmece dar ekranda 430 piksele düşüyor;
+   ızgara olsaydı belge numarası kırpılırdı, böyle alt satıra
+   geçiyor. */
+.mlyt-grup{background:var(--taban);border:1px solid var(--cizgi);
+  border-radius:9px;padding:8px 11px 7px;margin-bottom:6px}
+.mlyt-grup:last-child{margin-bottom:0}
+.mlyt-bas{font-size:.8rem;font-weight:700;margin-bottom:3px}
+/* SÜTUNLAR SABİT GENİŞLİKTE — içeriğe göre DEĞİL.
+   İlk halinde esnek kutu + boşluk vardı: "Tarih:" her satırda
+   belge numarasının uzunluğu kadar sağa kayıyordu. İçeriğe göre
+   genişleyen sütun (`max-content`) da yetmez — her satır KENDİ
+   ızgarası olduğu için sütunlar satırlar arasında paylaşılmaz.
+   Sabit `em` ölçüsü hem satırlar hem KUTULAR arasında hizalıyor. */
+.mlyt-satir{display:grid;
+  grid-template-columns:minmax(0,19em) minmax(0,10em) 1fr;
+  gap:2px 10px;align-items:baseline;padding:4px 0;font-size:.83rem}
+.mlyt-satir > span{min-width:0;overflow-wrap:anywhere}
+.mlyt-satir + .mlyt-satir{border-top:1px solid var(--cizgi)}
+.mlyt-satir .e{color:var(--soluk);font-size:.74rem;font-weight:400}
+.mlyt-satir .d{font-weight:600}
+/* Tutar sağa yaslanır: göz tek sütunda tarıyor. */
+.mlyt-satir .son{justify-self:end;white-space:nowrap}
+.mlyt-satir .son .d{font-family:var(--mono)}
+/* Çekmece telefonda tam genişliğe düşüyor; üç sabit sütun oraya
+   sığmaz. Belge no tek başına üst satıra, tarih ve tutar altına —
+   ikisi hâlâ hizalı. */
+@media(max-width:760px){
+  .mlyt-satir{grid-template-columns:1fr auto}
+  .mlyt-satir > :first-child{grid-column:1 / -1}
+}
 </style>
 {% endblock %}
 
@@ -1397,6 +1436,33 @@ async function secilenleriSil() {
    bloktan çıktı" diye sorduğunda cevap tek çağrıda hazır. */
 const IZ_IKON = { 'Satış': '↗', 'Sipariş': '▤', 'Üretim (kesim)': '✂', 'Alış': '↘' };
 
+/* ── MG1 · MALİYETLER TİPE GÖRE GRUPLANIR ──
+   Eskiden her maliyet satırı kendi kartıydı ve tip adı her kartta
+   tekrarlanıyordu. Aynı tipten iki gümrük belgesi, yan yana durması
+   gerekirken, iki ayrı kart açıyordu.
+
+   Sıra İLK GÖRÜLME sırası — alfabetik dizmek sunucudan gelen
+   (maliyet tarihine göre) sırayı bozar ve belgenin hangi aşamada
+   girdiği okunmaz olurdu. `Map` ekleme sırasını koruduğu için
+   ayrıca bir şey yapmak gerekmiyor. */
+function maliyetGruplari(mal) {
+  const grup = new Map();
+  (mal || []).forEach(m => {
+    const t = m.tip || '—';
+    if (!grup.has(t)) grup.set(t, []);
+    grup.get(t).push(m);
+  });
+  return [...grup.entries()].map(([tip, satirlar]) => `
+    <div class="mlyt-grup">
+      <div class="mlyt-bas">${kacar(tip)}</div>
+      ${satirlar.map(m => `<div class="mlyt-satir">
+        <span><span class="e">Belge No:</span> <span class="d mono">${kacar(m.fatura_no || 'belgesiz')}</span></span>
+        <span><span class="e">Tarih:</span> <span class="d">${kacar(tarihTR(m.tarih))}</span></span>
+        <span class="son"><span class="e">Tutar:</span> <span class="d">${para2(m.tutar, m.doviz)}</span></span>
+      </div>`).join('')}
+    </div>`).join('');
+}
+
 async function izAc(stokId, tip) {
   let d;
   try { d = await api(`/api/iz/${encodeURIComponent(tip)}/${encodeURIComponent(stokId)}`); }
@@ -1448,10 +1514,7 @@ async function izAc(stokId, tip) {
     </div>
     ${halkalar || '<div class="bos" style="padding:12px">Bu stok için kayıtlı bir zincir yok.</div>'}
     ${mal.length ? `<h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin:14px 0 6px">Bu stoğa işlenen maliyetler</h4>
-      ${mal.map(m => `<div class="kalem-satir"><span class="rozet rz-gri">${kacar(m.tip || '—')}</span>
-        <div><div>${kacar(m.fatura_no || 'belgesiz')}</div>
-        <div style="color:var(--soluk);font-size:.76rem">${kacar(m.tarih || '')}</div></div>
-        <span class="m">${para2(m.tutar, m.doviz)}</span></div>`).join('')}` : ''}`;
+      ${maliyetGruplari(mal)}` : ''}`;
   const basNo = slabVar(s.slab_no) ? `${kacar(s.blok_no || '')} · Plaka ${kacar(String(s.slab_no))}`
                          : kacar(s.blok_no || s.id);
   cekmeceAc(`Kaynak zinciri · ${basNo}`,

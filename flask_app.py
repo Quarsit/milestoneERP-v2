@@ -2964,13 +2964,20 @@ def create_app():
         stok_idler = [r.stok_id for r in rezler]
         if stok_idler:
             # KDV kalemleri HARIC (Devreden/Iade KDV maliyet hesabina girmez)
+            # MR1 · IKI SUZGEC: `aktif=False` iptal edilmis maliyettir,
+            # `~tip.in_` tek basina ise tipi BOS satiri da eler (SQL'de
+            # NULL NOT IN (...) → NULL). Ayni soru `_stok_maliyet_kalemleri`
+            # ile soruluyor; burada TRY karsiligi da gerektigi icin
+            # sorgu yerinde kaldi ama SUZGECLER ayni.
+            _mr1 = db.or_(Maliyet.maliyet_tip.is_(None),
+                          ~Maliyet.maliyet_tip.in_(MALIYET_DISI_TIPLER))
             ek_maliyet_usd += db.session.query(db.func.sum(Maliyet.usd_karsilik)).filter(
                 Maliyet.baglanti_id.in_(stok_idler),
-                ~Maliyet.maliyet_tip.in_(['Devreden KDV', 'Iade KDV'])
+                Maliyet.aktif.is_(True), _mr1
             ).scalar() or 0
             ek_maliyet_try += db.session.query(db.func.sum(Maliyet.try_karsilik)).filter(
                 Maliyet.baglanti_id.in_(stok_idler),
-                ~Maliyet.maliyet_tip.in_(['Devreden KDV', 'Iade KDV'])
+                Maliyet.aktif.is_(True), _mr1
             ).scalar() or 0
 
         # ── F2 · EK MALİYET ORANTILI DAĞITILIR ──
@@ -3573,13 +3580,22 @@ def create_app():
         if not kesimler:
             return 0  # blok kesilmemiş
 
+        # MR1: ek maliyet toplami `_stok_maliyet_kalemleri`den geliyor.
+        # Burada ucuncu bir kopya vardi ve IKI SUZGECI kaciriyordu:
+        # iptal edilmis (aktif=False) gider plakalara DAGITILIYOR,
+        # tipsiz gider ise hic dagitilmiyordu. Olculdu — 400 USD'lik
+        # iptal bir gider yuzunden blok 7.550 USD iken plakalara
+        # 7.950 dagitilmisti.
+        #
+        # MATRAH'a DOKUNULMADI: burada (ve kesim ucunda) matrah
+        # stogun kendi dovizinde, cevrilmeden kullaniliyor. Duzeltmek
+        # USD disi bloklarda mevcut birim maliyetleri oynatir; ayri
+        # bir karar, Bahadir'a soruldu.
         matrah = blok.matrah or ((blok.alis_fiyati or 0) * (blok.tonaj or 0)
                                  if blok.alis_fiyat_birim == 'ton' else
                                  (blok.alis_fiyati or 0) * (blok.hacim_m3 or 0))
-        ek_top = db.session.query(db.func.sum(Maliyet.usd_karsilik)).filter(
-            Maliyet.baglanti_id == blok_id,
-            ~Maliyet.maliyet_tip.in_(['Devreden KDV', 'Iade KDV'])
-        ).scalar() or 0
+        ek_top = sum(float(m.usd_karsilik or 0)
+                     for m in _stok_maliyet_kalemleri(blok_id))
         yeni_toplam = (matrah or 0) + ek_top
 
         guncellenen = 0
@@ -3599,6 +3615,110 @@ def create_app():
                 guncellenen += 1
         return guncellenen
 
+    # ══════════════════════════════════════════════════════════════
+    #  MR1 · BİR STOĞUN MALİYETİ — TEK KAYNAK
+    #
+    #  Satış kârı, stok ekranı ve maliyet raporu AYNI rakamı söylemek
+    #  zorunda. Üç ayrı toplama zamanla ayrışır — DZ4'te aynı dersi
+    #  almıştık. Hesap burada, çağıranlar buradan okuyor.
+    #
+    #  İKİ SÜZGEÇ, İKİSİ DE GEREKLİ:
+    #    1) `aktif=False` kayıtlar İPTAL EDİLMİŞ maliyetlerdir.
+    #    2) `~tip.in_(...)` tek başına, tipi BOŞ olan satırı da eler:
+    #       SQL'de NULL NOT IN (...) sonucu NULL'dır, satır düşer.
+    #       Tipsiz girilmiş bir fason gideri maliyete hiç girmezdi.
+    #
+    #  Bu iki süzgeç ortaklık hesabında vardı ve orada gerekçesi
+    #  yazılıydı ("uygulamanın geri kalanı onları her yerde
+    #  süzüyor") — ama SATIŞ MALİYETİNDE ikisi de yoktu.
+    # ══════════════════════════════════════════════════════════════
+    MALIYET_DISI_TIPLER = ('Devreden KDV', 'Iade KDV')
+
+    def _stok_alim_usd(stok, stok_tip=None):
+        """Stoğun KENDİ alış bedeli, USD. Ek maliyetler hariç.
+
+        ── MATRAH ÖNCELİKLİ ──
+        Stok faturalandıysa `matrah` o faturanın KDV hariç bedelidir
+        ve birim fiyat × ölçü çarpımından daha doğrudur (yuvarlama,
+        iskonto, kısmi giriş). Kesim dağıtıcısı zaten matrahı
+        önceliyordu; satış maliyeti ise HİÇ bakmıyordu — ikisi aynı
+        stok için farklı alış bedeli kullanıyordu.
+
+        ── BİR DE ÇEVRİM ──
+        Dağıtıcı matrahı USD'ye ÇEVİRMEDEN kullanıyordu. TL ile
+        alınmış bir blokta matrah TL, ama USD gibi işleniyordu.
+        Burada stoğun kendi dövizinden çevriliyor.
+        """
+        if not stok:
+            return 0.0
+        stok_doviz = getattr(stok, 'doviz', 'USD') or 'USD'
+        matrah = float(getattr(stok, 'matrah', 0) or 0)
+        if matrah > 0:
+            ham = matrah
+        else:
+            alis_fiyat = getattr(stok, 'alis_fiyati', 0) or 0
+            alis_birim = getattr(stok, 'alis_fiyat_birim', None) or (
+                'ton' if (stok_tip or '').upper() == 'BLOK' else 'm2')
+            try:
+                alis_olcu = _stok_olcu(stok, alis_birim)
+            except Exception:
+                alis_olcu = 0
+            ham = float(alis_fiyat or 0) * float(alis_olcu or 0)
+        if stok_doviz == 'USD':
+            return ham
+        usd_k = DovizKur.query.filter_by(doviz='USD').order_by(
+            DovizKur.tarih.desc()).first()
+        eur_k = DovizKur.query.filter_by(doviz='EUR').order_by(
+            DovizKur.tarih.desc()).first()
+        ku = float((usd_k.alis if usd_k else 0) or 0)
+        ke = float((eur_k.alis if eur_k else 0) or 0)
+        if stok_doviz == 'EUR':
+            return (ham * ke / ku) if ku else 0.0
+        if stok_doviz == 'TRY':
+            return (ham / ku) if ku else 0.0
+        return ham
+
+    def _stok_maliyet_kalemleri(stok_id, haric=False):
+        """Stoğa işlenmiş maliyet kalemleri.
+
+        `haric=True` ise MALİYETE GİRMEYEN kalemler (Devreden/İade
+        KDV) döner — raporda ayrı bir başlıkta gösteriliyor, çünkü
+        "neden toplamda yok" sorusunun cevabı görünmeli."""
+        q = Maliyet.query.filter(Maliyet.baglanti_id == stok_id,
+                                 Maliyet.aktif.is_(True))
+        if haric:
+            q = q.filter(Maliyet.maliyet_tip.in_(MALIYET_DISI_TIPLER))
+        else:
+            q = q.filter(db.or_(
+                Maliyet.maliyet_tip.is_(None),
+                ~Maliyet.maliyet_tip.in_(MALIYET_DISI_TIPLER)))
+        return q.order_by(Maliyet.maliyet_tarihi.asc(),
+                          Maliyet.id.asc()).all()
+
+    def _stok_maliyet_dokumu(stok_id, stok_tip=None, stok=None):
+        """Bir stoğun maliyeti, kalem kalem.
+
+        Döner: alim_usd · kalem_usd · toplam_usd · kalemler · haric
+        """
+        if stok is None and stok_tip:
+            stok = _stok_getir(stok_id, (stok_tip or '').upper())
+        alim = _stok_alim_usd(stok, stok_tip)
+
+        def _satir(m):
+            return {'id': m.id, 'tip': m.maliyet_tip or '(tipsiz)',
+                    'fatura_no': m.fatura_no,
+                    'tarih': (m.maliyet_tarihi.isoformat()
+                              if m.maliyet_tarihi else None),
+                    'tutar': q2(m.tutar or 0), 'doviz': m.doviz,
+                    'usd': q2(m.usd_karsilik or 0)}
+
+        kalemler = [_satir(m) for m in _stok_maliyet_kalemleri(stok_id)]
+        haric = [_satir(m) for m in _stok_maliyet_kalemleri(stok_id, True)]
+        kalem_usd = q2(sum(k['usd'] for k in kalemler))
+        return {'alim_usd': q2(alim), 'kalem_usd': kalem_usd,
+                'toplam_usd': q2(alim + kalem_usd),
+                'kalemler': kalemler, 'haric': haric}
+
     def _satis_kaydi_maliyet_guncelle(stok_idler):
         """
         Verilen stok ID'lerine ait SatisKaydi'larin maliyet/kar/marj
@@ -3610,42 +3730,12 @@ def create_app():
             return 0
         guncellenen = 0
         for sk in SatisKaydi.query.filter(SatisKaydi.stok_id.in_(list(stok_idler))).all():
-            # Bu stoga ait toplam maliyet (Maliyet tablosu)
-            stok_maliyet = db.session.query(db.func.sum(Maliyet.usd_karsilik)).filter(
-                Maliyet.baglanti_id == sk.stok_id,
-                ~Maliyet.maliyet_tip.in_(['Devreden KDV', 'Iade KDV'])
-            ).scalar() or 0
-            # Stogun kendi alis maliyeti (stok kaydindan)
-            alim_usd = 0
-            stok = _stok_getir(sk.stok_id, sk.stok_tip)
-            if stok:
-                alis_fiyat = getattr(stok, 'alis_fiyati', 0) or 0
-                alis_birim = getattr(stok, 'alis_fiyat_birim', None) or (
-                    'ton' if sk.stok_tip == 'BLOK' else 'm2')
-                try:
-                    alis_olcu = _stok_olcu(stok, alis_birim)
-                except Exception:
-                    alis_olcu = 0
-                stok_doviz = getattr(stok, 'doviz', 'USD') or 'USD'
-                # USD'ye cevir
-                if stok_doviz == 'USD':
-                    alim_usd = alis_fiyat * alis_olcu
-                else:
-                    usd_k = DovizKur.query.filter_by(doviz='USD').order_by(
-                        DovizKur.tarih.desc()).first()
-                    eur_k = DovizKur.query.filter_by(doviz='EUR').order_by(
-                        DovizKur.tarih.desc()).first()
-                    ku = (usd_k.alis if usd_k else 0) or 0
-                    ke = (eur_k.alis if eur_k else 0) or 0
-                    ham = alis_fiyat * alis_olcu
-                    if stok_doviz == 'EUR':
-                        alim_usd = (ham * ke / ku) if ku else 0
-                    elif stok_doviz == 'TRY':
-                        alim_usd = (ham / ku) if ku else 0
-                    else:
-                        alim_usd = ham
-
-            yeni_maliyet = alim_usd + stok_maliyet
+            # MR1: hesap `_stok_maliyet_dokumu`ya tasindi — rapor ve
+            # stok ekrani da ayni yerden okuyor. Buradaki kopya iki
+            # suzgeci kacirdigi icin iptal edilmis gideri sayiyor,
+            # tipsiz gideri ise hic saymiyordu.
+            yeni_maliyet = _stok_maliyet_dokumu(
+                sk.stok_id, sk.stok_tip)['toplam_usd']
             satis = sk.tutar_usd or sk.tutar or 0
             yeni_kar = satis - yeni_maliyet
             yeni_marj = (yeni_kar / satis * 100) if satis else 0
@@ -9638,6 +9728,230 @@ def create_app():
             'ulke_listesi': ulke_listesi
         })
 
+    # ══════════════════════════════════════════════════════════════
+    #  MR1 · STOK MALİYET RAPORU
+    #
+    #  Bu bilgi sistemde vardı ama tek tek, çekmecede: bir stoğun
+    #  maliyet dökümünü görmek için o stoğu bulup kaynak zincirini
+    #  açmak gerekiyordu. Toplu bir yerde yoktu.
+    #
+    #  BLOK ALTINDA GRUPLU: bloğun matrahı ve ondan kesilmiş
+    #  plaka/ebatlı ürünlerin maliyeti BİR ARADA görünüyor. Düz liste
+    #  olsaydı kesim ilişkisi kaybolurdu — bloğun 6.000 USD'sinin
+    #  hangi plakalara dağıldığı okunmazdı.
+    #
+    #  Hesap `_stok_maliyet_dokumu`dan geliyor; satış kârı da oradan
+    #  okuyor. İki ayrı toplama zamanla ayrışırdı.
+    # ══════════════════════════════════════════════════════════════
+    @app.route('/api/rapor/stok_maliyet', methods=['GET'])
+    def api_rapor_stok_maliyet():
+        """Stok maliyet raporu — blok altında gruplu.
+
+        Süzgeçler: ?tip= ?cins= ?uretici= ?durum= ?blok_no=
+                   ?baslangic= ?bitis=   (giriş tarihi)
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+
+        tip = (request.args.get('tip') or '').upper().strip()
+        cins = (request.args.get('cins') or '').strip()
+        uretici = (request.args.get('uretici') or '').strip()
+        durum = (request.args.get('durum') or '').strip()
+        blok_no = (request.args.get('blok_no') or '').strip()
+        bas = _parse_date(request.args.get('baslangic'))
+        bit = _parse_date(request.args.get('bitis'))
+
+        def _suz(q, model):
+            if cins and hasattr(model, 'cins'):
+                q = q.filter(model.cins == cins)
+            if uretici and hasattr(model, 'uretici'):
+                q = q.filter(model.uretici == uretici)
+            if durum and hasattr(model, 'durum'):
+                q = q.filter(model.durum == durum)
+            if blok_no and hasattr(model, 'blok_no'):
+                q = q.filter(model.blok_no == blok_no)
+            if bas and hasattr(model, 'giris_tarihi'):
+                q = q.filter(model.giris_tarihi >= bas)
+            if bit and hasattr(model, 'giris_tarihi'):
+                q = q.filter(model.giris_tarihi <= bit)
+            return q
+
+        def _olcu_ozet(s, t):
+            if t == 'BLOK':
+                return {'tonaj': q2(getattr(s, 'tonaj', 0) or 0),
+                        'hacim_m3': q2(getattr(s, 'hacim_m3', 0) or 0)}
+            return {'metraj_m2': q2(getattr(s, 'metraj_m2', 0) or 0)}
+
+        def _birim(dokum, s, t):
+            """Birim maliyet — BLOK'ta ton, diğerlerinde m²."""
+            if t == 'BLOK':
+                ol = float(getattr(s, 'tonaj', 0) or 0)
+                birim_ad = 'ton'
+            else:
+                ol = float(getattr(s, 'metraj_m2', 0) or 0)
+                birim_ad = 'm²'
+            # Ölçü yoksa SIFIR DEĞİL None: sıfır yazmak "maliyeti yok"
+            # demek olurdu, oysa ölçü girilmemiş demek.
+            return ({'deger': q2(dokum['toplam_usd'] / ol), 'birim': birim_ad}
+                    if ol else {'deger': None, 'birim': birim_ad})
+
+        def _kart(s, t):
+            d = _stok_maliyet_dokumu(s.id, t, stok=s)
+            return {'id': s.id, 'tip': t,
+                    'blok_no': getattr(s, 'blok_no', None),
+                    'slab_no': getattr(s, 'slab_no', None),
+                    'kasa_no': getattr(s, 'kasa_no', None),
+                    'cins': getattr(s, 'cins', None),
+                    'uretici': getattr(s, 'uretici', None),
+                    'durum': getattr(s, 'durum', None),
+                    'giris_tarihi': (s.giris_tarihi.isoformat()
+                                     if getattr(s, 'giris_tarihi', None) else None),
+                    'olcu': _olcu_ozet(s, t),
+                    'alim_usd': d['alim_usd'], 'kalem_usd': d['kalem_usd'],
+                    'toplam_usd': d['toplam_usd'],
+                    'birim_maliyet': _birim(d, s, t),
+                    'kalemler': d['kalemler'], 'haric': d['haric']}
+
+        # ── BLOKLAR ──
+        gruplar = []
+        if tip in ('', 'BLOK'):
+            for b in _suz(BlokStok.query, BlokStok).order_by(
+                    BlokStok.giris_tarihi.desc(), BlokStok.id.desc()).all():
+                g = _kart(b, 'BLOK')
+                g['urunler'] = []
+                gruplar.append(g)
+
+        # ── KESİMDEN ÇIKANLAR: bloğun altına ──
+        # Hangi ürün hangi bloktan: Kesim.kaynak_id → KesimDetay.
+        blok_sirasi = {g['id']: g for g in gruplar}
+        cocuk_anahtar = {}
+        if blok_sirasi:
+            for ks in Kesim.query.filter(
+                    Kesim.kaynak_tip == 'BLOK',
+                    Kesim.kaynak_id.in_(list(blok_sirasi))).all():
+                for dt in KesimDetay.query.filter_by(kesim_id=ks.id).all():
+                    if dt.hedef_stok_id:
+                        cocuk_anahtar[dt.hedef_stok_id] = ks.kaynak_id
+
+        bagimsiz = []
+        for model, t in ((PlakaStok, 'PLAKA'), (EbatliStok, 'EBATLI')):
+            if tip and tip != t:
+                continue
+            for s in _suz(model.query, model).all():
+                k = _kart(s, t)
+                ana = cocuk_anahtar.get(s.id)
+                if ana and ana in blok_sirasi:
+                    blok_sirasi[ana]['urunler'].append(k)
+                else:
+                    # Kesimden GELMEYEN (doğrudan girilmiş) ürün.
+                    # Bloğun altına koymak yanlış olurdu.
+                    bagimsiz.append(k)
+
+        def _topla(kartlar):
+            return {'adet': len(kartlar),
+                    'alim_usd': q2(sum(k['alim_usd'] for k in kartlar)),
+                    'kalem_usd': q2(sum(k['kalem_usd'] for k in kartlar)),
+                    'toplam_usd': q2(sum(k['toplam_usd'] for k in kartlar))}
+
+        # Blok TOPLAMI, altındaki ürünleri İÇERMEZ: bloğun maliyeti
+        # kesimde plakalara DAĞITILIYOR; ikisini toplamak aynı parayı
+        # iki kez saymak olurdu.
+        for g in gruplar:
+            g['urun_ozet'] = _topla(g['urunler'])
+
+        tum = gruplar + bagimsiz
+        return jsonify({
+            'ok': True,
+            'gruplar': gruplar,
+            'bagimsiz': bagimsiz,
+            'genel': {
+                'blok': _topla(gruplar),
+                'bagimsiz': _topla(bagimsiz),
+                'urun': _topla([u for g in gruplar for u in g['urunler']]),
+                'kayit_sayisi': len(tum) + sum(len(g['urunler']) for g in gruplar)
+            }})
+
+    @app.route('/api/rapor/stok_maliyet/excel', methods=['GET'])
+    def api_rapor_stok_maliyet_excel():
+        """Stok maliyet raporu — .xlsx.
+
+        Aynı uçtan beslenir: `api_rapor_stok_maliyet` ne diyorsa
+        Excel de onu der. Ayrı bir sorgu yazmak iki rakam demekti.
+        """
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        import io          # modul duzeyinde YOK; kasa Excel'i de boyle aliyor
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment, PatternFill
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            return jsonify({'ok': False,
+                'mesaj': 'Excel çıktısı için "openpyxl" paketi gerekli. '
+                         'Kurulum: pip install openpyxl'}), 500
+
+        # Rapor fonksiyonu DOGRUDAN cagriliyor: ayni istek baglamini
+        # (ve ayni suzgecleri) kullaniyor. `test_request_context` ile
+        # yeni bir baglam acsaydik oturum tasinmaz, `_auth_required`
+        # icerde patlardi. Ayri bir sorgu yazmak ise iki rakam demekti.
+        veri = api_rapor_stok_maliyet().get_json()
+
+        wb = Workbook()
+        sh = wb.active
+        sh.title = 'Stok Maliyeti'
+        bas_font = Font(bold=True, color='FFFFFF')
+        bas_dolgu = PatternFill('solid', fgColor='1F6F54')
+        grup_font = Font(bold=True)
+
+        basliklar = ['Kayıt', 'Tip', 'Blok No', 'Plaka/Kasa', 'Cins',
+                     'Üretici', 'Durum', 'Giriş', 'Ölçü', 'Birim',
+                     'Alış (USD)', 'Ek Maliyet (USD)', 'Toplam (USD)',
+                     'Birim Maliyet', 'Maliyet Dışı (USD)']
+        sh.append(basliklar)
+        for i in range(1, len(basliklar) + 1):
+            c = sh.cell(row=1, column=i)
+            c.font = bas_font; c.fill = bas_dolgu
+            c.alignment = Alignment(horizontal='center')
+
+        def _olcu_metin(k):
+            o = k.get('olcu') or {}
+            if o.get('metraj_m2') is not None:
+                return o['metraj_m2'], 'm²'
+            return o.get('tonaj'), 'ton'
+
+        def _yaz(k, girinti=''):
+            ol, birim = _olcu_metin(k)
+            bm = k.get('birim_maliyet') or {}
+            sh.append([
+                girinti + (k.get('id') or ''), k.get('tip'),
+                k.get('blok_no'), k.get('slab_no') or k.get('kasa_no'),
+                k.get('cins'), k.get('uretici'), k.get('durum'),
+                k.get('giris_tarihi'), ol, birim,
+                k.get('alim_usd'), k.get('kalem_usd'), k.get('toplam_usd'),
+                bm.get('deger'),
+                q2(sum(h.get('usd') or 0 for h in (k.get('haric') or [])))])
+
+        for g in veri.get('gruplar', []):
+            _yaz(g)
+            sh.cell(row=sh.max_row, column=1).font = grup_font
+            for u in g.get('urunler', []):
+                _yaz(u, '    ')
+        for b in veri.get('bagimsiz', []):
+            _yaz(b)
+
+        for i in range(1, len(basliklar) + 1):
+            sh.column_dimensions[get_column_letter(i)].width = 16
+        for satir in sh.iter_rows(min_row=2, min_col=11, max_col=15):
+            for c in satir:
+                c.number_format = '#,##0.00'
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=f'stok_maliyet_{date.today().isoformat()}.xlsx')
+
     @app.route('/api/rapor/stok_durum', methods=['GET'])
     def api_rapor_stok_durum():
         """Stok Durum Raporu - mevcut envanter durumu.
@@ -10191,15 +10505,15 @@ def create_app():
 
             # Kaynaklara bağlı EK MALİYETLER (nakliye/gümrük vb.) — KDV kalemleri hariç.
             kaynak_id_listesi = [k.id for k in kaynaklar]
+            # MR1: IKI SUZGEC burada da eksikti — iptal edilmis
+            # (aktif=False) bir gider kesimde plakalara dagitiliyor,
+            # tipsiz gider ise hic dagitilmiyordu. Tek kaynak:
+            # `_stok_maliyet_kalemleri`.
             ek_maliyet_map = {}
-            if kaynak_id_listesi:
-                for _bid, _t in db.session.query(
-                    Maliyet.baglanti_id, db.func.sum(Maliyet.usd_karsilik)
-                ).filter(
-                    Maliyet.baglanti_id.in_(kaynak_id_listesi),
-                    ~Maliyet.maliyet_tip.in_(['Devreden KDV', 'Iade KDV'])
-                ).group_by(Maliyet.baglanti_id).all():
-                    ek_maliyet_map[_bid] = _t or 0
+            for _kid in kaynak_id_listesi:
+                ek_maliyet_map[_kid] = sum(
+                    float(m.usd_karsilik or 0)
+                    for m in _stok_maliyet_kalemleri(_kid))
 
             for k in kaynaklar:
                 if kaynak_tip_db == 'BLOK':
@@ -17141,7 +17455,20 @@ def create_app():
         }
 
     def _maliyet_etkilenen_stoklari_tazele(stoklar):
-        """Silme/düzenleme sonrası türetilmiş değerleri yeniden üret."""
+        """Silme/düzenleme sonrası türetilmiş değerleri yeniden üret.
+
+        ── MR1 · KESİMDEN ÇIKANLAR DA TAZELENİR ──
+        Bloğa maliyet eklenince plakaların birim maliyeti yeniden
+        dağıtılıyordu ama SATILMIŞ bir plakanın kâr kaydı eski
+        maliyetle kalıyordu: stok kartı yeni rakamı gösterirken
+        kârlılık raporu eskisini gösteriyordu.
+
+        ÖLÇÜLDÜ — satış dökümü ucunu yazarken yakalandı: kayıtta
+        0,00 USD maliyet dururken hesaplanan 3.774,98 USD'ydi.
+
+        DZ4'te aynı tazeleme ÖLÇÜ değişimi için konmuştu; maliyet
+        eklenmesi için konmamıştı.
+        """
         stoklar = [s for s in dict.fromkeys(stoklar) if s]
         if not stoklar:
             return 0
@@ -17149,6 +17476,17 @@ def create_app():
         for sid in stoklar:
             if str(sid).startswith('BLK'):
                 _kesilmis_blok_maliyet_yeniden_dagit(sid)
+                db.session.flush()
+                # Dagitim plakalarin alis_fiyati'ni degistirdi; o
+                # plakalarin satis kayitlari da yeniden hesaplanmali.
+                _cocuklar = []
+                for _ks in Kesim.query.filter_by(kaynak_id=sid).all():
+                    _cocuklar += [d.hedef_stok_id for d in
+                                  KesimDetay.query.filter_by(
+                                      kesim_id=_ks.id).all()
+                                  if d.hedef_stok_id]
+                if _cocuklar:
+                    n += _satis_kaydi_maliyet_guncelle(_cocuklar)
         return n
 
     def _onay_verildi():
@@ -17971,6 +18309,67 @@ def create_app():
             },
             'mod': mod
         })
+
+    # ══════════════════════════════════════════════════════════════
+    #  MR1 · BİR SATIŞIN MALİYET DÖKÜMÜ
+    #
+    #  Kârlılık listesi satır başına maliyet ve kâr veriyordu ama
+    #  "bu maliyet NEREDEN geliyor" sorusunun cevabı yoktu. Kalem
+    #  dökümü yalnız SİPARİŞ bazlı raporda vardı; tek bir satışın
+    #  dökümünü görmek için stoğu bulup kaynak zincirini açmak
+    #  gerekiyordu.
+    #
+    #  Liste HAFİF kalsın diye ayrı uç: döküm ancak satıra
+    #  tıklanınca çekiliyor.
+    # ══════════════════════════════════════════════════════════════
+    @app.route('/api/karlilik/<satis_id>/dokum', methods=['GET'])
+    def api_karlilik_dokum(satis_id):
+        """Bir satış kaydının maliyeti, kalem kalem."""
+        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
+        s = db.session.get(SatisKaydi, satis_id)
+        if not s:
+            return jsonify({'ok': False, 'mesaj': 'Satış kaydı bulunamadı'}), 404
+
+        stok = _stok_getir(s.stok_id, (s.stok_tip or '').upper()) \
+            if s.stok_id else None
+        d = _stok_maliyet_dokumu(s.stok_id, s.stok_tip, stok=stok) \
+            if s.stok_id else {'alim_usd': 0, 'kalem_usd': 0,
+                               'toplam_usd': 0, 'kalemler': [], 'haric': []}
+
+        satis_usd = q2(s.tutar_usd or s.tutar or 0)
+        # Kâr, KAYITTAN okunuyor — burada yeniden hesaplamak üçüncü
+        # bir formül olurdu. Kayıt `_satis_kaydi_maliyet_guncelle`
+        # ile güncelleniyor ve o da aynı dökümden besleniyor.
+        kayit_maliyet = q2(s.maliyet_usd or 0)
+        return jsonify({
+            'ok': True,
+            'satis': {
+                'id': s.id, 'musteri': s.musteri,
+                'tarih': s.satis_tarihi.isoformat() if s.satis_tarihi else None,
+                'cins': s.cins, 'stok_tip': s.stok_tip, 'stok_id': s.stok_id,
+                'miktar': q2(s.miktar or 0), 'birim': s.birim,
+                'doviz': s.doviz or 'USD',
+                'birim_fiyat': q2(s.birim_fiyat or 0),
+                'tutar': q2(s.tutar or 0), 'tutar_usd': satis_usd,
+                'fatura_no': s.fatura_no, 'siparis_id': s.siparis_id},
+            'stok': ({'id': stok.id,
+                      'blok_no': getattr(stok, 'blok_no', None),
+                      'slab_no': getattr(stok, 'slab_no', None),
+                      'kasa_no': getattr(stok, 'kasa_no', None),
+                      'uretici': getattr(stok, 'uretici', None),
+                      'durum': getattr(stok, 'durum', None)} if stok else None),
+            'maliyet': d,
+            # Kayıttaki maliyet ile şu an hesaplanan AYNI olmalı.
+            # Ayrışıyorsa stoğa sonradan gider eklenmiş ve satış
+            # kaydı tazelenmemiş demektir — sessiz bırakmıyoruz.
+            'tutarsizlik': (None if abs(kayit_maliyet - d['toplam_usd']) < 0.01
+                            else {'kayitta': kayit_maliyet,
+                                  'hesaplanan': d['toplam_usd'],
+                                  'fark': q2(d['toplam_usd'] - kayit_maliyet)}),
+            'ozet': {'satis_usd': satis_usd,
+                     'maliyet_usd': kayit_maliyet,
+                     'kar_usd': q2(s.kar_usd or 0),
+                     'marj': q_oran(s.marj_yuzde or 0)}})
 
     @app.route('/api/karlilik/musteri_ozet', methods=['GET'])
     def api_karlilik_musteri_ozet():

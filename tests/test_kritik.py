@@ -6748,6 +6748,248 @@ def test_vt1_olu_tahsilat_paneli_silindi():
         'hareket düğmesi tek olmalı'
 
 
+def test_mg1_maliyetler_tipe_gore_gruplaniyor():
+    """MG1: kaynak zinciri çekmecesinde her maliyet satırı KENDİ
+    kartıydı ve tip adı her kartta tekrarlanıyordu. Aynı tipten iki
+    gümrük belgesi iki ayrı kart açıyordu.
+
+    ÖLÇÜLDÜ (6 kalemli gerçek bir stokla, tarayıcıda):
+        eski: 6 kart, 480 piksel
+        yeni: 5 kutu, 338 piksel   → %30 daha az yer
+
+    Artık tip bir kez yazılıyor, belgeler altında satır satır
+    duruyor. Sıra İLK GÖRÜLME sırası: alfabetik dizmek sunucudan
+    gelen (maliyet tarihine göre) sırayı bozardı."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    assert 'function maliyetGruplari(' in m, 'gruplayıcı yok'
+    assert '${maliyetGruplari(mal)}' in m, 'liste gruplayıcıyı çağırmıyor'
+
+    # ESKİ satır-başına-kart biçimi gitmeli; kalırsa iki yol birden
+    # yaşar ve biri düzeltilip diğeri unutulur.
+    assert 'class="kalem-satir"><span class="rozet rz-gri">' not in m, \
+        'eski kart biçimi duruyor'
+
+    # Tip ADI bir kez: başlıkta. Satırda tip yazmıyor.
+    _g = m[m.index('function maliyetGruplari('):]
+    _g = _g[:_g.index('\nasync function')]
+    assert _g.count('mlyt-bas') == 1, 'tip başlığı bir kez yazılmalı'
+    for _alan in ('Belge No:', 'Tarih:', 'Tutar:'):
+        assert _alan in _g, f'{_alan} etiketi yok'
+    # Tarih ORTAK biçimlendiriciden geçsin (base.html · tarihTR):
+    # iki sayfada ayrı ayrı yazılırsa zamanla ayrışırlar.
+    assert 'tarihTR(m.tarih)' in _g, 'tarih ham ISO basılıyor'
+
+    # Kutu biçimi CSS'te tanımlı olmalı — yoksa düz metin yığını olur
+    for _k in ('.mlyt-grup{', '.mlyt-bas{', '.mlyt-satir{'):
+        assert _k in m, f'{_k} tanımlı değil'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  MR1 · MALİYET RAPORLARI — VE DÖRT AYRI KOPYA
+#
+#  "Bu stoğun maliyeti ne?" sorusunun cevabı sistemde DÖRT ayrı
+#  yerde hesaplanıyordu ve hiçbiri diğeriyle aynı değildi:
+#
+#      satış kârı          · iptal edileni SAYIYOR, tipsizi saymıyor
+#      kesim dağıtıcısı    · iptal edileni SAYIYOR, tipsizi saymıyor
+#      kesimin kendisi     · iptal edileni SAYIYOR, tipsizi saymıyor
+#      ortaklık hesabı     · ikisi de DOĞRU
+#
+#  Ortaklık kodunda bu iki süzgecin gerekçesi yazılıydı
+#  ("uygulamanın geri kalanı onları her yerde süzüyor") — ama
+#  doğru değildi, yalnız orada vardı.
+#
+#  ÖLÇÜLDÜ: 400 USD'lik İPTAL bir gider yüzünden blok 7.550 USD
+#  iken plakalara 7.950 dağıtılıyordu. 250 USD'lik TİPSİZ bir gider
+#  ise satışın maliyetine hiç girmiyordu.
+# ══════════════════════════════════════════════════════════════════
+
+def _mr1_kur(ek):
+    """Blok + dört maliyet kalemi: normal, iptal, tipsiz, KDV."""
+    from models import Maliyet
+    bid = f'BLK-MR{ek}'
+    with fa.app.app_context():
+        if not db.session.get(BlokStok, bid):
+            db.session.add(BlokStok(
+                id=bid, blok_no=f'MR{ek}', cins='MRTEST',
+                uretici='MR OCAK', boy=300, yukseklik=180, en=170,
+                hacim_m3=9.18, tonaj=20, alis_fiyati=300,
+                alis_fiyat_birim='ton', doviz='USD', durum='Serbest'))
+            db.session.add_all([
+                # normal — SAYILIR
+                Maliyet(id=f'MRM{ek}1', maliyet_tip='Nakliye (Ocak-Fabrika)',
+                        baglanti_tip='stok', baglanti_id=bid, tutar=1000,
+                        doviz='USD', usd_karsilik=1000, aktif=True),
+                # İPTAL — sayılmaz
+                Maliyet(id=f'MRM{ek}2', maliyet_tip='Gümrük/Liman Masrafı',
+                        baglanti_tip='stok', baglanti_id=bid, tutar=500,
+                        doviz='USD', usd_karsilik=500, aktif=False),
+                # TİPSİZ — sayılır
+                Maliyet(id=f'MRM{ek}3', maliyet_tip=None,
+                        baglanti_tip='stok', baglanti_id=bid, tutar=250,
+                        doviz='USD', usd_karsilik=250, aktif=True),
+                # KDV izleme — maliyete girmez, ayrı gösterilir
+                Maliyet(id=f'MRM{ek}4', maliyet_tip='Devreden KDV',
+                        baglanti_tip='stok', baglanti_id=bid, tutar=900,
+                        doviz='USD', usd_karsilik=900, aktif=True)])
+            db.session.commit()
+    return bid
+
+
+def test_mr1_iptal_edilmis_gider_maliyete_girmiyor():
+    """MR1: `aktif=False` kayıtlar İPTAL EDİLMİŞ maliyetlerdir.
+    Üç ayrı hesap onları sayıyordu.
+
+    Doğru toplam: alış 6.000 + (1.000 normal + 250 tipsiz) = 7.250.
+    Eski hesap: 6.000 + (1.000 + 500 iptal) = 7.500 derdi."""
+    c = istemci('admin', 'ADMIN')
+    bid = _mr1_kur('A')
+    r = c.get(f'/api/rapor/stok_maliyet?blok_no=MRA', headers=H)
+    assert r.status_code == 200, r.status_code
+    g = [x for x in r.get_json()['gruplar'] if x['id'] == bid]
+    assert g, 'blok raporda yok'
+    g = g[0]
+    assert g['alim_usd'] == 6000, g['alim_usd']
+    assert g['kalem_usd'] == 1250, g['kalem_usd']
+    assert g['toplam_usd'] == 7250, g['toplam_usd']
+    tipler = [k['tip'] for k in g['kalemler']]
+    assert 'Gümrük/Liman Masrafı' not in tipler, 'iptal edilmiş gider sayıldı'
+    assert '(tipsiz)' in tipler, 'tipsiz gider düştü'
+
+
+def test_mr1_kdv_kalemi_ayri_gosteriliyor():
+    """MR1: Devreden/İade KDV maliyete GİRMEZ — ürünün maliyeti
+    değil, mahsup için izlenen tutar. Ama raporda görünmeli:
+    "neden toplamda yok" sorusunun cevabı okunabilir olmalı."""
+    c = istemci('admin', 'ADMIN')
+    bid = _mr1_kur('B')
+    r = c.get('/api/rapor/stok_maliyet?blok_no=MRB', headers=H)
+    g = [x for x in r.get_json()['gruplar'] if x['id'] == bid][0]
+    assert all(k['tip'] != 'Devreden KDV' for k in g['kalemler'])
+    assert [h['tip'] for h in g['haric']] == ['Devreden KDV'], g['haric']
+    assert g['haric'][0]['usd'] == 900
+
+
+def test_mr1_birim_maliyet_olcu_yoksa_sifir_degil():
+    """MR1: ölçüsü girilmemiş stokta birim maliyet SIFIR yazılmaz.
+    Sıfır "maliyeti yok" demek olurdu; doğrusu "ölçü yok"."""
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not db.session.get(BlokStok, 'BLK-MROL'):
+            db.session.add(BlokStok(
+                id='BLK-MROL', blok_no='MROL', cins='MRTEST',
+                alis_fiyati=300, alis_fiyat_birim='ton', doviz='USD',
+                durum='Serbest', tonaj=0))
+            db.session.commit()
+    r = c.get('/api/rapor/stok_maliyet?blok_no=MROL', headers=H)
+    g = [x for x in r.get_json()['gruplar'] if x['id'] == 'BLK-MROL'][0]
+    assert g['birim_maliyet']['deger'] is None, g['birim_maliyet']
+    assert g['birim_maliyet']['birim'] == 'ton'
+
+
+def test_mr1_satis_dokumu_kayitla_tutuyor():
+    """MR1: satışın maliyet dökümü ile KAYITTAKİ maliyet aynı olmalı.
+
+    `tutarsizlik` alanı bunu söylüyor ve ilk denemede gerçek bir
+    hatayı yakaladı: bloğa maliyet eklenince plakaların birim
+    maliyeti yeniden dağıtılıyor ama SATILMIŞ plakanın kâr kaydı
+    eski maliyetle kalıyordu — stok kartı yeni rakamı gösterirken
+    kârlılık raporu eskisini gösteriyordu."""
+    from models import Maliyet, SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    bid = _mr1_kur('C')
+    with fa.app.app_context():
+        if not db.session.get(SatisKaydi, 'SK-MR-C'):
+            db.session.add(SatisKaydi(
+                id='SK-MR-C', stok_tip='BLOK', stok_id=bid,
+                musteri='MR ALICI', cins='MRTEST',
+                satis_tarihi=date(2026, 5, 1), doviz='USD',
+                tutar=12000, tutar_usd=12000, kur_usd=40))
+            db.session.commit()
+    # Maliyete dokun → satış kaydı tazelenir
+    assert c.put(f'/api/maliyet/MRMC1', headers=H,
+                 json={'tutar': 1000}).status_code == 200
+
+    r = c.get('/api/karlilik/SK-MR-C/dokum', headers=H)
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d['maliyet']['toplam_usd'] == 7250, d['maliyet']
+    assert d['ozet']['maliyet_usd'] == 7250, d['ozet']
+    assert d['ozet']['kar_usd'] == 4750, d['ozet']
+    assert d['tutarsizlik'] is None, d['tutarsizlik']
+
+
+def test_mr1_dagitim_ve_rapor_ayni_rakami_soyluyor():
+    """MR1: kesim dağıtımı ve rapor AYNI toplamdan beslenmeli.
+
+    ÖLÇÜLDÜ: 400 USD'lik iptal bir gider yüzünden blok 7.550 USD
+    iken plakalara 7.950 dağıtılıyordu — birim maliyet 736,11
+    olması gerekirken 699,07 idi."""
+    from models import Maliyet
+    c = istemci('admin', 'ADMIN')
+    bid = _mr1_kur('D')
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': [bid],
+        'kesim_tarihi': '2026-05-02',
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'MRTEST', 'boy': 300,
+                      'yukseklik': 180, 'kalinlik': 2, 'adet': 2,
+                      'miktar_m2': 5}]})
+    assert r.status_code == 200, r.get_json()
+
+    rp = c.get('/api/rapor/stok_maliyet?blok_no=MRD', headers=H).get_json()
+    g = [x for x in rp['gruplar'] if x['id'] == bid][0]
+    # Blok toplami 7.250; 2 plaka x 5,4 m2 = 10,8 m2  (hedef m2 boy*yuk)
+    toplam_urun = sum(u['toplam_usd'] for u in g['urunler'])
+    assert len(g['urunler']) == 2, len(g['urunler'])
+    # Iptal edilmis 500 USD plakalara DAGITILMAMIS olmali
+    assert abs(toplam_urun - g['toplam_usd']) < 0.05, \
+        f'blok {g["toplam_usd"]} ama plakalara {toplam_urun} dağıtılmış'
+
+
+def test_mr1_rapor_ekrani_ve_excel_var():
+    """MR1: sunucu tek başına işe yaramaz — bilgi zaten vardı,
+    ULAŞILAMIYORDU. Yapı testi: sekme, açılır döküm, Excel ucu."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/raporlar.html'),
+                 encoding='utf-8').read()
+    assert 'data-b="stokmaliyet"' in m, 'sekme yok'
+    assert 'id="b-stokmaliyet"' in m, 'bölüm yok'
+    assert 'function stokMaliyetYukle(' in m
+    assert 'stokmaliyet: stokMaliyetYukle' in m, 'yükleyiciye bağlanmamış'
+    # Karlilik satiri tiklanabilir ve dokumu aciyor
+    assert 'satisDokumAc(' in m, 'satış dökümü çağrılmıyor'
+    assert 'data-sk=' in m, 'satır kimliği yok'
+    # Yazdirmada sekmeler ve suzgecler gizlenir, acik bolum basilir
+    assert '@media print' in m
+    f = _io.open(os.path.join(KOK, 'flask_app.py'), encoding='utf-8').read()
+    assert "/api/rapor/stok_maliyet/excel" in f, 'Excel ucu yok'
+    # Excel AYNI raporu okur — ikinci bir sorgu iki rakam demekti
+    assert 'veri = api_rapor_stok_maliyet().get_json()' in f
+
+
+def test_mr1_maliyet_hesabi_tek_yerde():
+    """MR1: dört kopya teke indi. Ölü ya da unutulmuş bir kopya
+    kalırsa zamanla yine ayrışırlar."""
+    import io as _io
+    import re as _re
+    f = _io.open(os.path.join(KOK, 'flask_app.py'), encoding='utf-8').read()
+    assert 'def _stok_maliyet_dokumu(' in f
+    assert 'def _stok_maliyet_kalemleri(' in f
+    # STOK kimligine bagli her toplama IKI SUZGECTEN gecmeli.
+    # (Siparis kimligine bagli toplamalar BASKA bir soru soruyor —
+    #  onlarda da `aktif` eksik, Bahadir'a bulgu olarak bildirildi.)
+    kotu = []
+    for parca in _re.findall(
+            r'sum\(Maliyet\.(?:usd|try)_karsilik\).{0,320}?\.scalar\(\)',
+            f, _re.S):
+        if 'stok_idler' not in parca and 'baglanti_id == stok_id' not in parca:
+            continue
+        if 'aktif.is_(True)' not in parca:
+            kotu.append(parca[:90])
+    assert not kotu, f'stok maliyetinde süzgeçsiz toplama: {kotu}'
+
 def test_ma4_alt_bar_kendi_zeminini_tasiyor():
     """MA4: alt bar (Vazgeç/Kaydet) `.modal`in beyaz zemini üzerinde
     duruyordu — zemini kendisinin değil, kapsayıcısınındı. Gövde bir
