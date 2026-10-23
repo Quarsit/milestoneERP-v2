@@ -6990,6 +6990,554 @@ def test_mr1_maliyet_hesabi_tek_yerde():
             kotu.append(parca[:90])
     assert not kotu, f'stok maliyetinde süzgeçsiz toplama: {kotu}'
 
+
+# ══════════════════════════════════════════════════════════════════
+#  KF1 · KUR FARKI ONAYI — ÜÇ SATIRDAN BİRE
+#
+#  Kutucuk `.form-alan input{width:100%}` kuralından 273 piksel
+#  genişlik alıyordu. Chrome kontrolü o geniş kutunun ORTASINA çizer;
+#  kutucuk kendi yazısından yarım form uzakta duruyor, açıklama da
+#  kalan dar alanda iki satıra sarıyordu.
+#
+#  ÖLÇÜLDÜ (640 px modal, tarayıcıda):
+#      eski: kutu 273 px · alan 73 px · gövde 12 px kaydırıyor
+#      yeni: kutu  15 px · alan 33 px · kaydırma yok
+#
+#  16 şablondaki tüm onay/radyo kutuları tarandı; tek kurban buydu.
+# ══════════════════════════════════════════════════════════════════
+
+def test_kf1_onay_kutusu_metin_kutusu_genisligi_almiyor():
+    """Onay kutusu `.form-alan` kuralından `width:100%` ALMAMALI.
+
+    Bu testin asıl işi gelecek: kuralın kendisi hâlâ tip ayırmıyor
+    olabilir. İki koruma da aranır — tipe göre yazılmış kural ve
+    kur farkı kutusunun kendi ölçüsü."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    assert '.form-alan input[type=checkbox]' in m, \
+        'tipe göre koruma kuralı yok — bir sonraki kutucuk yayılır'
+    assert '.kf-onay input{width:15px' in m, \
+        'kur farkı kutusu kendi ölçüsünü söylemiyor'
+
+    # Kutucuk `.form-alan` içine GERİ TAŞINMAMALI: orada genişlik
+    # kuralı yeniden devreye girer.
+    _b = m.index('id="hKurFarkiAlan"')
+    _acilis = m.rindex('<div class=', 0, _b)
+    assert 'kf-onay' in m[_acilis:_b], 'kutu form-alan içine dönmüş'
+
+
+def test_kf1_aciklama_isarete_gore_degisiyor_ve_boy_oynamiyor():
+    """İki açıklama da var ve ikisi de TEK SATIR.
+
+    İlk denemede kapalı hâlin cümlesi 58 karakterdi; 640 px modalde
+    nota kalan yer ~55 karakter olduğu için sarıyor, işaretleyince
+    kutu 51'den 33 piksele düşüp pencereyi zıplatıyordu. Sınır
+    testle tutuluyor."""
+    import io as _io, re as _re
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    for _k in ('.kf-onay:has(input:checked) .kf-kapali{display:none}',
+               '.kf-onay:has(input:checked) .kf-acik{display:inline}'):
+        assert _k in m, f'{_k} yok — açıklama işarete göre değişmiyor'
+
+    _alan = m[m.index('id="hKurFarkiAlan"'):]
+    _alan = _alan[:_alan.index('</div>')]
+    for _s in ('kf-not kf-kapali', 'kf-not kf-acik'):
+        assert _s in _alan, f'{_s} yok'
+    # Metinler tek satıra sığmalı: sürüm notlarıyla uzamasın.
+    for _m in _re.finditer(r'class="kf-not kf-\w+">(.*?)</span>',
+                           _alan, _re.S):
+        _metin = ' '.join(_m.group(1).split())
+        assert len(_metin) <= 55, \
+            f'açıklama {len(_metin)} karakter — sarar: {_metin}'
+
+
+def test_kf1_olmayan_tutar_sozu_verilmiyor():
+    """`hKurFarkiTutar` ÇIKARILDI — hiçbir şey doldurmuyordu.
+
+    Etikette tutarın yazılacağı bir yer duruyordu ama onu yazan kod
+    yoktu: açık fatura ucu faturanın ESKİ kurunu dönmüyor. Boş bir
+    söz, verilmemiş sözden kötüdür."""
+    import io as _io, os as _os
+    for _ad in _os.listdir(os.path.join(KOK, 'templates')):
+        if not _ad.endswith('.html'):
+            continue
+        m = _io.open(os.path.join(KOK, 'templates', _ad),
+                     encoding='utf-8').read()
+        # ADI değil ÖGESİ aranır: yama notu adı anıyor, öge değil.
+        assert 'id="hKurFarkiTutar"' not in m, \
+            f'{_ad}: dolduran kodu olmayan tutar alanı geri gelmiş'
+
+    # Kutucuğun KENDİSİ duruyor: kaydederken okunan bayrak bu.
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    assert "getElementById('hKurFarkiIslet')" in m, 'bayrak okunmuyor'
+    assert 'govde.kur_farki_islet = true' in m, 'bayrak sunucuya gitmiyor'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  KF2 · HAREKET FORMU KAYDIRMAYI BIRAKTI
+#
+#  KF1'den sonra da kaydırma kalmıştı: form, pencerenin verdiği
+#  yerden uzundu. Üç yerde boşuna yer harcanıyordu.
+#
+#  ÖLÇÜLDÜ (1280x800, modal 560 px, gövdenin yüksekliği):
+#                      önce   sonra
+#      Ödeme + USD      697 →   542
+#      Alış Faturası    533 →   425
+#      Açılış Bakiyesi  412 →   357
+#      kaydırma           7 →     0   (her işlem tipinde)
+# ══════════════════════════════════════════════════════════════════
+
+def test_kf2_doviz_tutarla_ayni_alanda():
+    """Döviz tek başına bir satır yiyordu.
+
+    Yan etki olarak sözleşme kuru kutusu ("TCMB kuru kullanılır:
+    40,0000") döviz seçicisinin ÜSTÜNDE kalıyordu — kuru, döviz
+    seçilmeden önce söylüyordu. Artık altında."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    assert '.tutar-cift{' in m, 'birleşik tutar alanı tanımlı değil'
+    # hDoviz, hTutar ile AYNI kutuda olmalı.
+    _k = m[m.index('class="tutar-cift"'):]
+    _k = _k[:_k.index('</div>')]
+    assert 'id="hTutar"' in _k and 'id="hDoviz"' in _k, \
+        'tutar ve döviz ayrılmış'
+    # Döviz seçicisi sözleşme kuru kutusundan ÖNCE gelmeli.
+    assert m.index('id="hDoviz"') < m.index('id="hKurAlan"'), \
+        'kur kutusu döviz seçicisinin üstünde'
+
+
+def test_kf2_belge_satiri_esnek_js_sutun_saymiyor():
+    """Evrak no · belge tarihi · vade tek satırda.
+
+    Vade yalnız borç doğuran tiplerde görünüyor (VT1). Eskiden
+    satırın sütun sayısı JS'ten değiştiriliyordu; esnek satırda
+    gizlenen öge akıştan çıktığı için gerek kalmadı. JS'in o işi
+    geri almaması gerekiyor: iki yol birden yaşarsa biri
+    düzeltilip öteki unutulur."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    assert '.form-cift{display:flex' in m, 'esnek satır tanımlı değil'
+    _s = m[m.index('id="hTarihSatir"') - 120:m.index('id="hTarihSatir"')]
+    assert 'form-cift' in _s, 'belge satırı esnek değil'
+    assert "classList.toggle('f2'" not in m, \
+        'JS hâlâ sütun sayısı değiştiriyor'
+    # Üç alan da bu satırda.
+    _r = m[m.index('id="hTarihSatir"'):]
+    _r = _r[:_r.index('id="hKasaAlan"')]
+    for _a in ('id="hEvrak"', 'id="hBelgeTarihi"', 'id="hVade"'):
+        assert _a in _r, f'{_a} belge satırında değil'
+
+
+def test_kf2_bos_kutular_yer_kaplamiyor():
+    """Hiçbir şey söylemeyen kutu yer kaplamamalı.
+
+    KDV önizlemesi tutar girilene kadar içinde '—' ile duruyordu:
+    40 piksellik boş bir kutu. Kasa ipucunun ikinci cümlesi de
+    yalnız TANIMLI KASA YOKKEN işe yarıyor."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    # Önizleme kutusu gizli başlar ve boşalınca yine gizlenir.
+    _k = m[m.index('id="hKdvOnizle"'):]
+    assert 'display:none' in _k[:_k.index('>')], \
+        'KDV önizlemesi gizli başlamıyor'
+    assert "kutu.style.display = 'none'; return; }" in m, \
+        'önizleme boşalınca gizlenmiyor'
+    assert "kutu.style.display = '';" in m, \
+        'önizleme dolunca geri gelmiyor'
+
+    # Kasa ipucu: uzun öğüt yalnız kasa listesi BOŞKEN.
+    assert 'id="hKasaNot"' in m, 'kasa ipucu kimliksiz'
+    assert 'HAR_KASALAR.length' in m, 'ipucu kasa sayısına bakmıyor'
+    _n = m[m.index("kn.innerHTML = HAR_KASALAR.length"):]
+    _n = _n[:_n.index(';')]
+    assert 'Tanımlı kasa yok' in _n, 'boş liste uyarısı yok'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  US1 · YENİ STOK FORMU — ÜÇ TİP, ÜÇ DÜZEN, TEK IZGARA
+#
+#  Bahadır üç tip için ayrı düzen çizdi. Satırları tip tip yazmak
+#  üç kopya demekti; bunun yerine alanlar TEK 4 sütunlu ızgarada
+#  sırayla duruyor ve ızgara gizli alanı atlıyor. Sıralama şu üç
+#  düzeni birden veriyor:
+#
+#    BLOK    ürün tipi · üretici · menşe · giriş tarihi
+#            cins · blok no · kaynak · alış tipi
+#            alış fiyatı · döviz · fiyat birimi · tonaj
+#            boy · yükseklik · en · hacim
+#            fatura durumu · fatura no · fatura tarihi · kdv oranı
+#    PLAKA   ... cins · blok no · özellik · kaynak
+#            alış tipi · alış fiyatı · döviz · fiyat birimi
+#            boy · yükseklik · kalınlık
+#            stok adedi · başlangıç slab no · toplam m² · + grup
+#    EBATLI  aynısı; kasa no, kasa adedi · kasa içi adet · toplam m²
+#
+#  ÖLÇÜLDÜ (tarayıcıda, 880 px modal): üç düzen de çizime birebir
+#  uydu, hiçbir seçici kırpılmıyor, kaydırma yok. Üç tip de formdan
+#  kaydedildi ve veritabanında eksiksiz çıktı.
+# ══════════════════════════════════════════════════════════════════
+
+def _us1_sira(metin, kap_id):
+    """Bir ızgaranın içindeki alanları SIRAYLA döner."""
+    import re as _re
+    _p = metin.index(f'id="{kap_id}"')
+    _p = metin.index('>', _p) + 1
+    _derinlik, _i, _son = 1, _p, _p
+    while _derinlik and _i < len(metin):
+        _a = metin.find('<div', _i)
+        _k = metin.find('</div>', _i)
+        if _k == -1:
+            break
+        if _a != -1 and _a < _k:
+            _derinlik += 1; _i = _a + 4
+        else:
+            _derinlik -= 1; _i = _k + 6; _son = _k
+    _ic = metin[_p:_son]
+    return [m.group(1) for m in
+            _re.finditer(r'<(?:input|select|button)[^>]*id="(s[A-Z]\w*)"', _ic)]
+
+
+def test_us1_alanlar_tipe_gore_dogru_sirada():
+    """Izgaradaki SIRA üç düzeni birden üretiyor.
+
+    Sıra bozulursa blokta 'alış tipi' alt satıra, plakada 'özellik'
+    yanlış sütuna düşer — ekrana bakmadan anlaşılmaz. Bu yüzden
+    sıranın kendisi test ediliyor."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    assert _us1_sira(m, 'kimlikSatir') == [
+        'sCins', 'sBlokNo', 'sOzellik', 'sKaynak', 'sAlisTipi',
+        'sFiyat', 'sDoviz', 'sFiyatBirim', 'sTonaj'], 'kimlik sırası bozuk'
+    assert _us1_sira(m, 'olcuSatir') == [
+        'sBoy', 'sYuk', 'sEn', 'sKal', 'sAdet', 'sKasaAdedi',
+        'sKasaIci', 'sBasNo', 'sOlcu'], 'ölçü/miktar sırası bozuk'
+
+    # Blok dışında miktar alanları ALT SATIRDAN başlar.
+    assert '.f4.ayri > #adetAlan, .f4.ayri > #kasaAdediAlan{grid-column-start:1}' in m, \
+        'satır başı kuralı yok'
+    assert "_os.classList.toggle('ayri', !blok)" in m, \
+        'satır başı tipe göre açılmıyor'
+
+
+def test_us1_etiketler_sadelesti_ama_bilgi_silinmedi():
+    """Parantezli açıklamalar etiketten çıktı, ipucuna taşındı.
+
+    "Blok No (kesildiği blok)", "Kasa No (ilk kasa, ops.)",
+    "Üretici / Ocak", "Yüzey / Özellik", "Alış / Fatura Tarihi" —
+    hepsi sadeleşti. Açıklamaları SİLMEK başka şey; onlar alanın
+    baloncuğunda duruyor."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    # Etiket olarak YAZILIYOR mu diye bakılır; yama notunda adının
+    # geçmesi başka şey (KF1'de bu tuzağa bir kez düşüldü).
+    for _eski in ('Üretici / Ocak', 'Yüzey / Özellik'):
+        assert f'>{_eski}<' not in m, f'eski etiket duruyor: {_eski}'
+    for _eski in ('Blok No (kesildiği blok)', 'Kasa No (ilk kasa, ops.)'):
+        assert f"'{_eski}'" not in m, f'eski etiket duruyor: {_eski}'
+    assert '<label>Üretici</label>' in m, 'Üretici etiketi yok'
+    assert '<label>Özellik</label>' in m, 'Özellik etiketi yok'
+    assert "_no.textContent = blok || plaka ? 'Blok No' : 'Kasa No'" in m, \
+        'no etiketi sadeleşmemiş'
+    # Açıklamalar ipucuna taşındı.
+    assert 'kesildiği blok numarası' in m, 'plaka ipucu kayıp'
+    assert 'İlk kasanın numarası' in m, 'kasa ipucu kayıp'
+    assert "Ülkeler'den ekleyin" in m, 'menşe ipucu kayıp'
+
+    # ÜRETİMDE fatura yok: etiket "Üretim Tarihi" demeli.
+    assert 'id="sAlisTarihEtiket">Fatura Tarihi<' in m, \
+        'tarih etiketi sadeleşmemiş'
+    assert "uretim ? 'Üretim Tarihi' : 'Fatura Tarihi'" in m, \
+        'üretimde tarih etiketi düzeltilmiyor'
+
+
+def test_us1_kdv_ikilisi_birlikte_gizlenir():
+    """KDV oranı ve "fiyata KDV dahil" artık AYRI yerlerde.
+
+    Eskiden ikisi tek satırdaydı ve satır gizleniyordu. Ayrı yerlere
+    dağılınca biri gizlenip öteki ekranda kalma riski doğdu; ikisini
+    tek fonksiyon açıp kapatıyor."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    assert 'id="kdvSatir"' not in m, 'eski KDV satırı duruyor'
+    assert 'function kdvAlanlariGoster(' in m, 'ortak açıp kapatıcı yok'
+    for _id in ('kdvOranAlan', 'kdvDahilAlan'):
+        assert f"getElementById('{_id}')" in m, f'{_id} okunmuyor'
+    # Gizleme KURALI tek yerden: doğrudan style ataması kalmamalı.
+    for _id in ('kdvOranAlan', 'kdvDahilAlan'):
+        assert f"getElementById('{_id}').style.display" not in m, \
+            f'{_id} ortak fonksiyonun dışından gizleniyor'
+    assert m.count('kdvAlanlariGoster(') == 3, \
+        'açıp kapatıcı beklenen yerlerde çağrılmıyor'
+
+    # Ölçü grubu kutusu yalnız grup varken.
+    assert "alan.style.display = ek.length ? '' : 'none'" in m, \
+        'boş ölçü grubu kutusu gizlenmiyor'
+    assert 'id="grupEkleAlan"' in m, 'grup ekle düğmesi miktar satırında değil'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  US2 · ÜRETİLEN MALIN "ALIŞ FİYATI" OLMAZ — AMA MALİYETİ OLUR
+#
+#  Bahadır sordu: "kaynak üretim seçilince Alış Fiyatı olmalı mı?"
+#  Ölçüldü — alan KALMALI, adı değişmeli.
+#
+#  Sunucu üretimde alış tipini NULL, KDV'yi 0, fatura durumunu zorla
+#  'faturasiz' yapıyor ve tedarikçi cari hareketi hiç doğmuyor. Ama
+#  FİYATI saklıyor ve matrahı ondan kuruyor. İki üretim bloğu açıp
+#  ikisini de 10.000 USD'ye sattım:
+#
+#      girilen bedel   kaydedilen matrah   satış maliyeti   kâr
+#      —                        0            1,00 $      9.999,00 $
+#      300 $/ton            6.000 $      6.001,00 $      3.999,00 $
+#
+#  Yani alan kaldırılsa ya da boş bırakılsa, kendi ocağından çıkan
+#  bloğun maliyeti HİÇBİR YERDE olmaz ve kâr 6.000 $ şişer.
+#
+#  Ekran ayrıca sunucunun yaptığının TERSİNİ söylüyordu: üretimde
+#  "Fatura Durumu: Faturalı" seçili duruyor ve altındaki not
+#  "tedarikçi cariye borç işlenir" diyordu.
+# ══════════════════════════════════════════════════════════════════
+
+def test_us2_uretimde_fiyat_alani_duruyor_adi_degisiyor():
+    """Alan silinmemeli — silinirse üretim maliyeti kaybolur."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    # Alanın kendisi hiçbir koşulda gizlenmiyor.
+    assert "getElementById('sFiyat').style.display" not in m, \
+        'fiyat alanı gizleniyor — üretim maliyeti kaybolur'
+    assert 'id="sFiyatEtiket"' in m, 'fiyat etiketi kimliksiz'
+    assert 'Üretim Maliyeti' in m, 'üretim adı yok'
+
+    # KS1: etiket üç ekranda da TEK yerden geliyor (`bedelAdi`).
+    # Üç ayrı yerde yazılsaydı biri değiştirilip ötekiler unutulurdu.
+    assert 'function bedelAdi(' in m, 'ortak adlandırıcı yok'
+    assert m.count('bedelAdi(') >= 4, \
+        'etiket her yerde ortak adlandırıcıdan gelmiyor'
+    for _yer in ("_fe.innerHTML = bedelAdi(",       # yeni stok formu
+                 "_dfe.textContent = bedelAdi(",    # düzenleme modalı
+                 "alan(bedelAdi(s.kaynak)"):        # stok kartı
+        assert _yer in m, f'{_yer} ortak adlandırıcıyı kullanmıyor'
+
+
+def test_us2_uretimde_ekran_sunucunun_yaptigini_soyluyor():
+    """Üretimde fatura alanları gizli, not doğru şeyi söylüyor.
+
+    Sunucu `_fatura_durumu = 'faturasiz'` diye ZORLUYOR; ekran
+    "Faturalı" gösterip "tedarikçi cariye borç işlenir" diyordu."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    for _id in ('sFaturaDurumAlan', 'sFaturaNoAlan'):
+        assert f'id="{_id}"' in m, f'{_id} kimliksiz — gizlenemez'
+        assert f"_gos('{_id}', !uretim)" in m, f'{_id} üretimde gizlenmiyor'
+    assert 'Üretimde tedarikçi borcu, fatura ve KDV yok' in m, \
+        'üretim notu yok'
+    # Nakliye işaretinin adı da üretimde değişiyor (toplu form gibi).
+    assert "? 'Maliyete nakliye dahil' : 'Alış fiyatına nakliye dahil'" in m, \
+        'nakliye etiketi üretimde düzeltilmiyor'
+
+
+def test_us2_fatura_durumu_secimi_sessizce_degismiyor():
+    """Üretime geçip geri dönünce seçim geri gelmeli.
+
+    'Faturalı' ile 'Faturasız' arasındaki fark tedarikçiye borç
+    yazılıp yazılmamasıdır — sessizce değişmesi en olmayacak şey.
+    İki formda da aynı kusur vardı; ikisi birden düzeltildi."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/stok.html'),
+                 encoding='utf-8').read()
+    for _d in ('FATURA_DURUM_ONCEKI', 'TP_FATURA_DURUM_ONCEKI'):
+        assert f'let {_d} = null;' in m, f'{_d} tanımlı değil'
+        assert f'{_d} = _' in m, f'{_d} hiç yazılmıyor'
+        assert f'if ({_d})' in m or f'else if ({_d})' in m, \
+            f'{_d} hiç geri yüklenmiyor'
+
+
+def test_us2_denetim_betigi_var_ve_salt_okunur():
+    """Maliyeti olmayan üretim stoklarını bulan betik yazmamalı."""
+    import io as _io
+    _y = os.path.join(KOK, 'denetim_uretim_maliyet.py')
+    assert os.path.exists(_y), 'denetim betiği yok'
+    _m = _io.open(_y, encoding='utf-8').read()
+    for _yasak in ('db.session.commit', 'db.session.add',
+                   'db.session.delete'):
+        assert _yasak not in _m, f'salt okunur olmalı ama {_yasak} var'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  KS1 · KESİMDEN ÇIKAN STOĞU KİMSE SATIN ALMADI
+#
+#  Bahadır sordu: "üretim 0 geldi ama plakalar kesimden oluştu."
+#  Haklıydı. Kesim, oluşturduğu stoğun `kaynak` alanını HİÇ
+#  yazmıyordu; model varsayılanı 'satinalma' devreye giriyordu.
+#
+#  ÖLÇÜLDÜ (ithalat EUR bloğu kesildi):
+#      blok   kaynak='satinalma'  alis_tipi='ithalat'
+#      plaka  kaynak='satinalma'  alis_tipi=NULL
+#             → uç nokta NULL'u 'yurtici_kdvli' diye DOLDURUYORDU
+#
+#  Bugün bu değeri basan bir ekran yok; yani görünür bir yalan
+#  değildi, ekrana çıkmayı bekleyen bir yalandı.
+# ══════════════════════════════════════════════════════════════════
+
+def test_ks1_kesim_kaynagi_yaziyor():
+    """Kesim, oluşturduğu her stoğa kaynak='kesim' yazmalı."""
+    import io as _io, re as _re
+    m = _io.open(os.path.join(KOK, 'flask_app.py'),
+                 encoding='utf-8').read().replace('\r\n', '\n')
+    _r = m[m.index("@app.route('/api/kesim', methods=['POST'])"):]
+    _r = _r[:_r.index("@app.route('/api/kesim/<kesim_id>', methods=['DELETE'])")]
+    # Kesim icinde olusturulan HER stok kaydinda kaynak yazili olmali.
+    for _ctor in ('PlakaStok(', 'EbatliStok('):
+        for _p in _re.finditer(_re.escape(_ctor), _r):
+            # Sabit pencere KULLANMA: KM1'in menşe yorumu eklenince
+            # gövde 1600 karakteri aştı ve test kodu değil KENDİNİ
+            # kırdı. Sınır bir sonraki `db.session.add`.
+            _son = _r.index('db.session.add', _p.start())
+            _govde = _r[_p.start():_son]
+            assert "kaynak='kesim'" in _govde, \
+                f'{_ctor} kaynak yazmıyor — varsayılan satinalma kalır'
+
+
+def test_ks1_bos_alis_tipine_deger_uydurulmuyor():
+    """NULL `alis_tipi` 'yurtici_kdvli' diye doldurulmamalı.
+
+    Kesimden çıkan stokta alan NULL; kaynak blok İTHALAT olsa bile
+    uç nokta onu yurt içi KDV'li alış diye dönüyordu."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'flask_app.py'),
+                 encoding='utf-8').read().replace('\r\n', '\n')
+    assert "if item['kaynak'] in ('uretim', 'kesim')" in m, \
+        'kesim, uydurma değerden muaf değil'
+    # Eski tek kosullu hali geri gelmesin.
+    assert "(None if item['kaynak'] == 'uretim'" not in m, \
+        'eski hal duruyor'
+
+
+def test_ks1_kesim_stogu_faturalandirilamaz():
+    """Kesimden çıkan stok tedarikçi borcu doğurmamalı.
+
+    `faturalandir` stoğun matrahı kadar borç yazıyor. Kesim
+    plakasının matrahı kaynak bloktan dağıtılan paydır; borcu zaten
+    o blokta. Buradan faturalandırmak aynı malı iki kez
+    borçlandırırdı."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'flask_app.py'),
+                 encoding='utf-8').read().replace('\r\n', '\n')
+    _u = m[m.index("def api_stok_faturalandir("):]
+    _u = _u[:_u.index('def api_stok_mal_teslim(')]
+    assert "(getattr(stok, 'kaynak', None) or '') == 'kesim'" in _u, \
+        'kesim stoğu faturalandırmaya karşı korunmuyor'
+    # Denetim, borcu yazan koddan ÖNCE gelmeli.
+    assert _u.index("== 'kesim'") < _u.index('_stok_cari_hareket_olustur'), \
+        'denetim borç yazıldıktan sonra geliyor'
+
+
+def test_ks1_gecmis_icin_goc_betigi_var():
+    """Mevcut kayıtlar için göç betiği — varsayılan RAPOR olmalı."""
+    import io as _io
+    _y = os.path.join(KOK, 'goc_kesim_kaynak.py')
+    assert os.path.exists(_y), 'göç betiği yok'
+    _m = _io.open(_y, encoding='utf-8').read()
+    assert "UYGULA = '--uygula' in sys.argv" in _m, '--uygula kapısı yok'
+    assert 'if UYGULA:' in _m, 'rapor kipi yazıyor olabilir'
+    # Yalnız `kaynak` alanina dokunmali.
+    import re as _re
+    _atamalar = set(_re.findall(r'\bs\.(\w+) =', _m))
+    assert _atamalar <= {'kaynak'}, f'başka alana da yazıyor: {_atamalar}'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  KM1 · KESİLEN TAŞIN MENŞEİ DEĞİŞMEZ
+#
+#  Kesim, hedef stoğun `mense` alanını hiç yazmıyordu; model
+#  varsayılanı devreye girip 'TURKIYE' kalıyordu. ARNAVUTLUK
+#  menşeli K6462 bloğundan kesilen plakalar TÜRK MALI olarak
+#  kaydolmuştu — Bahadır stok kartında yakaladı.
+#
+#  Bu kozmetik değil: `mense` TİCARİ FATURAYA ve kasa ETİKETİNE
+#  basılıyor. Fatura şablonu tüm kalemler TURKIYE ise "the goods
+#  are of Turkish origin" yazıyor.
+#
+#  Aşağıdaki test METİN değil DAVRANIŞ bakıyor: bir blok kesiliyor
+#  ve hedefin alanları kaynakla karşılaştırılıyor. Unutulan bir
+#  sonraki alan da burada patlar.
+# ══════════════════════════════════════════════════════════════════
+
+def test_km1_kesim_menseyi_kaynaktan_tasir():
+    """ARNAVUTLUK bloğundan kesilen plaka ARNAVUTLUK olmalı."""
+    from models import PlakaStok, KesimDetay
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BLK-KM1', firma_id=1, blok_no='KM1', cins='KMTEST',
+            uretici='ALBSTONE1 SHPK', mense='ARNAVUTLUK',
+            boy=310, yukseklik=155, en=50, hacim_m3=2.4, tonaj=6.78,
+            alis_fiyati=200, alis_fiyat_birim='ton', doviz='EUR',
+            durum='Serbest', giris_tarihi=date(2026, 9, 14),
+            kaynak='satinalma', alis_tipi='ithalat'))
+        db.session.commit()
+
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': ['BLK-KM1'],
+        'kesim_tarihi': '2026-10-18',
+        'hedefler': [{'hedef_tip': 'PLAKA', 'cins': 'KMTEST', 'boy': 302,
+                      'yukseklik': 151, 'kalinlik': 2, 'adet': 2,
+                      'miktar_m2': 4.56}]})
+    assert r.status_code == 200, r.get_json()
+
+    with fa.app.app_context():
+        hedefler = [d.hedef_stok_id for d in
+                    KesimDetay.query.filter_by(hedef_tip='PLAKA').all()]
+        plakalar = PlakaStok.query.filter(
+            PlakaStok.id.in_(hedefler),
+            PlakaStok.cins == 'KMTEST').all()
+        assert len(plakalar) == 2, len(plakalar)
+        for p in plakalar:
+            assert p.mense == 'ARNAVUTLUK', \
+                f'{p.id} menşei {p.mense!r} — ticari faturaya bu basılır'
+            # KK1 ile birlikte gelenler de yerinde dursun.
+            assert p.kaynak == 'kesim', f'{p.id} kaynak {p.kaynak!r}'
+            assert p.uretici == 'ALBSTONE1 SHPK'
+            assert (p.doviz or '').upper() == 'EUR'
+
+
+def test_km1_mense_tek_kapidan_geciyor():
+    """Menşe iki hedef tipinde ayrı ayrı yazılmasın.
+
+    PLAKA'da düzeltip EBATLI'da unutmak, hatanın kendisiyle aynı
+    sınıf. İkisi de tek yardımcıdan geçiyor."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'flask_app.py'),
+                 encoding='utf-8').read().replace('\r\n', '\n')
+    assert 'def _kesim_mense(' in m, 'ortak menşe kapısı yok'
+    _r = m[m.index("@app.route('/api/kesim', methods=['POST'])"):]
+    _r = _r[:_r.index("@app.route('/api/kesim/<kesim_id>', methods=['DELETE'])")]
+    assert _r.count('mense=_kesim_mense(ana_kaynak)') == 2, \
+        'her iki hedef tipi de ortak kapıdan geçmiyor'
+
+
+def test_km1_mense_gocu_var_ve_rapor_kipinde_yazmaz():
+    """Geçmiş kayıtlar için göç betiği — varsayılan RAPOR."""
+    import io as _io, re as _re
+    _y = os.path.join(KOK, 'goc_kesim_mense.py')
+    assert os.path.exists(_y), 'menşe göç betiği yok'
+    _m = _io.open(_y, encoding='utf-8').read()
+    assert "UYGULA = '--uygula' in sys.argv" in _m, '--uygula kapısı yok'
+    assert 'if UYGULA:' in _m, 'rapor kipi yazıyor olabilir'
+    _atamalar = set(_re.findall(r'\bhedef\.(\w+) =', _m))
+    assert _atamalar <= {'mense'}, f'başka alana da yazıyor: {_atamalar}'
+
 def test_ma4_alt_bar_kendi_zeminini_tasiyor():
     """MA4: alt bar (Vazgeç/Kaydet) `.modal`in beyaz zemini üzerinde
     duruyordu — zemini kendisinin değil, kapsayıcısınındı. Gövde bir

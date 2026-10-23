@@ -104,6 +104,52 @@
   .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
   .onay{display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:12px}
   .onay input{width:auto}
+  /* KF1 — ONAY KUTUSUNDA TİP ÖNEMLİ.
+     Üstteki `.form-alan input` kuralı tip ayırmıyor: aynı kapsayıcıda
+     duran bir onay kutusu da `width:100%` alıyordu. Chrome kontrolü o
+     geniş kutunun ORTASINA çiziyor — kutucuk kendi yazısından 270
+     piksel uzakta duruyordu (kenarlık ve dolgu zaten yok sayılıyor,
+     bozan tek şey genişlik).
+     ÖLÇÜLDÜ: 16 şablondaki tüm onay/radyo kutuları tarandı, tek kurban
+     `hKurFarkiIslet`'ti — ötekiler ya elle korunmuş ya da `.form-alan`
+     dışında. Kural yine de TİPE GÖRE yazıldı: bir sonraki kutucuk
+     aynı yere düşmesin. */
+  .form-alan input[type=checkbox],.form-alan input[type=radio]{
+    width:15px;height:15px;flex:none;padding:0;cursor:pointer;
+    accent-color:var(--verde)}
+  /* KF1 — KUR FARKI ONAYI: tek satır, işaretlenince yeşile döner.
+     Açıklama işarete göre değişiyor (`:has`, JS yok) ve iki hâli de
+     tek satır olduğu için işaretleyince pencere zıplamıyor. */
+  /* KF2 — yan yana duran alan çifti. Grid DEĞİL: gizlenen bir öge
+     gridde sütununu boş bırakır, esnekte akıştan tamamen çıkar ve
+     kalan alan tam genişliğe yayılır. */
+  .form-cift{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+  .form-cift > .form-alan{flex:1 1 150px;margin-bottom:0}
+  /* KF2 — tutar ve dövizi tek alanda okunur tutar. Döviz sabit dar,
+     tutar kalanı alır; `min-width:0` olmadan sayı kutusu esnek
+     kutuda kendi taban genişliğinin altına inmiyor ve taşıyor. */
+  .tutar-cift{display:flex;gap:6px}
+  .tutar-cift input{flex:1 1 auto;min-width:0}
+  .tutar-cift select{flex:0 0 84px}
+  .kf-onay{margin-bottom:12px}
+  .kf-onay > label{display:flex;flex-wrap:wrap;align-items:center;
+    gap:4px 9px;cursor:pointer;border:1px solid var(--cizgi-koyu);
+    border-radius:var(--r-kucuk);padding:8px 11px;margin:0;
+    font-size:.85rem;font-weight:400;text-transform:none;
+    letter-spacing:0;color:inherit}
+  /* Kutucuk artık `.form-alan` içinde DEĞİL, yani yukarıdaki koruma
+     kuralı buraya uğramıyor; ölçüsünü ve rengini kendisi söylüyor.
+     Varsayılan işaretli rengi tarayıcının mavisiydi — kurumsal yeşil
+     olmayınca kutu sayfanın geri kalanına yabancı duruyordu. */
+  .kf-onay input{width:15px;height:15px;flex:none;margin:0;
+    cursor:pointer;accent-color:var(--verde)}
+  .kf-onay:has(input:checked) > label{border-color:var(--verde);
+    background:var(--verde-acik)}
+  .kf-not{font-size:.73rem;color:var(--soluk);
+    border-left:1px solid var(--cizgi-koyu);padding-left:9px}
+  .kf-acik{display:none}
+  .kf-onay:has(input:checked) .kf-kapali{display:none}
+  .kf-onay:has(input:checked) .kf-acik{display:inline}
   /* MA4: ALT BAR KENDI ZEMININI TASIR.
      Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
      yani zemini kendisinin degil, kapsayicisinindi. Gövde
@@ -396,7 +442,19 @@
             </optgroup>
           </select>
         </div>
-        <div class="form-alan"><label>Tutar <span style="color:var(--kirmizi)">*</span></label><input id="hTutar" type="number" step="0.01" oninput="kdvOnizle()"></div>
+        <!-- KF2 — TUTAR VE DÖVİZ AYNI ALANDA.
+             Döviz ayrı bir satırda duruyordu ve o satır tek başına
+             56 piksel yiyordu. Tutarla birlikte okunması gereken bir
+             şeyi ayrı satıra koymanın da faydası yoktu.
+             Yan etki: sözleşme kuru kutusu ("TCMB kuru kullanılır:
+             40,0000") döviz seçicisinin ÜSTÜNDE kalıyordu — yani
+             kuru dövizi seçmeden önce söylüyordu. Artık altında. -->
+        <div class="form-alan"><label>Tutar <span style="color:var(--kirmizi)">*</span></label>
+          <div class="tutar-cift">
+            <input id="hTutar" type="number" step="0.01" oninput="kdvOnizle()">
+            <select id="hDoviz" onchange="kurAlaniGoster()"><option>USD</option><option>EUR</option><option>TRY</option></select>
+          </div>
+        </div>
       </div>
 
       <!-- SK1 — SÖZLEŞME KURU
@@ -455,9 +513,12 @@
             </select>
           </div>
         </div>
-        <div id="hKdvOnizle" style="font-size:.82rem;color:var(--soluk);line-height:1.7;
+        <!-- KF2: tutar girilene kadar bu kutu içinde "—" ile duruyordu:
+             40 piksellik boş bir kutu, hiçbir şey söylemeyen. Artık
+             söyleyecek bir şey olduğunda beliriyor. -->
+        <div id="hKdvOnizle" style="display:none;font-size:.82rem;color:var(--soluk);line-height:1.7;
              background:var(--kagit);border:1px solid var(--cizgi);border-radius:var(--r-kucuk);
-             padding:9px 12px;margin-bottom:12px">—</div>
+             padding:9px 12px;margin-bottom:12px"></div>
       </div>
 
       <!-- Transfer alanları -->
@@ -488,15 +549,14 @@
         </div>
       </div>
 
-      <div class="form-satir f2">
-        <div class="form-alan"><label>Döviz</label>
-          <select id="hDoviz" onchange="kurAlaniGoster()"><option>USD</option><option>EUR</option><option>TRY</option></select>
-        </div>
+      <!-- KF2 — BELGE SATIRI: evrak no · belge tarihi · vade.
+           Üçü de aynı belgeyi anlatıyor, bir satırda duruyorlar.
+           VT1: vade yalnız BORÇ doğuran tiplerde görünür; eskiden
+           satırın sütun sayısı bunun için JS'ten değiştiriliyordu.
+           `.form-cift` ESNEK olduğu için artık gerekmiyor — gizlenen
+           öge akıştan çıkıyor, kalanlar kendiliğinden yayılıyor. -->
+      <div class="form-cift" id="hTarihSatir">
         <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
-      </div>
-      <!-- VT1: vade yalnız BORÇ doğuran tiplerde görünür, o yüzden
-           satırın sütun sayısı da tipe göre değişiyor (hTarihSatir). -->
-      <div class="form-satir f2" id="hTarihSatir">
         <!-- BT1 — BELGE TARİHİ
              Faturanın KESİLDİĞİ gün. Kur bu tarihten alınır (VUK/GİB:
              dövizli işlemin TL karşılığı fatura tarihindeki TCMB döviz
@@ -513,8 +573,13 @@
       </div>
       <div class="form-alan" id="hKasaAlan" style="margin-bottom:12px"><label>Kasa / Banka Hesabı</label>
         <select id="hKasa"><option value="">— kasa seçin (zorunlu) —</option></select>
-        <div style="font-size:.72rem;color:var(--soluk);margin-top:4px">Tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur.
-        <strong>Zorunludur</strong> — para takip etmediğiniz bir hesaba geliyorsa önce o hesabı kasa olarak tanımlayın.</div>
+        <!-- KF2 — İPUCU İKİ SATIRDAN BİRE.
+             İkinci cümle ("para takip etmediğiniz bir hesaba
+             geliyorsa önce o hesabı kasa olarak tanımlayın") yalnız
+             TANIMLI KASA YOKKEN işe yarıyor; her açılışta durması
+             formu 30 piksel uzatıyordu. Artık tam o durumda
+             yazılıyor — öğüt, işe yaradığı yerde. -->
+        <div id="hKasaNot" style="font-size:.72rem;color:var(--soluk);margin-top:4px">Tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur · <strong>zorunludur</strong></div>
       </div>
       <!-- KAPATILACAK FATURA (BF1).
            Eskiden bu seçim YALNIZCA ayrı "Tahsilat / Ödeme"
@@ -532,24 +597,45 @@
       <!-- KUR FARKI: hesaplamak ile CARİYE İŞLEMEK ayrı şeylerdir.
            Varsayılan KAPALI — bir muhasebe kaydını sessizce
            oluşturmak, oluşturmamaktan daha zararlıdır. -->
-      <div class="form-alan" id="hKurFarkiAlan" style="margin-bottom:12px;display:none">
-        <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;
-               font-weight:400;text-transform:none;letter-spacing:0;font-size:.88rem">
-          <input type="checkbox" id="hKurFarkiIslet" style="margin-top:3px">
-          <span>
-            <strong>Kur farkını cari hesaba işle</strong>
-            <span id="hKurFarkiTutar" style="color:var(--soluk)"></span>
-            <span style="display:block;font-size:.74rem;color:var(--soluk);margin-top:3px">
-              İşaretlemezseniz kur farkı yalnızca <strong>hesaplanır ve bildirilir</strong>;
-              cari hesaba kayıt düşmez.
-            </span>
-          </span>
+      <!-- KF1 — ÜÇ SATIRDAN BİRE.
+           Kutucuk `.form-alan input{width:100%}` kuralından 273 piksel
+           genişlik alıyordu; yazısından yarım form uzakta duruyor,
+           açıklama da kalan dar alanda iki satıra sarıyordu. Kutucuk
+           kendi boyutuna döndü, açıklama tek satıra sığdı.
+           ÖLÇÜLDÜ: 73 px → 37 px; pencerenin 12 px'lik kaydırma
+           ihtiyacı kalmadı.
+
+           `hKurFarkiTutar` ÇIKARILDI: tutarı yazacak bir yer hiç
+           yoktu, boş bir söz veriyordu. Açık fatura ucu faturanın
+           ESKİ kurunu dönmüyor, yani önizleme sunucu tarafında iş
+           ister — ayrı konu. -->
+      <div class="kf-onay" id="hKurFarkiAlan" style="display:none">
+        <label>
+          <input type="checkbox" id="hKurFarkiIslet">
+          <strong>Kur farkını cari hesaba işle</strong>
+          <!-- İki açıklama da TEK SATIRA sığacak kadar kısa tutuldu:
+               640 piksellik modalde nota kalan yer ~330 piksel, yani
+               ~55 karakter. İlk yazdığım uzun cümle 58 karakterdi ve
+               sarıyordu — işaretleyince kutu 51'den 33 piksele
+               düşüyor, pencere zıplıyordu. Ölçüldü. -->
+          <span class="kf-not kf-kapali">kur farkı yalnızca bildirilir,
+            kayıt düşmez</span>
+          <span class="kf-not kf-acik">cari hesaba kur farkı kaydı
+            açılır</span>
         </label>
       </div>
-      <div class="form-alan" id="hSiparisAlan" style="margin-bottom:12px"><label>Sipariş (opsiyonel)</label>
-        <select id="hSiparisSec"><option value="">— sipariş bağlama —</option></select>
+      <!-- KF2 — İKİ OPSİYONEL ALAN YAN YANA.
+           İkisi de tek kontrol, ipucu yok; alt alta durup 112 piksel
+           yiyorlardı. `.form-cift` ESNEK (grid değil): sipariş alanı
+           kasaya virmanda gizleniyor ve grid olsaydı açıklama yarım
+           sütunda kalırdı — esnekte gizli öge akıştan çıkıyor,
+           açıklama kendiliğinden tam genişliğe yayılıyor. -->
+      <div class="form-cift">
+        <div class="form-alan" id="hSiparisAlan"><label>Sipariş (opsiyonel)</label>
+          <select id="hSiparisSec"><option value="">— sipariş bağlama —</option></select>
+        </div>
+        <div class="form-alan"><label>Açıklama</label><input id="hAciklama" placeholder="opsiyonel"></div>
       </div>
-      <div class="form-alan"><label>Açıklama</label><input id="hAciklama" placeholder="opsiyonel"></div>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="hareketKapat()">Vazgeç</button>
@@ -2242,7 +2328,8 @@ async function hareketAc(cariId, unvan) {
   document.getElementById('hKdvOran').value = '20';
   document.getElementById('hKdvOranSerbest').style.display = 'none';
   document.getElementById('hKdvDahil').value = '0';
-  document.getElementById('hKdvOnizle').textContent = '—';
+  const _ko = document.getElementById('hKdvOnizle');
+  _ko.textContent = ''; _ko.style.display = 'none';
   document.getElementById('harModal').classList.add('acik');
   // Carinin siparişleri — sipariş bazlı takip/ekstre/avans devri için
   const sipSel = document.getElementById('hSiparisSec');
@@ -2293,7 +2380,9 @@ function kdvOnizle() {
   const oran = kdvOraniAl();
   const dahil = document.getElementById('hKdvDahil').value === '1';
   const dov = document.getElementById('hDoviz').value || 'USD';
-  if (!tutar || !oran) { kutu.textContent = '—'; return; }
+  /* KF2: gosterecek bir sey yoksa kutu HIC gorunmesin. */
+  if (!tutar || !oran) { kutu.textContent = ''; kutu.style.display = 'none'; return; }
+  kutu.style.display = '';
   let matrah, kdv, toplam;
   if (dahil) { toplam = tutar; matrah = tutar / (1 + oran / 100); kdv = toplam - matrah; }
   else { matrah = tutar; kdv = matrah * oran / 100; toplam = matrah + kdv; }
@@ -2346,9 +2435,10 @@ function hareketTipiDegisti() {
      kuralı izlesin ki kullanıcı boşuna doldurmasın. */
   const vadeli = VADE_ANLAMLI_TIPLER.includes(tip);
   const vAlan = document.getElementById('hVadeAlan');
-  const vSatir = document.getElementById('hTarihSatir');
   if (vAlan) vAlan.style.display = vadeli ? '' : 'none';
-  if (vSatir) vSatir.classList.toggle('f2', vadeli);
+  /* KF2: burada `hTarihSatir`in sütun sayısı da değiştiriliyordu.
+     Satır artık esnek (`.form-cift`); gizlenen vade akıştan çıkıyor,
+     kalanlar kendiliğinden yayılıyor. JS'in yapacağı bir şey yok. */
   if (!vadeli) document.getElementById('hVade').value = '';
   else if (!document.getElementById('hVade').value)
     document.getElementById('hVade').valueAsDate = new Date();
@@ -2368,6 +2458,15 @@ function hareketTipiDegisti() {
       const uygun = HAR_KASALAR.find(k => k.doviz === dv);
       if (uygun) ks.value = String(uygun.id);
     }
+    /* KF2: "önce kasa tanımlayın" öğüdü yalnız TANIMLI KASA YOKKEN
+       anlamlı. Her açılışta göstermek formu iki satır uzatıyordu. */
+    const kn = document.getElementById('hKasaNot');
+    if (kn) kn.innerHTML = HAR_KASALAR.length
+      ? 'Tahsilatta kasaya giriş, ödemede çıkış kaydı otomatik oluşur'
+        + ' · <strong>zorunludur</strong>'
+      : '<strong>Tanımlı kasa yok.</strong> Para takip etmediğiniz bir'
+        + ' hesaba geliyorsa bile önce o hesabı kasa olarak tanımlayın'
+        + ' — bu alan zorunludur.';
   }
 
   // Hedef listesi

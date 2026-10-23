@@ -265,7 +265,7 @@
                seçenek olarak geliyor. -->
           <div class="form-alan"><label>Cins (ortak)</label>
             <select id="kCins" onchange="kesimListeDegisti('kCins','cins')"></select></div>
-          <div class="form-alan"><label>Yüzey / Özellik (ortak)</label>
+          <div class="form-alan"><label>Özellik (ortak)</label>
             <select id="kOzellik" onchange="kesimListeDegisti('kOzellik','ozellik')"></select></div>
           <div class="form-alan"><label>Kalınlık (cm) · ortak</label>
             <input id="kKalinlik" type="number" step="0.1" placeholder="Excel'de yoksa"
@@ -571,7 +571,7 @@ function hedefSil(i) { HEDEFLER.splice(i, 1); hedefListeCiz(); ozetHesapla(); }
    ekranı da aynılarını kullanıyor. */
 const KX_ALANLAR = [
   ['cins',          'Cins',            false],
-  ['ozellik',       'Yüzey / Özellik', false],
+  ['ozellik',       'Özellik',         false],
   ['boy',           'Boy (cm)',        true],
   ['yukseklik',     'Yükseklik (cm)',  true],
   ['kalinlik',      'Kalınlık (cm)',   false],

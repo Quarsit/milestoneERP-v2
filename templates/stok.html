@@ -68,6 +68,18 @@
   .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr} .f4{grid-template-columns:1fr 1fr 1fr 1fr}
+  /* US1 — SATIR BAŞI. Plaka ve ebatlıda miktar alanları ölçülerin
+     ALTINDAN başlasın diye ilk miktar alanı birinci sütuna
+     sabitleniyor; ızgarada bu, satır başı demek. Blokta sınıf yok,
+     hacim ölçülerin yanında kalıyor. */
+  .f4.ayri > #adetAlan, .f4.ayri > #kasaAdediAlan{grid-column-start:1}
+  /* US1 — yan yana iki işaret kutusu. */
+  .isaret-cift{display:flex;flex-wrap:wrap;gap:8px 22px;margin-bottom:12px}
+  .isaret-cift > label{display:flex;align-items:center;gap:8px;cursor:pointer;
+    font-weight:500;text-transform:none;letter-spacing:0;font-size:.88rem;margin:0}
+  .isaret-cift input{width:16px;height:16px;flex:none;margin:0;
+    cursor:pointer;accent-color:var(--verde)}
+  .is-not{color:var(--soluk);font-size:.78rem;font-weight:400}
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
   .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
   .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
@@ -373,7 +385,7 @@
     <div class="modal-gov">
       <div class="form-satir f3">
         <div class="form-alan"><label>Cins</label><input id="duzCins"></div>
-        <div class="form-alan" id="duzOzellikAlan"><label>Yüzey / Özellik</label><input id="duzOzellik"></div>
+        <div class="form-alan" id="duzOzellikAlan"><label>Özellik</label><input id="duzOzellik"></div>
         <div class="form-alan"><label>Menşe</label><select id="duzMense"></select></div>
       </div>
       <div class="form-satir f3">
@@ -390,7 +402,7 @@
             <option>Serbest</option><option>Rezerve</option><option>Satildi</option><option>Hasarlı</option>
           </select>
         </div>
-        <div class="form-alan"><label>Alış Fiyatı</label><input id="duzFiyat" type="number" step="0.01"></div>
+        <div class="form-alan"><label id="duzFiyatEtiket">Alış Fiyatı</label><input id="duzFiyat" type="number" step="0.01"></div>
       </div>
       <!-- SD1: tutar vardi, PARA BIRIMI yoktu. "270" tek basina bir sey
            soylemiyor; stok EUR alinmisken ekran USD gibi okunuyordu.
@@ -549,7 +561,7 @@
           <div class="form-alan"><label>Cins (ortak)
             <span style="font-weight:400;color:var(--soluk)">· Excel'de yoksa</span></label>
             <select id="tCins" onchange="topluListeDegisti('tCins','cins')"></select></div>
-          <div class="form-alan" id="tOzellikAlan"><label>Yüzey / Özellik (ortak)
+          <div class="form-alan" id="tOzellikAlan"><label>Özellik (ortak)
             <span style="font-weight:400;color:var(--soluk)">· Excel'de yoksa</span></label>
             <select id="tOzellik" onchange="topluListeDegisti('tOzellik','ozellik')"></select></div>
         </div>
@@ -697,13 +709,32 @@
 
 <!-- Yeni stok modalı -->
 <div class="modal-ortu" id="modal" onclick="if(event.target===this)modalKapat()">
-  <div class="modal" role="dialog" aria-label="Yeni stok">
+  <!-- US1: 4 sütuna geçince 720 pikselde sütun başına 160 piksel
+       kalıyordu; "Faturalı (mal + fatura geldi)" gibi seçenekler
+       kırpılıyordu. Ölçüldü, 880'de kırpılma kalmadı. -->
+  <div class="modal" style="width:880px" role="dialog" aria-label="Yeni stok">
     <div class="modal-bas">
       <h3>Yeni Stok Girişi</h3>
       <p>Depoya blok, plaka veya ebatlı ürün ekle. Plakada adet kadar ayrı kayıt oluşur.</p>
     </div>
     <div class="modal-gov">
-      <div class="form-satir f3">
+      <!-- ══ US1 · ALANLAR TİPE GÖRE AKIYOR ══
+           Üç ürün tipinin formu artık Bahadır'ın çizdiği düzende.
+           Satırları tip tip YAZMIYORUZ: alanlar tek bir 4 sütunlu
+           ızgarada SIRAYLA duruyor, tipte anlamı olmayan alan
+           gizlenince ızgara onu atlıyor ve kalanlar yukarı kayıyor.
+
+           Böylece tek bir sıralama üç düzeni birden veriyor:
+
+             BLOK    cins · blok no · kaynak · alış tipi
+                     alış fiyatı · döviz · fiyat birimi · tonaj
+             PLAKA   cins · blok no · özellik · kaynak
+                     alış tipi · alış fiyatı · döviz · fiyat birimi
+             EBATLI  aynısı (kasa no ile)
+
+           Tip başına ayrı satır yazsaydık üç kopya olurdu ve biri
+           düzeltilip ötekiler unutulurdu. -->
+      <div class="form-satir f4">
         <div class="form-alan"><label>Ürün Tipi</label>
           <select id="sTip" onchange="tipDegisti()">
             <option value="BLOK">Blok</option>
@@ -711,82 +742,28 @@
             <option value="EBATLI">Ebatlı</option>
           </select>
         </div>
-        <div class="form-alan"><label>Üretici / Ocak</label><select id="sUretici"></select></div>
-        <div class="form-alan"><label>Cins <span style="color:var(--kirmizi)">*</span></label><input id="sCins" placeholder="Emperador Dark"></div>
-      </div>
-      <div class="form-satir f4">
-        <div class="form-alan"><label id="sNoLabel">Blok No</label><input id="sBlokNo" placeholder="B-100"></div>
-        <!-- UR2: BLOK'ta yüzey/özellik gizlenir — ham blokta yüzey
-             işlemi yok, alanı göstermek doldurulacak bir şey varmış
-             gibi gösteriyordu. -->
-        <div class="form-alan" id="ozellikAlan"><label>Yüzey / Özellik</label><input id="sOzellik" placeholder="Ham / Cilalı"></div>
+        <div class="form-alan"><label>Üretici</label><select id="sUretici"></select></div>
         <!-- UR2: menşe artık LİSTEDEN. Elle yazılınca aynı ülke üç
              ayrı yazımla kaydediliyordu (TURKIYE / TÜRKİYE / Turkiye)
              ve bu değer ticari faturaya, packing list'e ve etikete
              BASILIYOR. Liste Ayarlar → Listeler → Ülkeler'den gelir. -->
         <div class="form-alan"><label>Menşe</label>
-          <select id="sMense" title="Malın menşei — bundle/crate etiketinde ve ticari faturada basılır"></select>
-          <div style="font-size:.72rem;color:var(--soluk);margin-top:3px">
-            Listede yoksa Ayarlar → Listeler → Ülkeler'den ekle</div>
+          <!-- US1: altındaki "Listede yoksa Ayarlar → Listeler →
+               Ülkeler'den ekle" satırı, 4 sütuna geçince bu satırı tek
+               başına iki kat uzatıyordu. Yazı silinmedi, seçicinin
+               ipucuna (üstüne gelince çıkan baloncuk) taşındı. -->
+          <select id="sMense" title="Malın menşei — bundle/crate etiketinde ve ticari faturada basılır. Listede yoksa Ayarlar → Listeler → Ülkeler'den ekleyin."></select>
         </div>
         <div class="form-alan"><label>Giriş Tarihi</label><input id="sTarih" type="date"></div>
       </div>
 
-      <!-- Ölçüler -->
-      <div class="form-satir f4" id="olcuSatir">
-        <div class="form-alan"><label>Boy (cm)</label><input id="sBoy" type="number" oninput="hesapla()"></div>
-        <div class="form-alan"><label>Yükseklik (cm)</label><input id="sYuk" type="number" oninput="hesapla()"></div>
-        <div class="form-alan" id="enAlan"><label>En (cm)</label><input id="sEn" type="number" oninput="hesapla()"></div>
-        <div class="form-alan" id="kalAlan" style="display:none"><label>Kalınlık (cm)</label><input id="sKal" type="number" step="0.1" value="2" oninput="hesapla()"></div>
-      </div>
-
-      <!-- Miktar -->
-      <div class="form-satir f3">
-        <div class="form-alan" id="tonajAlan"><label>Tonaj</label><input id="sTonaj" type="number" step="0.01" oninput="hesapla()"></div>
-        <div class="form-alan" id="adetAlan" style="display:none"><label>Stok Adedi</label><input id="sAdet" type="number" value="1" oninput="hesapla()"></div>
-        <div class="form-alan" id="kasaAdediAlan" style="display:none"><label>Kasa Adedi</label><input id="sKasaAdedi" type="number" min="1" value="1" oninput="hesapla()"></div>
-        <div class="form-alan" id="kasaIciAlan" style="display:none"><label>Kasa İçi Adet</label><input id="sKasaIci" type="number" min="1" value="1" oninput="hesapla()"></div>
-        <div class="form-alan" id="basNoAlan" style="display:none"><label id="basNoLabel">Başlangıç Slab No</label><input id="sBasNo" type="number" min="0" value="1"
-               title="İlk plakanın numarası. 0 da geçerlidir."></div>
-        <div class="form-alan"><label id="olcuLabel">Hacim (m³)</label><input id="sOlcu" readonly></div>
-      </div>
-
-      <!-- ── ÖLÇÜ GRUPLARI (OG1) ──
-           Bir blokta farklı ölçüde plaka grupları olabiliyor.
-           K6318 örneği: 187×298'den 9 adet, 185×273'ten 1 adet,
-           186×297'den 11+12+12+12 adet, 135×296'dan 6 adet — toplam
-           63 plaka, numaralar kesintisiz 1-63.
-
-           Ortak bilgiler (cins, blok no, yüzey işlemi, fiyat,
-           tedarikçi, fatura) yukarıda BİR KEZ girilir; yalnızca
-           ölçüler ve adet grup grup değişir. -->
-      <div id="olcuGrupAlan" style="display:none;margin-top:4px">
-        <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px">
-          <label style="margin:0">Ek Ölçü Grupları</label>
-          <button type="button" class="mini-btn" onclick="olcuGrupEkle()">+ Grup ekle</button>
-          <span id="olcuGrupOzet" style="font-size:.78rem;color:var(--soluk)"></span>
-        </div>
-        <div id="olcuGruplar"></div>
-        <div style="font-size:.76rem;color:var(--soluk);margin-top:4px;line-height:1.5">
-          Üstteki ölçü <b>1. grup</b>tur. Ek grup eklerseniz plaka numaraları
-          kesintisiz devam eder.
-        </div>
-      </div>
-
-      <!-- Fiyat -->
-      <div class="form-satir f4">
-        <div class="form-alan"><label>Alış Fiyatı</label><input id="sFiyat" type="number" step="0.01" oninput="hesapla()"></div>
-        <div class="form-alan"><label>Fiyat Birimi</label>
-          <select id="sFiyatBirim" onchange="hesapla()">
-            <option value="ton">$/ton</option>
-            <option value="m3">$/m³</option>
-            <option value="m2">$/m²</option>
-            <option value="sqft">$/sqft</option>
-          </select>
-        </div>
-        <div class="form-alan"><label>Döviz</label>
-          <select id="sDoviz" onchange="hesapla()"><option>USD</option><option>EUR</option><option>TRY</option></select>
-        </div>
+      <div class="form-satir f4" id="kimlikSatir">
+        <div class="form-alan"><label>Cins <span style="color:var(--kirmizi)">*</span></label><input id="sCins" placeholder="Emperador Dark"></div>
+        <div class="form-alan"><label id="sNoLabel">Blok No</label><input id="sBlokNo" placeholder="B-100"></div>
+        <!-- UR2: BLOK'ta yüzey/özellik gizlenir — ham blokta yüzey
+             işlemi yok, alanı göstermek doldurulacak bir şey varmış
+             gibi gösteriyordu. -->
+        <div class="form-alan" id="ozellikAlan"><label>Özellik</label><input id="sOzellik" placeholder="Ham / Cilalı"></div>
         <!-- UR1: kaynak, alış tipinin ÖNÜNDE. Üretim seçilirse alış
              tipi ve KDV zaten anlamını yitiriyor, gizleniyorlar. -->
         <div class="form-alan"><label>Kaynak</label>
@@ -802,42 +779,130 @@
             <option value="ithalat">İthalat</option>
           </select>
         </div>
-      </div>
-
-      <div class="form-satir f3">
-        <div class="form-alan"><label>Fatura Durumu</label>
-          <select id="sFaturaDurum" onchange="faturaDurumDegisti()">
-            <option value="faturali">Faturalı (mal + fatura geldi)</option>
-            <option value="faturasiz">Faturasız (mal geldi, fatura bekliyor)</option>
-            <option value="mal_bekliyor">Mal bekleniyor (fatura kesildi, mal yok)</option>
+        <!-- US2: ÜRETİLEN MALIN "ALIŞ FİYATI" OLMAZ.
+             Alan duruyor çünkü üretilen malın da maliyeti var (ocak,
+             fason, nakliye) ve sunucu onu matrah olarak saklıyor;
+             boş bırakılırsa o stoğun maliyeti HİÇ olmuyor. Ölçüldü:
+             aynı 10.000 $'lık satış, fiyatı girilmemiş üretim
+             bloğunda 9.999 $ kâr, 6.000 $'lık bloğunda 3.999 $ kâr
+             gösteriyordu. Değişen tek şey ADI — toplu aktarma formu
+             bu ayrımı zaten yapıyordu, tekil form yapmıyordu. -->
+        <div class="form-alan"><label id="sFiyatEtiket">Alış Fiyatı</label><input id="sFiyat" type="number" step="0.01" oninput="hesapla()"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="sDoviz" onchange="hesapla()"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
+        <div class="form-alan"><label>Fiyat Birimi</label>
+          <select id="sFiyatBirim" onchange="hesapla()">
+            <option value="ton">$/ton</option>
+            <option value="m3">$/m³</option>
+            <option value="m2">$/m²</option>
+            <option value="sqft">$/sqft</option>
           </select>
         </div>
-        <div class="form-alan"><label>Fatura No</label><input id="sFaturaNo" placeholder="AKD-2026-118"></div>
-        <div class="form-alan"><label>Alış / Fatura Tarihi</label><input id="sAlisTarih" type="date"></div>
+        <div class="form-alan" id="tonajAlan"><label>Tonaj</label><input id="sTonaj" type="number" step="0.01" oninput="hesapla()"></div>
+      </div>
+
+      <!-- ÖLÇÜ + MİKTAR TEK IZGARADA.
+           BLOK'ta hacim ölçülerin yanında (ondan hesaplanıyor);
+           plaka ve ebatlıda toplam m² adedin yanında (ondan
+           hesaplanıyor). Bu yüzden ikisi aynı ızgarada ve araya
+           `.ayri` sınıfıyla satır başı konuyor:
+
+             BLOK    boy · yükseklik · en · hacim
+             PLAKA   boy · yükseklik · kalınlık
+                     stok adedi · başlangıç slab no · toplam m² · + grup
+             EBATLI  boy · yükseklik · kalınlık
+                     kasa adedi · kasa içi adet · toplam m²
+
+           `grid-column-start:1` ızgarada satır başı demektir; araya
+           görünmez bir ayraç ögesi koymaktan daha az kırılgan. -->
+      <div class="form-satir f4" id="olcuSatir">
+        <div class="form-alan"><label>Boy (cm)</label><input id="sBoy" type="number" oninput="hesapla()"></div>
+        <div class="form-alan"><label>Yükseklik (cm)</label><input id="sYuk" type="number" oninput="hesapla()"></div>
+        <div class="form-alan" id="enAlan"><label>En (cm)</label><input id="sEn" type="number" oninput="hesapla()"></div>
+        <div class="form-alan" id="kalAlan" style="display:none"><label>Kalınlık (cm)</label><input id="sKal" type="number" step="0.1" value="2" oninput="hesapla()"></div>
+        <div class="form-alan" id="adetAlan" style="display:none"><label>Stok Adedi</label><input id="sAdet" type="number" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="kasaAdediAlan" style="display:none"><label>Kasa Adedi</label><input id="sKasaAdedi" type="number" min="1" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="kasaIciAlan" style="display:none"><label>Kasa İçi Adet</label><input id="sKasaIci" type="number" min="1" value="1" oninput="hesapla()"></div>
+        <div class="form-alan" id="basNoAlan" style="display:none"><label id="basNoLabel">Başlangıç Slab No</label><input id="sBasNo" type="number" min="0" value="1"
+               title="İlk plakanın numarası. 0 da geçerlidir."></div>
+        <div class="form-alan"><label id="olcuLabel">Hacim (m³)</label><input id="sOlcu" readonly></div>
+        <!-- US1: "+ Grup ekle" düğmesi aşağıdaki kutunun başlığındaydı;
+             kutu boşken orada tek başına duruyordu. Artık adedin
+             yanında, grubun açılacağı yerde. -->
+        <div class="form-alan" id="grupEkleAlan" style="display:none"><label>Ölçü Grubu</label>
+          <button type="button" class="mini-btn" onclick="olcuGrupEkle()"
+                  style="height:38px;width:100%">+ Grup ekle</button></div>
+      </div>
+
+      <!-- ── ÖLÇÜ GRUPLARI (OG1) ──
+           Bir blokta farklı ölçüde plaka grupları olabiliyor.
+           K6318 örneği: 187×298'den 9 adet, 185×273'ten 1 adet,
+           186×297'den 11+12+12+12 adet, 135×296'dan 6 adet — toplam
+           63 plaka, numaralar kesintisiz 1-63.
+
+           Ortak bilgiler (cins, blok no, yüzey işlemi, fiyat,
+           tedarikçi, fatura) yukarıda BİR KEZ girilir; yalnızca
+           ölçüler ve adet grup grup değişir.
+
+           US1: kutu artık YALNIZCA grup varken açılıyor; boşken
+           başlıktan ve nottan ibaret 40 piksel duruyordu. -->
+      <div id="olcuGrupAlan" style="display:none;margin-top:4px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px">
+          <label style="margin:0">Ek Ölçü Grupları</label>
+          <span id="olcuGrupOzet" style="font-size:.78rem;color:var(--soluk)"></span>
+        </div>
+        <div id="olcuGruplar"></div>
+        <div style="font-size:.76rem;color:var(--soluk);margin-top:4px;line-height:1.5">
+          Üstteki ölçü <b>1. grup</b>tur. Ek grup eklerseniz plaka numaraları
+          kesintisiz devam eder.
+        </div>
+      </div>
+
+      <div class="form-satir f4">
+        <div class="form-alan" id="sFaturaDurumAlan"><label>Fatura Durumu</label>
+          <select id="sFaturaDurum" onchange="faturaDurumDegisti()">
+            <!-- US1: parantez içindeki açıklamalar kaldırıldı —
+                 seçiciye sığmıyorlardı ve ALTINDAKİ renkli not zaten
+                 seçilen durumu daha ayrıntılı anlatıyor. Aynı şeyi
+                 iki kez, biri kırpılarak söylemenin anlamı yok. -->
+            <option value="faturali">Faturalı</option>
+            <option value="faturasiz">Faturasız</option>
+            <option value="mal_bekliyor">Mal bekleniyor</option>
+          </select>
+        </div>
+        <div class="form-alan" id="sFaturaNoAlan"><label>Fatura No</label><input id="sFaturaNo" placeholder="AKD-2026-118"></div>
+        <!-- US1: etiket "Alış / Fatura Tarihi" idi, "Fatura Tarihi"
+             oldu. Ama ÜRETİM stoğunun faturası yok — o durumda
+             "Üretim Tarihi" yazıyor (toplu aktarma formunda da
+             böyle). Yanlış ada sabitlemektense tipe göre söylüyoruz. -->
+        <div class="form-alan"><label id="sAlisTarihEtiket">Fatura Tarihi</label><input id="sAlisTarih" type="date"></div>
+        <!-- US1: KDV oranı kendi satırındaydı; fatura satırının
+             dördüncü sütununa geldi. Gizlenme kuralı aynı: yalnız
+             yurt içi KDV'li alışta görünür. -->
+        <div class="form-alan" id="kdvOranAlan"><label>KDV Oranı (%)</label><input id="sKdv" type="number" value="20" oninput="hesapla()"></div>
       </div>
       <div id="fdNot" style="background:var(--notr-bg);border-radius:7px;padding:9px 12px;font-size:.8rem;color:var(--soluk);margin-bottom:12px">
         Mal ve fatura birlikte geldi — tedarikçi cariye borç işlenir.
       </div>
 
-      <div class="form-satir f3" id="kdvSatir">
-        <div class="form-alan"><label>KDV Oranı (%)</label><input id="sKdv" type="number" value="20" oninput="hesapla()"></div>
-        <div class="form-alan" style="display:flex;align-items:flex-end">
-          <div class="onay" style="margin:0">
-            <input type="checkbox" id="sKdvDahil" onchange="hesapla()">
-            <label for="sKdvDahil" style="margin:0;text-transform:none;letter-spacing:0;font-weight:500;font-size:.85rem;color:var(--murekkep)">Fiyata KDV dahil</label>
-          </div>
-        </div>
-      </div>
-
-            <div class="form-alan" style="margin-bottom:10px">
+      <!-- US1: İki işaret kutusu yan yana. "Fiyata KDV dahil" KDV
+           oranıyla aynı satırdaydı; oran fatura satırına taşınınca
+           kutu buraya geldi. Gizlenme kuralı değişmedi — oranla
+           birlikte görünüp birlikte kayboluyor. -->
+      <div class="isaret-cift">
         <!-- F5: Yalnızca BİLGİ amaçlı işaret. Maliyet hesabına karışmaz;
              işaretlenince açıklamaya not düşer ve bayrak kayda geçer.
              Nakliyeyi maliyete giydirmek için Maliyet modülü kullanılır. -->
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:500;text-transform:none;letter-spacing:0">
-          <input type="checkbox" id="sNakliyeDahil" style="width:16px;height:16px"
-                 onchange="nakliyeNotu()">
-          Alış fiyatına nakliye dahil
-          <span style="color:var(--soluk);font-size:.78rem;font-weight:400">· bilgi amaçlı, maliyeti etkilemez</span>
+        <label>
+          <input type="checkbox" id="sNakliyeDahil" onchange="nakliyeNotu()">
+          <span id="sNakliyeEtiket">Alış fiyatına nakliye dahil</span>
+          <span class="is-not">· bilgi amaçlı, maliyeti etkilemez</span>
+        </label>
+        <label id="kdvDahilAlan">
+          <input type="checkbox" id="sKdvDahil" onchange="hesapla()">
+          Fiyata KDV dahil
+          <span class="is-not">· girilen fiyat KDV'li ise işaretleyin</span>
         </label>
       </div>
 <div class="form-alan" style="margin-bottom:12px"><label>Açıklama</label>
@@ -1537,7 +1602,7 @@ async function detayAc(id) {
       ${alan('Durum', `<span class="rozet ${ROZET[s.durum] || 'rz-gri'}">${kacar(DURUM_AD[s.durum] || s.durum || '—')}</span>`)}
       ${alan('Konum', kacar(s.konum || '—'))}
       ${alan('Ölçü / Miktar', kacar(olcu(s)), true)}
-      ${alan('Alış Fiyatı', alisBirim, true)}
+      ${alan(bedelAdi(s.kaynak), alisBirim, true)}
       ${alan('Ek Maliyet', s.ek_maliyet_toplam ? para(s.ek_maliyet_toplam) : '—', true)}
       ${alan('Alım/Üretim Maliyeti', alimBirim(s) ? para2(alimBirim(s)) + ' / ' + (s.birim_ad || '') : '—')}
       ${alan('Ek Maliyetler', (s.ek_maliyet_toplam || 0) > 0 ? para(s.ek_maliyet_toplam) : '—')}
@@ -1729,7 +1794,10 @@ async function yeniAc() {
   }
   document.getElementById('sUretici').innerHTML = URETICILER.length
     ? URETICILER.map(c => `<option value="${kacar(c.unvan)}">${kacar(c.unvan)}</option>`).join('')
-    : '<option value="">— tedarikçi yok, Cari ekranından ekle —</option>';
+    /* US1: "Cari ekranından ekle" kısmı seçiciye sığmıyordu;
+       ipucuna taşındı. */
+    : '<option value="" title="Cari ekranından tedarikçi veya üretici'
+      + ' ekleyin">— tedarikçi yok —</option>';
   tipDegisti();
 }
 function modalKapat() { document.getElementById('modal').classList.remove('acik'); }
@@ -1828,6 +1896,10 @@ function olcuGrupOzetle() {
   const ozet = document.getElementById('olcuGrupOzet');
   if (!ozet) return;
   const ek = gruplar.filter(g => !g.ana);
+  /* US1: kutu yalnızca grup varken açılır. Boşken başlık ve nottan
+     ibaret 40 piksel duruyordu. */
+  const alan = document.getElementById('olcuGrupAlan');
+  if (alan) alan.style.display = ek.length ? '' : 'none';
   if (!ek.length) { ozet.textContent = ''; return; }
   const adet = gruplar.reduce((a, g) => a + (g.adet || 0), 0);
   const m2 = gruplar.reduce((a, g) => a + (g.m2 || 0), 0);
@@ -1844,8 +1916,11 @@ function tipDegisti() {
   document.getElementById('tonajAlan').style.display = blok ? '' : 'none';
   document.getElementById('adetAlan').style.display = plaka ? '' : 'none';
   /* OG1: ölçü grupları yalnızca PLAKA'da anlamlı */
-  const og = document.getElementById('olcuGrupAlan');
-  if (og) { og.style.display = plaka ? '' : 'none'; if (!plaka) olcuGruplariSifirla(); }
+  /* US1: kutu artık kendi başına karar veriyor (olcuGrupOzetle):
+     grup yoksa görünmüyor. Düğme ise adedin yanında. */
+  const gd = document.getElementById('grupEkleAlan');
+  if (gd) gd.style.display = plaka ? '' : 'none';
+  if (!plaka) olcuGruplariSifirla();
   /* UR2: ham blokta yüzey işlemi YOK. Alanı göstermek
      doldurulacak bir şey varmış gibi gösteriyordu; gizlenirken
      değeri de siliniyor, yoksa tipi BLOK'a çevirince önceki
@@ -1858,8 +1933,20 @@ function tipDegisti() {
   document.getElementById('kasaAdediAlan').style.display = ebatli ? '' : 'none';
   document.getElementById('kasaIciAlan').style.display = ebatli ? '' : 'none';
   document.getElementById('basNoAlan').style.display = plaka ? '' : 'none';
-  document.getElementById('sNoLabel').textContent = blok ? 'Blok No' : (plaka ? 'Blok No (kesildiği blok)' : 'Kasa No (ilk kasa, ops.)');
+  /* US1: etiketler sadeleşti — "Blok No (kesildiği blok)" ve
+     "Kasa No (ilk kasa, ops.)" parantezleri kalktı. Açıklamalar
+     alanın ipucuna (baloncuk) taşındı, silinmedi. */
+  const _no = document.getElementById('sNoLabel');
+  _no.textContent = blok || plaka ? 'Blok No' : 'Kasa No';
+  const _noG = document.getElementById('sBlokNo');
+  _noG.title = plaka ? 'Plakanın kesildiği blok numarası'
+             : (blok ? 'Bloğun numarası'
+                     : 'İlk kasanın numarası — opsiyonel');
   document.getElementById('olcuLabel').textContent = blok ? 'Hacim (m³)' : 'Toplam m²';
+  /* US1: ölçü ızgarasında miktar alanları blokta ölçülerin YANINDA,
+     ötekilerde ALT SATIRDA başlıyor. */
+  const _os = document.getElementById('olcuSatir');
+  if (_os) _os.classList.toggle('ayri', !blok);
   // Fiyat birimi varsayılanı
   const fb = document.getElementById('sFiyatBirim');
   fb.innerHTML = blok
@@ -1890,24 +1977,104 @@ function faturaDurumDegisti() {
 /* UR1: üretimde alış tipi ve KDV satırı gizlenir; tedarikçi alanı
    duruyor ama sunucu üretimde cari borcu zaten oluşturmuyor —
    "kimden/nereden ürettik" bilgisini kaydetmek isteyebilirsin. */
+/* ── KS1 · STOĞUN BEDELİ NE ADLA ANILIR ──
+   Üç kaynak, üç ad. Üç ekranda ayrı ayrı yazılsaydı biri
+   değiştirilip ötekiler unutulurdu — bu dosyada defalarca olan şey.
+     satinalma → alınan fiyat
+     uretim    → kendi masrafın
+     kesim     → kaynak bloktan DAĞITILAN pay (kimse satın almadı) */
+const BEDEL_ADI = {uretim: 'Üretim Maliyeti', kesim: 'Kesim Maliyeti'};
+function bedelAdi(kaynak) {
+  return BEDEL_ADI[kaynak] || 'Alış Fiyatı';
+}
+
+/* US2: üretime geçmeden önceki fatura durumu seçimi. */
+let FATURA_DURUM_ONCEKI = null;
+
 function kaynakDegisti() {
   const uretim = document.getElementById('sKaynak').value === 'uretim';
   const at = document.getElementById('sAlisTipiAlan');
   if (at) at.style.display = uretim ? 'none' : '';
-  const kdv = document.getElementById('kdvSatir');
+  /* US1: KDV oranı artık fatura satırında, "fiyata KDV dahil" ise
+     işaret kutularının yanında. İkisi birlikte görünür, birlikte
+     kaybolur — eskiden ikisi tek satırdaydı ve satır gizleniyordu. */
   if (uretim) {
     document.getElementById('sKdv').value = 0;
     document.getElementById('sKdvDahil').checked = false;
-    if (kdv) kdv.style.display = 'none';
+    kdvAlanlariGoster(false);
     hesapla();
   } else {
     alisTipiDegisti();
   }
+  /* US1: üretimde fatura yok — tarih etiketi onu söylesin. */
+  const _te = document.getElementById('sAlisTarihEtiket');
+  if (_te) _te.textContent = uretim ? 'Üretim Tarihi' : 'Fatura Tarihi';
+  /* US2: fiyat alanı da öyle. Satın almadığın malın "alış fiyatı"
+     olmaz; girilen rakam senin kendi masrafın ve cariye borç
+     yazılmıyor. Alanın KENDİSİ duruyor — boş bırakılırsa o stoğun
+     maliyeti hiç olmuyor. */
+  const _fe = document.getElementById('sFiyatEtiket');
+  if (_fe) _fe.innerHTML = bedelAdi(uretim ? 'uretim' : 'satinalma')
+    + (uretim
+       ? ' <span style="font-weight:400;text-transform:none;'
+         + 'letter-spacing:0;color:var(--soluk)">· kendi masrafın</span>'
+       : '');
+  /* ── US2 · EKRAN, SUNUCUNUN YAPTIĞINI SÖYLESİN ──
+     Üretimde sunucu fatura durumunu ZORLA 'faturasiz' yapıyor ve
+     tedarikçi cari hareketi hiç doğmuyor (flask_app: "ÜRETİMDE
+     FATURA YOK"). Ekran ise "Faturalı" seçili duruyor ve altındaki
+     not "tedarikçi cariye borç işlenir" diyordu — yani olacağın
+     TERSİNİ söylüyordu. Toplu aktarma formu bu alanları zaten
+     gizliyordu; tekil form gizlemiyordu. */
+  const _gos = (id, ac) => {
+    const e = document.getElementById(id);
+    if (e) e.style.display = ac ? '' : 'none';
+  };
+  _gos('sFaturaDurumAlan', !uretim);
+  _gos('sFaturaNoAlan', !uretim);
+  const _fd = document.getElementById('fdNot');
+  const _fdSec = document.getElementById('sFaturaDurum');
+  if (uretim) {
+    /* Seçimi SAKLA. Üretime geçip geri dönünce kullanıcının
+       "Faturalı" seçimi sessizce "Faturasız"a dönüyordu — ikisi
+       arasındaki fark tedarikçiye borç yazılıp yazılmaması, yani
+       sessiz değişmesi en olmayacak şey. */
+    if (_fdSec.value !== 'faturasiz') FATURA_DURUM_ONCEKI = _fdSec.value;
+    _fdSec.value = 'faturasiz';
+    document.getElementById('sFaturaNo').value = '';
+    if (_fd) {
+      _fd.style.background = 'var(--kehribar-bg,#FDF6E3)';
+      _fd.style.color = 'var(--kehribar,#8A6D1F)';
+      _fd.textContent = 'Üretimde tedarikçi borcu, fatura ve KDV yok.'
+        + ' Girilen maliyet stoğun kendi bedeli olarak saklanır.';
+    }
+  } else {
+    if (FATURA_DURUM_ONCEKI) {
+      _fdSec.value = FATURA_DURUM_ONCEKI;
+      FATURA_DURUM_ONCEKI = null;
+    }
+    faturaDurumDegisti();
+  }
+  /* Üretimde "alış fiyatı" diye bir şey olmadığı için işaretin adı
+     da değişiyor — toplu aktarma formunda olduğu gibi. */
+  const _ne = document.getElementById('sNakliyeEtiket');
+  if (_ne) _ne.textContent = uretim
+    ? 'Maliyete nakliye dahil' : 'Alış fiyatına nakliye dahil';
+}
+
+/* US1: KDV oranı ve "fiyata KDV dahil" artık iki ayrı yerde durduğu
+   için ikisini TEK yerden açıp kapatıyoruz; ayrı ayrı yazılsaydı
+   biri gizlenip öteki ekranda kalırdı. */
+function kdvAlanlariGoster(goster) {
+  const o = document.getElementById('kdvOranAlan');
+  const d = document.getElementById('kdvDahilAlan');
+  if (o) o.style.display = goster ? '' : 'none';
+  if (d) d.style.display = goster ? '' : 'none';
 }
 
 function alisTipiDegisti() {
   const kdvli = document.getElementById('sAlisTipi').value === 'yurtici_kdvli';
-  document.getElementById('kdvSatir').style.display = kdvli ? '' : 'none';
+  kdvAlanlariGoster(kdvli);
   if (!kdvli) { document.getElementById('sKdv').value = 0; document.getElementById('sKdvDahil').checked = false; }
   else document.getElementById('sKdv').value = 20;
   hesapla();
@@ -2147,7 +2314,7 @@ const TP_ALANLAR = {
     ['boy',       'Boy (cm)',        true],
     ['yukseklik', 'Yükseklik (cm)',  true],
     ['kalinlik',  'Kalınlık (cm)',   false],
-    ['ozellik',   'Yüzey / Özellik', false],
+    ['ozellik',   'Özellik',         false],
     ['fiyat',     'Alış Fiyatı',     false],
     ['adet',      'Adet',            false],
     ['aciklama',  'Açıklama',        false],
@@ -2168,7 +2335,7 @@ const TP_ALANLAR = {
     ['boy',           'Boy (cm)',        true],
     ['yukseklik',     'Yükseklik (cm)',  true],
     ['kalinlik',      'Kalınlık (cm)',   false],
-    ['ozellik',       'Yüzey / Özellik', false],
+    ['ozellik',       'Özellik',         false],
     ['kasa_adedi',    'Kasa Adedi',      false],
     ['kasa_ici_adet', 'Kasa İçi Adet',   false],
     ['fiyat',         'Alış Fiyatı',     false],
@@ -2235,6 +2402,9 @@ async function topluCarileriYukle() {
    tedarikçi seçimi gizlendikten sonra da gönderilir ve üretilen mal
    için cari borç doğururdu. (Sunucu da aynı şeyi ayrıca zorluyor —
    iki taraf da güvenmiyor.) */
+/* US2: üretime geçmeden önceki fatura durumu seçimi (toplu form). */
+let TP_FATURA_DURUM_ONCEKI = null;
+
 function topluKaynakDegisti() {
   const uretim = document.getElementById('tKaynak').value === 'uretim';
   const goster = (id, ac) => {
@@ -2246,12 +2416,21 @@ function topluKaynakDegisti() {
   goster('tKdvAlan', !uretim);
   goster('tKdvDahilAlan', !uretim);
   goster('tKaynakNot', uretim);
+  /* US2: tekil formdaki ile AYNI sessiz değişim burada da vardı —
+     üretime geçip geri dönünce "Faturalı" seçimi "Faturasız" olarak
+     kalıyordu. Tek yerde düzeltip ötekini unutmak, bu dosyada
+     defalarca gördüğümüz şey. */
+  const _tfd = document.getElementById('tFaturaDurum');
   if (uretim) {
     document.getElementById('tCari').value = '';
     document.getElementById('tFaturaNo').value = '';
     document.getElementById('tKdv').value = 0;
     document.getElementById('tKdvDahil').checked = false;
-    document.getElementById('tFaturaDurum').value = 'faturasiz';
+    if (_tfd.value !== 'faturasiz') TP_FATURA_DURUM_ONCEKI = _tfd.value;
+    _tfd.value = 'faturasiz';
+  } else if (TP_FATURA_DURUM_ONCEKI) {
+    _tfd.value = TP_FATURA_DURUM_ONCEKI;
+    TP_FATURA_DURUM_ONCEKI = null;
   }
   const at_ = document.getElementById('tAlisTarihEtiket');
   if (at_) at_.textContent = uretim ? 'Üretim Tarihi' : 'Alış / Fatura Tarihi';
@@ -2914,6 +3093,10 @@ function duzenleAc(id) {
   document.getElementById('duzKonum').value = s.konum || '';
   durumSecenekleriniKur(s.durum);
   document.getElementById('duzFiyat').value = s.alis_fiyati || '';
+  /* US2: üretilen malda etiket "Üretim Maliyeti". Aynı alanın iki
+     ekranda iki adı olmasın. */
+  const _dfe = document.getElementById('duzFiyatEtiket');
+  if (_dfe) _dfe.textContent = bedelAdi(s.kaynak);
   document.getElementById('duzFiyatBirim').value = s.fiyat_birim || (s.tip === 'BLOK' ? 'ton' : 'm2');
   document.getElementById('duzDoviz').value = (s.doviz || 'USD').toUpperCase();
   document.getElementById('duzAciklama').value = s.aciklama || '';

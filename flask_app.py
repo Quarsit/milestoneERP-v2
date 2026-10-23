@@ -5626,9 +5626,20 @@ def create_app():
             # yalan söylerdi — ekran üretilen plakayı 'Yurt içi
             # KDV'li alış' diye gösterirdi.
             item['kaynak'] = getattr(s, 'kaynak', None) or 'satinalma'
-            item['alis_tipi'] = (None if item['kaynak'] == 'uretim'
-                                 else (getattr(s, 'alis_tipi', None)
-                                       or 'yurtici_kdvli'))
+            # ── KK1 · BOŞ ALANA DEĞER UYDURULMAZ ──
+            # `or 'yurtici_kdvli'` yalnız üretimde atlanıyordu; kesimden
+            # çıkan stokta `alis_tipi` NULL olduğu için ekran onu "Yurt
+            # içi KDV'li alış" diye gösteriyordu — kaynak blok İTHALAT
+            # olsa bile. Ölçüldü: ithalat EUR bloğundan kesilen plaka
+            # ekranda yurt içi KDV'li alış görünüyordu.
+            #
+            # Varsayılan yalnızca SATIN ALMADA anlamlı: orada alan her
+            # zaman yazılıyor, NULL ise gerçekten eski bir kayıttır ve
+            # onu da tahmin etmek doğru değil. Boşsa boş döner.
+            item['alis_tipi'] = (getattr(s, 'alis_tipi', None)
+                                 if item['kaynak'] in ('uretim', 'kesim')
+                                 else getattr(s, 'alis_tipi', None)
+                                 or 'yurtici_kdvli')
             item['fatura_no'] = getattr(s, 'fatura_no', None) or ''
             item['fatura_durumu'] = getattr(s, 'fatura_durumu', None) or 'faturali'
             item['alis_tarihi'] = s.alis_tarihi.isoformat() if getattr(s, 'alis_tarihi', None) else None
@@ -6324,6 +6335,19 @@ def create_app():
         stok = _stok_getir(stok_id, tip.upper())
         if not stok:
             return jsonify({'ok': False, 'mesaj': 'Stok bulunamadı'}), 404
+        # ── KK1 · KESİMDEN ÇIKAN STOK FATURALANDIRILAMAZ ──
+        # Bu uç nokta stoğun matrahı kadar TEDARİKÇİ BORCU yazıyor.
+        # Kesimden çıkan plakanın matrahı kaynak bloktan dağıtılmış
+        # paydır; borcu zaten o blokta. Buradan faturalandırmak aynı
+        # malı iki kez borçlandırırdı.
+        #
+        # Bugün bu durum oluşamıyor (kesim 'faturali' yazıyor, aşağıdaki
+        # denetim de onu eliyor) ama tek bir veri düzeltmesi kapıyı
+        # açardı. Para söz konusuysa kapı kapalı dursun.
+        if (getattr(stok, 'kaynak', None) or '') == 'kesim':
+            return jsonify({'ok': False, 'mesaj':
+                'Bu stok kesimden çıktı; malın borcu kaynak blokta. '
+                'Faturalandırmak aynı malı iki kez borçlandırır.'}), 400
         if getattr(stok, 'fatura_durumu', 'faturali') != 'faturasiz':
             return jsonify({'ok': False, 'mesaj': 'Bu stok zaten faturalı (veya mal bekliyor durumunda).'}), 400
 
@@ -10395,6 +10419,26 @@ def create_app():
             }
         })
 
+    def _kesim_mense(kaynak):
+        """Kesim hedefinin mensei — KAYNAGIN mensei.
+
+        ── KM1 · NEDEN AYRI BIR FONKSIYON ──
+        Kesim hedef stogu olustururken alanlari TEK TEK yaziyordu ve
+        `mense` unutulmustu. Ayni unutma iki yerde (PLAKA ve EBATLI)
+        ayri ayri olabilirdi; tek kapidan gecirince ikisi birden
+        duzeliyor ve bir sonraki hedef tipi de ayni kapidan geciyor.
+
+        Kaynagin mensei bossa 'TURKIYE' — model varsayilaniyla ayni,
+        ama artik BILINCLI bir varsayilan, unutulmus bir alan degil.
+
+        TASINMAYANLAR ve gerekceleri (olculdu, listelendi):
+          alis_tipi    — kesim bir ALIS degil; KK1'de NULL birakildi
+          fatura_no    — plakanin kendi faturasi yok, blogunki var
+          alis_tarihi  — plaka satin alinmadi
+          kaynak       — 'kesim' yaziliyor (KK1)
+        """
+        return (getattr(kaynak, 'mense', None) or 'TURKIYE')
+
     @app.route('/api/kesim', methods=['POST'])
     def api_kesim_ekle():
         """Kesim islemi olustur.
@@ -10714,6 +10758,22 @@ def create_app():
                             alis_fiyati=birim_m2_maliyet,
                             doviz=kaynak_doviz, konum=ana_kaynak.konum,
                             durum='Serbest',
+                            # KK1 (eski adiyla KS1 — o ad stok.html'de
+                            # KASKAD SUZGEC icin zaten kullaniliyordu):
+                            # bu plakayi KIMSE SATIN ALMADI. `kaynak` hic
+                            # yazilmiyordu, model varsayilani 'satinalma'
+                            # devreye giriyordu.
+                            kaynak='kesim',
+                            # ── KM1 · MENSE KAYNAKTAN GELIR ──
+                            # Yazilmayinca model varsayilani 'TURKIYE'
+                            # devreye giriyordu: ARNAVUTLUK mensesli
+                            # blokdan kesilen plaka TURK MALI olarak
+                            # kaydoluyordu. Bu deger TICARI FATURAYA ve
+                            # ETIKETE BASILIYOR ("the goods are of Turkish
+                            # origin"), yani yanlis mense beyani.
+                            # Bahadir yakaladi; K6462 (ARNAVUTLUK) bunun
+                            # canli ornegiydi.
+                            mense=_kesim_mense(ana_kaynak),
                             aciklama=f'Kesim {kesim_id} ({uretim_blok_no}-{slab_int}) | Orijinal Blok: {ana_kaynak.blok_no or ana_kaynak.id}',
                             kullanici=session.get('kullanici')
                         )
@@ -10782,6 +10842,8 @@ def create_app():
                             alis_fiyati=birim_m2_maliyet,
                             doviz=kaynak_doviz, konum=ana_kaynak.konum,
                             durum='Serbest',
+                            kaynak='kesim',          # KK1 — bkz. plaka
+                            mense=_kesim_mense(ana_kaynak),   # KM1
                             aciklama=f'Kesim {kesim_id} - Üretim Blok: {uretim_blok_no} | Orijinal: {getattr(ana_kaynak, "blok_no", "") or ana_kaynak.id}',
                             kullanici=session.get('kullanici')
                         )
