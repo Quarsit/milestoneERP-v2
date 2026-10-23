@@ -52,7 +52,16 @@
   .tipi-rozet{display:inline-block;margin-left:6px;font-size:.6rem;font-weight:800;letter-spacing:.05em;border-radius:4px;padding:1px 5px;vertical-align:middle}
   .tipi-rozet.transit{color:var(--mavi);border:1px solid var(--mavi)}
   .tipi-rozet.teklif{color:var(--kehribar);border:1px solid var(--kehribar)}
-  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
   .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--verde-acik);color:var(--verde)}
 </style>

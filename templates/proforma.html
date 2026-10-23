@@ -47,7 +47,12 @@
   .modal-bas{padding:18px 22px 0}
   .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
   .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
-  .modal-gov{padding:18px 22px;overflow-y:auto}
+  /* MA3: `min-height:0` OLMADAN esnek kutu cocugu kendi iceriginden
+     kisa olamaz; `overflow-y:auto` hic devreye girmez ve uzun bir
+     modalda ALT BAR (Vazgec/Kaydet) disari itilir. Chromium bazi
+     durumlarda affediyor, Firefox affetmiyor. Sayfanin kendi
+     kurali base.html'inkini EZDIGI icin her sayfada ayri yaziyor. */
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr} .f4{grid-template-columns:1fr 1fr 1fr 1fr} .f5{grid-template-columns:repeat(5,1fr)}
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
@@ -84,7 +89,16 @@
   .ozet-ic{display:flex;align-items:center;gap:6px}
   .ozet-ic select{border:1px solid var(--cizgi-koyu);border-radius:6px;padding:4px 6px;font-size:.8rem;background:var(--yuzey)}
   .ozet-ic input{border:1px solid var(--cizgi-koyu);border-radius:6px;padding:4px 8px;font-size:.85rem;width:90px;text-align:right;font-family:var(--mono);background:var(--yuzey)}
-  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .belge-sec{display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid var(--cizgi);border-radius:8px;cursor:pointer;font-size:.88rem;transition:border-color .15s}
   .belge-sec:hover{border-color:var(--verde)}
   .belge-sec input{width:16px;height:16px;cursor:pointer}
@@ -2406,12 +2420,28 @@ async function proformaKaydet() {
   };
 
   try {
-    const d = DUZENLE_ID
-      ? await api(`/api/proforma/${encodeURIComponent(DUZENLE_ID)}`, { method: 'PUT', body: JSON.stringify(payload) })
-      : await api('/api/proforma', { method: 'POST', body: JSON.stringify(payload) });
+    let d;
+    if (DUZENLE_ID) {
+      /* DZ3: proforma siparise donusturulmusse ve toplam degistiyse
+         sunucu 409 + kapsam donuyor. Siparisi SESSIZCE degistirmek
+         dogru degil — ne olacagini gosterip soruyoruz. Onay
+         verilmezse proforma da degismiyor (sunucu geri aliyor). */
+      const yol = `/api/proforma/${encodeURIComponent(DUZENLE_ID)}`;
+      try {
+        d = await api(yol, { method: 'PUT', body: JSON.stringify(payload) });
+      } catch (e) {
+        if (e && e.status === 409 && e.yanit && e.yanit.error === 'onay_gerekli') {
+          if (!await onayla(e.yanit.mesaj)) return;
+          d = await api(yol + '?onay=1',
+                        { method: 'PUT', body: JSON.stringify(payload) });
+        } else { throw e; }
+      }
+    } else {
+      d = await api('/api/proforma', { method: 'POST', body: JSON.stringify(payload) });
+    }
     bildir(d.mesaj || ((DUZENLE_ID ? 'Güncellendi' : 'Oluşturuldu') + ' · ' + (d.id || '')));
     modalKapat(); await yukle();
-  } catch (e) { /* */ }
+  } catch (e) { /* api() zaten bildiriyor */ }
   finally { btn.disabled = false; btn.textContent = DUZENLE_ID ? 'Kaydet' : 'Oluştur'; }
 }
 

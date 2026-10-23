@@ -4973,3 +4973,1798 @@ def test_or9_ekstre_yetki_ve_bulunamadi():
     assert r.status_code in (302, 403), r.status_code
     assert c.get('/api/export/ortaklik?format=xlsx').status_code == 200
     assert d.get('/api/export/ortaklik?format=xlsx').status_code == 403
+
+
+def test_sd1_bos_durum_stogun_durumunu_silemez():
+    """SD1: düzenleme formu, durumu listesinde olmayan stoklarda
+    (Kesildi, Sevkedildi…) <select>'i boş bırakıyordu ve Kaydet o
+    boşluğu yazıyordu. Kesilmiş blok 'Depoda' görünüyor, silme
+    korumaları duruma baktığı için düşüyordu.
+
+    Sunucu ikinci kapı: boş/boşluk durum ASLA yazılmaz."""
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BSD1', blok_no='SD1-1', cins='TEST', boy=300, yukseklik=150,
+            en=120, hacim_m3=5.4, tonaj=15, durum='Kesildi',
+            alis_fiyati=270, alis_fiyat_birim='ton', doviz='EUR'))
+        db.session.commit()
+
+    for bos in ('', '   ', None):
+        r = c.put('/api/stok/BSD1', headers=H,
+                  json={'tip': 'BLOK', 'durum': bos, 'cins': 'TEST'})
+        assert r.status_code == 200, (bos, r.status_code)
+        with fa.app.app_context():
+            assert db.session.get(BlokStok, 'BSD1').durum == 'Kesildi', bos
+
+    # Gerçek bir durum hâlâ yazılabiliyor — kapıyı kapatmadık
+    c.put('/api/stok/BSD1', headers=H,
+          json={'tip': 'BLOK', 'durum': 'Serbest', 'cins': 'TEST'})
+    with fa.app.app_context():
+        assert db.session.get(BlokStok, 'BSD1').durum == 'Serbest'
+
+
+def test_sd1_doviz_ve_birim_duzenlenebiliyor():
+    """SD1: düzenleme formunda tutar vardı, PARA BİRİMİ yoktu —
+    '270' tek başına bir şey söylemiyor. Yanlış dövizle girilmiş
+    stok düzeltilemiyordu."""
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BSD2', blok_no='SD1-2', cins='TEST', boy=300, yukseklik=150,
+            en=120, hacim_m3=5.4, tonaj=15, durum='Serbest',
+            alis_fiyati=270, alis_fiyat_birim='ton', doviz='USD'))
+        db.session.commit()
+
+    r = c.put('/api/stok/BSD2', headers=H,
+              json={'tip': 'BLOK', 'cins': 'TEST', 'durum': 'Serbest',
+                    'alis_fiyati': 270, 'doviz': 'EUR', 'fiyat_birim': 'm3'})
+    assert r.status_code == 200, r.status_code
+    with fa.app.app_context():
+        s = db.session.get(BlokStok, 'BSD2')
+        assert s.doviz == 'EUR', s.doviz
+        assert s.alis_fiyat_birim == 'm3', s.alis_fiyat_birim
+
+    # Tanınmayan döviz yazılmaz — serbest metin para birimi olmaz
+    c.put('/api/stok/BSD2', headers=H,
+          json={'tip': 'BLOK', 'cins': 'TEST', 'doviz': 'ZZZ'})
+    with fa.app.app_context():
+        assert db.session.get(BlokStok, 'BSD2').doviz == 'EUR'
+
+
+def test_sd1_doviz_degisince_tedarikci_borcu_sessizce_donmez():
+    """SD1: C1'den beri BİR CariHareket BİRDEN ÇOK stoğu kapsıyor
+    (fatura bazlı gruplama). Tek stoğun dövizi değişti diye o satırı
+    çevirmek, aynı faturadaki öbür stokların borcunu da değiştirirdi.
+    Borca dokunulmuyor — ama sessiz kalınmıyor, kullanıcı uyarılıyor."""
+    from models import CariHareket
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add_all([
+            BlokStok(id='BSD3', blok_no='SD1-3', cins='TEST', boy=300,
+                     yukseklik=150, en=120, hacim_m3=5.4, tonaj=15,
+                     durum='Serbest', alis_fiyati=270, doviz='USD'),
+            CariHareket(id='CH-SD3', cari_id='C1', cari_unvan='TEDARIKCI',
+                        hareket_tarihi=date.today(), islem_tip='Alis',
+                        alacak=4050, doviz='USD', aciklama='stok alis',
+                        baglanti_tip='stok', baglanti_id='BSD3')])
+        db.session.commit()
+
+    r = c.put('/api/stok/BSD3', headers=H,
+              json={'tip': 'BLOK', 'cins': 'TEST', 'doviz': 'EUR'})
+    d = r.get_json()
+    assert d.get('uyari') is True, d
+    assert 'USD' in (d.get('mesaj') or '') and 'EUR' in (d.get('mesaj') or ''), d
+    with fa.app.app_context():
+        assert db.session.get(BlokStok, 'BSD3').doviz == 'EUR'
+        ch = CariHareket.query.filter_by(baglanti_id='BSD3').first()
+        assert ch.doviz == 'USD', 'tedarikçi borcu sessizce çevrilmiş'
+
+
+def test_sd1_formda_doviz_birim_ve_durum_korumasi_var():
+    """SD1: üç eksik de ŞABLONDA — sunucu düzelmesi tek başına
+    yetmez, kullanıcının gördüğü form yanlış değer gönderiyordu."""
+    import io as _io
+    h = _io.open('templates/stok.html', encoding='utf-8').read()
+    for parca in ("id=\"duzDoviz\"", "id=\"duzFiyatBirim\"",
+                  "doviz: document.getElementById('duzDoviz').value",
+                  "fiyat_birim: document.getElementById('duzFiyatBirim').value",
+                  'function durumSecenekleriniKur'):
+        assert parca in h, parca
+    # Durum artık sabit listeyle doldurulmuyor: tanınmayan değer
+    # listeye EKLENİYOR, yoksa <select> sessizce boşalır.
+    assert "document.getElementById('duzDurum').value = s.durum" not in h
+    assert 'DUZ_ELLE_DURUMLAR.includes(d)' in h
+
+
+def test_ma1_maliyet_aciklamasi_kaydediliyor():
+    """MA1: `aciklama` modelde vardı ve HER YERDE okunuyordu — detay
+    paneli, arama, dışa aktarma, ortaklık ekstresi — ama hiçbir uç
+    nokta onu kabul etmiyordu. Girilen not hiçbir yere ulaşmıyordu."""
+    from models import Maliyet
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BMA1', blok_no='MA1-1', cins='TEST', boy=300, yukseklik=150,
+            en=120, hacim_m3=5.4, tonaj=15, durum='Serbest'))
+        db.session.commit()
+
+    r = c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Nakliye', 'baglanti_tip': 'stok',
+        'baglanti_id': 'BMA1', 'tutar': 1000, 'doviz': 'USD',
+        'aciklama': 'Limandan depoya çekici — şoför Ahmet'})
+    assert r.status_code == 200, r.status_code
+    with fa.app.app_context():
+        m = Maliyet.query.filter_by(baglanti_id='BMA1',
+                                    maliyet_tip='Nakliye').first()
+        assert m is not None
+        assert m.aciklama == 'Limandan depoya çekici — şoför Ahmet', m.aciklama
+
+
+def test_ma1_dagitimda_kullanici_notu_sistem_notunun_onune_gecer():
+    """MA1: dağıtım kendi notunu üretiyor ("4 kayda orantılı
+    dağıtıldı") — o bilgi değerli, atılmıyor. Kullanıcının notu ÖNE
+    geçiyor: ortaklık ekstresi ortak kipinde ilk ' · ' ye kadarını
+    gösteriyor (OR9), orada insanın yazdığı kısım durmalı."""
+    from models import Maliyet
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add_all([
+            BlokStok(id='BMA2', blok_no='MA1-2', cins='TEST', boy=300,
+                     yukseklik=150, en=120, hacim_m3=5.4, tonaj=15,
+                     durum='Serbest'),
+            BlokStok(id='BMA3', blok_no='MA1-3', cins='TEST', boy=300,
+                     yukseklik=150, en=120, hacim_m3=10.8, tonaj=30,
+                     durum='Serbest')])
+        db.session.commit()
+
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'maliyet_tip': 'Navlun', 'baglanti_tip': 'stok',
+        'hedefler': ['BMA2', 'BMA3'], 'tutar': 3000, 'doviz': 'USD',
+        'dagitim': 'oransal', 'aciklama': 'MSC konteyner 4 nolu'})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        kayitlar = Maliyet.query.filter(
+            Maliyet.baglanti_id.in_(['BMA2', 'BMA3']),
+            Maliyet.maliyet_tip == 'Navlun').all()
+        assert len(kayitlar) == 2, len(kayitlar)
+        for m in kayitlar:
+            assert m.aciklama.startswith('MSC konteyner 4 nolu · '), m.aciklama
+            # Sistem notu ATILMADI
+            assert 'dağıtıldı' in m.aciklama, m.aciklama
+            # Ortak kipinin gördüğü kısım (OR9 kesme kuralı)
+            assert m.aciklama.split(' · ')[0] == 'MSC konteyner 4 nolu'
+
+
+def test_ma1_aciklama_bos_birakilabilir_ve_kirpiliyor():
+    """MA1: alan opsiyonel — boş bırakmak eski davranışı korur
+    (None), ve 500 karakterde kırpılıyor: sütun Text ama serbest
+    metnin sınırsız olması belge çıktılarını bozar."""
+    from models import Maliyet
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(BlokStok(
+            id='BMA4', blok_no='MA1-4', cins='TEST', boy=300, yukseklik=150,
+            en=120, hacim_m3=5.4, tonaj=15, durum='Serbest'))
+        db.session.commit()
+
+    c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Sigorta', 'baglanti_tip': 'stok',
+        'baglanti_id': 'BMA4', 'tutar': 50, 'doviz': 'USD',
+        'aciklama': '   '})
+    c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Komisyon', 'baglanti_tip': 'stok',
+        'baglanti_id': 'BMA4', 'tutar': 60, 'doviz': 'USD',
+        'aciklama': 'x' * 900})
+    with fa.app.app_context():
+        bos = Maliyet.query.filter_by(baglanti_id='BMA4',
+                                      maliyet_tip='Sigorta').first()
+        assert bos.aciklama is None, repr(bos.aciklama)
+        uzun = Maliyet.query.filter_by(baglanti_id='BMA4',
+                                       maliyet_tip='Komisyon').first()
+        assert len(uzun.aciklama) == 500, len(uzun.aciklama)
+
+
+def test_ma1_iki_formda_da_aciklama_kutusu_var():
+    """MA1: iki ayrı maliyet ekleme formu var (Maliyet sayfası ve
+    stok çekmecesi). Birine ekleyip ötekini unutmak, aynı alanın
+    bir yerde dolup bir yerde boş kalmasıyla biterdi.
+
+    MA2: alan textarea değil INPUT. Bu önemli bir yan etki getiriyor —
+    base.html'deki global BÜYÜK HARF kuralı yalnız <input>'lere
+    uygulanıyor (`el.tagName !== 'INPUT'` ile çıkıyor). İşaretsiz
+    bırakılırsa "K6461 kesim" → "K6461 KESİM" olurdu; serbest bir
+    notun büyük harfe çevrilmesi okunaksızdır."""
+    import io as _io
+    for dosya, kimlik in (('templates/maliyet.html', 'fAciklama'),
+                          ('templates/stok.html', 'malAciklama')):
+        h = _io.open(dosya, encoding='utf-8').read()
+        assert f'id="{kimlik}"' in h, (dosya, kimlik)
+        assert (f"aciklama: document.getElementById('{kimlik}')"
+                ".value.trim()") in h, (dosya, kimlik)
+        # Kutu satır içi stille boyanmıyor: gridin kendi kuralına
+        # giriyor (.form-alan input) — iki formda da aynı görünsün.
+        etiket = h[h.index(f'id="{kimlik}"') - 40:
+                   h.index(f'id="{kimlik}"') + 220]
+        assert '<input' in etiket, (dosya, 'textarea kalmis')
+        assert 'style=' not in etiket, (dosya, 'satir ici stil geri gelmis')
+        assert 'data-buyuk-harf="hayir"' in etiket, (
+            dosya, 'BUYUK HARF muafiyeti dusmus — not büyük harfe döner')
+
+
+def test_ma3_modal_govdesi_esnek_kutuda_kuculebiliyor():
+    """MA3: `.modal` esnek sütun + `max-height`. Gövde çocuğunda
+    `min-height:0` YOKSA çocuk kendi içeriğinden kısa olamaz —
+    `overflow-y:auto` hiç devreye girmez ve uzun bir modalda ALT BAR
+    (Vazgeç/Kaydet) modalın dışına itilir. Chromium bazı durumlarda
+    affediyor, Firefox affetmiyor.
+
+    Kural 14 sayfada ayrı ayrı KOPYALANMIŞ ve sayfanınki base'i
+    eziyor — base.html'i düzeltmek tek başına hiçbirini kurtarmıyor.
+    Bu yüzden test tek tek bakıyor: yeni bir sayfa kuralı kopyalayıp
+    bu parçayı unutursa burada düşer."""
+    import glob
+    import io as _io
+    import re
+    eksik = []
+    for yol in sorted(glob.glob('templates/*.html')):
+        g = _io.open(yol, encoding='utf-8').read()
+        kurallar = re.findall(r'\.modal-gov\{[^}]*\}', g)
+        if not kurallar:
+            continue
+        # Yalnız `.modal` gerçekten esnek sütunsa kural anlamlı
+        if not re.search(r'\.modal\{[^}]*flex-direction:column', g):
+            continue
+        for k in kurallar:
+            if 'min-height:0' not in k:
+                eksik.append(yol)
+    assert not eksik, f'modal gövdesi küçülemiyor: {eksik}'
+
+
+def test_ma3_maliyet_formu_iki_uclu_satirda():
+    """MA3: süzgeçler tek esnek satırdaydı, 620px modalda dört kutu
+    sarıyordu — seçici bloğu 307px tutup formun son alanlarını
+    katlamanın altına itiyordu. İki üçlü ızgara satırı oldu."""
+    import io as _io
+    tam = _io.open('templates/maliyet.html', encoding='utf-8').read()
+    # YALNIZ MODALIN İÇİ: `fTip` gibi kimlikler sayfanın üst
+    # süzgecinde de geçiyor, dışarıdan arayınca yanlış yeri bulur.
+    h = tam[tam.index('<div class="modal-ortu" id="modal"'):
+            tam.index('{% endblock %}',
+                      tam.index('<div class="modal-ortu" id="modal"'))]
+    # Konum karşılaştırmasıyla ölçüyoruz: biçimlendirme değişse de
+    # "hangi kutu hangi satırda" sorusu aynı kalsın.
+    y = {k: h.index(f'id="{k}"') for k in
+         ('fTip', 'fBagTip', 'hUretici', 'hAra', 'hCins', 'hBlok')}
+    f3ler = []
+    ara = 0
+    while True:
+        try:
+            ara = h.index('<div class="form-satir f3">', ara) + 1
+        except ValueError:
+            break
+        f3ler.append(ara - 1)
+    assert len(f3ler) >= 3, f'üç f3 satırı bekleniyordu, {len(f3ler)} var'
+    satir1, satir2, satir3 = f3ler[0], f3ler[1], f3ler[2]
+    liste = h.index('hedef-liste')
+
+    # 1. üçlü: Maliyet Tipi · Bağlantı Tipi · Üretici
+    for k in ('fTip', 'fBagTip', 'hUretici'):
+        assert satir1 < y[k] < satir2, (k, 'ilk üçlü satırda değil')
+    # 2. üçlü: Bağlanacak stok (ara) · Cins · Blok No — listeden ÖNCE
+    for k in ('hAra', 'hCins', 'hBlok'):
+        assert satir2 < y[k] < liste, (k, 'ikinci üçlü satırda değil')
+    # 3. üçlü (Tutar/Döviz/KDV) listeden SONRA gelmeli
+    assert liste < satir3
+
+    # Her kutunun artık ETİKETİ var — önce ne oldukları yalnız
+    # "— üretici (tümü) —" gibi seçenek metinlerinden anlaşılıyordu
+    for etiket in ('>Üretici<', '>Cins<', '>Blok No<'):
+        assert etiket in h, etiket
+    # Süzgeçler yalnız STOK için anlamlı: sipariş/sevkiyatta gizleniyor
+    assert "['fAlanUretici', 'fAlanCins', 'fAlanBlok']" in tam
+
+
+def test_ma5_her_modalda_alt_bar_modalin_icinde():
+    """MA5: `.modal-alt`, `.modal`in İÇİNDE olmak zorunda. Dışına
+    çıkarsa `.modal-ortu` ızgarasının (place-items:center) çocuğu
+    olur: ortalanır ve içeriği kadar daralır — panelden kopmuş
+    ensiz bir düğme kutusu.
+
+    Bunu bir yamam yaptı. MA1'in tabanını kurarken maliyet.html'den
+    açıklama bloğunu elle kesmiştim ve kesme noktası `.modal-gov`un
+    kapanışını da götürmüştü; yama o `</div>`i "eklenecek" sanıp
+    geri koyunca kullanıcının dosyasında FAZLADAN bir kapanış
+    oluştu. Bayt bayt doğrulamam yakalayamadı çünkü yamayı kendi
+    bozuk tabanıma uygulayıp kendi dosyamla karşılaştırıyordum —
+    ikisi de aynı hatayı taşıyordu.
+
+    Bu test o karşılaştırmaya güvenmiyor: şablonu gerçek bir HTML
+    ayrıştırıcısıyla okuyup YAPIYA bakıyor."""
+    import glob
+    import io as _io
+    import re
+    from html.parser import HTMLParser
+
+    BOS = {'input', 'br', 'hr', 'img', 'meta', 'link', 'source',
+           'col', 'area', 'base', 'embed', 'track', 'wbr'}
+
+    class Y(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.yigin = []
+            self.kapanis = {}
+
+        def handle_starttag(self, etiket, nitelikler):
+            if etiket in BOS:
+                return
+            self.yigin.append((etiket, dict(nitelikler).get('class', '') or '',
+                               self.getpos()[0]))
+
+        def handle_endtag(self, etiket):
+            sat = self.getpos()[0]
+            for i in range(len(self.yigin) - 1, -1, -1):
+                if self.yigin[i][0] == etiket:
+                    for _e, snf, ac in self.yigin[i:]:
+                        k = snf.split()[0] if snf else ''
+                        if k in ('modal', 'modal-alt'):
+                            self.kapanis.setdefault((k, ac), sat)
+                    del self.yigin[i:]
+                    return
+
+    bozuk = []
+    for yol in sorted(glob.glob('templates/*.html')):
+        g = _io.open(yol, encoding='utf-8').read()
+        t = re.sub(r'\{%.*?%\}', '', g, flags=re.S)
+        t = re.sub(r'\{\{.*?\}\}', '', t, flags=re.S)
+        for ortu in re.finditer(r'<div class="modal-ortu"[^>]*>', t):
+            bas, derin, kes = ortu.start(), 0, len(t)
+            for x in re.finditer(r'<div\b|</div>', t[bas:]):
+                derin += 1 if x.group(0) == '<div' else -1
+                if derin == 0:
+                    kes = bas + x.end()
+                    break
+            y = Y()
+            y.feed(t[bas:kes])
+            mo = [(a, b) for (k, a), b in y.kapanis.items() if k == 'modal']
+            al = [(a, b) for (k, a), b in y.kapanis.items() if k == 'modal-alt']
+            if not (mo and al):
+                continue
+            ac_m, kap_m = mo[0]
+            ac_a, _ = al[0]
+            if not (ac_m < ac_a < kap_m):
+                bozuk.append((yol, t[:bas].count('\n') + 1))
+    assert not bozuk, f'alt bar .modal dışında kalmış: {bozuk}'
+
+
+def _dz1_kur(c, ek, tonlar=(20, 10)):
+    """DZ1 testleri icin kurulum. HER TESTE KENDI KIMLIKLERI:
+    sayimlar genel yapilirsa takim halinde calisirken baska
+    testlerin birakti maliyet/hareket satirlari girer ve test
+    sirasi onemli hale gelir — bir kez yasadik, bir daha degil."""
+    from models import Cari
+    with fa.app.app_context():
+        if not db.session.get(Cari, 'TEDDZ'):
+            db.session.add(Cari(id='TEDDZ', unvan='NAKLIYECI DZ',
+                                cari_tip='Tedarikçi', urun_tedarikcisi=True))
+        idler = []
+        for n, ton in enumerate(tonlar, 1):
+            sid = f'BLK-{ek}{n}'
+            idler.append(sid)
+            if not db.session.get(BlokStok, sid):
+                db.session.add(BlokStok(
+                    id=sid, blok_no=f'{ek}{n}', cins='TEST', boy=300,
+                    yukseklik=180, en=170, hacim_m3=9.18, tonaj=ton,
+                    alis_fiyati=300, alis_fiyat_birim='ton', doviz='USD',
+                    durum='Serbest'))
+        db.session.commit()
+    return idler
+
+
+def _dz1_sayim(stok_idler):
+    """Yalniz BU stoklara bagli maliyet ve hareket sayisi."""
+    from models import CariHareket, Maliyet
+    with fa.app.app_context():
+        satirlar = Maliyet.query.filter(
+            Maliyet.baglanti_id.in_(stok_idler)).all()
+        idler = [s.id for s in satirlar] or ['-']
+        hareketler = CariHareket.query.filter(
+            CariHareket.baglanti_tip == 'maliyet',
+            CariHareket.baglanti_id.in_(idler)).count()
+        return len(satirlar), hareketler
+
+
+def test_dz1_cari_hareket_silinince_kdv_satiri_oksuz_kalmaz():
+    """DZ1: bir gider faturası İKİ maliyet satırı doğuruyor — net ve
+    Devreden KDV. Cari hareket silinince eskiden yalnız net satır
+    gidiyor, KDV satırı stoğa bağlı olarak ÖKSÜZ kalıyordu.
+
+    Bağ `baglanti_id` ile bire bir kurulmuştu; gerçek ilişki bire
+    çok. Artık `grup_id` tek anahtar."""
+    from models import CariHareket, Maliyet
+    c = istemci('admin', 'ADMIN')
+    (sid,) = _dz1_kur(c, 'KDVA', (20,))
+    r = c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Nakliye (Ocak-Fabrika)', 'baglanti_tip': 'stok',
+        'baglanti_id': sid, 'tutar': 1000, 'doviz': 'USD',
+        'kdv_oran': 20, 'cari_id': 'TEDDZ'})
+    assert r.status_code == 200, r.get_json()
+    mid = r.get_json()['id']
+    assert _dz1_sayim([sid]) == (2, 1), _dz1_sayim([sid])
+    with fa.app.app_context():
+        hid = CariHareket.query.filter_by(
+            baglanti_tip='maliyet', baglanti_id=mid).first().id
+
+    # ONAY olmadan: 409 + kapsam, ve hicbir sey silinmemis
+    r = c.delete(f'/api/cari/hareket/{hid}', headers=H)
+    assert r.status_code == 409, r.status_code
+    d = r.get_json()
+    assert d['error'] == 'onay_gerekli'
+    assert d['kapsam']['satir_sayisi'] == 2, d['kapsam']
+    assert _dz1_sayim([sid]) == (2, 1), 'onay verilmeden silinmiş'
+
+    assert c.delete(f'/api/cari/hareket/{hid}?onay=1',
+                    headers=H).status_code == 200
+    assert _dz1_sayim([sid]) == (0, 0), 'KDV satırı öksüz kaldı'
+    with fa.app.app_context():
+        assert db.session.get(CariHareket, hid) is None
+
+
+def test_dz1_dagitilmis_maliyetin_tamami_birlikte_gider():
+    """DZ1: dağıtım N stok için N satır açıyor ama cari harekete
+    yalnız İLK satırın kimliği yazılıyordu. Hareketi silince N-1
+    satır kalıyor ve o stokların maliyeti şişik görünmeye devam
+    ediyordu — ölçüldü."""
+    from models import CariHareket, Maliyet
+    c = istemci('admin', 'ADMIN')
+    a, b = _dz1_kur(c, 'DAG', (20, 10))
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'maliyet_tip': 'Navlun', 'baglanti_tip': 'stok',
+        'hedefler': [a, b], 'tutar': 3000, 'doviz': 'USD',
+        'kdv_oran': 0, 'dagitim': 'oransal', 'cari_id': 'TEDDZ'})
+    assert r.status_code == 200, r.get_json()
+    assert _dz1_sayim([a, b]) == (2, 1), _dz1_sayim([a, b])
+    with fa.app.app_context():
+        satirlar = Maliyet.query.filter(Maliyet.baglanti_id.in_([a, b])).all()
+        assert len({s.grup_id for s in satirlar}) == 1, 'tek grupta değiller'
+        hid = CariHareket.query.filter(
+            CariHareket.baglanti_tip == 'maliyet',
+            CariHareket.baglanti_id.in_([s.id for s in satirlar])).first().id
+
+    d = c.delete(f'/api/cari/hareket/{hid}', headers=H).get_json()
+    assert d['kapsam']['stok_sayisi'] == 2, d['kapsam']
+    assert c.delete(f'/api/cari/hareket/{hid}?onay=1',
+                    headers=H).status_code == 200
+    assert _dz1_sayim([a, b]) == (0, 0), 'dağıtımın bir kısmı öksüz kaldı'
+
+
+def test_dz1_maliyet_silinince_cari_hareket_de_gider():
+    """DZ1: ters yön. Hangi satırdan silinirse silinsin — net, KDV,
+    ya da dağıtımın ortasındaki bir satır — grubun tamamı ve
+    tedarikçi borcu birlikte gider."""
+    c = istemci('admin', 'ADMIN')
+    (sid,) = _dz1_kur(c, 'TERS', (10,))
+    r = c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Komisyon', 'baglanti_tip': 'stok',
+        'baglanti_id': sid, 'tutar': 500, 'doviz': 'USD',
+        'kdv_oran': 20, 'cari_id': 'TEDDZ'})
+    kdv_id = r.get_json()['kdv_id']
+    assert _dz1_sayim([sid]) == (2, 1)
+
+    # KDV satirindan silmek bile grubun tamamini goturur
+    assert c.delete(f'/api/maliyet/{kdv_id}', headers=H).status_code == 409
+    assert c.delete(f'/api/maliyet/{kdv_id}?onay=1',
+                    headers=H).status_code == 200
+    assert _dz1_sayim([sid]) == (0, 0)
+
+
+def test_dz1_maliyet_duzenlenince_tedarikci_borcu_esitlenir():
+    """DZ1: tutarı değiştirmek maliyeti ve satış kârını
+    güncelliyordu ama CARİ HAREKET eski tutarda kalıyordu —
+    stokta 2.000 USD gider görünürken tedarikçide 1.000 USD borç.
+
+    Borç grubun TAMAMININ karşılığı (net + KDV), tek satırın
+    değil; o yüzden grup toplamından yeniden kuruluyor."""
+    from models import CariHareket
+    c = istemci('admin', 'ADMIN')
+    (sid,) = _dz1_kur(c, 'DUZ', (20,))
+    mid = c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Gümrük/Liman Masrafı', 'baglanti_tip': 'stok',
+        'baglanti_id': sid, 'tutar': 1000, 'doviz': 'USD',
+        'kdv_oran': 0, 'cari_id': 'TEDDZ'}).get_json()['id']
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(
+            baglanti_tip='maliyet', baglanti_id=mid).first()
+        assert h.alacak == 1000, h.alacak
+        hid = h.id
+
+    r = c.put(f'/api/maliyet/{mid}', headers=H, json={'tutar': 2000})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['hareket_guncel']['yeni_tutar'] == 2000
+    with fa.app.app_context():
+        assert db.session.get(CariHareket, hid).alacak == 2000, \
+            'tedarikçi borcu eski tutarda kaldı'
+
+
+def test_dz1_sade_kayitta_fazladan_onay_sorulmaz():
+    """DZ1: onay adımı yalnız kapsam genişken çıkmalı. Cariye
+    bağlanmamış, KDV'siz tek bir maliyet satırı tek soruyla
+    silinmeli — her silmede ikinci bir kutu çıkarsa kullanıcı
+    onu okumadan onaylamaya alışır."""
+    from models import Maliyet
+    c = istemci('admin', 'ADMIN')
+    (sid,) = _dz1_kur(c, 'SADE', (10,))
+    mid = c.post('/api/maliyet', headers=H, json={
+        'maliyet_tip': 'Diğer', 'baglanti_tip': 'stok',
+        'baglanti_id': sid, 'tutar': 100, 'doviz': 'USD',
+        'kdv_oran': 0}).get_json()['id']
+    r = c.delete(f'/api/maliyet/{mid}', headers=H)
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    with fa.app.app_context():
+        assert db.session.get(Maliyet, mid) is None
+
+
+def _dz2_kur(ek, tonaj=20, alis=300):
+    """DZ2 testleri: her teste kendi stogu ve kendi satis kaydi."""
+    from models import SatisKaydi
+    with fa.app.app_context():
+        sid = f'BLK-{ek}'
+        if not db.session.get(BlokStok, sid):
+            db.session.add(BlokStok(
+                id=sid, blok_no=ek, cins='TEST', boy=300, yukseklik=180,
+                en=170, hacim_m3=9.18, tonaj=tonaj, alis_fiyati=alis,
+                alis_fiyat_birim='ton', doviz='USD', durum='Serbest'))
+            db.session.add(SatisKaydi(
+                id=f'SK-{ek}', stok_tip='BLOK', stok_id=sid,
+                musteri='ALICI', satis_tarihi=date(2026, 10, 1),
+                doviz='USD', tutar=20000, tutar_usd=20000,
+                maliyet_usd=alis * tonaj, kar_usd=20000 - alis * tonaj))
+        db.session.commit()
+    return sid
+
+
+def test_dz2_alis_fiyati_degisince_satis_kari_guncellenir():
+    """DZ2: stok düzenleme ucu hiçbir yeniden hesap çağırmıyordu.
+    Ölçüldü: alış fiyatını 300 → 500 yaptım, satış kaydının maliyeti
+    6.000'de, kârı 14.000'de kaldı; doğrusu 10.000 / 10.000 idi.
+    Stok kartı ile satış kârlılığı sessizce ayrışıyordu."""
+    from models import SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz2_kur('DZA', tonaj=20, alis=300)
+    with fa.app.app_context():
+        assert db.session.get(SatisKaydi, 'SK-DZA').maliyet_usd == 6000
+
+    r = c.put(f'/api/stok/{sid}', headers=H,
+              json={'tip': 'BLOK', 'cins': 'TEST', 'alis_fiyati': 500})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['satis_kaydi_guncel'] >= 1, r.get_json()
+    with fa.app.app_context():
+        sk = db.session.get(SatisKaydi, 'SK-DZA')
+        assert sk.maliyet_usd == 10000, sk.maliyet_usd
+        assert sk.kar_usd == 10000, sk.kar_usd
+
+
+def test_dz2_olculer_duzenlenebiliyor_ve_kar_takip_ediyor():
+    """DZ2: ölçü alanları düzenleme ucundan HİÇ güncellenmiyordu —
+    yanlış girilmiş bir tonaj düzeltilemiyordu. Oysa ölçü maliyetin
+    temeli: alış bedeli `alis_fiyati × ölçü`."""
+    from models import SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz2_kur('DZB', tonaj=20, alis=300)
+
+    r = c.put(f'/api/stok/{sid}', headers=H, json={
+        'tip': 'BLOK', 'cins': 'TEST',
+        'tonaj': 25, 'boy': 320, 'hacim_m3': 11.0})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        s = db.session.get(BlokStok, sid)
+        assert s.tonaj == 25 and s.boy == 320 and s.hacim_m3 == 11.0
+        # 25 ton × 300 = 7500
+        assert db.session.get(SatisKaydi, 'SK-DZB').maliyet_usd == 7500
+
+
+def test_dz2_plakaya_tonaj_yazilmaz():
+    """DZ2: hangi ölçü hangi tipte anlamlı — BLOK ton/m³ ile,
+    PLAKA m² ile ölçülüyor. PLAKA'ya tonaj yazmak alanı yalan
+    söyletirdi; `hasattr` süzgeci onu engelliyor."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not db.session.get(PlakaStok, 'PLK-DZC'):
+            db.session.add(PlakaStok(
+                id='PLK-DZC', blok_no='DZC', cins='TEST', boy=300,
+                yukseklik=180, kalinlik=2, metraj_m2=5.4,
+                durum='Serbest', giris_tarihi=date(2026, 10, 1)))
+            db.session.commit()
+    r = c.put('/api/stok/PLK-DZC', headers=H, json={
+        'tip': 'PLAKA', 'cins': 'TEST', 'tonaj': 99, 'metraj_m2': 6.0})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        p = db.session.get(PlakaStok, 'PLK-DZC')
+        assert p.metraj_m2 == 6.0, 'metraj yazılmadı'
+        assert not hasattr(p, 'tonaj'), 'PLAKA tonaj taşımamalı'
+
+
+def test_dz2_olcu_degisince_dagitim_uyarisi_cikar():
+    """DZ2: dağıtım BİR KEZ yapılır ve paylar SABİT tutar olarak
+    yazılır. Ölçü sonradan değişince o paylar eski ölçüye göre
+    hesaplanmış kalır.
+
+    Kendiliğinden yeniden dağıtmıyoruz: bu AYNI GRUPTAKİ BAŞKA
+    stokların maliyetini de değiştirirdi ve onların satışı çoktan
+    faturalanmış olabilir. Sessiz kalmak yerine söylüyoruz."""
+    c = istemci('admin', 'ADMIN')
+    a = _dz2_kur('DZD1', tonaj=20)
+    b = _dz2_kur('DZD2', tonaj=10)
+    r = c.post('/api/maliyet/dagit', headers=H, json={
+        'maliyet_tip': 'Navlun', 'baglanti_tip': 'stok',
+        'hedefler': [a, b], 'tutar': 3000, 'doviz': 'USD',
+        'kdv_oran': 0, 'dagitim': 'oransal'})
+    assert r.status_code == 200, r.get_json()
+
+    # Olcu DEGISMEYEN bir duzenlemede uyari CIKMAMALI
+    r = c.put(f'/api/stok/{a}', headers=H,
+              json={'tip': 'BLOK', 'cins': 'TEST', 'konum': 'Depo 3'})
+    assert not r.get_json().get('uyarilar'), r.get_json()
+
+    # Olcu degisince uyari CIKMALI
+    r = c.put(f'/api/stok/{a}', headers=H,
+              json={'tip': 'BLOK', 'cins': 'TEST', 'tonaj': 40})
+    d = r.get_json()
+    assert d['uyari'] is True, d
+    assert any('dağıtılmış maliyet' in u for u in d['uyarilar']), d
+    # Paylar DEGISMEDI — baskasinin maliyetine dokunmadik
+    with fa.app.app_context():
+        from models import Maliyet
+        paylar = {m.baglanti_id: m.tutar for m in
+                  Maliyet.query.filter(Maliyet.baglanti_id.in_([a, b]),
+                                       Maliyet.maliyet_tip == 'Navlun').all()}
+        assert paylar[a] == 2000 and paylar[b] == 1000, paylar
+
+
+def test_dz2_gecersiz_olcu_reddedilir():
+    """DZ2: ölçü sayı olmalı ve negatif olamaz. Negatif tonaj,
+    negatif alış bedeli demek — kâr tablosu anlamını yitirir."""
+    c = istemci('admin', 'ADMIN')
+    sid = _dz2_kur('DZE', tonaj=20)
+    for deger, bekle in ((-5, 400), ('abc', 400)):
+        r = c.put(f'/api/stok/{sid}', headers=H,
+                  json={'tip': 'BLOK', 'cins': 'TEST', 'tonaj': deger})
+        assert r.status_code == bekle, (deger, r.status_code, r.get_json())
+    with fa.app.app_context():
+        assert db.session.get(BlokStok, sid).tonaj == 20, 'bozuk değer yazıldı'
+
+
+def test_dz2_formda_olcu_kutulari_var():
+    """DZ2: sunucu düzelmesi tek başına yetmez — kullanıcının
+    gördüğü formda kutu yoksa alan yine düzenlenemez."""
+    import io as _io
+    h = _io.open('templates/stok.html', encoding='utf-8').read()
+    for kimlik in ('duzBoy', 'duzYukseklik', 'duzEn', 'duzKalinlik',
+                   'duzHacim', 'duzTonaj', 'duzMetraj'):
+        assert f'id="{kimlik}"' in h, kimlik
+    assert 'function olcuDoldur' in h
+    assert 'function olcuGovde' in h
+    assert '...olcuGovde(),' in h, 'ölçüler gönderilmiyor'
+    # Liste ucu bu ikisini KISA adla veriyor; uzun ad tek basina
+    # bos kutu birakirdi
+    assert 's.hacim_m3 !== undefined ? s.hacim_m3 : s.hacim' in h
+    assert 's.metraj_m2 !== undefined ? s.metraj_m2 : s.m2' in h
+
+
+def _dz3_kur(ek, tutar=20000, maliyet=6000, doviz='USD'):
+    """DZ3: her teste kendi satis kaydi."""
+    from models import SatisKaydi
+    sid = f'SK-{ek}'
+    with fa.app.app_context():
+        if not db.session.get(SatisKaydi, sid):
+            db.session.add(BlokStok(
+                id=f'BLK-{ek}', blok_no=ek, cins='TEST', boy=300,
+                yukseklik=180, en=170, hacim_m3=9.18, tonaj=20,
+                alis_fiyati=300, alis_fiyat_birim='ton', doviz='USD',
+                durum='Satildi'))
+            db.session.add(SatisKaydi(
+                id=sid, stok_tip='BLOK', stok_id=f'BLK-{ek}',
+                musteri='ALICI', satis_tarihi=date(2026, 10, 1),
+                doviz=doviz, birim_fiyat=1000, miktar=20, birim='ton',
+                tutar=tutar, tutar_usd=tutar,
+                maliyet_usd=maliyet, kar_usd=tutar - maliyet))
+            db.session.commit()
+    return sid
+
+
+def test_dz3_satis_kaydi_duzenlenince_kar_yeniden_hesaplanir():
+    """DZ3: satış kaydının TUTAR tarafı hiçbir yerden
+    düzenlenemiyordu — yalnız fatura no/tarih/not. Yanlış fiyatla
+    girilmiş bir satışı düzeltmenin yolu yoktu; kayıt silinemiyordu
+    da. Oysa bu kayıt KÂRIN kaynağı: ortaklık hesabı, kârlılık
+    raporu ve müşteri özeti hep buradan okuyor."""
+    from models import SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz3_kur('DZ3A', tutar=20000, maliyet=6000)
+
+    r = c.put(f'/api/satislar/{sid}', headers=H, json={'tutar': 30000})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d['tutar_usd'] == 30000, d
+    assert d['kar_usd'] == 24000, d          # 30000 - 6000
+    with fa.app.app_context():
+        s = db.session.get(SatisKaydi, sid)
+        assert s.kar_usd == 24000
+        assert abs((s.marj_yuzde or 0) - 80.0) < 0.01, s.marj_yuzde
+
+
+def test_dz3_birim_fiyat_ve_miktardan_tutar_turetilir():
+    """DZ3: birim fiyat ya da miktar değişince tutar yeniden
+    hesaplanır. Ama ikisiyle birlikte TUTAR da verilmişse elle
+    verilen kazanır — faturada iskonto veya yuvarlama olabilir ve
+    belgedeki rakam hesaplanandan önceliklidir."""
+    from models import SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz3_kur('DZ3B', tutar=20000, maliyet=5000)
+
+    c.put(f'/api/satislar/{sid}', headers=H,
+          json={'birim_fiyat': 1200, 'miktar': 20})
+    with fa.app.app_context():
+        assert db.session.get(SatisKaydi, sid).tutar == 24000
+
+    # Tutar da verilirse O kazanir
+    c.put(f'/api/satislar/{sid}', headers=H,
+          json={'birim_fiyat': 1200, 'miktar': 20, 'tutar': 23500})
+    with fa.app.app_context():
+        assert db.session.get(SatisKaydi, sid).tutar == 23500
+
+
+def test_dz3_faturaya_bagli_satis_duzenlenmez():
+    """DZ3: satış bir faturadan doğduysa doğrunun kaynağı FATURA.
+    Buradan tutarı değiştirmek belge ile kaydı ayrıştırırdı.
+    Sipariş düzenleme ucu da aynı gerekçeyle kalemleri kilitliyor;
+    aynı kuralı sürdürüyoruz."""
+    from models import Fatura, SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz3_kur('DZ3C', tutar=20000, maliyet=6000)
+    with fa.app.app_context():
+        db.session.add(Fatura(id='FTR-DZ3', fatura_no='FT-9',
+                              musteri='ALICI', durum='Kesildi'))
+        db.session.get(SatisKaydi, sid).fatura_id = 'FTR-DZ3'
+        db.session.commit()
+
+    r = c.put(f'/api/satislar/{sid}', headers=H, json={'tutar': 99999})
+    assert r.status_code == 409, r.status_code
+    assert r.get_json()['error'] == 'faturaya_bagli'
+    assert 'FT-9' in r.get_json()['mesaj']
+    with fa.app.app_context():
+        assert db.session.get(SatisKaydi, sid).tutar == 20000, 'değişmiş'
+
+
+def test_dz3_kur_satis_tarihindeki_kur():
+    """DZ3: TRY bir satış USD'ye çevrilirken SATIŞ TARİHİNDEKİ kur
+    kullanılmalı. Bugünün kuruyla çevirmek, geçmiş bir satışı
+    bugünün kuruyla yeniden fiyatlandırmak demektir — kâr tablosu
+    kur hareketiyle oynamaya başlar."""
+    from models import DovizKur, SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz3_kur('DZ3D', tutar=100000, maliyet=1000, doviz='TRY')
+    with fa.app.app_context():
+        for t, k in ((date(2026, 9, 1), 40.0), (date(2026, 12, 1), 50.0)):
+            if not DovizKur.query.filter_by(doviz='USD', tarih=t).first():
+                db.session.add(DovizKur(doviz='USD', tarih=t, alis=k,
+                                        satis=k, efektif=k))
+        db.session.commit()
+
+    # Satis tarihi 2026-10-01 -> gecerli kur 40 (01.09 satiri)
+    r = c.put(f'/api/satislar/{sid}', headers=H,
+              json={'tutar': 100000, 'satis_tarihi': '2026-10-01'})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        s = db.session.get(SatisKaydi, sid)
+        assert abs((s.tutar_usd or 0) - 2500) < 1, s.tutar_usd  # 100000/40
+
+
+def test_dz3_gecersiz_deger_reddedilir():
+    """DZ3: negatif tutar ya da tanınmayan döviz yazılamaz."""
+    from models import SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    sid = _dz3_kur('DZ3E', tutar=20000, maliyet=6000)
+    for govde in ({'tutar': -1}, {'doviz': 'ZZZ'}, {'miktar': 'abc'}):
+        r = c.put(f'/api/satislar/{sid}', headers=H, json=govde)
+        assert r.status_code == 400, (govde, r.status_code)
+    with fa.app.app_context():
+        s = db.session.get(SatisKaydi, sid)
+        assert s.tutar == 20000 and s.doviz == 'USD'
+
+
+def _dz3_proforma(ek, fiyat=1000, miktar=20):
+    """DZ3 proforma testleri: her teste kendi belgesi."""
+    from models import Proforma, ProformaKalem
+    pid = f'PI-{ek}'
+    with fa.app.app_context():
+        if not db.session.get(Proforma, pid):
+            db.session.add(Proforma(
+                id=pid, musteri='ALICI', cari_id='C1', doviz='USD',
+                durum='Taslak', aktif_surum=True, revizyon_no=0,
+                ana_pi_id=pid, tur='ihracat', kdv_oran=0,
+                toplam=fiyat * miktar))
+            db.session.flush()
+            db.session.add(ProformaKalem(
+                proforma_id=pid, sira=1, urun_tip='BLOK', cins='TEST',
+                adet=1, miktar=miktar, birim='ton', birim_fiyat=fiyat,
+                toplam_fiyat=fiyat * miktar, net_fiyat=fiyat * miktar,
+                doviz='USD'))
+            db.session.commit()
+    return pid
+
+
+def test_dz3_proforma_toplami_kalemlerden_turetilir():
+    """DZ3: proforma toplamı HİÇBİR ZAMAN sunucuda hesaplanmıyordu —
+    hem POST hem PUT istemciden geleni yazıyordu. Ölçüldü: kalemin
+    fiyatını 1.000 → 1.500 yapan bir PUT (gövdede `toplam` yok)
+    kalemi güncelledi ama başlıktaki toplam 20.000'de kaldı. Belge
+    "satır 30.000, toplam 20.000" diye basılacaktı — müşteriye
+    giden bir belgede."""
+    from models import Proforma
+    c = istemci('admin', 'ADMIN')
+    pid = _dz3_proforma('DZ3P', fiyat=1000, miktar=20)
+
+    r = c.put(f'/api/proforma/{pid}', headers=H, json={'kalemler': [{
+        'urun_tip': 'BLOK', 'cins': 'TEST', 'adet': 1, 'miktar': 20,
+        'birim': 'ton', 'birim_fiyat': 1500, 'toplam_fiyat': 30000,
+        'net_fiyat': 30000, 'sira': 1}]})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        assert db.session.get(Proforma, pid).toplam == 30000, \
+            'başlık toplamı kalemleri takip etmedi'
+
+
+def test_dz3_kalem_tutari_eksikse_toplam_sifirlanmaz():
+    """DZ3: türetme `net_fiyat` üzerinden; o boşsa `toplam_fiyat`,
+    o da boşsa birim × miktar. Düz toplasaydık eksik veride toplam
+    SIFIRA düşerdi — eskisinden kötü.
+
+    İkinci koruma: türetilen sıfır çıkıp istemci sıfırdan büyük bir
+    toplam gönderdiyse belgeyi sıfırlamıyoruz, uyarıyoruz."""
+    from models import Proforma
+    c = istemci('admin', 'ADMIN')
+    pid = _dz3_proforma('DZ3Q', fiyat=1000, miktar=20)
+
+    # net_fiyat YOK, toplam_fiyat var -> ondan turetmeli
+    r = c.put(f'/api/proforma/{pid}', headers=H, json={'kalemler': [{
+        'urun_tip': 'BLOK', 'cins': 'TEST', 'adet': 1, 'miktar': 20,
+        'birim': 'ton', 'birim_fiyat': 1200, 'toplam_fiyat': 24000,
+        'sira': 1}]})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        assert db.session.get(Proforma, pid).toplam == 24000
+
+    # Ikisi de YOK -> birim × miktar
+    r = c.put(f'/api/proforma/{pid}', headers=H, json={'kalemler': [{
+        'urun_tip': 'BLOK', 'cins': 'TEST', 'adet': 1, 'miktar': 10,
+        'birim': 'ton', 'birim_fiyat': 900, 'sira': 1}]})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        assert db.session.get(Proforma, pid).toplam == 9000
+
+
+def test_dz3_siparise_donusmus_proformada_onay_sorulur():
+    """DZ3: proforma siparişe dönüştükten sonra düzenlenince ikisi
+    sessizce ayrışıyordu — proforma 40.000, sipariş 30.000.
+
+    Siparişi proformadan YENİDEN KURMUYORUZ (dönüştürme rezervasyon
+    taşıyor, stok bağlıyor). Yapı aynıysa yalnız FİYAT taşınıyor ve
+    bu da önce soruluyor."""
+    from models import Proforma, Siparis, SiparisKalem
+    c = istemci('admin', 'ADMIN')
+    pid = _dz3_proforma('DZ3R', fiyat=1000, miktar=20)
+    with fa.app.app_context():
+        sip = Siparis(id='SIP-DZ3R', musteri='ALICI', cari_id='C1',
+                      doviz='USD', durum='Hazirlaniyor', toplam_tutar=20000)
+        db.session.add(sip)
+        db.session.flush()
+        db.session.add(SiparisKalem(
+            siparis_id='SIP-DZ3R', sira=1, urun_tip='BLOK', cins='TEST',
+            adet=1, miktar=20, birim='ton', birim_fiyat=1000,
+            toplam_fiyat=20000, doviz='USD'))
+        db.session.get(Proforma, pid).siparis_id = 'SIP-DZ3R'
+        db.session.commit()
+
+    govde = {'kalemler': [{
+        'urun_tip': 'BLOK', 'cins': 'TEST', 'adet': 1, 'miktar': 20,
+        'birim': 'ton', 'birim_fiyat': 2000, 'toplam_fiyat': 40000,
+        'net_fiyat': 40000, 'sira': 1}]}
+
+    # ONAY olmadan: 409 ve HICBIR SEY degismemis
+    r = c.put(f'/api/proforma/{pid}', headers=H, json=govde)
+    assert r.status_code == 409, r.status_code
+    d = r.get_json()
+    assert d['kapsam']['siparis_id'] == 'SIP-DZ3R', d
+    with fa.app.app_context():
+        assert db.session.get(Proforma, pid).toplam == 20000, \
+            'onay verilmeden proforma değişmiş'
+        assert db.session.get(Siparis, 'SIP-DZ3R').toplam_tutar == 20000
+
+    # Onayla: ikisi de guncellenir
+    r = c.put(f'/api/proforma/{pid}?onay=1', headers=H, json=govde)
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        assert db.session.get(Proforma, pid).toplam == 40000
+        assert db.session.get(Siparis, 'SIP-DZ3R').toplam_tutar == 40000
+        k = SiparisKalem.query.filter_by(siparis_id='SIP-DZ3R').first()
+        assert k.birim_fiyat == 2000, k.birim_fiyat
+
+
+def test_dz3_kilitli_siparise_fiyat_tasinmaz():
+    """DZ3: siparişe sevkiyat ya da satış kaydı bağlıysa kalemleri
+    değiştirmek belge ile sevk edilen malı ayrıştırırdı. Fiyat
+    taşınmıyor — ama sessiz kalınmıyor, ayrışma söyleniyor."""
+    from models import Proforma, SatisKaydi, Siparis, SiparisKalem
+    c = istemci('admin', 'ADMIN')
+    pid = _dz3_proforma('DZ3S', fiyat=1000, miktar=20)
+    with fa.app.app_context():
+        db.session.add(Siparis(id='SIP-DZ3S', musteri='ALICI', cari_id='C1',
+                               doviz='USD', durum='Hazirlaniyor',
+                               toplam_tutar=20000))
+        db.session.flush()
+        db.session.add_all([
+            SiparisKalem(siparis_id='SIP-DZ3S', sira=1, urun_tip='BLOK',
+                         cins='TEST', adet=1, miktar=20, birim='ton',
+                         birim_fiyat=1000, toplam_fiyat=20000, doviz='USD'),
+            SatisKaydi(id='SK-DZ3S', siparis_id='SIP-DZ3S', stok_tip='BLOK',
+                       musteri='ALICI', satis_tarihi=date(2026, 10, 1),
+                       doviz='USD', tutar=20000, tutar_usd=20000)])
+        db.session.get(Proforma, pid).siparis_id = 'SIP-DZ3S'
+        db.session.commit()
+
+    r = c.put(f'/api/proforma/{pid}', headers=H, json={'kalemler': [{
+        'urun_tip': 'BLOK', 'cins': 'TEST', 'adet': 1, 'miktar': 20,
+        'birim': 'ton', 'birim_fiyat': 2000, 'toplam_fiyat': 40000,
+        'net_fiyat': 40000, 'sira': 1}]})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d['siparis_uyari'] and 'satış kaydı' in d['siparis_uyari'], d
+    with fa.app.app_context():
+        assert db.session.get(Siparis, 'SIP-DZ3S').toplam_tutar == 20000, \
+            'kilitli siparişin fiyatı değişmiş'
+
+
+def _dz4_kesim(c, ek, tonaj=20, alis=300):
+    """DZ4: bir blogu iki plakaya kes. Her teste kendi kimlikleri."""
+    from models import Kesim, KesimDetay
+    bid = f'BLK-{ek}'
+    with fa.app.app_context():
+        if not db.session.get(BlokStok, bid):
+            db.session.add(BlokStok(
+                id=bid, blok_no=ek, cins='TEST', boy=300, yukseklik=180,
+                en=170, hacim_m3=9.18, tonaj=tonaj, alis_fiyati=alis,
+                alis_fiyat_birim='ton', doviz='USD', durum='Serbest'))
+            db.session.commit()
+    r = c.post('/api/kesim', headers=H, json={
+        'kesim_yon': 'BLOK_PLAKA', 'kaynak_ids': [bid],
+        'kesim_tarihi': '2026-10-01',
+        'hedefler': [
+            {'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 300,
+             'yukseklik': 180, 'kalinlik': 2, 'adet': 1},
+            {'hedef_tip': 'PLAKA', 'cins': 'TEST', 'boy': 300,
+             'yukseklik': 180, 'kalinlik': 2, 'adet': 1}]})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        ks = Kesim.query.filter_by(kaynak_id=bid).first()
+        plakalar = [d.hedef_stok_id for d in
+                    KesimDetay.query.filter_by(kesim_id=ks.id).all()]
+    return bid, ks.id, plakalar
+
+
+def test_dz4_plaka_olcusu_degisince_maliyet_yeniden_dagilir():
+    """DZ4: bloğun maliyeti plakalara m² ORANINDA dağıtılıyor —
+    birim = (matrah + ek maliyet) / toplam m². Bir plakanın m²'si
+    değişince PAYDA değişir, yani KARDEŞ plakaların birim maliyeti
+    de değişmeli.
+
+    Dağıtıcı zaten vardı ve plakaların canlı m²'sini okuyordu, ama
+    yalnız BLOĞA dokunulunca çağrılıyordu. Ölçüldü: plakanın m²'si
+    5,4 → 30 yapıldı, iki plakanın da birim maliyeti 555,56'da
+    kaldı; doğrusu 169,49 idi."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    bid, kid, plakalar = _dz4_kesim(c, 'DZ4A', tonaj=20, alis=300)
+    assert len(plakalar) == 2
+    with fa.app.app_context():
+        ilk = db.session.get(PlakaStok, plakalar[0])
+        # 6000 USD / 10.8 m2
+        assert abs((ilk.alis_fiyati or 0) - 555.56) < 0.05, ilk.alis_fiyati
+
+    r = c.put(f'/api/stok/{plakalar[0]}', headers=H,
+              json={'tip': 'PLAKA', 'cins': 'TEST', 'metraj_m2': 30})
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()
+    assert d['kesim_yeniden_dagitim'], d
+    assert d['kesim_yeniden_dagitim']['blok'] == bid, d
+
+    with fa.app.app_context():
+        # 6000 / (30 + 5.4) = 169.49 — IKISINDE DE
+        for pid in plakalar:
+            p = db.session.get(PlakaStok, pid)
+            assert abs((p.alis_fiyati or 0) - 169.49) < 0.05, (pid, p.alis_fiyati)
+
+
+def test_dz4_kesim_kaydi_stoktan_ayrismaz():
+    """DZ4: kesim, o gün ne çıktığının kaydı. Stok düzeltilince
+    kesim satırı 5,4 m²'de kalıyordu — belge ile depo birbirini
+    tutmuyordu."""
+    from models import KesimDetay, PlakaStok
+    c = istemci('admin', 'ADMIN')
+    bid, kid, plakalar = _dz4_kesim(c, 'DZ4B', tonaj=20, alis=300)
+
+    c.put(f'/api/stok/{plakalar[0]}', headers=H,
+          json={'tip': 'PLAKA', 'cins': 'TEST', 'metraj_m2': 25,
+                'kalinlik': 3})
+    with fa.app.app_context():
+        dt = KesimDetay.query.filter_by(hedef_stok_id=plakalar[0]).first()
+        p = db.session.get(PlakaStok, plakalar[0])
+        assert dt.miktar_m2 == 25, dt.miktar_m2
+        assert dt.kalinlik == 3, dt.kalinlik
+        # Maliyet de stokla ayni
+        assert abs((dt.birim_maliyet or 0) - (p.alis_fiyati or 0)) < 0.01
+        # Kardesin maliyeti de guncellendi
+        dt2 = KesimDetay.query.filter_by(hedef_stok_id=plakalar[1]).first()
+        p2 = db.session.get(PlakaStok, plakalar[1])
+        assert abs((dt2.birim_maliyet or 0) - (p2.alis_fiyati or 0)) < 0.01
+
+
+def test_dz4_kesimden_gelmeyen_stokta_dagitim_calismaz():
+    """DZ4: yeniden dağıtım yalnız KESİMDEN çıkmış ürün için.
+    Doğrudan girilmiş bir plakanın ölçüsünü değiştirmek hiçbir
+    bloğun dağıtımını tetiklememeli — ortada dağıtılacak bir blok
+    maliyeti yok."""
+    from models import PlakaStok
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not db.session.get(PlakaStok, 'PLK-DZ4C'):
+            db.session.add(PlakaStok(
+                id='PLK-DZ4C', blok_no='DZ4C', cins='TEST', boy=300,
+                yukseklik=180, kalinlik=2, metraj_m2=5.4,
+                alis_fiyati=100, durum='Serbest',
+                giris_tarihi=date(2026, 10, 1)))
+            db.session.commit()
+    r = c.put('/api/stok/PLK-DZ4C', headers=H,
+              json={'tip': 'PLAKA', 'cins': 'TEST', 'metraj_m2': 8})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['kesim_yeniden_dagitim'] is None, r.get_json()
+    with fa.app.app_context():
+        p = db.session.get(PlakaStok, 'PLK-DZ4C')
+        assert p.metraj_m2 == 8
+        assert p.alis_fiyati == 100, 'dokunulmamalıydı'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DZ5 · CARİ HAREKETİN TUTARI DÜZELTİLEBİLİR
+#
+#  Ölçülen: 10.000 TL tahsilat girilecekken 100.000 TL girilmiş bir
+#  kaydı düzeltmenin hiçbir yolu yoktu. Beyaz liste borç/alacak/
+#  döviz/kuru DIŞARIDA bırakıyordu; yanındaki not "tutar düzeltmesi
+#  iptal+yeniden giriş ile yapılmalı" diyordu. O yol çalışıyor ama
+#  denetim kaydında düzeltme diye bir iz bırakmıyor — bir SİLME ve
+#  bir YENİ KAYIT bırakıyor.
+#
+#  Ayrıca: süzgeç `hasattr(hareket, k)` idi. `tutar` modelde bir
+#  alan DEĞİL, o yüzden ne reddediliyor ne uygulanıyordu —
+#  `PUT {"tutar": 10000}` 200 "Değişiklik yok" dönüyordu.
+# ══════════════════════════════════════════════════════════════════
+
+def _dz5_kur(c, ek, tutar=100000, doviz='TRY', tip='Tahsilat'):
+    """DZ5 kurulumu. HER TESTE KENDİ cari/kasa/hareket kimliği:
+    genel sayım yapılırsa başka testlerin bıraktığı satırlar girer
+    ve test sırası önemli hale gelir (DZ1'de bir kez yaşandı)."""
+    from models import Cari, Kasa
+    cid = f'MD5{ek}'
+    with fa.app.app_context():
+        if not db.session.get(Cari, cid):
+            db.session.add(Cari(id=cid, unvan=f'DZ5 {ek}',
+                                cari_tip='Müşteri'))
+        k = Kasa.query.filter_by(ad=f'DZ5 {ek} KASA').first()
+        if not k:
+            k = Kasa(ad=f'DZ5 {ek} KASA', doviz=doviz, bakiye=0)
+            db.session.add(k)
+        db.session.commit()
+        kid = k.id
+    yan = 'alacak' if tip == 'Tahsilat' else 'borc'
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': cid, 'islem_tip': tip, 'doviz': doviz,
+        'tutar': tutar, yan: tutar, 'kasa_id': kid,
+        'hareket_tarihi': '2026-10-01', 'vade_tarihi': '2026-10-01',
+        'evrak_no': f'MK-{ek}'})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(cari_id=cid).first()
+        return h.id, kid, cid
+
+
+def test_dz5_cari_hareket_tutari_duzeltilebiliyor():
+    """DZ5: tutar düzeltilince TRY karşılığı ve bağlı kasa birlikte
+    gidiyor. Eskiden bu PUT 400 dönüyordu: 'Bu alanlar buradan
+    değiştirilemez: alacak.'"""
+    from models import Kasa
+    c = istemci('admin', 'ADMIN')
+    hid, kid, _ = _dz5_kur(c, 'A')
+    with fa.app.app_context():
+        assert float(db.session.get(Kasa, kid).bakiye) == 100000
+
+    r = c.put(f'/api/cari/hareket/{hid}?onay=1', headers=H,
+              json={'tutar': 10000})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        h = db.session.get(CariHareket, hid)
+        assert float(h.alacak) == 10000, 'tutar düzelmedi'
+        assert float(h.alacak_try) == 10000, 'TRY karşılığı takip etmedi'
+        assert float(db.session.get(Kasa, kid).bakiye) == 10000, \
+            'kasa bakiyesi eski tutarda kaldı'
+
+
+def test_dz5_tutar_degisimi_once_kapsami_soruyor():
+    """DZ5: tutarın arkasında kasa bakiyesi, kapanışlar, kur farkı
+    kayıtları ve fatura durumu var. DZ1'de silme için kurulan kural
+    burada da geçerli: kapsam ÖNCE söylenir, sonra iş yapılır.
+
+    Onay verilmediyse HİÇBİR ŞEY değişmemeli."""
+    from models import Kasa
+    c = istemci('admin', 'ADMIN')
+    hid, kid, _ = _dz5_kur(c, 'B')
+
+    r = c.put(f'/api/cari/hareket/{hid}', headers=H, json={'tutar': 5000})
+    assert r.status_code == 409, r.status_code
+    d = r.get_json()
+    assert d['error'] == 'onay_gerekli', d
+    assert float(d['kapsam']['eski_tutar']) == 100000, d['kapsam']
+    assert float(d['kapsam']['yeni_tutar']) == 5000, d['kapsam']
+    assert any('kasa' in m for m in d['kapsam']['maddeler']), d['kapsam']
+
+    with fa.app.app_context():
+        assert float(db.session.get(CariHareket, hid).alacak) == 100000, \
+            'onay verilmeden tutar değişmiş'
+        assert float(db.session.get(Kasa, kid).bakiye) == 100000, \
+            'onay verilmeden kasa değişmiş'
+
+
+def test_dz5_bilinmeyen_alan_sessizce_yutulmuyor():
+    """DZ5: eski süzgeç yalnız MODELDE OLAN alanları reddediyordu.
+    Modelde olmayan bir ad ne reddediliyor ne uygulanıyordu; PUT
+    200 ve 'Değişiklik yok' dönüyordu. Ölçüldü. Ekranı naif
+    yazsaydım 'kaydedildi' diyecek, rakam yerinde duracaktı."""
+    c = istemci('admin', 'ADMIN')
+    hid, _, _ = _dz5_kur(c, 'C')
+    r = c.put(f'/api/cari/hareket/{hid}', headers=H, json={'tutarr': 5})
+    assert r.status_code == 400, r.get_json()
+    assert 'tutarr' in r.get_json()['mesaj'], r.get_json()
+
+    # `tutar` ise ARTIK TANINIYOR: ekranın kullandığı ad bu.
+    r = c.put(f'/api/cari/hareket/{hid}', headers=H, json={'tutar': 7000})
+    assert r.status_code == 409, (r.status_code, r.get_json())
+
+
+def test_dz5_yon_ve_sifir_tutar_kapali():
+    """DZ5: yön kaydın NİTELİĞİ — alacak kaydına borç yazmak
+    düzeltme değil, başka bir kayıt. Sıfır da silmenin yerine
+    geçmez: kaydı ekstrede bırakır ama bakiyeye hiç girmez."""
+    c = istemci('admin', 'ADMIN')
+    hid, _, _ = _dz5_kur(c, 'D')
+
+    r = c.put(f'/api/cari/hareket/{hid}?onay=1', headers=H,
+              json={'borc': 500})
+    assert r.status_code == 400, r.get_json()
+    assert 'yön' in r.get_json()['mesaj'], r.get_json()
+
+    r = c.put(f'/api/cari/hareket/{hid}?onay=1', headers=H, json={'tutar': 0})
+    assert r.status_code == 400, r.get_json()
+
+    with fa.app.app_context():
+        h = db.session.get(CariHareket, hid)
+        assert float(h.alacak) == 100000 and float(h.borc or 0) == 0
+
+
+def test_dz5_tutar_duzeltilince_kapanis_yeniden_kuruluyor():
+    """DZ5+DZ6: tahsilat bir borcu kapatmış ve kur farkı doğmuşsa,
+    tutar değişince o eşleşme geçersiz. DELETE'in kullandığı
+    `_kur_farki_geri_al` ile çözülüyor — ikinci bir çözme mantığı
+    yazmadık, zamanla ayrışırdı — sonra YENİ tutarla yeniden
+    kuruluyor.
+
+    DZ5'te açık bırakılıyordu. Bu yanlıştı: kur farkı gerçek bir
+    gider ve onu yeniden hesaplatacak bir ekran YOK, yani
+    kullanıcıya yapamayacağı bir şey söyleniyordu. DZ6 ile eşleşme
+    burada yeniden kuruluyor; doğan kur farkı önce onay ekranında
+    rakamıyla gösteriliyor, yani EK2'nin kuralı korunuyor.
+
+    BURADA ÖDEME KISMİ: 1.000 USD borca 600 USD. Borç KAPANMIYOR
+    (kısmi), ama eşleşen 600 USD üzerinden kur farkı doğuyor:
+    600 × (48 − 38) = 6.000 TRY."""
+    from models import Cari, Kasa
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not db.session.get(Cari, 'MD5E'):
+            db.session.add(Cari(id='MD5E', unvan='DZ5 E',
+                                cari_tip='Müşteri'))
+        if not db.session.get(CariHareket, 'HR-DZ5E'):
+            db.session.add(CariHareket(
+                id='HR-DZ5E', cari_id='MD5E', cari_unvan='DZ5 E',
+                islem_tip='Fatura (Satis)', hareket_tarihi=date(2026, 1, 2),
+                vade_tarihi=date(2026, 1, 2), borc=1000, alacak=0,
+                borc_try=38000, doviz='USD', kur_uygulanan=38,
+                kaynak='manuel', kapatildi=False))
+        k = Kasa.query.filter_by(ad='DZ5 E KASA').first()
+        if not k:
+            k = Kasa(ad='DZ5 E KASA', doviz='USD', bakiye=0)
+            db.session.add(k)
+        db.session.commit()
+        kid = k.id
+
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'MD5E', 'islem_tip': 'Tahsilat', 'doviz': 'USD',
+        'tutar': 1000, 'alacak': 1000, 'kasa_id': kid,
+        'hareket_tarihi': date.today().isoformat(),
+        'vade_tarihi': date.today().isoformat(),
+        'evrak_no': 'MK-E', 'kur_farki_islet': True})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        th = CariHareket.query.filter_by(cari_id='MD5E',
+                                         islem_tip='Tahsilat').first()
+        tid = th.id
+        assert db.session.get(CariHareket, 'HR-DZ5E').kapatildi is True, \
+            'kurulum tutmadı: borç kapanmamış'
+        kf_once = CariHareket.query.filter_by(
+            cari_id='MD5E', kaynak='otomatik_kur_farki').count()
+        assert kf_once == 1, f'kurulum tutmadı: {kf_once} kur farkı kaydı'
+
+    r = c.put(f'/api/cari/hareket/{tid}?onay=1', headers=H,
+              json={'tutar': 600})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        assert float(db.session.get(CariHareket, tid).alacak) == 600
+        eski = db.session.get(CariHareket, 'HR-DZ5E')
+        # 600 < 1.000 → borc KISMI odendi, kapanmiyor
+        assert not eski.kapatildi, 'kısmi ödeme borcu kapatmamalı'
+        assert eski.kapanis_hareket_id is None, 'kapanış bağı kalmamalı'
+        # Eski (1.000 USD uzerinden) kayit gitti, YENISI geldi:
+        # eslesen 600 USD × (48 − 38) = 6.000 TRY
+        kf = CariHareket.query.filter_by(
+            cari_id='MD5E', kaynak='otomatik_kur_farki').all()
+        assert len(kf) == 1, f'{len(kf)} kur farkı kaydı (1 olmalı)'
+        _kf_tut = float((kf[0].borc or 0) + (kf[0].alacak or 0))
+        assert _kf_tut == 6000, f'kur farkı {_kf_tut} (6000 olmalı)'
+        assert float(db.session.get(Kasa, kid).bakiye) == 600
+
+
+def test_dz5_hareket_duzenleme_ekrani_var():
+    """DZ5: sunucu tarafı tek başına işe yaramaz. Hareket satırının
+    TEK eylemi `✕` silmekti; düzenlemeyi çağıran bir ekran yoktu —
+    sunucu açıklama/evrak/vade/tarihi kabul ediyordu ama onu
+    çağıran hiçbir şey yoktu.
+
+    Yapı testi: düğme, form, 409 onay yolu ve iki sessiz tuzağın
+    kapağı yerinde mi."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    assert 'hareketDuzenleAc(' in m, 'satırda düzenleme düğmesi yok'
+    assert 'id="hdModal"' in m, 'düzenleme formu yok'
+    assert 'hareketDuzenleKaydet' in m
+    assert "e.yanit.error === 'onay_gerekli'" in m.split(
+        'async function hareketDuzenleKaydet')[1], \
+        'düzenleme yolunda 409 onayı ele alınmıyor'
+
+    # TUZAK 1 — genel büyük harf kuralı `<input>`lara uygulanıyor.
+    # Form MEVCUT açıklamayı gösteriyor; kural açık olsaydı formu
+    # sadece AÇMAK kullanıcının yazdığı metni büyük harfe çevirirdi.
+    i = m.index('id="hdAciklama"')
+    assert 'data-buyuk-harf="hayir"' in m[i - 40:i + 200], \
+        'açıklama alanı büyük harf kuralına açık kalmış'
+
+    # TUZAK 2 — `belge_no` CariHareket'te YOK (Sevkiyat'ın alanı) ama
+    # sunucunun beyaz listesindeydi. Forma koysaydım kullanıcı yazar,
+    # "kaydedildi" görür, ertesi gün alanı boş bulurdu.
+    assert 'hdBelge' not in m, 'olmayan bir alan forma konmuş'
+
+
+def test_dz5_olmayan_alan_guncellendi_diye_sayilmiyor():
+    """DZ5: beyaz listede `belge_no` vardı ama o alan CariHareket'te
+    bulunmuyor — Sevkiyat'ın alanı. Ölçüldü:
+
+        PUT {"belge_no": "X"} → 200 {'guncellenen': ['belge_no']}
+        kayıtta duran         → (alan yok)
+
+    Alanı GÜNCELLENDİ diye adıyla sayıp hiçbir yere yazmıyordu.
+    Bunu DZ5'in formunu yazarken buldum: alanı forma koymuş,
+    tarayıcıda açmış ve listenin çöktüğünü görmüştüm."""
+    from models import CariHareket as _CH
+    assert 'belge_no' not in [k.name for k in _CH.__table__.columns], \
+        'model değişmiş — bu testin gerekçesi kalktı'
+    c = istemci('admin', 'ADMIN')
+    hid, _, _ = _dz5_kur(c, 'F')
+    r = c.put(f'/api/cari/hareket/{hid}', headers=H,
+              json={'belge_no': 'DENEME-1'})
+    assert r.status_code == 400, (r.status_code, r.get_json())
+    assert 'belge_no' in r.get_json()['mesaj'], r.get_json()
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DZ6 · ÖNCE YAP, ONAY YOKSA GERİ AL — VE EŞLEŞMEYİ YENİDEN KUR
+#
+#  DZ5 kapsamı ÖNCEDEN TAHMİN ediyordu ve kapanışları çözüp AÇIK
+#  bırakıyordu. İki sonucu vardı:
+#
+#   · Yeni kur farkının tutarı tahmin edilemiyordu — onu hesaplamak
+#     için hareketin yeni tutarı taşıması ve eski kapanışın çözülmüş
+#     olması gerekiyor.
+#   · Eşleşmeyi yeniden çalıştıran bir uç nokta ya da ekran YOK.
+#     Yani kullanıcıya yapamayacağı bir şey söyleniyordu.
+#
+#  Ölçüldü: 10.000 EUR borç 44 kurdan, 100.000 EUR yanlış ödeme 46
+#  kurdan. Sistem borcu kapatıp 20.000 TL kur farkı açıyor. Ödeme
+#  10.000 EUR'ya düzeltilince o kayıt siliniyor ve yerine yenisi
+#  GELMİYORDU — oysa fark gerçek: 44'ten borçlanıp 46'dan ödenmiş.
+# ══════════════════════════════════════════════════════════════════
+
+def _dz6_kur(c, ek):
+    """EUR borç (44 kurdan) + yanlış tutarlı EUR ödeme (46 kurdan).
+    Ödeme eşleştirilerek giriliyor, yani kur farkı doğuyor."""
+    from models import Cari, Kasa, DovizKur
+    cid = f'TD6{ek}'
+    with fa.app.app_context():
+        if not db.session.get(Cari, cid):
+            db.session.add(Cari(id=cid, unvan=f'DZ6 {ek}',
+                                cari_tip='Tedarikçi'))
+        for _t, _k in ((date(2026, 3, 1), 44), (date(2026, 3, 2), 46)):
+            if not DovizKur.query.filter_by(doviz='EUR', tarih=_t).first():
+                db.session.add(DovizKur(doviz='EUR', tarih=_t,
+                                        alis=_k, satis=_k))
+        k = Kasa.query.filter_by(ad=f'DZ6 {ek} KASA').first()
+        if not k:
+            k = Kasa(ad=f'DZ6 {ek} KASA', doviz='TRY', bakiye=5000000)
+            db.session.add(k)
+        db.session.commit()
+        kid = k.id
+        bid = f'HR-D6{ek}'
+        if not db.session.get(CariHareket, bid):
+            db.session.add(CariHareket(
+                id=bid, cari_id=cid, cari_unvan=f'DZ6 {ek}',
+                islem_tip='Fatura (Alis)', hareket_tarihi=date(2026, 3, 1),
+                vade_tarihi=date(2026, 3, 1), borc=0, alacak=10000,
+                alacak_try=440000, doviz='EUR', kur_uygulanan=44,
+                kaynak='manuel', kapatildi=False))
+            db.session.commit()
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': cid, 'islem_tip': 'Odeme', 'doviz': 'EUR',
+        'tutar': 100000, 'borc': 100000, 'kasa_id': kid,
+        'hareket_tarihi': '2026-03-02', 'vade_tarihi': '2026-03-02',
+        'evrak_no': f'DK-{ek}', 'kur_farki_islet': True})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        o = CariHareket.query.filter_by(cari_id=cid,
+                                        islem_tip='Odeme').first()
+        return o.id, bid, cid, kid
+
+
+def _dz6_iz(cid, kid):
+    """Bu testin dokunduğu HER ŞEYİN özeti. Tek alan değişse tutmaz."""
+    from models import Kasa
+    with fa.app.app_context():
+        p = []
+        for h in CariHareket.query.filter_by(cari_id=cid).order_by(
+                CariHareket.id).all():
+            p.append(f'{h.id}|{h.borc}|{h.alacak}|{h.borc_try}|{h.doviz}|'
+                     f'{h.kur_uygulanan}|{h.kapatildi}|'
+                     f'{h.kapanis_hareket_id}|{h.aciklama}|{h.evrak_no}')
+        p.append(f'KASA|{db.session.get(Kasa, kid).bakiye}')
+        return '\n'.join(p)
+
+
+def test_dz6_vazgecince_hicbir_sey_kalmiyor():
+    """DZ6: iş artık ÖNCE YAPILIYOR, sonra onay yoksa rollback ile
+    geri alınıyor. Bu testin tek sorusu: geri alma GERÇEKTEN her şeyi
+    geri alıyor mu — kasa bakiyesi, kapanış bayrakları, silinen ve
+    yeni açılan kur farkı kayıtları dahil.
+
+    Üst üste vazgeçmek de artık artık bırakmamalı."""
+    c = istemci('admin', 'ADMIN')
+    oid, bid, cid, kid = _dz6_kur(c, 'A')
+    once = _dz6_iz(cid, kid)
+
+    r = c.put(f'/api/cari/hareket/{oid}', headers=H,
+              json={'tutar': 10000, 'aciklama': 'DUZELTILDI'})
+    assert r.status_code == 409, (r.status_code, r.get_json())
+    assert _dz6_iz(cid, kid) == once, 'vazgeçmeye rağmen bir şey kaldı'
+
+    # Üç kez daha vazgeç — birikmemeli
+    for _ in range(3):
+        c.put(f'/api/cari/hareket/{oid}', headers=H, json={'tutar': 10000})
+    assert _dz6_iz(cid, kid) == once, 'tekrarlanan vazgeçme artık bıraktı'
+
+
+def test_dz6_eslesme_yeniden_kuruluyor_kur_farki_onayda_yaziyor():
+    """DZ6: düzeltmeden sonra eşleşme yeniden kuruluyor ve doğan kur
+    farkı RAKAMIYLA onay ekranında yazıyor.
+
+    10.000 EUR 44'ten borçlanılmış, 46'dan ödenmiş → 20.000 TL fark.
+    DZ5'te bu kayıt siliniyor ve yerine yenisi gelmiyordu."""
+    from models import Kasa
+    c = istemci('admin', 'ADMIN')
+    oid, bid, cid, kid = _dz6_kur(c, 'B')
+    with fa.app.app_context():
+        assert db.session.get(CariHareket, bid).kapatildi is True, \
+            'kurulum tutmadı: borç kapanmamış'
+        assert CariHareket.query.filter_by(
+            cari_id=cid, kaynak='otomatik_kur_farki').count() == 1
+
+    r = c.put(f'/api/cari/hareket/{oid}', headers=H, json={'tutar': 10000})
+    assert r.status_code == 409, r.get_json()
+    msj = r.get_json()['mesaj']
+    # Tahmin DEGIL: bu rakam isi yapip olcerek bulundu.
+    assert '20,000.00' in msj, msj
+    # Kayit tipi veride ASCII ('Kur Farki (Borc)'), kullaniciya
+    # OKUNABILIR gosteriliyor.
+    assert 'Kur Farkı' in msj, msj
+
+    r = c.put(f'/api/cari/hareket/{oid}?onay=1', headers=H,
+              json={'tutar': 10000})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        o = db.session.get(CariHareket, oid)
+        assert float(o.borc) == 10000
+        assert float(o.borc_try) == 460000, 'TRY karşılığı ödeme kurundan'
+        assert db.session.get(CariHareket, bid).kapatildi is True, \
+            'eşleşme yeniden kurulmadı — borç açık kaldı'
+        kf = CariHareket.query.filter_by(
+            cari_id=cid, kaynak='otomatik_kur_farki').all()
+        assert len(kf) == 1, f'{len(kf)} kur farkı kaydı (1 olmalı)'
+        assert float(kf[0].borc) == 20000, float(kf[0].borc)
+        # 5.000.000 − 460.000
+        assert float(db.session.get(Kasa, kid).bakiye) == 4540000
+
+
+def test_dz6_eslesmesiz_kayitta_kur_farki_acilmiyor():
+    """DZ6: eşleşme YALNIZCA önceden varsa yeniden kuruluyor.
+
+    Kullanıcı o ödemeyi eşleştirmeden girdiyse, düzeltme bahanesiyle
+    ona hiç istemediği bir kur farkı kaydı açmak doğru olmazdı —
+    muhasebe kaydını sessizce oluşturmama kuralı (EK2) bunu da
+    kapsıyor."""
+    c = istemci('admin', 'ADMIN')
+    hid, kid, cid = _dz5_kur(c, 'G')   # TRY tahsilat, eşleştirme yok
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(
+            cari_id=cid, kaynak='otomatik_kur_farki').count() == 0
+
+    r = c.put(f'/api/cari/hareket/{hid}?onay=1', headers=H,
+              json={'tutar': 10000})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(
+            cari_id=cid, kaynak='otomatik_kur_farki').count() == 0, \
+            'istenmediği halde kur farkı kaydı açıldı'
+
+
+def test_dz6_kapsam_tahmin_eden_fonksiyon_kaldirildi():
+    """DZ6: kapsamı önceden sayan `_hareket_tutar_kapsami` kaldırıldı.
+    Sayan kod ile YAPAN kod iki ayrı yerde durdukça zamanla
+    ayrışırlar — DZ4'te aynı dersi almıştık. Ölü kod da bırakmıyoruz:
+    sonraki biri onu doğru sanıp çağırabilir."""
+    import io as _io
+    f = _io.open(os.path.join(KOK, 'flask_app.py'), encoding='utf-8').read()
+    assert 'def _hareket_tutar_kapsami' not in f, \
+        'tahmin eden fonksiyon hâlâ duruyor'
+
+
+def test_dz6_odeme_borctan_kucukse_de_eslesme_yeniden_kuruluyor():
+    """DZ6: "eşleşme vardı"nın ÜÇ işareti var ve üçü de sayılmalı.
+
+    Başta yalnız birine bakıyordum: "bu hareket bir borç kapattı mı".
+    TARAYICIDA görüldü — testler kaçırmıştı, çünkü ikisi de ödemenin
+    borçtan BÜYÜK olduğu durumu kuruyordu:
+
+        10.000 EUR borç, 9.900 EUR ödeme (44 → 46 kur)
+
+    Ödeme küçük olduğu için kapanan taraf BORÇ değil ÖDEMEnin
+    kendisi oluyor; borç açık kalıyor. Yani "kapattığı hareket"
+    sayısı sıfır — ama kur farkı kaydı gayet vardı ve düzeltmede
+    siliniyordu. Yerine yenisi gelmiyordu.
+
+    Doğrusu: ödemenin kendi kapanışı da bir eşleşme işaretidir."""
+    from models import Cari, Kasa, DovizKur
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        if not db.session.get(Cari, 'TD6K'):
+            db.session.add(Cari(id='TD6K', unvan='DZ6 K',
+                                cari_tip='Tedarikçi'))
+        for _t, _k in ((date(2026, 3, 1), 44), (date(2026, 3, 2), 46)):
+            if not DovizKur.query.filter_by(doviz='EUR', tarih=_t).first():
+                db.session.add(DovizKur(doviz='EUR', tarih=_t,
+                                        alis=_k, satis=_k))
+        k = Kasa.query.filter_by(ad='DZ6 K KASA').first()
+        if not k:
+            k = Kasa(ad='DZ6 K KASA', doviz='TRY', bakiye=5000000)
+            db.session.add(k)
+        db.session.commit()
+        kid = k.id
+        if not db.session.get(CariHareket, 'HR-D6K'):
+            db.session.add(CariHareket(
+                id='HR-D6K', cari_id='TD6K', cari_unvan='DZ6 K',
+                islem_tip='Fatura (Alis)', hareket_tarihi=date(2026, 3, 1),
+                vade_tarihi=date(2026, 3, 1), borc=0, alacak=10000,
+                alacak_try=440000, doviz='EUR', kur_uygulanan=44,
+                kaynak='manuel', kapatildi=False))
+            db.session.commit()
+
+    # ODEME BORCTAN KUCUK: 9.900 < 10.000
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'TD6K', 'islem_tip': 'Odeme', 'doviz': 'EUR',
+        'tutar': 9900, 'borc': 9900, 'kasa_id': kid,
+        'hareket_tarihi': '2026-03-02', 'vade_tarihi': '2026-03-02',
+        'evrak_no': 'DK-K', 'kur_farki_islet': True})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        o = CariHareket.query.filter_by(cari_id='TD6K',
+                                        islem_tip='Odeme').first()
+        oid = o.id
+        # Kurulumun ta kendisi: KAPANAN taraf ODEME, borc acik
+        assert o.kapatildi is True, 'kurulum tutmadı: ödeme kapanmamış'
+        assert db.session.get(CariHareket, 'HR-D6K').kapatildi is False, \
+            'kurulum tutmadı: kısmi ödeme borcu kapatmış'
+        assert CariHareket.query.filter_by(
+            cari_id='TD6K', kaynak='otomatik_kur_farki').count() == 1
+
+    r = c.put(f'/api/cari/hareket/{oid}', headers=H, json={'tutar': 10000})
+    assert r.status_code == 409, r.get_json()
+    msj = r.get_json()['mesaj']
+    assert 'siliniyor' in msj, msj
+    assert 'oluşuyor' in msj, f'yerine yenisi gelmiyor: {msj}'
+    # Kayit tipi kullaniciya OKUNABILIR yaziliyor ('Kur Farki' degil)
+    assert 'Kur Farkı' in msj, msj
+
+    r = c.put(f'/api/cari/hareket/{oid}?onay=1', headers=H,
+              json={'tutar': 10000})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        kf = CariHareket.query.filter_by(
+            cari_id='TD6K', kaynak='otomatik_kur_farki').all()
+        assert len(kf) == 1, f'{len(kf)} kur farkı kaydı (1 olmalı)'
+        # 10.000 EUR tam eslesti: 10.000 × (46 − 44) = 20.000 TRY
+        assert float((kf[0].borc or 0) + (kf[0].alacak or 0)) == 20000
+
+
+# ══════════════════════════════════════════════════════════════════
+#  VT1 · BELGE TARİHİ / VADE TARİHİ
+#
+#  Sistemde iki tarih alanı vardı ve ikisi de yanlış yerde duruyordu:
+#  vade HER harekette ZORUNLU, belge tarihi opsiyonel. Oysa kuru
+#  belirleyen belge tarihi; vade bir TAHSİLATTA anlamsız — para
+#  zaten el değiştirmiş.
+#
+#  `belge_tarihi` diye bir kolon zaten YOK; o sadece ekrandaki
+#  etiket, altındaki alan `hareket_tarihi`.
+# ══════════════════════════════════════════════════════════════════
+
+def _vt1_cari(ek, tip='Müşteri'):
+    from models import Cari, Kasa
+    cid = f'VT{ek}'
+    with fa.app.app_context():
+        if not db.session.get(Cari, cid):
+            db.session.add(Cari(id=cid, unvan=f'VT1 {ek}', cari_tip=tip))
+        k = Kasa.query.filter_by(ad=f'VT1 {ek} KASA').first()
+        if not k:
+            k = Kasa(ad=f'VT1 {ek} KASA', doviz='TRY', bakiye=1000000)
+            db.session.add(k)
+        db.session.commit()
+        return cid, k.id
+
+
+def test_vt1_tahsilatta_vade_zorunlu_degil_ve_yazilmiyor():
+    """VT1: vade her hareket için zorunluydu — `Cari, işlem tipi ve
+    vade tarihi zorunlu`. Bir tahsilatın vadesi olmaz: para gelmiş.
+
+    Gönderilse bile yazılmıyor, ama SESSİZCE yutulmuyor: yanıt
+    bunu söylüyor."""
+    c = istemci('admin', 'ADMIN')
+    cid, kid = _vt1_cari('A')
+
+    # 1) VADESİZ kabul ediliyor
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': cid, 'islem_tip': 'Tahsilat', 'doviz': 'TRY',
+        'tutar': 1000, 'alacak': 1000, 'kasa_id': kid,
+        'hareket_tarihi': '2026-03-05', 'evrak_no': 'VT-A1'})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(evrak_no='VT-A1').first()
+        assert h.vade_tarihi is None
+        assert h.hareket_tarihi == date(2026, 3, 5)
+
+    # 2) GÖNDERİLSE BİLE yazılmıyor — ve söyleniyor
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': cid, 'islem_tip': 'Tahsilat', 'doviz': 'TRY',
+        'tutar': 500, 'alacak': 500, 'kasa_id': kid,
+        'hareket_tarihi': '2026-03-05', 'vade_tarihi': '2026-09-09',
+        'evrak_no': 'VT-A2'})
+    assert r.status_code == 200, r.get_json()
+    assert 'Vade tarihi yazılmadı' in r.get_json()['mesaj'], r.get_json()
+    with fa.app.app_context():
+        assert CariHareket.query.filter_by(
+            evrak_no='VT-A2').first().vade_tarihi is None
+
+
+def test_vt1_faturada_vade_hala_zorunlu():
+    """VT1: gevşetme her tipi kapsamıyor. Fatura bir BORÇ doğurur;
+    yaşlandırma ve gecikme takibi onun vadesinden beslenir."""
+    c = istemci('admin', 'ADMIN')
+    cid, _ = _vt1_cari('B')
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': cid, 'islem_tip': 'Fatura (Satis)', 'doviz': 'TRY',
+        'tutar': 1000, 'borc': 1000, 'hareket_tarihi': '2026-03-05',
+        'evrak_no': 'VT-B1'})
+    assert r.status_code == 400, r.get_json()
+    assert 'vade' in r.get_json()['mesaj'].lower()
+
+
+def test_vt1_nakit_hareketi_yaklasan_listesine_girmiyor():
+    """VT1: form vadeyi BUGÜNLE dolduruyordu, sorgu da yalnız
+    borç/alacak işaretine bakıyordu. Sonuç ölçüldü: bugün TAHSİL
+    EDİLMİŞ ve kasaya girmiş para, "yaklaşan ödemeler" — yani
+    önümüzdeki 30 günde ÖDEYECEĞİMİZ paralar — listesinde
+    duruyordu.
+
+    İki koruma var: vade artık o tiplere yazılmıyor (yeni kayıt),
+    ve sorgu işlem tipine de bakıyor (ESKİ kayıtlar)."""
+    from models import Cari
+    c = istemci('admin', 'ADMIN')
+    cid, kid = _vt1_cari('C')
+    # ESKİ kayıt taklidi: vadesi BUGÜN olan bir tahsilat
+    with fa.app.app_context():
+        if not db.session.get(CariHareket, 'HR-VT1C'):
+            db.session.add(CariHareket(
+                id='HR-VT1C', cari_id=cid, cari_unvan='VT1 C',
+                islem_tip='Tahsilat', hareket_tarihi=date.today(),
+                vade_tarihi=date.today(), borc=0, alacak=9999,
+                alacak_try=9999, doviz='TRY', kur_uygulanan=1,
+                kaynak='manuel'))
+            db.session.commit()
+
+    r = c.get('/api/cari/finansal_ozet', headers=H)
+    assert r.status_code == 200, r.status_code
+    d = r.get_json()
+    tutarlar = [x.get('tutar') for x in (d.get('yaklasan_odemeler') or [])]
+    assert 9999 not in tutarlar, \
+        f'tahsil edilmiş para ödenecekler listesinde: {tutarlar}'
+
+
+def test_vt1_ucuncu_dovizli_kasada_kur_belge_tarihinden():
+    """VT1: hareketin kendi TL karşılığı BELGE tarihinden, bağlı
+    kasa hareketi ise VADE tarihinden çevriliyordu. Aynı ödeme iki
+    ayrı günün kuruyla TL'ye çevriliyordu.
+
+    TL kasada görünmüyor (oradaki dal hazır TL karşılığını
+    kullanıyor); kasa ÜÇÜNCÜ bir dövizdeyse ortaya çıkıyor.
+
+    ÖLÇÜLDÜ: 1.000 USD, belge günü 40 / vade günü 50; EUR kasa,
+    belge günü 44 / vade günü 55.
+        doğru : 40.000 / 44 = 909,09 EUR
+        olan  : 40.000 / 55 = 727,27 EUR"""
+    from models import Cari, Kasa, DovizKur
+    c = istemci('admin', 'ADMIN')
+    _b, _v = date(2026, 4, 1), date(2026, 5, 1)
+    with fa.app.app_context():
+        if not db.session.get(Cari, 'VTD'):
+            db.session.add(Cari(id='VTD', unvan='VT1 D',
+                                cari_tip='Müşteri'))
+        for _d, _t, _k in (('USD', _b, 40), ('USD', _v, 50),
+                           ('EUR', _b, 44), ('EUR', _v, 55)):
+            if not DovizKur.query.filter_by(doviz=_d, tarih=_t).first():
+                db.session.add(DovizKur(doviz=_d, tarih=_t,
+                                        alis=_k, satis=_k))
+        k = Kasa.query.filter_by(ad='VT1 D EUR').first()
+        if not k:
+            k = Kasa(ad='VT1 D EUR', doviz='EUR', bakiye=0)
+            db.session.add(k)
+        db.session.commit()
+        kid = k.id
+
+    # Acilis Bakiyesi: vadesi ANLAMLI olan bir tip, yani vade
+    # gercekten yazilir — ayrisma ancak boyle olculebilir.
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'VTD', 'islem_tip': 'Tahsilat', 'doviz': 'USD',
+        'tutar': 1000, 'alacak': 1000, 'kasa_id': kid,
+        'hareket_tarihi': _b.isoformat(),
+        'vade_tarihi': _v.isoformat(), 'evrak_no': 'VT-D1'})
+    assert r.status_code == 200, r.get_json()
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(evrak_no='VT-D1').first()
+        assert float(h.alacak_try) == 40000, float(h.alacak_try)
+        kh = KasaHareket.query.filter_by(
+            baglanti_tip='cari_hareket', baglanti_id=h.id).first()
+        assert kh is not None, 'kasa hareketi yok'
+        assert abs(float(kh.tutar) - 909.09) < 0.02, \
+            f'{kh.tutar} — vade günü kuru kullanılmış olmalı değil'
+
+
+def test_vt1_vadesiz_fatura_yaslaniyor():
+    """VT1: gecikme hesabı `if f.vade_tarihi and f.vade_tarihi <
+    bugun` idi — vade boşsa koşul hiç çalışmıyor, gecikme SIFIR
+    dönüyordu.
+
+    ÖLÇÜLDÜ, 120 gün önce kesilmiş iki fatura:
+        vadesi tanımlı → 90 gün   ✓
+        vadesi boş     →  0 gün   ✗   (tahsilat takibinden düşüyor)
+
+    Vade yoksa gecikme FATURA TARİHİNDEN sayılıyor ve bunun bir
+    varsayım olduğu `vadesiz` ile söyleniyor."""
+    from datetime import timedelta as _td
+    from models import Cari, Fatura
+    c = istemci('admin', 'ADMIN')
+    _kesim = date.today() - _td(days=120)
+    with fa.app.app_context():
+        if not db.session.get(Cari, 'VTE'):
+            db.session.add(Cari(id='VTE', unvan='VT1 E',
+                                cari_tip='Müşteri'))
+        for _fid, _vade in (('FT-VTE1', None),
+                            ('FT-VTE2', _kesim + _td(days=30))):
+            if not db.session.get(Fatura, _fid):
+                db.session.add(Fatura(
+                    id=_fid, fatura_no=_fid, musteri='VT1 E',
+                    cari_id='VTE', toplam=10000, doviz='USD',
+                    durum='Kesildi', yon='satis',
+                    fatura_tarihi=_kesim, vade_tarihi=_vade))
+        db.session.commit()
+
+    r = c.get('/api/cari/VTE/acik_faturalar?yon=satis', headers=H)
+    assert r.status_code == 200, r.status_code
+    fs = {x['fatura_no']: x for x in r.get_json()['faturalar']}
+    assert fs['FT-VTE1']['gecikme_gun'] == 120, fs['FT-VTE1']
+    assert fs['FT-VTE1']['vadesiz'] is True
+    assert fs['FT-VTE2']['gecikme_gun'] == 90, fs['FT-VTE2']
+    assert fs['FT-VTE2']['vadesiz'] is False
+
+
+def test_vt1_olu_tahsilat_paneli_silindi():
+    """VT1: "Tahsilat Gir" paneli ölü koddu — `tahModal`ı açan
+    hiçbir şey yoktu. BF1 ile iki form birleştirilmiş, "Tahsilat /
+    Ödeme" düğmesi o günden beri hareket formunu açıyordu.
+
+    Duran ölü bir form zararsız değil: içinde iki gerçek hata vardı
+    ve ben onları CANLI sanıp rapor ettim. Tarih alanı
+    `vade_tarihi` olarak gidiyor ve `hareket_tarihi` hiç
+    gönderilmiyordu; döviz de `'USD'` sabit yazılıydı.
+
+    İki düğme tek panel açıyordu; biri kaldırıldı, işlem tipini
+    hazır seçme işi `hareketAc`a taşındı."""
+    import io as _io
+    m = _io.open(os.path.join(KOK, 'templates/cari.html'),
+                 encoding='utf-8').read()
+    for _olu in ('id="tahModal"', 'function tahsilatKaydet',
+                 'function faturaSecildi', "doviz: 'USD',"):
+        assert _olu not in m, f'ölü kod duruyor: {_olu}'
+    # ÇAĞRI biçimini arıyoruz, adı geçen açıklamaları değil:
+    # `onclick="..."` ve `fn(` yalnız gerçek kodda böyle yazılır.
+    assert 'onclick="tahsilatAc(' not in m, \
+        'kaldırılan düğme hâlâ bir düğmeye bağlı'
+    assert ' tahsilatAc(c.id)' not in m, 'kısayol hâlâ onu çağırıyor'
+    assert 'function tahsilatAc' not in m, 'fonksiyon geri gelmiş'
+    # Tek kapı: hareket formu
+    assert m.count('onclick="hareketAc(') == 1, \
+        'hareket düğmesi tek olmalı'
+
+
+def test_ma4_alt_bar_kendi_zeminini_tasiyor():
+    """MA4: alt bar (Vazgeç/Kaydet) `.modal`in beyaz zemini üzerinde
+    duruyordu — zemini kendisinin değil, kapsayıcısınındı. Gövde bir
+    şekilde kapsayıcıyı aşınca alt bar ZEMİNSİZ kalıyor ve panelden
+    kopmuş görünüyor. Kendi zeminini ve alt köşe yuvarlamasını
+    taşıyınca, dizilim ne olursa olsun panelin parçası kalıyor.
+
+    `flex:0 0 auto` ayrı bir koruma: esnek sütunda alt bar asla
+    ezilmesin, önce gövde küçültülsün."""
+    import glob
+    import io as _io
+    import re
+    eksik = []
+    for yol in sorted(glob.glob('templates/*.html')):
+        g = _io.open(yol, encoding='utf-8').read()
+        for k in re.findall(r'\.modal-alt\{[^}]*\}', g):
+            if ('background:' not in k or 'border-radius:0 0' not in k
+                    or 'flex:0 0 auto' not in k):
+                eksik.append((yol, k[:70]))
+    assert not eksik, f'alt bar zeminsiz kalabilir: {eksik}'

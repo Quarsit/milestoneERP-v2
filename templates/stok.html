@@ -60,7 +60,12 @@
   .modal-bas{padding:18px 22px 0}
   .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
   .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
-  .modal-gov{padding:18px 22px;overflow-y:auto}
+  /* MA3: `min-height:0` OLMADAN esnek kutu cocugu kendi iceriginden
+     kisa olamaz; `overflow-y:auto` hic devreye girmez ve uzun bir
+     modalda ALT BAR (Vazgec/Kaydet) disari itilir. Chromium bazi
+     durumlarda affediyor, Firefox affetmiyor. Sayfanin kendi
+     kurali base.html'inkini EZDIGI icin her sayfada ayri yaziyor. */
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr} .f4{grid-template-columns:1fr 1fr 1fr 1fr}
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
@@ -69,7 +74,16 @@
   .form-alan input[readonly]{background:var(--notr-bg);font-family:var(--mono);font-weight:600}
   .onay{display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:12px}
   .onay input{width:auto}
-  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
   .ozet-kutu{background:var(--notr-bg);border-radius:var(--r-kucuk);padding:12px 14px;display:flex;gap:22px;flex-wrap:wrap;font-size:.85rem}
   .ozet-kutu b{font-family:var(--mono)}
@@ -293,6 +307,15 @@
           </label>
         </div>
       </div>
+      <!-- MA1: açıklama alanı modelde vardı, her yerde okunuyordu,
+           yazacak kutu yoktu. MA2: maliyet sayfasıyla AYNI biçim —
+           tek satırlık input, gridin kendi stil kuralına giriyor.
+           Aynı alanın iki formda iki ayrı görünmesi, hangisinden
+           girildiğini sormaya başlatırdı. -->
+      <div class="form-alan"><label>Açıklama</label>
+        <input id="malAciklama" maxlength="500" data-buyuk-harf="hayir"
+               placeholder="Bu gideri sonra tanımanı sağlayacak not (opsiyonel)">
+      </div>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="maliyetKapat()">Vazgeç</button>
@@ -329,6 +352,47 @@
           </select>
         </div>
         <div class="form-alan"><label>Alış Fiyatı</label><input id="duzFiyat" type="number" step="0.01"></div>
+      </div>
+      <!-- SD1: tutar vardi, PARA BIRIMI yoktu. "270" tek basina bir sey
+           soylemiyor; stok EUR alinmisken ekran USD gibi okunuyordu.
+           Fiyat birimi de ayni sebeple burada: 270/ton ile 270/m3 ayri
+           maliyet. Sunucu ikisini de zaten kabul ediyordu. -->
+      <!-- DZ2 · ÖLÇÜLER
+           Ölçü alanları düzenleme formunda HİÇ yoktu: yanlış
+           girilmiş bir tonaj ya da metraj düzeltilemiyordu. Oysa
+           ölçü maliyetin temeli — alış bedeli `alis_fiyati × ölçü`.
+           BLOK ton/m³ ile, PLAKA/EBATLI m² ile ölçülüyor; alanlar
+           tipe göre gösteriliyor. -->
+      <div class="form-satir f3" id="duzOlcuSatir1">
+        <div class="form-alan"><label>Boy (cm)</label>
+          <input id="duzBoy" type="number" step="0.1" min="0"></div>
+        <div class="form-alan"><label>Yükseklik (cm)</label>
+          <input id="duzYukseklik" type="number" step="0.1" min="0"></div>
+        <div class="form-alan" id="duzEnAlan"><label>En (cm)</label>
+          <input id="duzEn" type="number" step="0.1" min="0"></div>
+        <div class="form-alan" id="duzKalinlikAlan"><label>Kalınlık (cm)</label>
+          <input id="duzKalinlik" type="number" step="0.1" min="0"></div>
+      </div>
+      <div class="form-satir f2" id="duzOlcuSatir2">
+        <div class="form-alan" id="duzHacimAlan"><label>Hacim (m³)</label>
+          <input id="duzHacim" type="number" step="0.001" min="0"></div>
+        <div class="form-alan" id="duzTonajAlan"><label>Tonaj</label>
+          <input id="duzTonaj" type="number" step="0.001" min="0"></div>
+        <div class="form-alan" id="duzMetrajAlan"><label>Metraj (m²)</label>
+          <input id="duzMetraj" type="number" step="0.001" min="0"></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Fiyat Birimi</label>
+          <select id="duzFiyatBirim">
+            <option value="ton">/ton</option>
+            <option value="m3">/m³</option>
+            <option value="m2">/m²</option>
+            <option value="sqft">/sqft</option>
+          </select>
+        </div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="duzDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
       </div>
       <div class="form-alan"><label>Açıklama</label>
         <textarea id="duzAciklama" rows="2" placeholder="Stoğa ait notlar" style="width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;resize:vertical"></textarea>
@@ -2785,18 +2849,79 @@ function duzenleAc(id) {
   document.getElementById('duzUretici').value = s.uretici || '';
   document.getElementById('duzBlokNo').value = s.blok_no || s.kasa_no || '';
   document.getElementById('duzKonum').value = s.konum || '';
-  document.getElementById('duzDurum').value = s.durum || 'Serbest';
+  durumSecenekleriniKur(s.durum);
   document.getElementById('duzFiyat').value = s.alis_fiyati || '';
+  document.getElementById('duzFiyatBirim').value = s.fiyat_birim || (s.tip === 'BLOK' ? 'ton' : 'm2');
+  document.getElementById('duzDoviz').value = (s.doviz || 'USD').toUpperCase();
   document.getElementById('duzAciklama').value = s.aciklama || '';
   document.getElementById('duzNoLabel').textContent = s.tip === 'EBATLI' ? 'Kasa No' : 'Blok No';
   const dOz = document.getElementById('duzOzellikAlan');
   if (dOz) dOz.style.display = (s.tip === 'BLOK') ? 'none' : '';
+  /* DZ2: olculeri doldur ve TIPE GORE goster. BLOK ton/m3 ile,
+     PLAKA/EBATLI m2 ile olculuyor; PLAKA'ya tonaj kutusu koymak
+     alani yalan soyletirdi. */
+  olcuDoldur(s);
   listeyeBagla('duzCins', 'cins');
   listeyeBagla('duzOzellik', 'ozellik');
   ureticiOnerileriDoldur();
   document.getElementById('duzModal').classList.add('acik');
 }
 function duzenleKapat() { document.getElementById('duzModal').classList.remove('acik'); }
+
+/* DZ2 · ÖLÇÜ KUTULARI
+   Hangi ölçü hangi tipte anlamlı:
+     BLOK          boy · yükseklik · en · hacim(m³) · tonaj
+     PLAKA/EBATLI  boy · yükseklik · kalınlık · metraj(m²)
+   Anlamsız olanı gizliyoruz; boş bir "tonaj" kutusu PLAKA'da
+   doldurulmayı bekler gibi durur ve yanlış veriye davet olur. */
+function olcuDoldur(s) {
+  const blok = (s.tip === 'BLOK');
+  const koy = (id, deger) => {
+    const el = document.getElementById(id);
+    if (el) el.value = (deger === 0 || deger) ? deger : '';
+  };
+  koy('duzBoy', s.boy); koy('duzYukseklik', s.yukseklik);
+  koy('duzEn', s.en); koy('duzKalinlik', s.kalinlik);
+  /* DIKKAT: liste ucu bu ikisini KISA adla veriyor —
+     hacim_m3 -> `hacim`, metraj_m2 -> `m2`. Uzun adi da
+     yokluyoruz ki baska bir uc noktadan gelen kayit da dolsun. */
+  koy('duzHacim', s.hacim_m3 !== undefined ? s.hacim_m3 : s.hacim);
+  koy('duzTonaj', s.tonaj);
+  koy('duzMetraj', s.metraj_m2 !== undefined ? s.metraj_m2 : s.m2);
+  const goster = (id, acik) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = acik ? '' : 'none';
+  };
+  goster('duzEnAlan', blok);
+  goster('duzKalinlikAlan', !blok);
+  goster('duzHacimAlan', blok);
+  goster('duzTonajAlan', blok);
+  goster('duzMetrajAlan', !blok);
+}
+
+/* SD1 · DURUM KUTUSU — mevcut durum listede yoksa YUTULUYORDU.
+   Elle secilebilen dort durum var; ama stogun durumu bunlardan biri
+   olmak zorunda degil: kesilmis blok 'Kesildi', sevk edilmis mal
+   'Sevkedildi' oluyor. <select>.value listede olmayan bir deger
+   alinca sessizce BOSALIYOR ve Kaydet o bosluğu veritabanina
+   yaziyordu — kesilmis blok "Depoda" gorunuyor, silme korumalari
+   (Satildi/Rezerve/Teslim Edildi) duruma baktigi icin dusuyordu.
+
+   Artik tanimadigimiz durum listenin basina EKLENIYOR ve secili
+   geliyor: Kaydet'e basmak onu oldugu gibi birakiyor. Elle dort
+   duruma gecis hala serbest — kapatmak degil, kaza ile silmemek
+   istedigimiz. */
+const DUZ_ELLE_DURUMLAR = ['Serbest', 'Rezerve', 'Satildi', 'Hasarlı'];
+function durumSecenekleriniKur(mevcut) {
+  const sec = document.getElementById('duzDurum');
+  const d = (mevcut || '').trim();
+  let html = DUZ_ELLE_DURUMLAR.map(x => `<option value="${kacar(x)}">${kacar(x)}</option>`).join('');
+  if (d && !DUZ_ELLE_DURUMLAR.includes(d)) {
+    html = `<option value="${kacar(d)}">${kacar(d)} (sistem)</option>` + html;
+  }
+  sec.innerHTML = html;
+  sec.value = d || 'Serbest';
+}
 
 /* Üretici önerileri — Cari'deki Tedarikçi/Üretici kayıtlarından */
 async function ureticiOnerileriDoldur() {
@@ -2808,6 +2933,22 @@ async function ureticiOnerileriDoldur() {
   }
   const dl = document.getElementById('dl-ureticiler');
   if (dl) dl.innerHTML = URETICILER.map(c => `<option value="${kacar(c.unvan)}">`).join('');
+}
+
+/* DZ2: yalniz DOLU ve GORUNUR olcu kutularini gonder. */
+function olcuGovde() {
+  const es = {duzBoy: 'boy', duzYukseklik: 'yukseklik', duzEn: 'en',
+              duzKalinlik: 'kalinlik', duzHacim: 'hacim_m3',
+              duzTonaj: 'tonaj', duzMetraj: 'metraj_m2'};
+  const g = {};
+  for (const [id, alan] of Object.entries(es)) {
+    const el = document.getElementById(id);
+    if (!el || el.value === '') continue;
+    const kap = el.closest('.form-alan');
+    if (kap && kap.style.display === 'none') continue;
+    g[alan] = parseFloat(el.value);
+  }
+  return g;
 }
 
 async function duzenleKaydet() {
@@ -2827,6 +2968,12 @@ async function duzenleKaydet() {
         konum: document.getElementById('duzKonum').value,
         durum: document.getElementById('duzDurum').value,
         alis_fiyati: parseFloat(document.getElementById('duzFiyat').value) || null,
+        fiyat_birim: document.getElementById('duzFiyatBirim').value,
+        doviz: document.getElementById('duzDoviz').value,
+        /* DZ2: olculer. Bos birakilan alan GONDERILMIYOR —
+           sunucu bos degeri atliyor, boylece "temizlemek"
+           istemeden sifirlamak mumkun degil. */
+        ...olcuGovde(),
         aciklama: document.getElementById('duzAciklama').value
       })
     });
@@ -3016,6 +3163,7 @@ async function maliyetAc(id, tip, no, cins) {
     `${no || id}${cins ? ' · ' + cins : ''} · ${tip}`;
   document.getElementById('malTutar').value = '';
   document.getElementById('malFaturaNo').value = '';
+  document.getElementById('malAciklama').value = '';
   document.getElementById('malKdvSec').value = '20';
   document.getElementById('malKdv').value = 20;
   document.getElementById('malKdvSerbest').style.display = 'none';
@@ -3058,6 +3206,7 @@ async function maliyetKaydet() {
         kdv_oran: malKdvOraniAl(),
         kdv_dahil_mi: document.getElementById('malKdvDahil').checked,
         fatura_no: document.getElementById('malFaturaNo').value,
+        aciklama: document.getElementById('malAciklama').value.trim(),
         cari_id: document.getElementById('malCari').value || null
       })
     });

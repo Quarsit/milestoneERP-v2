@@ -35,8 +35,22 @@
   .modal-bas{padding:18px 22px 0}
   .modal-bas h3{font-size:1.05rem;font-weight:700}
   .modal-bas p{font-size:.8rem;color:var(--soluk);margin-top:3px}
-  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1}
-  .modal-alt{padding:14px 22px;border-top:1px solid var(--cizgi);display:flex;justify-content:flex-end;gap:9px}
+  /* MA3: `min-height:0` OLMADAN esnek kutu cocugu kendi iceriginden
+     kisa olamaz; `overflow-y:auto` hic devreye girmez ve uzun bir
+     modalda ALT BAR (Vazgec/Kaydet) disari itilir. Chromium bazi
+     durumlarda affediyor, Firefox affetmiyor. Sayfanin kendi
+     kurali base.html'inkini EZDIGI icin her sayfada ayri yaziyor. */
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1;flex:1 1 auto;min-height:0}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  .modal-alt{padding:14px 22px;border-top:1px solid var(--cizgi);display:flex;justify-content:flex-end;gap:9px;background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .form-satir{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
   .form-satir.f3{grid-template-columns:1fr 1fr 1fr}
   .form-alan label{display:block;font-size:.76rem;font-weight:600;color:var(--soluk);margin-bottom:4px}

@@ -105,7 +105,12 @@
   .modal-bas{padding:18px 22px 0}
   .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
   .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
-  .modal-gov{padding:18px 22px;overflow-y:auto}
+  /* MA3: `min-height:0` OLMADAN esnek kutu cocugu kendi iceriginden
+     kisa olamaz; `overflow-y:auto` hic devreye girmez ve uzun bir
+     modalda ALT BAR (Vazgec/Kaydet) disari itilir. Chromium bazi
+     durumlarda affediyor, Firefox affetmiyor. Sayfanin kendi
+     kurali base.html'inkini EZDIGI icin her sayfada ayri yaziyor. */
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr} .f4{grid-template-columns:1fr 1fr 1fr 1fr}
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
@@ -124,7 +129,16 @@
   .ekle-btn{border:1px solid var(--verde);background:var(--verde-acik);color:var(--verde);border-radius:var(--r-kucuk);padding:9px 14px;font-weight:600;font-size:.85rem}
   .toplam-kutu{background:var(--notr-bg);border-radius:var(--r-kucuk);padding:12px 14px;display:flex;align-items:center;justify-content:space-between}
   .toplam-kutu .t{font-family:var(--baslik);font-weight:800;font-size:1.3rem}
-  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
 </style>
 {% endblock %}

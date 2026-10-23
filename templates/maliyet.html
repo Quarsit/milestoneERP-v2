@@ -49,7 +49,12 @@
   .modal-bas{padding:18px 22px 0}
   .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
   .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
-  .modal-gov{padding:18px 22px;overflow-y:auto}
+  /* MA3: `min-height:0` OLMADAN bir esnek kutu cocugu kendi
+     icerigininden kisa olamaz — `overflow-y:auto` o yuzden hic
+     devreye girmez, govde buyur ve ALT BAR (Vazgec/Kaydet)
+     modalin disina itilir. Chromium bazi durumlarda affediyor,
+     Firefox affetmiyor. Dogrusu acikca yazmak. */
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr}
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
@@ -63,7 +68,28 @@
   .hedef-satir.secili{background:var(--verde-acik)}
   .hedef-satir input{width:auto;margin:0}
   .hedef-satir .m{margin-left:auto;font-family:var(--mono);font-size:.78rem;color:var(--soluk)}
-  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  /* MA7: MA4'ün zemini GERİ KONDU — MA6 onu bu dosyadan almıştı ama
+     diğer 16 şablonda duruyor; MA4'ün testi de duruyor ve yalnız bu
+     dosyayı yakalıyordu.
+
+     ÖLÇÜLDÜ: zemin `var(--yuzey)`, yani panelin KENDİ rengi. Paneli
+     iki halde de çektim — görüntü aynı, fark yalnız köşelerdeki
+     yumuşatma. Yani bu satır görünmüyor; bir güvenlik ağı.
+
+     "Alt bar panelden kopmuş görünüyor" dediğin şey bu zemin DEĞİLDİ:
+     MA5'te bulduğumuz kaçak `</div>` barı panelin dışına atıyordu,
+     zemin de kopuk barı görünür kılıyordu. Nesting düzeldi, zemin
+     zararsız. */
+  .modal-alt{padding:10px 22px 12px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
   .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--verde-acik);color:var(--verde)}
 </style>
@@ -209,8 +235,16 @@
       <p>Maliyeti bir stoğa, siparişe veya sevkiyata bağla — birim maliyete otomatik dağıtılır.</p>
     </div>
     <div class="modal-gov">
-      <div class="not" id="mNot">Tutar, bağlanan kayıtların birim maliyetine eklenir.</div>
-      <div class="form-satir f2">
+      <!-- MA3 · İKİ ÜÇLÜ SATIR
+           Süzgeçler eskiden tek bir esnek satırdaydı ve 620px'lik
+           modalda DÖRT kutu sığmayıp alt satıra sarıyordu: seçici
+           bloğu tek başına 307px tutuyor, gövdenin yarısını yiyor,
+           formun son alanlarını katlamanın altına itiyordu.
+           Artık iki üçlü ızgara satırı — sarma yok, iki satır
+           kazanıldı ve her kutunun artık bir ETİKETİ var
+           (önce ne olduklarını yalnız "— üretici (tümü) —" gibi
+           seçenek metinleri söylüyordu). -->
+      <div class="form-satir f3">
         <div class="form-alan"><label>Maliyet Tipi</label>
           <select id="fTip">
             <option>Nakliye (Ocak-Fabrika)</option>
@@ -229,21 +263,29 @@
             <option value="Sevkiyat">Sevkiyat</option>
           </select>
         </div>
+        <div class="form-alan" id="fAlanUretici"><label>Üretici</label>
+          <select id="hUretici" onchange="hedefSuz()"></select>
+        </div>
+      </div>
+
+      <!-- SÜZGEÇ + ÇOKLU SEÇİM (MS1).
+           Binlerce stok kaydında aranan ürünü kaydırarak bulmak
+           zahmetliydi. Süzgeçler listeyi daraltır; birden çok
+           kayıt seçilebilir ve tutar aralarında eşit bölünür. -->
+      <div class="form-satir f3">
+        <div class="form-alan"><label id="hedefBaslik">Bağlanacak kayıt</label>
+          <input id="hAra" placeholder="cins, blok no, kayıt no…"
+                 oninput="hedefSuz()" data-buyuk-harf="hayir">
+        </div>
+        <div class="form-alan" id="fAlanCins"><label>Cins</label>
+          <select id="hCins" onchange="hedefSuz()"></select>
+        </div>
+        <div class="form-alan" id="fAlanBlok"><label>Blok No</label>
+          <select id="hBlok" onchange="hedefSuz()"></select>
+        </div>
       </div>
 
       <div class="form-alan" style="margin-bottom:10px">
-        <label id="hedefBaslik">Bağlanacak kayıt</label>
-        <!-- SÜZGEÇ + ÇOKLU SEÇİM (MS1).
-             Binlerce stok kaydında aranan ürünü kaydırarak bulmak
-             zahmetliydi. Süzgeçler listeyi daraltır; birden çok
-             kayıt seçilebilir ve tutar aralarında eşit bölünür. -->
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
-          <input id="hAra" placeholder="Ara — cins, blok no, kayıt no…"
-                 oninput="hedefSuz()" style="flex:1;min-width:150px">
-          <select id="hUretici" onchange="hedefSuz()" style="max-width:170px"></select>
-          <select id="hCins" onchange="hedefSuz()" style="max-width:140px"></select>
-          <select id="hBlok" onchange="hedefSuz()" style="max-width:130px"></select>
-        </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:5px">
           <!-- "Tümünü seç" = SÜZGEÇTEN GEÇEN tüm kayıtlar.
                Süzgeç yoksa gerçekten hepsi; varsa listelenenler. -->
@@ -292,6 +334,21 @@
       <div class="form-satir f2">
         <div class="form-alan"><label>Fatura No</label><input id="fFaturaNo" placeholder="opsiyonel"></div>
         <div class="form-alan"><label>Tedarikçi (cari)</label><select id="fCari"><option value="">— yok —</option></select></div>
+      </div>
+      <!-- MA1 · AÇIKLAMA
+           Alan modelde vardı ve HER YERDE okunuyordu — detay
+           panelinde, aramada, dışa aktarmada, ortaklık ekstresinde —
+           ama yazılacak bir kutu yoktu: hep boş kalıyordu.
+
+           MA2: önce iki satırlık textarea'ydı ve satır içi stille
+           boyanmıştı — gridin öbür alanlarıyla aynı kurala girmediği
+           için yabancı duruyordu, üstelik modalı 28px uzatıp son
+           alanları kısa ekranda katlamanın altına itiyordu. Artık
+           tek satırlık input: aynı yükseklik, aynı kenarlık, aynı
+           odak halkası. 500 karakter hâlâ sığıyor, kutu kaydırıyor. -->
+      <div class="form-alan"><label>Açıklama</label>
+        <input id="fAciklama" maxlength="500" data-buyuk-harf="hayir"
+               placeholder="Bu gideri sonra tanımanı sağlayacak not (opsiyonel)">
       </div>
     </div>
     <div class="modal-alt">
@@ -599,18 +656,31 @@ async function maliyetDuzenle(id) {
 
 async function maliyetSil(id) {
   if (!await onayla('Maliyet kaydı silinsin mi? Bağlı stoğun birim maliyeti yeniden hesaplanır.', { tehlike: true })) return;
+  /* DZ1: bu satir tek basina olmayabilir — ayni faturanin KDV
+     satiri ya da dagitimdan gelen kardes satirlar olabilir ve
+     tedarikci borcu da onlarin TOPLAMININ karsiligi. Sunucu
+     kapsami 409 ile bildiriyor; once gosterip soruyoruz. */
+  const yol = `/api/maliyet/${encodeURIComponent(id)}`;
   try {
-    const d = await api(`/api/maliyet/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    let d;
+    try {
+      d = await api(yol, { method: 'DELETE' });
+    } catch (e) {
+      if (e && e.status === 409 && e.yanit && e.yanit.error === 'onay_gerekli') {
+        if (!await onayla(e.yanit.mesaj, { tehlike: true })) return;
+        d = await api(yol + '?onay=1', { method: 'DELETE' });
+      } else { throw e; }
+    }
     bildir(d.mesaj || 'Maliyet silindi');
     cekmeceKapat(); await yukle();
-  } catch (e) { /* */ }
+  } catch (e) { /* api() zaten bildiriyor */ }
 }
 
 /* ── Maliyet ekle ── */
 async function yeniAc() {
   document.getElementById('modal').classList.add('acik');
   SECILI_HEDEFLER = new Set();
-  ['fTutar','fFaturaNo'].forEach(i => document.getElementById(i).value = '');
+  ['fTutar','fFaturaNo','fAciklama'].forEach(i => document.getElementById(i).value = '');
   document.getElementById('fKdv').value = 20;
   document.getElementById('fKdvDahil').checked = false;
   if (!CARILER.length) {
@@ -629,6 +699,15 @@ async function bagTipDegisti() {
   const kok = document.getElementById('hedefListe');
   const baslik = document.getElementById('hedefBaslik');
   baslik.textContent = { Stok: 'Bağlanacak stok', Siparis: 'Bağlanacak sipariş', Sevkiyat: 'Bağlanacak sevkiyat' }[tip];
+  /* MA3: uretici/cins/blok yalniz STOK icin anlamli. Suzgecler
+     eskiden secici blogunun icindeydi ve bos da olsa goze
+     batmiyordu; artik ust satirlarda duruyorlar — siparis veya
+     sevkiyat secilince uc BOS kutu formun basinda durmasin. */
+  const stokMu = (tip === 'Stok');
+  ['fAlanUretici', 'fAlanCins', 'fAlanBlok'].forEach(k => {
+    const el = document.getElementById(k);
+    if (el) el.style.display = stokMu ? '' : 'none';
+  });
   kok.innerHTML = '<div class="yukleniyor" style="padding:10px">Yükleniyor…</div>';
   HEDEFLER = [];
   try {
@@ -863,6 +942,7 @@ async function maliyetKaydet() {
       kdv_oran: parseFloat(document.getElementById('fKdv').value) || 0,
       kdv_dahil_mi: document.getElementById('fKdvDahil').checked,
       fatura_no: document.getElementById('fFaturaNo').value,
+      aciklama: document.getElementById('fAciklama').value.trim(),
       cari_id: document.getElementById('fCari').value || null
     };
     if (hedefler.length === 1) {

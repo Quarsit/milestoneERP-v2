@@ -39,6 +39,11 @@
   .ekstre-satir .tut.alacak{color:var(--verde)}
   .hsil{border:0;background:transparent;color:var(--cizgi-koyu);font-size:.85rem;cursor:pointer;padding:0 2px}
   .hsil:hover{color:var(--kirmizi)}
+  /* DZ5: satirin tek eylemi SILMEK degil artik. Duzenleme ayni
+     sessizlikte durur, uzerine gelince kehribar olur — silme
+     kirmizi, duzeltme degil. */
+  .hduz{border:0;background:transparent;color:var(--cizgi-koyu);font-size:.85rem;cursor:pointer;padding:0 2px}
+  .hduz:hover{color:var(--kehribar)}
   .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--verde-acik);color:var(--verde)}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr}
   /* ── CRM bölümleri ── */
@@ -86,7 +91,12 @@
   .modal-bas{padding:18px 22px 0}
   .modal-bas h3{font-family:var(--baslik);font-weight:700;font-size:1.15rem}
   .modal-bas p{color:var(--soluk);font-size:.85rem;margin-top:3px}
-  .modal-gov{padding:18px 22px;overflow-y:auto}
+  /* MA3: `min-height:0` OLMADAN esnek kutu cocugu kendi iceriginden
+     kisa olamaz; `overflow-y:auto` hic devreye girmez ve uzun bir
+     modalda ALT BAR (Vazgec/Kaydet) disari itilir. Chromium bazi
+     durumlarda affediyor, Firefox affetmiyor. Sayfanin kendi
+     kurali base.html'inkini EZDIGI icin her sayfada ayri yaziyor. */
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .f2{grid-template-columns:1fr 1fr} .f3{grid-template-columns:1fr 1fr 1fr}
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
@@ -94,7 +104,16 @@
   .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
   .onay{display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:12px}
   .onay input{width:auto}
-  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi)}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
 </style>
 {% endblock %}
@@ -216,31 +235,83 @@
   </div>
 </div>
 
-<div class="modal-ortu" id="tahModal" onclick="if(event.target===this)tahsilatKapat()">
-  <div class="modal" style="width:520px" role="dialog" aria-label="Tahsilat">
+<!-- ══════════════════════════════════════════════════════════════
+     VT1 — "TAHSİLAT GİR" PANELİ SİLİNDİ
+
+     Bu panel ÖLÜ koddu: dosyada yalnız kendi markup'ında ve
+     `tahsilatKapat()` içinde geçiyordu, `acik` sınıfını ekleyen
+     hiçbir şey yoktu. BF1 ile iki form birleştirilmiş, "Tahsilat /
+     Ödeme" düğmesi o günden beri tam donanımlı HAREKET FORMUNU
+     açıyor — `tahsilatAc()` doğrudan `hareketAc()` çağırıyor.
+
+     Duran ölü bir form zararsız değil: içinde iki gerçek hata
+     vardı ve ben onları CANLI sanıp rapor ettim.
+       · tarih alanı `vade_tarihi` olarak gidiyordu, `hareket_tarihi`
+         hiç gönderilmiyordu — kur bugünden alınırdı
+       · `doviz: 'USD'` sabit yazılıydı, döviz seçici yoktu
+     İkisi de hareket formunda doğru çalışıyor. Panel silindi ki
+     bir daha kimse onu gerçek sanmasın.
+     ══════════════════════════════════════════════════════════════ -->
+
+<!-- ══════════════════════════════════════════════════════════════
+     DZ5 — HAREKET DÜZENLEME
+
+     Hareket satırının tek eylemi SİLMEK'ti. Yanlış tutarla
+     girilmiş bir kaydı düzeltmenin yolu, kaydı silip yeniden
+     girmekten geçiyordu; denetim kaydında da "düzeltme" diye bir
+     iz kalmıyordu — bir silme ve bir yeni kayıt kalıyordu.
+
+     YÖN ve KASA burada DEĞİŞMEZ. Yön kaydın niteliğidir; kasa
+     seçimi para nereye girdiğidir — ikisi de düzeltme değil,
+     başka bir kayıttır. Sunucu da ikisini reddediyor.
+     ══════════════════════════════════════════════════════════════ -->
+<div class="modal-ortu" id="hdModal" onclick="if(event.target===this)hareketDuzenleKapat()">
+  <div class="modal" style="width:520px" role="dialog" aria-label="Hareketi düzenle">
     <div class="modal-bas">
-      <h3 id="tBaslik">Tahsilat Gir</h3>
-      <p id="tAlt">—</p>
+      <h3>Hareketi Düzenle</h3>
+      <p id="hdAlt">—</p>
     </div>
     <div class="modal-gov">
-      <div class="not" id="tNot" style="display:none"></div>
-      <div class="form-alan" style="margin-bottom:12px">
-        <label>Kapatılacak fatura</label>
-        <select id="tFatura" onchange="faturaSecildi()"><option value="">— fatura seçilmeden (serbest hareket) —</option></select>
+      <div class="form-satir f2">
+        <div class="form-alan">
+          <label id="hdTutarEtiket">Tutar</label>
+          <input id="hdTutar" type="number" step="0.01" min="0">
+        </div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="hdDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
       </div>
       <div class="form-satir f2">
-        <div class="form-alan"><label>Tutar</label><input id="tTutar" type="number" step="0.01"></div>
-        <div class="form-alan"><label>Kasa</label><select id="tKasa"></select></div>
+        <div class="form-alan"><label>Belge Tarihi</label><input id="hdTarih" type="date"></div>
+        <div class="form-alan"><label>Vade Tarihi</label><input id="hdVade" type="date"></div>
       </div>
-      <div class="form-satir f2">
-        <div class="form-alan"><label>Tarih</label><input id="tTarih" type="date"></div>
-        <div class="form-alan"><label>Evrak No</label><input id="tEvrak" placeholder="opsiyonel"></div>
+      <!-- Burada bir "Belge No" alanı YOK: sunucunun beyaz listesinde
+           `belge_no` vardı ama o alan CariHareket'te bulunmuyor
+           (Sevkiyat'ın alanı). Ölçüldü — PUT 200 dönüp alanı
+           "güncellenen" diye sayıyor, hiçbir yere yazmıyordu. Forma
+           koysaydım kullanıcı yazar, "kaydedildi" görür, ertesi gün
+           alanı boş bulurdu.
+
+           İKİSİ TEK `.form-satir` İÇİNDE: alt boşluk `.form-satir`da
+           duruyor, çıplak `.form-alan`da yok. Yan yana iki çıplak
+           alan koyunca aralarındaki boşluk kapanıyor — ölçüldü.
+           Ev stilinde çıplak alan hep TEK ve en sonda olduğu için
+           bu hiç görünmemiş. -->
+      <div class="form-satir">
+        <div class="form-alan"><label>Evrak No</label>
+          <input id="hdEvrak" placeholder="opsiyonel"></div>
+        <!-- Serbest metin: GENEL BÜYÜK HARF KURALI BURADA UYGULANMAZ.
+             Form MEVCUT açıklamayı gösteriyor; kural açık olsaydı
+             formu sadece AÇMAK kullanıcının yazdığı metni büyük
+             harfe çevirirdi. -->
+        <div class="form-alan"><label>Açıklama</label>
+          <input id="hdAciklama" data-buyuk-harf="hayir" placeholder="opsiyonel"></div>
       </div>
-      <div class="form-alan"><label>Açıklama</label><input id="tAciklama" placeholder="opsiyonel"></div>
+      <div class="not" id="hdNot" style="display:none"></div>
     </div>
     <div class="modal-alt">
-      <button class="iptal-btn" onclick="tahsilatKapat()">Vazgeç</button>
-      <button class="btn-yeni" id="tKaydet" onclick="tahsilatKaydet()">Kaydet</button>
+      <button class="iptal-btn" onclick="hareketDuzenleKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="hdKaydet" onclick="hareketDuzenleKaydet()">Kaydet</button>
     </div>
   </div>
 </div>
@@ -423,7 +494,9 @@
         </div>
         <div class="form-alan"><label>Evrak No</label><input id="hEvrak" placeholder="opsiyonel"></div>
       </div>
-      <div class="form-satir f2">
+      <!-- VT1: vade yalnız BORÇ doğuran tiplerde görünür, o yüzden
+           satırın sütun sayısı da tipe göre değişiyor (hTarihSatir). -->
+      <div class="form-satir f2" id="hTarihSatir">
         <!-- BT1 — BELGE TARİHİ
              Faturanın KESİLDİĞİ gün. Kur bu tarihten alınır (VUK/GİB:
              dövizli işlemin TL karşılığı fatura tarihindeki TCMB döviz
@@ -431,8 +504,11 @@
         <div class="form-alan"><label>Belge Tarihi
           <span style="font-weight:400;color:var(--soluk)">· kur bu tarihten</span></label>
           <input id="hBelgeTarihi" type="date" onchange="belgeTarihiDegisti()"></div>
-        <div class="form-alan"><label>Vade Tarihi
-          <span style="font-weight:400;color:var(--soluk)">· ödeme/tahsilat</span></label>
+        <!-- VT1: ipucu "ödeme/tahsilat" diyordu — yanıltıcıydı.
+             Vade bir BORCUN ne zaman ödeneceğidir; tahsilatın
+             vadesi olmaz, para zaten gelmiştir. -->
+        <div class="form-alan" id="hVadeAlan"><label>Vade Tarihi
+          <span style="font-weight:400;color:var(--soluk)">· borç ne zaman ödenecek</span></label>
           <input id="hVade" type="date"></div>
       </div>
       <div class="form-alan" id="hKasaAlan" style="margin-bottom:12px"><label>Kasa / Banka Hesabı</label>
@@ -712,13 +788,17 @@
 <script>
 /* ═══ SOL RAY KISAYOLLARINDAN GELEN AÇILIŞLAR ═══
    Sol raydaki "Tahsilat Gir" ve "Cari Hareket Ekle" kısayolları bu sayfaya
-   ?tahsilat=1 / ?hareket=1 ile gelir. Ancak tahsilatAc(id) ve
-   hareketAc(cariId, unvan) bir cari gerektirir — kısayolda henüz seçili cari
-   yoktur. Bu yüzden önce bir seçim penceresi açılır, seçim yapılınca asıl
-   fonksiyon çağrılır.
+   ?tahsilat=1 / ?hareket=1 ile gelir. hareketAc(cariId, unvan) bir cari
+   gerektirir — kısayolda henüz seçili cari yoktur. Bu yüzden önce bir
+   seçim penceresi açılır, seçim yapılınca asıl fonksiyon çağrılır.
+
+   VT1: İKİ KISAYOL DA AYNI FORMU AÇAR. BF1'de iki form birleştirilmişti;
+   ayrı bir tahsilat paneli artık yok. İşlem tipi carinin türüne göre
+   hazır seçili gelir (tedarikçiye Ödeme, müşteriden Tahsilat).
+
    NOT: base.html bu iki fonksiyonu 2,4 saniye boyunca arar; veri (TUM) o
    sırada henüz yüklenmemiş olabileceği için liste dolana kadar beklenir. */
-let SEC_HEDEF = null;   // 'tahsilat' | 'hareket'
+let SEC_HEDEF = null;   // 'tahsilat' | 'hareket' — ikisi de aynı formu açar
 
 function ilkTahsilatAc() { cariSecAc('tahsilat'); }
 function ilkHareketAc()  { cariSecAc('hareket'); }
@@ -772,10 +852,11 @@ function cariSecSuz() {
 function cariSecildi(id) {
   const c = TUM.find(x => String(x.id) === String(id));
   if (!c) { bildir('Cari bulunamadı.', true); return; }
-  const hedef = SEC_HEDEF;
   cariSecKapat();
-  if (hedef === 'tahsilat') tahsilatAc(c.id);
-  else hareketAc(c.id, c.unvan);
+  /* VT1: iki hedef de AYNI formu açıyordu (BF1'den beri). `?tahsilat=1`
+     ile gelenin tek farkı işlem tipinin hazır seçili gelmesiydi;
+     o da artık `hareketAc`ın içinde. */
+  hareketAc(c.id, c.unvan);
 }
 
 /* ═══ CARİ ═══
@@ -1004,6 +1085,10 @@ function belgeTarihiVarsayilan() {
    TRY işlemlerde anlamsız olduğu için gizlenir. */
 /* ── KAPATILACAK FATURA (BF1) ── */
 let HAR_ACIK_FATURALAR = [];
+/* DZ5: cekmecede gosterilen son hareket listesi. Duzenleme formu
+   satiri ID ile buradan okuyor; onclick'e JSON gomseydik tek bir
+   kacis hatasi o satirin butonunu bozardi. */
+let HAR_SON = [];
 
 async function hFaturalariYukle() {
   const alan = document.getElementById('hFaturaAlan');
@@ -1400,6 +1485,7 @@ async function detayAc(id) {
       api(`/api/cari/${encodeURIComponent(id)}/bakiye`)
     ]);
     hareketler = (h.data || []).slice().reverse().slice(0, 15);
+    HAR_SON = hareketler;        // DZ5
     bakiye = b || {};
   } catch (e) { /* */ }
 
@@ -1454,6 +1540,7 @@ async function detayAc(id) {
           <span class="tut ${(h.borc || 0) > 0 ? 'borc' : 'alacak'}">
             ${(h.borc || 0) > 0 ? '+' + para(h.borc, h.doviz) : '−' + para(h.alacak, h.doviz)}
           </span>
+          ${yazabilir('cari') ? `<button class="hduz" onclick="hareketDuzenleAc('${kacar(h.id)}','${kacar(id)}')" title="Hareketi düzenle">✎</button>` : ''}
           ${yazabilir('cari') ? `<button class="hsil" onclick="hareketSil('${kacar(h.id)}','${kacar(id)}')" title="Hareketi sil">✕</button>` : ''}
         </div>`).join('')
       : '<div class="bos" style="padding:12px">Hareket yok.</div>'}
@@ -1482,8 +1569,10 @@ async function detayAc(id) {
     eylem.push(`<button class="blok-btn" onclick="aktiviteAc('${kacar(id)}')">+ Temas kaydet</button>`);
   if (yazabilir('cari'))
     eylem.push(`<button class="blok-btn birincil" onclick="hareketAc('${kacar(id)}','${kacar(c.unvan)}')">Hareket ekle</button>`);
-  if (yazabilir('cari'))
-    eylem.push(`<button class="blok-btn" onclick="tahsilatAc('${kacar(id)}')">Tahsilat / Ödeme</button>`);
+  /* VT1: "Tahsilat / Ödeme" düğmesi KALDIRILDI. BF1'den beri aynı
+     formu açıyordu — iki düğme, tek panel. Tek farkı işlem tipini
+     hazır seçmesiydi; onu `hareketAc` artık kendi yapıyor
+     (tedarikçiye Ödeme, müşteriden Tahsilat). */
   eylem.push(`<button class="blok-btn" onclick="ekstreSecenek('${kacar(id)}')">Ekstre yazdır</button>`);
   eylem.push(`<button class="blok-btn" onclick="sipEkstreAc('${kacar(id)}','${kacar(c.unvan)}')">Sipariş ekstresi</button>`);
   if (yazabilir('cari'))
@@ -2103,106 +2192,23 @@ const BORC_TIPLERI = ['Fatura (Satis)', 'Odeme', 'Ödeme', 'Avans Odemesi',
                          yüzden hep alacak oluyordu. */
                       'Acilis Bakiyesi (Borc)',
                       'Vade Farki (Borc)', 'Kur Farki (Borc)', 'Iade (Alis)'];
+
+/* ── VT1 · VADESİ OLAN TİPLER ──
+   Vade, bir BORCUN ne zaman ödeneceğidir. Tahsilatın, ödemenin,
+   virmanın, mahsubun, kur farkının vadesi olmaz — orada para zaten
+   el değiştirmiş ya da ortada bir borç yok.
+
+   Bu liste SUNUCUDAKİ `VADE_ANLAMLI` ile aynı olmalı; ekran bir
+   değer gönderse bile sunucu o tiplerde yazmıyor, boşuna
+   doldurtmayalım. */
+const VADE_ANLAMLI_TIPLER = [
+  'Fatura (Satis)', 'Fatura (Alis)',
+  'Acilis Bakiyesi (Borc)', 'Acilis Bakiyesi (Alacak)',
+  'Iade (Satis)', 'Iade (Alis)'];
+
 let HAR_CARI = null, HAR_KASALAR = [], HAR_SIPARISLER = [];
-let TAH_CARI = null, ACIK_FATURALAR = [];
-
-/* ═══ TAHSİLAT / ÖDEME ═══
-   Fatura seçilirse → POST /api/fatura/<id>/tahsilat  (cari VE kasa birlikte güncellenir)
-   Fatura seçilmezse → POST /api/cari/hareket         (yalnızca cari defteri) */
-async function tahsilatAc(id) {
-  /* TEK FORM (BF1).
-     Eskiden ayrı bir "Tahsilat / Ödeme" formu vardı; onda fatura
-     seçimi vardı ama DÖVİZ yoktu, hareket formunda ise tersi.
-     İkisi de işi yarım yapıyordu. Artık tahsilat düğmesi de tam
-     donanımlı hareket formunu açıyor, işlem tipi hazır seçili. */
-  const c = (TUM || []).find(x => x.id === id) || {};
-  await hareketAc(id, c.unvan || id);
-  const sel = document.getElementById('hIslem');
-  if (sel) {
-    /* Tedarikçiye ÖDEME, müşteriden TAHSİLAT varsayılanı. */
-    const tedarikci = String(c.cari_tip || '').toLowerCase().includes('tedarik');
-    const hedef = tedarikci ? 'Ödeme' : 'Tahsilat';
-    const uy = [...sel.options].find(o => o.value.includes(hedef)
-      || o.value.includes(hedef.replace('Ö', 'O')));
-    if (uy) { sel.value = uy.value; hareketTipiDegisti(); }
-  }
-}
-function tahsilatKapat() { document.getElementById('tahModal').classList.remove('acik'); }
-
-function faturaSecildi() {
-  const fid = document.getElementById('tFatura').value;
-  const f = ACIK_FATURALAR.find(x => x.id === fid);
-  const not = document.getElementById('tNot');
-  not.style.display = '';
-  if (f) {
-    document.getElementById('tTutar').value = f.kalan;
-    not.style.background = 'var(--verde-acik)'; not.style.color = 'var(--verde)';
-    not.textContent = 'Faturaya işlenecek: cari bakiyesi VE kasa birlikte güncellenir.';
-  } else {
-    not.style.background = 'var(--kehribar-bg)'; not.style.color = 'var(--kehribar)';
-    not.textContent = 'Fatura seçilmedi: yalnızca cari defterine işlenir, kasaya yansımaz.';
-  }
-}
-
-async function tahsilatKaydet() {
-  const tutar = parseFloat(document.getElementById('tTutar').value);
-  if (!tutar || tutar <= 0) { bildir('Geçerli bir tutar gir.', true); return; }
-  const b = BAKIYE[TAH_CARI.id] || { net: 0 };
-  const odeme = b.net < 0;
-  const fid = document.getElementById('tFatura').value;
-  const kasaId = document.getElementById('tKasa').value;
-  const btn = document.getElementById('tKaydet');
-  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
-  try {
-    if (fid && fid.startsWith('STOK:')) {
-      /* STOK ALIŞ BORCU (AF1): `Fatura` kaydı yok, o yüzden
-         /api/fatura/<id>/tahsilat çalışmaz (404 verirdi).
-         Cari hareket olarak yazılır ve `baglanti_id` ile o alışa
-         bağlanır — açık borç listesi ödemeyi buradan düşer. */
-      await api('/api/cari/hareket', {
-        method: 'POST',
-        body: JSON.stringify({
-          cari_id: TAH_CARI.id,
-          islem_tip: odeme ? 'Odeme' : 'Tahsilat',
-          tutar, alacak: odeme ? 0 : tutar, borc: odeme ? tutar : 0,
-          doviz: (ACIK_FATURALAR.find(f => 'STOK:' + (f.fatura_no || f.id) === fid) || {}).doviz || 'USD',
-          kasa_id: kasaId ? parseInt(kasaId) : null,
-          baglanti_tip: 'stok_fatura',
-          baglanti_id: fid.slice(5),
-          vade_tarihi: document.getElementById('tTarih').value || null,
-          evrak_no: document.getElementById('tEvrak').value,
-          aciklama: document.getElementById('tAciklama').value
-        })
-      });
-    } else if (fid) {
-      await api(`/api/fatura/${encodeURIComponent(fid)}/tahsilat`, {
-        method: 'POST',
-        body: JSON.stringify({
-          tutar, kasa_id: kasaId ? parseInt(kasaId) : null, tahsilat_tipi: 'nakit',
-          evrak_no: document.getElementById('tEvrak').value,
-          aciklama: document.getElementById('tAciklama').value
-        })
-      });
-    } else {
-      await api('/api/cari/hareket', {
-        method: 'POST',
-        body: JSON.stringify({
-          cari_id: TAH_CARI.id,
-          islem_tip: odeme ? 'Odeme' : 'Tahsilat',
-          tutar, alacak: odeme ? 0 : tutar, borc: odeme ? tutar : 0,
-          doviz: 'USD',
-          vade_tarihi: document.getElementById('tTarih').value || null,
-          evrak_no: document.getElementById('tEvrak').value,
-          aciklama: document.getElementById('tAciklama').value
-        })
-      });
-    }
-    bildir((odeme ? 'Ödeme' : 'Tahsilat') + ' kaydedildi · ' + para(tutar));
-    tahsilatKapat();
-    await yukle();
-  } catch (e) { /* */ }
-  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
-}
+/* VT1: TAH_CARI · ACIK_FATURALAR · tahsilatKapat ·
+   faturaSecildi · tahsilatKaydet — silinen panele aitti. */
 
 async function hareketAc(cariId, unvan) {
   HAR_CARI = cariId;
@@ -2211,8 +2217,26 @@ async function hareketAc(cariId, unvan) {
   document.getElementById('hTutar').value = '';
   document.getElementById('hEvrak').value = '';
   document.getElementById('hAciklama').value = '';
-  document.getElementById('hVade').valueAsDate = new Date();
+  /* VT1: vade ARTIK BURADA DOLDURULMUYOR. Her tipte bugünle dolu
+     geliyordu; tahsilatın vadesi olmaz ve o değer yüzünden bugün
+     tahsil edilmiş paralar "yaklaşan ödemeler" listesine düşüyordu.
+     Doldurmayı `hareketTipiDegisti()` yapıyor — yalnız borç doğuran
+     tiplerde. */
+  document.getElementById('hVade').value = '';
   belgeTarihiVarsayilan();   // BT1
+
+  /* VT1: işlem tipi CARİNİN TÜRÜNE göre hazır seçili gelir —
+     kaldırılan "Tahsilat / Ödeme" düğmesi bunu yapıyordu, kaybolmasın.
+     Tedarikçiye ÖDEME, müşteriden TAHSİLAT. */
+  const _c = (TUM || []).find(x => String(x.id) === String(cariId)) || {};
+  const _sel = document.getElementById('hIslem');
+  if (_sel) {
+    const _ted = String(_c.cari_tip || '').toLowerCase().includes('tedarik');
+    const _hedef = _ted ? 'Ödeme' : 'Tahsilat';
+    const _uy = [...(_sel.options || [])].find(
+      o => o.value.includes(_hedef) || o.value.includes(_hedef.replace('Ö', 'O')));
+    if (_uy) _sel.value = _uy.value;
+  }
   // KDV kontrolünü varsayılana döndür (önceki faturanın oranı taşınmasın)
   document.getElementById('hKdvOranSec').value = '20';
   document.getElementById('hKdvOran').value = '20';
@@ -2312,6 +2336,22 @@ function hareketTipiDegisti() {
   const faturali = ['Fatura (Satis)', 'Fatura (Alis)'].includes(tip);
   document.getElementById('hKdvAlan').style.display = faturali ? '' : 'none';
   if (faturali) kdvOnizle();
+
+  /* ── VT1 · VADE YALNIZ BORÇ DOĞURAN TİPLERDE ──
+     Tahsilatın vadesi olmaz: para zaten el değiştirmiş. Alan her
+     tipte görünüyor ve BUGÜNLE dolu geliyordu; sonucu ölçtüm —
+     bugün tahsil edilmiş paralar "yaklaşan ödemeler" listesinde,
+     yani ödeyeceğimiz paralar arasında duruyordu.
+     Sunucu da bu tiplerde geleni yazmıyor; ekran onunla aynı
+     kuralı izlesin ki kullanıcı boşuna doldurmasın. */
+  const vadeli = VADE_ANLAMLI_TIPLER.includes(tip);
+  const vAlan = document.getElementById('hVadeAlan');
+  const vSatir = document.getElementById('hTarihSatir');
+  if (vAlan) vAlan.style.display = vadeli ? '' : 'none';
+  if (vSatir) vSatir.classList.toggle('f2', vadeli);
+  if (!vadeli) document.getElementById('hVade').value = '';
+  else if (!document.getElementById('hVade').value)
+    document.getElementById('hVade').valueAsDate = new Date();
   if (kasali) {
     const ks = document.getElementById('hKasa');
     if (ks.options.length <= 1 && HAR_KASALAR.length) {
@@ -2548,14 +2588,129 @@ function sipEkstreYazdir() {
   sipEkstreKapat();
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   DZ5 — HAREKET DÜZENLEME
+
+   Satırın tek eylemi silmekti; yanlış tutarı düzeltmenin yolu
+   kaydı silip yeniden girmekten geçiyordu.
+   ═══════════════════════════════════════════════════════════════ */
+let HD_ID = null, HD_CARI = null;
+
+function hareketDuzenleAc(hareketId, cariId) {
+  const h = (HAR_SON || []).find(x => x.id === hareketId);
+  if (!h) { bildir('Hareket bulunamadı — çekmeceyi yenile.', true); return; }
+  HD_ID = hareketId; HD_CARI = cariId;
+  const borcMu = (h.borc || 0) > 0;
+  const g = i => document.getElementById(i);
+  g('hdAlt').textContent = `${islemEtiket(h.islem_tip)} · ${h.id}`;
+  /* Hangi tarafi duzenledigi YAZIYOR: yon buradan degismiyor,
+     kullanici neyi degistirdigini bilmeli. */
+  g('hdTutarEtiket').textContent = borcMu ? 'Tutar (borç)' : 'Tutar (alacak)';
+  g('hdTutar').value   = borcMu ? (h.borc || '') : (h.alacak || '');
+  g('hdDoviz').value   = h.doviz || 'TRY';
+  g('hdTarih').value   = (h.hareket_tarihi || '').slice(0, 10);
+  g('hdVade').value    = (h.vade_tarihi || '').slice(0, 10);
+  g('hdEvrak').value   = h.evrak_no || '';
+  g('hdAciklama').value = h.aciklama || '';
+
+  /* OTOMATIK KAYITLAR — kullanici Kaydet'e basmadan once bilsin.
+     Sunucu bunlari zaten reddediyor ya da zincirle birlikte
+     goturuyor; surpriz olmasin. */
+  const not = g('hdNot');
+  let uyari = '';
+  if (h.kaynak === 'fatura' && borcMu) {
+    uyari = 'Bu, faturanın otomatik borç kaydı. Tutarı buradan '
+          + 'değişmez — faturayı iptal edip yeniden kesmek gerekir.';
+  } else if (h.kaynak === 'maliyet') {
+    uyari = 'Bu borç bir gider faturasının karşılığı. Tutarı '
+          + 'değiştirirsen bağlı maliyet kaydı ve o stoğun birim '
+          + 'maliyeti de güncellenir.';
+  } else if (h.kaynak === 'otomatik_kur_farki') {
+    uyari = 'Bu, eşleşmeden doğan otomatik kur farkı kaydı. Elle '
+          + 'düzeltmek yerine ilgili tahsilatı/ödemeyi düzeltmek '
+          + 'daha doğru — kur farkı o zaman kendiliğinden gider.';
+  } else if (h.kapatildi) {
+    uyari = 'Bu hareket kapatılmış. Tutarı değişirse kapanış geri '
+          + 'alınır ve eşleştirmeyi tekrar yapman gerekir.';
+  }
+  not.textContent = uyari;
+  not.style.display = uyari ? '' : 'none';
+
+  g('hdModal').classList.add('acik');
+  g('hdTutar').focus();
+}
+
+function hareketDuzenleKapat() {
+  document.getElementById('hdModal').classList.remove('acik');
+  HD_ID = null; HD_CARI = null;
+}
+
+async function hareketDuzenleKaydet() {
+  if (!HD_ID) return;
+  const tut = parseFloat(document.getElementById('hdTutar').value);
+  if (!(tut > 0)) {
+    bildir('Tutar sıfırdan büyük olmalı. Kaydı tamamen geri almak '
+         + 'için satırdaki ✕ ile sil.', true);
+    return;
+  }
+  const govde = {
+    tutar: tut,
+    doviz: document.getElementById('hdDoviz').value,
+    hareket_tarihi: document.getElementById('hdTarih').value || null,
+    vade_tarihi: document.getElementById('hdVade').value || null,
+    evrak_no: document.getElementById('hdEvrak').value,
+    aciklama: document.getElementById('hdAciklama').value
+  };
+  const yol = `/api/cari/hareket/${encodeURIComponent(HD_ID)}`;
+  const btn = document.getElementById('hdKaydet');
+  const cari = HD_CARI;
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    let d;
+    try {
+      d = await api(yol, { method: 'PUT', body: JSON.stringify(govde) });
+    } catch (e) {
+      /* DZ5: tutar degisiyorsa sunucu NE KIMILDAYACAGINI 409 ile
+         ONCE soyluyor — kasa bakiyesi, kapanislar, otomatik kur
+         farki kayitlari, faturanin tahsilat durumu. Kapsami
+         gosterip ikinci kez soruyoruz. Yalnizca tarih ya da
+         aciklama degistiyse bu soru HIC cikmiyor. */
+      if (e && e.status === 409 && e.yanit && e.yanit.error === 'onay_gerekli') {
+        if (!await onayla(e.yanit.mesaj, { tehlike: true })) return;
+        d = await api(yol + '?onay=1',
+                      { method: 'PUT', body: JSON.stringify(govde) });
+      } else { throw e; }
+    }
+    bildir(d.mesaj || 'Hareket güncellendi');
+    hareketDuzenleKapat();
+    await yukle();
+    if (cari) detayAc(cari);
+  } catch (e) { /* api() zaten bildiriyor */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
 async function hareketSil(hareketId, cariId) {
   if (!await onayla('Bu cari hareketi silinsin mi? Bakiye yeniden hesaplanır.', { tehlike: true })) return;
+  /* DZ1: hareket bir GIDER FATURASININ karsiligi olabilir; o zaman
+     ardinda bir maliyet GRUBU durur (net satir + KDV, dagitimda N
+     satir). Sunucu boyle bir durumda 409 + kapsam donuyor; kapsami
+     gosterip ikinci kez soruyoruz. Tek satirlik sade hareketlerde
+     ikinci soru hic cikmiyor. */
+  const yol = `/api/cari/hareket/${encodeURIComponent(hareketId)}`;
   try {
-    const d = await api(`/api/cari/hareket/${encodeURIComponent(hareketId)}`, { method: 'DELETE' });
+    let d;
+    try {
+      d = await api(yol, { method: 'DELETE' });
+    } catch (e) {
+      if (e && e.status === 409 && e.yanit && e.yanit.error === 'onay_gerekli') {
+        if (!await onayla(e.yanit.mesaj, { tehlike: true })) return;
+        d = await api(yol + '?onay=1', { method: 'DELETE' });
+      } else { throw e; }
+    }
     bildir(d.mesaj || 'Hareket silindi');
     await yukle();
     detayAc(cariId);
-  } catch (e) { /* */ }
+  } catch (e) { /* api() zaten bildiriyor */ }
 }
 
 /* MF6: firma listesi bir kez cekilir; form her acilista

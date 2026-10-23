@@ -105,8 +105,17 @@
   .modal-bas{padding:18px 22px 10px}
   .modal-bas h3{font-family:var(--baslik);font-size:1.1rem;margin:0}
   .modal-bas p{font-size:.82rem;color:var(--soluk);margin:4px 0 0}
+  /* MA4: ALT BAR KENDI ZEMININI TASIR.
+     Alt bar `.modal`in beyaz zemininin uzerinde duruyordu —
+     yani zemini kendisinin degil, kapsayicisinindi. Gövde
+     bir sekilde kapsayiciyi asinca alt bar ZEMINSIZ kaliyor
+     ve panelden kopmus gorunuyor (Pardus'ta boyle goruldu,
+     burada uretilemedi). Kendi zeminini ve alt kose
+     yuvarlamasini tasiyinca panelin parcasi gibi kaliyor.
+     `flex:0 0 auto` de ayri bir koruma: esnek sutunda alt bar
+     asla ezilmesin, once govde kucultulsun. */
   .modal-alt{padding:14px 22px 18px;display:flex;gap:10px;justify-content:flex-end;
-    border-top:1px solid var(--cizgi)}
+    border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .form-satir{display:grid;gap:12px;margin-bottom:12px}
   .form-satir.f2{grid-template-columns:1fr 1fr}
   .form-satir.f3{grid-template-columns:1fr 1fr 1fr}
