@@ -653,7 +653,7 @@
     </div>
     <div class="modal-gov">
       <div class="form-satir f2">
-        <div class="form-alan"><label>Ünvan <span style="color:var(--kirmizi)">*</span></label><input id="cUnvan" placeholder="ABC Marble LLC"></div>
+        <div class="form-alan"><label>Ünvan <span style="color:var(--kirmizi)">*</span></label><input id="cUnvan" placeholder="ABC Marble LLC" onblur="kisaltmaOner()"></div>
         <div class="form-alan"><label>Rol <span style="font-weight:400;color:var(--soluk)">(birden çok seçilebilir)</span></label>
           <div id="cRoller" style="display:flex;gap:12px;flex-wrap:wrap;padding:7px 0">
             <!-- R1: Bir cari aynı anda müşteri VE tedarikçi olabilir.
@@ -747,10 +747,25 @@
             Ürün tedarikçisi (stok girişlerinde üretici olarak seçilebilir)
           </label>
         </div>
-        <div class="form-alan" style="margin-bottom:12px">
+        
+      </div>
+      <div class="form-alan" style="margin-bottom:12px" id="kisaltmaAlan">
           <!-- RN1: kısaltma artık HER cari için kullanılıyor — belge
                numaraları bundan üretiliyor (SIP-STN26-03). Boş bırakılırsa
-               unvandan türetilir ve buraya yazılır. -->
+               unvandan türetilir ve buraya yazılır.
+
+               EM2: AMA BU ALAN YALNIZ TEDARİKÇİ/ÜRETİCİ ROLÜNDE
+               GÖRÜNÜYORDU. `tedarikciAlan` kapsayıcısı içindeydi ve o
+               kapsayıcı `display:none` ile başlıyor. Yani bir
+               MÜŞTERİ için sunucu kısaltmayı kendi üretiyordu
+               (flask_app 2244-2256, belge numarası istendiğinde) ama
+               kullanıcı onu ne görüyor ne değiştirebiliyordu — oysa
+               o harfler müşterinin gördüğü sipariş/proforma/fatura
+               numarasında yazıyor.
+
+               RN1 kuralı değiştirmiş, işaret güncellenmiş, ekran
+               güncellenmemiş. Alan artık kapsayıcının DIŞINDA ve
+               `tipDegisti()` onu ayrıca yönetmiyor. -->
           <label>Kısaltma (belge numaralarında kullanılır)</label>
           <input id="cKisaltma" maxlength="3" style="text-transform:uppercase"
                  placeholder="STN — boş bırakırsan unvandan türetilir">
@@ -762,7 +777,6 @@
             (<span class="mono">ALM</span> doluysa <span class="mono">ALK</span>).
           </div>
         </div>
-      </div>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="modalKapat()">Vazgeç</button>
@@ -2135,6 +2149,36 @@ function firmaKutulariniDoldur(secili) {
       ${kacar(f.ad)}</label>`).join('');
 }
 
+/* ═══ EM2 · KISALTMA ÖNERİSİ ═══
+   `GET /api/cari/kisaltma_oner` yazılıydı, hiçbir ekran
+   çağırmıyordu. Kısaltma belge numaralarının temeli
+   (SIP-STN26-03, PI-STN26-01); elle yazılırken tutarsız
+   kalıyordu.
+
+   YALNIZCA BOŞ ALANA yazıyor ve bir kez: kullanıcının yazdığı
+   kısaltmanın üstüne geçmek, formdaki en kötü davranış olurdu.
+   Sunucu kuralı tek yerde — 3 harfe tamamlama, kelime sayısına
+   göre türetme — ekran onu TEKRARLAMIYOR, soruyor. */
+let KISALTMA_ONERILDI = false;
+
+async function kisaltmaOner() {
+  const el = document.getElementById('cKisaltma');
+  if (!el || el.value.trim() || KISALTMA_ONERILDI) return;
+  const unvan = (document.getElementById('cUnvan').value || '').trim();
+  if (unvan.length < 2) return;
+  try {
+    const d = await api('/api/cari/kisaltma_oner?unvan='
+                        + encodeURIComponent(unvan));
+    if (d && d.kisaltma && !el.value.trim()) {
+      el.value = d.kisaltma;
+      KISALTMA_ONERILDI = true;
+      el.style.transition = 'background .4s';
+      el.style.background = 'var(--verde-acik)';
+      setTimeout(() => { el.style.background = ''; }, 900);
+    }
+  } catch (e) { /* oneri ikincil — sessiz gec */ }
+}
+
 function formAc(c) {
   DUZENLENEN = c || null;
   // Ülke: tam ad seçilir, ISO3 kodu (USA) saklanır
@@ -2163,6 +2207,7 @@ function formAc(c) {
   document.getElementById('cGorunurluk').value = c ? (c.gorunurluk || 'kapali') : 'kapali';
   document.getElementById('cUrunTed').checked = c ? !!c.urun_tedarikcisi : false;
   document.getElementById('cKisaltma').value = c ? (c.uretici_kisaltma || '') : '';
+  KISALTMA_ONERILDI = false;
   firmaKutulariniDoldur(c ? (c.firmalar || []) : null);   // MF6
   tipDegisti();
   cekmeceKapat();
@@ -2772,8 +2817,12 @@ async function hareketDuzenleKaydet() {
       /* DZ5: tutar degisiyorsa sunucu NE KIMILDAYACAGINI 409 ile
          ONCE soyluyor — kasa bakiyesi, kapanislar, otomatik kur
          farki kayitlari, faturanin tahsilat durumu. Kapsami
-         gosterip ikinci kez soruyoruz. Yalnizca tarih ya da
-         aciklama degistiyse bu soru HIC cikmiyor. */
+         gosterip ikinci kez soruyoruz.
+
+         KR1: DOVIZ hareketinde TARIH de ayni soruyu cikariyor —
+         gun degisince TRY karsiligi, kasa tutari ve kur farki da
+         degisiyor. Yalnizca evrak no, vade ya da aciklama
+         degistiyse soru HIC cikmiyor. */
       if (e && e.status === 409 && e.yanit && e.yanit.error === 'onay_gerekli') {
         if (!await onayla(e.yanit.mesaj, { tehlike: true })) return;
         d = await api(yol + '?onay=1',

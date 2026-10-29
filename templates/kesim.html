@@ -84,6 +84,17 @@
   .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
   .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
   .not{border-radius:var(--r-kucuk);padding:9px 12px;font-size:.8rem;margin-bottom:12px;background:var(--verde-acik);color:var(--verde)}
+  /* UN3 · MENSE. Etiket kaynak satirinda, uyari ozetin altinda.
+     Karisik mense YASAK DEGIL — sunucu her hedefi kendi kaynagindan
+     uretiyor — ama ne olacagi onceden yazilmali. */
+  .mense-et{display:inline-block;padding:0 5px;border-radius:3px;
+    background:var(--cizgi);color:var(--metin);font-size:.68rem;
+    font-weight:600;letter-spacing:.02em}
+  .mense-uyari{margin-top:8px;border-radius:var(--r-kucuk);
+    padding:9px 12px;font-size:.78rem;background:var(--kehribar-bg);
+    color:var(--kehribar);border:1px solid var(--kehribar)}
+  .mense-uyari b{font-weight:700}
+  .mense-uyari ul{margin:6px 0 0;padding-left:18px}
   @media (max-width:820px){ .f3,.f4{grid-template-columns:1fr 1fr} }
 </style>
 {% endblock %}
@@ -128,6 +139,7 @@
         <h5 id="kaynakBaslik">Kaynak seç</h5>
         <div class="kaynak-liste" id="kaynakListe"><div class="yukleniyor" style="padding:10px">Yükleniyor…</div></div>
         <div style="margin-top:8px;font-size:.8rem;color:var(--soluk)" id="kaynakOzet">Kaynak seçilmedi</div>
+        <div class="mense-uyari" id="menseUyari" hidden></div>
       </div>
 
       <!-- F6 — ÜRETİM–SİPARİŞ BAĞI: bu kesim bir siparişin üretim
@@ -471,7 +483,7 @@ async function yonDegisti() {
              onchange="kaynakSecildi(this, '${kaynakTip}')">
       <div>
         <div>${kacar(k.cins || '—')}${k.no ? ' · ' + kacar(k.no) : ''}</div>
-        <div style="color:var(--soluk);font-size:.75rem">${kacar(k.id)}${k.uretici ? ' · ' + kacar(k.uretici) : ''}</div>
+        <div style="color:var(--soluk);font-size:.75rem">${kacar(k.id)}${k.uretici ? ' · ' + kacar(k.uretici) : ''}${k.mense ? ' · <span class="mense-et">' + kacar(k.mense) + '</span>' : ''}</div>
       </div>
       <span class="m">${kaynakMiktar(k)}${kaynakMaliyet(k) ? ' · ' + para(kaynakMaliyet(k)) : ''}</span>
     </label>`).join('')
@@ -507,6 +519,51 @@ function kaynakSecildi(el, tip) {
   kaynakOzetCiz(); ozetHesapla();
 }
 
+/* UN3 · KARISIK MENSE SECIM ANINDA GORUNUR.
+   Sunucu artik her hedefi KENDI kaynagindan uretiyor (UN2), yani
+   karisik menseli kesim yasak degil — ama ne olacagini ONCEDEN
+   soylemek gerekiyor: hangi menseden kac parca cikacak. Pay, kaynagin
+   giren miktariyla orantili; burada ayni hesap gosteriliyor. */
+function menseDagilimi(secilenler, toplamParca) {
+  const ag = secilenler.map(k => ({
+    k, w: (k.tonaj || 0) > 0 ? k.tonaj : (k.mevcut || 0)
+  }));
+  const top = ag.reduce((a, x) => a + x.w, 0);
+  if (!top || !toplamParca) return [];
+  // En buyuk artik — sunucudaki `_tahsis_et` ile ayni kural
+  const ham = ag.map(x => ({ ...x, h: toplamParca * (x.w / top) }));
+  const pay = ham.map(x => ({ ...x, n: Math.floor(x.h) }));
+  let kalan = toplamParca - pay.reduce((a, x) => a + x.n, 0);
+  pay.map((x, i) => ({ i, art: x.h - Math.floor(x.h) }))
+     .sort((a, b) => b.art - a.art)
+     .slice(0, kalan)
+     .forEach(x => { pay[x.i].n += 1; });
+  const grup = {};
+  pay.forEach(x => {
+    const ms = x.k.mense || '—';
+    grup[ms] = (grup[ms] || 0) + x.n;
+  });
+  return Object.entries(grup).sort();
+}
+
+function menseUyarisiCiz(secilenler) {
+  const el = document.getElementById('menseUyari');
+  if (!el) return;
+  const menseler = [...new Set(secilenler.map(k => k.mense || '—'))];
+  if (secilenler.length < 2 || menseler.length < 2) { el.hidden = true; return; }
+  const toplamParca = HEDEFLER.reduce((a, h) => a + (h.adet || 0), 0);
+  const dagilim = menseDagilimi(secilenler, toplamParca);
+  el.hidden = false;
+  el.innerHTML =
+    `<b>${menseler.length} ayrı menşe seçildi.</b> Çıkan ürünler menşelerine `
+    + `göre AYRI gruplara bölünür; her grup kendi kaynağının menşesini, `
+    + `üreticisini ve maliyetini taşır. Kasalar menşe karıştırmaz.`
+    + (dagilim.length
+        ? '<ul>' + dagilim.map(([ms, n]) =>
+            `<li>${kacar(ms)} — ${n} parça</li>`).join('') + '</ul>'
+        : '<div style="margin-top:4px">Hedef satırı girince dağılım burada görünecek.</div>');
+}
+
 function kaynakOzetCiz() {
   const secilenler = KAYNAKLAR.filter(k => SECILI_KAYNAK.includes(k.id));
   const m2 = secilenler.reduce((a, k) => a + kaynakM2(k), 0);
@@ -514,6 +571,7 @@ function kaynakOzetCiz() {
   document.getElementById('kaynakOzet').textContent = secilenler.length
     ? `${secilenler.length} kaynak seçildi · ${m2 ? m2.toLocaleString('tr-TR') + ' m² · ' : ''}maliyet ${para(mal)}`
     : 'Kaynak seçilmedi';
+  menseUyarisiCiz(secilenler);
   document.getElementById('uretimNoOrijinal').textContent =
     secilenler.length && (secilenler[0].no || '') ? `Orijinal: ${secilenler[0].no}` : '';
 }
@@ -813,6 +871,10 @@ function ozetHesapla() {
   }
   document.getElementById('ozMaliyet').textContent =
     (maliyet > 0 && cikanM2 > 0) ? para2(maliyet / cikanM2) + ' /m²' : '—';
+  /* UN3: dagilim HEDEF ADEDINE bagli — hedef satiri degisince
+     uyarinin da yenilenmesi gerekiyor, yoksa eski parca sayisini
+     gosterir. Ayni seyin iki yerde farkli gorunmesi. */
+  menseUyarisiCiz(secilenler);
 }
 
 /* F6 — ÜRETİMDEN KARŞILANACAK KALEMLER

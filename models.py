@@ -1013,6 +1013,11 @@ class KesimDetay(FirmaKapsamli, db.Model):
     kesim_id        = db.Column(db.String(20), db.ForeignKey('kesim.id'), nullable=False)
     hedef_tip       = db.Column(db.String(10), nullable=False)
     hedef_stok_id   = db.Column(db.String(20))
+    # UN2: bu hedef HANGI kaynaktan cikti. Cok kaynakli kesimde
+    # (PLAKA->EBATLI) her hedef tek bir kaynaktan gelir ve menşeini,
+    # ureticisini, maliyetini ONDAN alir. Kolon olmadan "hepsi ilk
+    # kaynaktan" varsayimi kaciniimazdi.
+    kaynak_stok_id  = db.Column(db.String(20), index=True)
     cins            = db.Column(db.String(50))
     boy             = db.Column(Olcu)
     yukseklik       = db.Column(Olcu)

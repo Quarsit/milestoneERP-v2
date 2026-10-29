@@ -1588,6 +1588,130 @@ async function izAc(stokId, tip) {
              <button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   EK1 · BLOK İZLEME
+
+   Uç yazılmıştı, hiçbir ekran çağırmıyordu. Bir blok numarasından
+   tüm yaşam döngüsünü veriyor ve hem ORİJİNAL hem ÜRETİM blok
+   numarasından arıyor — yani kesimden sonra verilen yeni numarayla
+   da bulunuyor.
+
+   "Kaynak zinciri"nden farkı: o tek bir stok KAYDININ geçmişi, bu
+   bir blok NUMARASININ tüm ağacı. Blok tükendikten sonra da
+   çalışıyor; ihracat izlenebilirliği için gereken şey bu.
+   ═══════════════════════════════════════════════════════════════ */
+async function blokIzlemeAc(blokNo) {
+  if (!blokNo) return;
+  cekmeceAc(`Blok izleme · ${kacar(blokNo)}`, 'yükleniyor…',
+            '<div class="yukleniyor">Yükleniyor…</div>', '');
+  let d;
+  try {
+    d = await api('/api/blok/' + encodeURIComponent(blokNo) + '/izleme');
+  } catch (e) { cekmeceKapat(); return; }
+
+  const oz = d.ozet || {};
+  const bl = d.kaynak_bloklar || [];
+  const ks = d.kesimler || [];
+  const ur = d.uretilen_stoklar || [];
+  const ml = d.maliyetler || [];
+
+  const kutu = (etiket, deger) =>
+    `<div class="alan"><label>${etiket}</label><div>${deger}</div></div>`;
+
+  /* ORIJINAL BLOK(LAR) */
+  /* TABLO olarak: cekmece tablosuz bolumleri SUTUNA koyuyor
+     (`cek-tam` yalniz tablo iceren bolumlere veriliyor). Ilk halinde
+     kartlarla yazmistim ve bolum yarim genislikte kaliyordu —
+     otekilerle hizalanmiyordu. */
+  const blokGov = bl.length ? `<div class="tablo-kutu"><table>
+      <thead><tr><th>Blok</th><th>Cins</th><th>Üretici</th>
+        <th>Ölçü</th><th class="sag">Tonaj</th>
+        <th class="sag">Matrah</th><th>Durum</th></tr></thead>
+      <tbody>${bl.map(b => `<tr>
+        <td class="mono">${kacar(b.id)}
+          ${b.fatura_no ? '<div style="font-size:.7rem;color:var(--soluk)">fatura ' + kacar(b.fatura_no) + '</div>' : ''}</td>
+        <td>${kacar(b.cins || '—')}</td>
+        <td>${kacar(b.uretici || '—')}</td>
+        <td class="mono" style="font-size:.76rem">${
+          [b.boy, b.yukseklik, b.en].filter(x => x).join('×') || '—'}</td>
+        <td class="sag mono">${b.tonaj ? Number(b.tonaj).toLocaleString('tr-TR') : '—'}</td>
+        <td class="sag mono">${b.matrah ? para2(b.matrah, b.doviz) : '—'}</td>
+        <td>${kacar(b.durum || '—')}
+          ${b.giris_tarihi ? '<div style="font-size:.7rem;color:var(--soluk)">' + kacar(String(b.giris_tarihi).slice(0, 10)) + '</div>' : ''}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="bos" style="padding:10px">Bu numarayla kayıtlı blok yok (blok tükenmiş olabilir).</div>';
+
+  /* KESIMLER */
+  const kesimGov = ks.length ? `<div class="tablo-kutu"><table>
+      <thead><tr><th>Kesim</th><th>Tarih</th><th>Üretim No</th>
+        <th class="sag">Fire</th><th class="sag">Maliyet</th></tr></thead>
+      <tbody>${ks.map(k => `<tr>
+        <td class="mono">${kacar(k.id)}</td>
+        <td>${kacar(String(k.tarih || '—').slice(0, 10))}</td>
+        <td class="mono">${kacar(k.uretim_blok_no || '—')}</td>
+        <td class="sag mono">${(k.fire_orani || 0).toLocaleString('tr-TR')} %</td>
+        <td class="sag mono">${para2(k.toplam_maliyet, k.doviz)}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="bos" style="padding:10px">Bu blok hiç kesilmemiş.</div>';
+
+  /* URETILEN STOKLAR — tipe gore grupla */
+  const grup = {};
+  ur.forEach(x => { (grup[x.tip] = grup[x.tip] || []).push(x); });
+  const urGov = ur.length ? Object.entries(grup).map(([tip, liste]) => {
+    const m2 = liste.reduce((a, x) => a + Number(x.metraj_m2 || 0), 0);
+    return `
+    <div style="margin-bottom:10px">
+      <div style="font-size:.78rem;font-weight:700;margin-bottom:5px">
+        ${kacar(tip)} · ${liste.length} kayıt
+        ${m2 ? ' · ' + m2.toLocaleString('tr-TR', {maximumFractionDigits: 2}) + ' m²' : ''}</div>
+      <div class="tablo-kutu"><table>
+        <thead><tr><th>Stok</th><th>Ölçü</th><th>Durum</th>
+          <th class="sag">m²</th><th class="sag">Birim</th></tr></thead>
+        <tbody>${liste.map(x => `<tr>
+          <td class="mono">${kacar(x.id)}${x.kasa_no ? '<div style="font-size:.7rem;color:var(--soluk)">' + kacar(x.kasa_no) + '</div>' : ''}</td>
+          <td class="mono" style="font-size:.76rem">${[x.boy, x.yukseklik, x.kalinlik].filter(v => v).join('×')}</td>
+          <td>${kacar(x.durum || '—')}</td>
+          <td class="sag mono">${Number(x.metraj_m2 || 0).toLocaleString('tr-TR', {maximumFractionDigits: 2})}</td>
+          <td class="sag mono">${para2(x.alis_fiyati, x.doviz)}</td>
+        </tr>`).join('')}</tbody></table></div>
+    </div>`;
+  }).join('')
+    : '<div class="bos" style="padding:10px">Bu bloktan üretilmiş stok yok.</div>';
+
+  /* MALIYETLER */
+  const mlGov = ml.length ? `<div class="tablo-kutu"><table>
+      <thead><tr><th>Maliyet</th><th>Tip</th><th>Tarih</th>
+        <th>Bağlı</th><th class="sag">Tutar</th></tr></thead>
+      <tbody>${ml.map(m => `<tr>
+        <td class="mono">${kacar(m.id)}</td>
+        <td>${kacar(m.tip || '—')}</td>
+        <td>${kacar(String(m.tarih || '—').slice(0, 10))}</td>
+        <td class="mono" style="font-size:.74rem;color:var(--soluk)">${kacar(m.kaynak || '')}</td>
+        <td class="sag mono">${para2(m.tutar, m.doviz)}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="bos" style="padding:10px">İşlenmiş ek maliyet yok.</div>';
+
+  const bas = (t) => `<h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--soluk);margin:16px 0 7px">${t}</h4>`;
+
+  const govde = `
+    <div class="alan-grid" style="margin-bottom:6px">
+      ${kutu('Orijinal blok', oz.orijinal_blok_sayisi || 0)}
+      ${kutu('Kesim', oz.kesim_sayisi || 0)}
+      ${kutu('Üretilen stok', oz.uretilen_stok_sayisi || 0)}
+      ${kutu('Maliyet kaydı', oz.maliyet_kayit_sayisi || 0)}
+    </div>
+    ${bas('Orijinal blok')}${blokGov}
+    ${bas('Kesimler')}${kesimGov}
+    ${bas('Üretilen stoklar')}${urGov}
+    ${bas('İşlenen maliyetler')}${mlGov}`;
+
+  cekmeceAc(`Blok izleme · ${kacar(d.blok_no || blokNo)}`,
+            `${oz.kesim_sayisi || 0} kesim · ${oz.uretilen_stok_sayisi || 0} stok`,
+            govde,
+            `<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+}
+
 async function detayAc(id) {
   const s = (SON.data || []).find(x => x.id === id);
   if (!s) return;
@@ -1643,6 +1767,13 @@ async function detayAc(id) {
     eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="stokSil('${kacar(s.id)}','${kacar(s.tip)}','${kacar(stokNo(s))}')">Sil</button>`);
   // F6: bu ürün nereden geldi, nereye gitti — tek ekranda
   eylem.push(`<button class="blok-btn" onclick="izAc('${kacar(s.id)}','${kacar(s.tip)}')">Kaynak zinciri</button>`);
+  /* EK1 · BLOK İZLEME. "Kaynak zinciri" TEK STOK KAYDININ geçmişini
+     gösteriyor; blok izleme BLOK NUMARASI üzerinden gidiyor ve blok
+     tükendikten sonra da çalışıyor — kesimler, çıkan bütün stoklar,
+     işlenen maliyetler bir arada. Uç (`/api/blok/<no>/izleme`) hem
+     orijinal hem ÜRETİM blok numarasından arıyor. */
+  if (s.blok_no)
+    eylem.push(`<button class="blok-btn" onclick="blokIzlemeAc('${kacar(s.blok_no)}')">Blok izleme</button>`);
   eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
 
   cekmeceAc(s.cins || stokNo(s), `${stokNo(s)} · ${s.tip}`, govde, eylem.join(''));

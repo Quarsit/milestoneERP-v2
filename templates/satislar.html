@@ -177,6 +177,23 @@ function detayAc(id) {
     eylem.push(`<button class="blok-btn birincil" onclick="faturaOlustur('${kacar(id)}')">Fatura oluştur</button>`);
   if (x.siparis_id)
     eylem.push(`<button class="blok-btn" onclick="location.href='/siparis'">Siparişi aç</button>`);
+  /* SD4: `PUT /api/satislar/<id>` ucu kodda VARDI ama onu çağıran
+     hiçbir şey yoktu — özellik yarım kurulmuştu. Satış kaydı kârın
+     kaynağı (ortaklık hesabı, kârlılık raporu, müşteri özeti hep
+     buradan okuyor); yanlış girilmiş bir satış hiçbir yerden
+     düzeltilemiyordu. */
+  if (yazabilir('satis') || yazabilir('fatura'))
+    eylem.push(`<button class="blok-btn" onclick="sDuzenleAc('${kacar(id)}')">Düzenle</button>`);
+  /* EM2: `PATCH /api/satislar/<id>/fatura-bilgi` de bağlanmamıştı.
+     "Düzenle"den AYRI, çünkü iki uç AYRI sorular soruyor:
+       · PUT  para alanları — satış bir FATURADAN doğduysa REDDEDİYOR
+                              (belge ile kayıt ayrışmasın)
+       · PATCH fatura no / tarih / teslim / not — paraya dokunmuyor,
+                              o yüzden faturalı satışta da çalışıyor
+     Yani faturadan doğmuş bir satışın fatura numarasını yalnız
+     buradan düzeltebilirsin. */
+  if (yazabilir('satis') || yazabilir('fatura'))
+    eylem.push(`<button class="blok-btn" onclick="sFaturaBilgiAc('${kacar(id)}')">Fatura bilgisi</button>`);
   eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
   cekmeceAc(kacar(x.musteri || id), `${x.id} · ${x.satis_tarihi || ''}`, govde, eylem.join(''));
 }
@@ -210,6 +227,189 @@ document.getElementById('ara').addEventListener('input', e => {
   araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
 });
 
+/* ═══ SD4 · SATIŞ DÜZENLEME ═══ */
+let SDUZ_ID = null;
+
+function sDuzenleAc(id) {
+  const x = TUM.find(s => s.id === id);
+  if (!x) return;
+  SDUZ_ID = id;
+  cekmeceKapat();
+  document.getElementById('sDuzAlt').textContent =
+    `${x.id} · ${kacar(x.musteri || '')}`;
+  const koy = (kimlik, deger) => {
+    const el = document.getElementById(kimlik);
+    if (el) el.value = (deger === 0 || deger) ? deger : '';
+  };
+  koy('sDuzBirimFiyat', x.birim_fiyat);
+  koy('sDuzMiktar', x.miktar);
+  koy('sDuzTutar', x.tutar);
+  koy('sDuzTarih', x.satis_tarihi);
+  koy('sDuzNot', x.notlar);
+  document.getElementById('sDuzDoviz').value = (x.doviz || 'USD').toUpperCase();
+  document.getElementById('sDuzModal').classList.add('acik');
+}
+/* ═══ EM2 · FATURA BİLGİSİ ═══ */
+let SFB_ID = null;
+
+function sFaturaBilgiAc(id) {
+  const x = TUM.find(s => s.id === id);
+  if (!x) return;
+  SFB_ID = id;
+  cekmeceKapat();
+  document.getElementById('sFbAlt').textContent =
+    `${x.id} · ${kacar(x.musteri || '')}`;
+  const koy = (k, v) => {
+    const el = document.getElementById(k);
+    if (el) el.value = v || '';
+  };
+  koy('sFbNo', x.fatura_no);
+  koy('sFbTarih', (x.fatura_tarihi || '').slice(0, 10));
+  koy('sFbTeslim', (x.teslim_tarihi || '').slice(0, 10));
+  koy('sFbNot', x.notlar);
+  document.getElementById('sFbModal').classList.add('acik');
+}
+
+function sFbKapat() {
+  document.getElementById('sFbModal').classList.remove('acik');
+  SFB_ID = null;
+}
+
+async function sFaturaBilgiKaydet() {
+  if (!SFB_ID) return;
+  const btn = document.getElementById('sFbKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api(
+      `/api/satislar/${encodeURIComponent(SFB_ID)}/fatura-bilgi`,
+      { method: 'PATCH', body: JSON.stringify({
+          fatura_no: document.getElementById('sFbNo').value.trim(),
+          fatura_tarihi: document.getElementById('sFbTarih').value || null,
+          teslim_tarihi: document.getElementById('sFbTeslim').value || null,
+          notlar: document.getElementById('sFbNot').value
+        }) });
+    bildir(d.mesaj || 'Fatura bilgisi güncellendi');
+    sFbKapat();
+    await yukle();
+  } catch (e) { /* api() bildirdi */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
+function sDuzKapat() {
+  document.getElementById('sDuzModal').classList.remove('acik');
+}
+
+async function sDuzenleKaydet() {
+  if (!SDUZ_ID) return;
+  const btn = document.getElementById('sDuzKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const say = (kimlik) => {
+      const v = document.getElementById(kimlik).value;
+      return v === '' ? undefined : parseFloat(v);
+    };
+    const govde = {
+      doviz: document.getElementById('sDuzDoviz').value,
+      satis_tarihi: document.getElementById('sDuzTarih').value || undefined,
+      notlar: document.getElementById('sDuzNot').value
+    };
+    /* Bos birakilan sayi alani GONDERILMIYOR: yanlislikla
+       sifirlamak mumkun olmasin. */
+    for (const [kimlik, alan] of [['sDuzBirimFiyat', 'birim_fiyat'],
+                                  ['sDuzMiktar', 'miktar'],
+                                  ['sDuzTutar', 'tutar']]) {
+      const v = say(kimlik);
+      if (v !== undefined) govde[alan] = v;
+    }
+    const d = await api(`/api/satislar/${encodeURIComponent(SDUZ_ID)}`,
+                        { method: 'PUT', body: JSON.stringify(govde) });
+    bildir(d.mesaj || 'Satış kaydı güncellendi');
+    sDuzKapat(); await yukle();
+  } catch (e) {
+    /* 409 = faturaya bagli. api() 409'u cagirana birakiyor;
+       sebebi tehlike kipinde gosteriyoruz ki fark edilsin. */
+    if (e && e.status === 409 && e.yanit && e.yanit.mesaj) {
+      bildir(e.yanit.mesaj, true);
+    }
+  } finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+
 yukle();
 </script>
+<!-- SD4 · SATIŞ DÜZENLEME
+     Satışın tutar tarafı hiçbir yerden düzenlenemiyordu. Bu kayıt
+     kârın kaynağı: ortaklık hesabı, kârlılık raporu ve müşteri
+     özeti hep buradan okuyor. Faturaya bağlı satışta sunucu 409
+     dönüyor ve sebebini yazıyor — orada doğrunun kaynağı fatura. -->
+<!-- ═══ EM2 · FATURA BİLGİSİ ═══
+     Yalnız belge alanları: tutar, maliyet ve kâr buradan
+     DEĞİŞMEZ. Uç da öyle kurulmuş. -->
+<div class="modal-ortu" id="sFbModal" onclick="if(event.target===this)sFbKapat()">
+  <div class="modal" role="dialog" aria-label="Fatura bilgisi">
+    <div class="modal-bas">
+      <h3>Fatura Bilgisi</h3>
+      <p id="sFbAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Fatura No</label>
+          <input id="sFbNo" placeholder="MST-2026-001"></div>
+        <div class="form-alan"><label>Fatura Tarihi</label>
+          <input id="sFbTarih" type="date"></div>
+      </div>
+      <div class="form-satir">
+        <div class="form-alan"><label>Teslim Tarihi</label>
+          <input id="sFbTeslim" type="date"></div>
+        <div class="form-alan"><label>Not</label>
+          <input id="sFbNot" placeholder="opsiyonel"></div>
+      </div>
+      <div style="font-size:.76rem;color:var(--soluk);line-height:1.5">
+        Tutar, maliyet ve kâr buradan değişmez — onlar "Düzenle"de.
+        Satış bir faturadan doğduysa tutarı hiç değiştirilemez, ama
+        belge bilgisini buradan düzeltebilirsin.
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="sFbKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="sFbKaydet" onclick="sFaturaBilgiKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-ortu" id="sDuzModal" onclick="if(event.target===this)sDuzKapat()">
+  <div class="modal" role="dialog" aria-label="Satış düzenle">
+    <div class="modal-bas">
+      <h3>Satışı Düzenle</h3>
+      <p id="sDuzAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir f3">
+        <div class="form-alan"><label>Birim Fiyat</label>
+          <input id="sDuzBirimFiyat" type="number" step="0.01" min="0"></div>
+        <div class="form-alan"><label>Miktar</label>
+          <input id="sDuzMiktar" type="number" step="0.001" min="0"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="sDuzDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select></div>
+      </div>
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Tutar</label>
+          <input id="sDuzTutar" type="number" step="0.01" min="0"></div>
+        <div class="form-alan"><label>Satış Tarihi</label>
+          <input id="sDuzTarih" type="date"></div>
+      </div>
+      <div class="not" style="font-size:.8rem">
+        Tutarı boş bırakırsan birim fiyat × miktardan hesaplanır.
+        Yazarsan yazdığın geçerli olur — faturada iskonto ya da
+        yuvarlama olabilir.
+      </div>
+      <div class="form-alan"><label>Not</label>
+        <input id="sDuzNot" maxlength="500" data-buyuk-harf="hayir"></div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="sDuzKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="sDuzKaydet" onclick="sDuzenleKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

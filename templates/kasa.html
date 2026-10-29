@@ -307,6 +307,50 @@
   </div>
 </div>
 
+<!-- ═══ EK1 · KASAYI DÜZENLE ═══
+     Ad, döviz ve açılış bakiyesi. Döviz alanı HAREKETİ OLAN kasada
+     kilitli: bakiye o dövizde birikti, başka bir para birimi yazmak
+     rakamı çevirmeden ad değiştirmek olurdu. Sunucu da reddediyor —
+     tarayıcıda yapılan bir denetim denetim değildir. -->
+<div class="modal-ortu" id="kdModal">
+  <div class="modal">
+    <div class="modal-bas">
+      <h3>Kasayı Düzenle</h3>
+      <p id="kdAltBaslik">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-satir">
+        <div class="form-alan"><label>Kasa Adı</label>
+          <input id="kdAd" placeholder="USD Banka"></div>
+        <div class="form-alan"><label>Döviz</label>
+          <select id="kdDoviz">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="TRY">TRY</option>
+          </select>
+          <div id="kdDovizNot" style="display:none;font-size:.74rem;color:var(--kehribar);margin-top:4px"></div>
+        </div>
+      </div>
+      <div class="form-alan"><label>Açıklama</label>
+        <input id="kdAciklama" placeholder="opsiyonel"></div>
+      <!-- AÇILIŞ BAKİYESİ ALANI YOK, bilerek.
+           Modalin ilk halinde vardi. Olctum: `Kasa` modelinde
+           `baslangic_bakiye` diye bir KOLON YOK — uc noktada o alan
+           10 yerde `hasattr`/`getattr` ile yoklaniyor, hepsi False
+           donuyor. Yani alani gondermek hicbir sey yapmiyordu; form
+           "kaydedildi" der, kayitta hicbir sey degismezdi. Tam DZ5
+           sinifi, az kalsin gonderiyordum.
+           GUNCEL bakiye de burada duzenlenmiyor: o hareketlerden
+           turuyor, elle yazmak defteri ile bakiyeyi ayristirirdi.
+           Yanlis bakiye icin dogru yol kasa hareketi girmek. -->
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="kasaDuzenleKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="kdKaydet" onclick="kasaDuzenleKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -469,10 +513,74 @@ async function kasaAc(id) {
     eylem.push(`<button class="blok-btn birincil" onclick="cekmeceKapat();sonHareketleriYukle(${id})">Hareketlerini göster</button>`);
     eylem.push(`<button class="blok-btn" onclick="window.open('/api/kasa/${id}/hareket/excel','_blank')">Excel indir</button>`);
   }
-  if (yazabilir('kasa'))
+  if (yazabilir('kasa')) {
+    /* EK1: `PUT /api/kasa/<id>` ucu yaziliydi ama hicbir ekran
+       cagirmiyordu — yanlis kurulmus bir kasanin adi, dovizi ya da
+       acilis bakiyesi hicbir yerden duzeltilemiyordu. */
+    eylem.push(`<button class="blok-btn" onclick="kasaDuzenleAc(${id})">Kasayı düzenle</button>`);
     eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="kasaSil(${id}, '${kacar(k.ad)}')">Kasayı sil</button>`);
+  }
   eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
   cekmeceAc(k.ad, `${k.doviz}${k.ana_kasa ? ' · ana kasa' : ''}`, govde, eylem.join(''));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EK1 · KASAYI DÜZENLE
+   Ucu (`PUT /api/kasa/<id>`) hicbir ekran cagirmiyordu.
+   ═══════════════════════════════════════════════════════════════ */
+let KD_ID = null;
+
+function kasaDuzenleAc(id) {
+  const k = KASALAR.find(x => x.id === id);
+  if (!k) { bildir('Kasa bulunamadı.', true); return; }
+  KD_ID = id;
+  cekmeceKapat();
+  document.getElementById('kdAd').value = k.ad || '';
+  document.getElementById('kdAciklama').value = k.aciklama || '';
+  const dv = document.getElementById('kdDoviz');
+  dv.value = k.doviz || 'USD';
+  /* DOVIZ KILIDI: hareketi varsa degistirilemez. Sunucu da ayni
+     kurali uyguluyor; burasi SEBEBINI soyluyor. */
+  const hs = k.hareket_sayisi;
+  const kilit = !(hs === 0 || hs === undefined || hs === null);
+  dv.disabled = kilit;
+  const not = document.getElementById('kdDovizNot');
+  if (kilit) {
+    not.style.display = 'block';
+    not.textContent = (hs ? hs + ' hareket var' : 'Hareketi olabilir')
+      + ' — bakiye bu dövizde birikti, değiştirilemez. '
+      + 'Doğru dövizde yeni kasa açıp virmanla taşıyın.';
+  } else {
+    not.style.display = 'none';
+  }
+  document.getElementById('kdAltBaslik').textContent =
+    `${k.ad || ''} · güncel bakiye ${para(k.bakiye, k.doviz)}`
+    + (hs ? ` · ${hs} hareket` : ' · hareket yok');
+  document.getElementById('kdModal').classList.add('acik');
+}
+
+function kasaDuzenleKapat() {
+  document.getElementById('kdModal').classList.remove('acik');
+  KD_ID = null;
+}
+
+async function kasaDuzenleKaydet() {
+  if (!KD_ID) return;
+  const ad = document.getElementById('kdAd').value.trim();
+  if (!ad) { bildir('Kasa adı zorunlu.', true); return; }
+  const govde = { ad: ad, aciklama: document.getElementById('kdAciklama').value };
+  const dv = document.getElementById('kdDoviz');
+  if (!dv.disabled) govde.doviz = dv.value;
+  const btn = document.getElementById('kdKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  try {
+    const d = await api(`/api/kasa/${KD_ID}`,
+                        { method: 'PUT', body: JSON.stringify(govde) });
+    bildir(d.mesaj || 'Kasa güncellendi');
+    kasaDuzenleKapat();
+    await kasalariYukle();
+  } catch (e) { /* api() zaten bildiriyor */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
 }
 
 /* ── Kasa hareketi ── */

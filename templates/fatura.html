@@ -87,8 +87,16 @@
   <button class="cip" data-d="Kesildi">Kesildi</button>
   <button class="cip" data-d="Kismi Tahsil">Kısmi Tahsil</button>
   <button class="cip" data-d="Tahsil Edildi">Tahsil Edildi</button>
-  <div class="suz"><input id="ara" placeholder="Müşteri, fatura no ara…" autocomplete="off"></div>
+  <div class="suz"><input id="ara" placeholder="Müşteri, fatura no veya ETTN ara…" autocomplete="off" spellcheck="false"></div>
 </div>
+
+<!-- ═══ EK1 · ETTN → FATURA (GİB MUTABAKATI) ═══
+     GİB portalındaki listede bir UUID görünce hangi faturaya denk
+     geldiğini bulmak için. Ayrı bir kutu AÇMADIK: arama alanına
+     32 haneli onaltılık bir şey yapıştırılınca sistem tanıyor ve
+     ters aramayı kendisi yapıyor. Fatura numarası ararken ETTN
+     aramaya geçmek diye bir adım yok. -->
+<div id="ettnSonuc" style="display:none;margin:-8px 0 16px"></div>
 
 <div class="tablo-kutu">
   <table>
@@ -1129,10 +1137,88 @@ document.querySelectorAll('.cip').forEach(b => b.onclick = () => {
   document.querySelectorAll('.cip').forEach(x => x.classList.remove('aktif'));
   b.classList.add('aktif'); DURUM = b.dataset.d; ciz();
 });
+/* ═══ EK1 · ETTN TERS ARAMA ═══
+   Sunucudaki kuralin aynisi: tireli ya da tiresiz, 32 hane
+   onaltilik (`_ettn_normalize`). Ayni kurali iki yerde yazmak
+   ayrisma riski; burada YALNIZCA "bu bir ETTN mi" sorusuna cevap
+   veriyoruz, normalizasyonu sunucu yapiyor. */
+function ettnMi(metin) {
+  const c = (metin || '').trim().replace(/[{} ]/g, '').replace(/-/g, '');
+  return c.length === 32 && /^[0-9a-fA-F]+$/.test(c);
+}
+
+async function ettnAra(ham) {
+  const kutu = document.getElementById('ettnSonuc');
+  kutu.style.display = 'block';
+  kutu.innerHTML = '<div class="bos" style="padding:12px">ETTN aranıyor…</div>';
+  try {
+    const d = await api('/api/fatura/ettn/' + encodeURIComponent(ham.trim()));
+    const f = d.fatura || {};
+    kutu.innerHTML = `
+      <div class="tablo-kutu" style="border-left:3px solid var(--verde)">
+        <div style="padding:13px 15px">
+          <div style="font-size:.72rem;color:var(--soluk);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">ETTN eşleşti</div>
+          <div style="font-family:var(--mono);font-size:.74rem;color:var(--soluk);margin-bottom:9px">${kacar(f.ettn || '')}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px 22px;align-items:baseline">
+            <strong style="font-size:1rem">${kacar(f.fatura_no || f.id || '—')}</strong>
+            <span>${kacar(f.musteri || '—')}</span>
+            <span class="rozet rz-gri">${kacar(f.durum || '—')}</span>
+            <span class="mono">${para(f.toplam, f.doviz)}</span>
+            <span style="color:var(--soluk);font-size:.8rem">${kacar((f.fatura_tarihi || '').slice(0, 10))}</span>
+          </div>
+          <div style="margin-top:8px;font-size:.78rem;color:var(--soluk)">
+            ${f.efatura_senaryo ? 'Senaryo: ' + kacar(f.efatura_senaryo) + ' · ' : ''}
+            ${f.efatura_durum ? 'GİB durumu: ' + kacar(f.efatura_durum) : ''}
+          </div>
+          <button class="blok-btn birincil" style="margin-top:11px"
+                  onclick="ettnSonucGit('${kacar(f.id || '')}')">Faturayı aç</button>
+          <button class="blok-btn" style="margin-top:11px"
+                  onclick="ettnSonucKapat()">Kapat</button>
+        </div>
+      </div>`;
+  } catch (e) {
+    /* 404 = kayitli fatura yok. api() zaten bildirdi; burada da
+       YAZIYORUZ, cunku "bulunamadi" bu ekranda bir CEVAP:
+       GIB'de olan bir fatura bizde yok demek. */
+    const _m = (e && e.yanit && e.yanit.mesaj) || 'Bu ETTN ile kayıtlı fatura yok.';
+    kutu.innerHTML = `
+      <div class="tablo-kutu" style="border-left:3px solid var(--kehribar)">
+        <div style="padding:13px 15px">
+          <div style="font-weight:600;margin-bottom:4px">${kacar(_m)}</div>
+          <div style="font-size:.79rem;color:var(--soluk)">
+            GİB'de duran bir faturanın karşılığı sistemde yoksa, ya ETTN
+            hiç yazılmamış ya da fatura bu sistemde hiç kesilmemiş.</div>
+          <button class="blok-btn" style="margin-top:10px" onclick="ettnSonucKapat()">Kapat</button>
+        </div>
+      </div>`;
+  }
+}
+
+function ettnSonucKapat() {
+  const k = document.getElementById('ettnSonuc');
+  k.style.display = 'none'; k.innerHTML = '';
+}
+
+function ettnSonucGit(fid) {
+  if (!fid) return;
+  ettnSonucKapat();
+  document.getElementById('ara').value = '';
+  ARA = ''; ciz();
+  detayAc(fid);
+}
+
 let araZaman;
 document.getElementById('ara').addEventListener('input', e => {
   clearTimeout(araZaman);
-  araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
+  const ham = e.target.value;
+  araZaman = setTimeout(() => {
+    /* EK1: ETTN yapistirildiysa liste suzmek anlamsiz — fatura no
+       ile ETTN birbirine hic benzemez. Ters aramayi yapip listeyi
+       oldugu gibi birakiyoruz. */
+    if (ettnMi(ham)) { ettnAra(ham); return; }
+    ettnSonucKapat();
+    ARA = ham; ciz();
+  }, 200);
 });
 
 yukle();
