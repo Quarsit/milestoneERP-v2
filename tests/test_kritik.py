@@ -10808,3 +10808,90 @@ def test_vr1_her_bag_tipinin_geri_alma_yolu_var():
     assert not acik, (
         'bu bağlantı tipleriyle hareket yaratılıyor ama geri alma '
         'yolu yok: ' + ', '.join(acik))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  SL1 · SATIŞLAR LİSTESİ SATIŞ BAŞINA, KALEM BAŞINA DEĞİL
+#
+#  İşin sahibi bildirdi: iki plakalı TEK satış, satışlar sekmesinde
+#  İKİ KUTU olarak görünüyordu — aynı fatura no, aynı müşteri, aynı
+#  tarih. Kullanıcı iki satış yaptığını sanıyor.
+#
+#  Satış kaydının kalem başına üretilmesi DOĞRU: ürün bazlı kârlılık
+#  ondan besleniyor (F1/F2, DV1'de transit faturayı da o yola
+#  soktuk). Yanlış olan, listenin o kayıtları olduğu gibi basması.
+#
+#  Düzeltirken aynı ekranda ikinci bir tutarsızlık çıktı: müşteri
+#  özeti ucu da KAYIT sayıyordu. Liste "1 satış" derken özet "2"
+#  diyecekti — EM2'de düzelttiğimiz "satır ve özet aynı sayıyı
+#  söylemiyor" durumunun kopyası.
+# ══════════════════════════════════════════════════════════════════
+def test_sl1_musteri_ozeti_satis_sayiyor_kalem_degil():
+    """Aynı faturanın kalemleri TEK satış sayılmalı."""
+    from models import SatisKaydi, Fatura
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(Cari(id='SL1-MUS', unvan='SL1 ACAR',
+                            cari_tip='Müşteri', para_birimi='USD'))
+        db.session.add(Fatura(
+            id='FT-SL1', fatura_no='SL1-001', cari_id='SL1-MUS',
+            musteri='SL1 ACAR', yon='satis', durum='Kesildi',
+            doviz='USD', toplam=1008, ara_toplam=1008,
+            fatura_tarihi=date(2026, 10, 29)))
+        # TEK faturanın İKİ kalemi
+        for i in (1, 2):
+            db.session.add(SatisKaydi(
+                id=f'SK-SL1-{i}', cari_id='SL1-MUS', musteri='SL1 ACAR',
+                cins='SL1 CEPPO', stok_tip='PLAKA', miktar=5.04,
+                birim='m2', doviz='USD', tutar_usd=504, maliyet_usd=181.44,
+                kar_usd=322.56, fatura_id='FT-SL1', fatura_no='SL1-001',
+                satis_tarihi=date(2026, 10, 29)))
+        db.session.commit()
+
+    r = c.get('/api/satislar/musteri/SL1%20ACAR/ozet', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    j = r.get_json()
+    # ESKI DAVRANIS: adet == 2
+    assert j.get('adet') == 1, (
+        f'adet {j.get("adet")} — iki kalemli TEK satış 1 sayılmalı')
+    assert j.get('kalem_adedi') == 2, j
+    assert float(j.get('toplam_usd') or 0) == 1008.0, j
+
+
+def test_sl1_satis_listesi_fatura_kimligini_gonderiyor():
+    """Ekran faturaya göre gruplayacak; kimlik gelmeli (AS2 sınıfı)."""
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/satislar?per_page=300', headers=H)
+    assert r.status_code == 200
+    satirlar = (r.get_json() or {}).get('data') or []
+    assert satirlar, 'satış kaydı yok, test anlamsız'
+    assert 'fatura_id' in satirlar[0], (
+        'ekran fatura_id ile gruplayacak ama sunucu göndermiyor')
+
+
+def test_sl1_ekran_satislari_gruplayip_kalemleri_gosteriyor():
+    """Gruplama ekranda olmalı ve kalem bilgisi kaybolmamalı."""
+    import io as _io
+    s = _io.open(os.path.join(KOK, 'templates', 'satislar.html'),
+                 encoding='utf-8').read()
+    assert 'function gruplaSatislar(' in s, 'gruplama yok'
+    assert 'function grupAc(' in s, 'grup detayı yok'
+    # Tek kalemli grup DOĞRUDAN detaya gitmeli (araya boş adım girmesin)
+    assert 'if (g.kalemler.length === 1) { detayAc(' in s
+    # Kalem satırları kendi detayını açmalı
+    assert "onclick=\"detayAc('${kacar(k.id)}')\"" in s
+    # KPI kayıt değil satış saymalı
+    assert 'gruplaSatislar(TUM).length' in s
+
+
+def test_sl1_farkli_birimler_toplanmiyor():
+    """m² + ton toplanıp tek birimle yazılmamalı (DV1 dersi)."""
+    import io as _io
+    s = _io.open(os.path.join(KOK, 'templates', 'satislar.html'),
+                 encoding='utf-8').read()
+    # Birim sayısı 1 DEĞİLSE miktar toplanmaz, "N kalem" yazılır
+    i = s.find('function gruplaSatislar(')
+    govde = s[i:i + 3000]
+    assert 'birimler.length === 1' in govde, (
+        'miktar birim ayrımı yapmadan toplanıyor olabilir')
+    assert "g.kalemler.length + ' kalem'" in govde

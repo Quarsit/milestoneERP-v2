@@ -22939,6 +22939,10 @@ def create_app():
                 'musteri': s.musteri, 'musteri_ulke': s.musteri_ulke,
                 'satis_tarihi': s.satis_tarihi.isoformat() if s.satis_tarihi else None,
                 'teslim_tarihi': s.teslim_tarihi.isoformat() if s.teslim_tarihi else None,
+                # SL1: ekran satışları FATURAYA göre gruplayacak.
+                # `fatura_no` tek başına zayıf bir anahtar (iki ayrı
+                # belge aynı numarayı taşıyabilir); kimlik kesin.
+                'fatura_id': s.fatura_id,
                 'fatura_no': s.fatura_no,
                 'fatura_tarihi': s.fatura_tarihi.isoformat() if s.fatura_tarihi else None,
                 'birim_fiyat': s.birim_fiyat, 'miktar': s.miktar, 'birim': s.birim,
@@ -23282,9 +23286,20 @@ def create_app():
         maliyet_usd = sum(s.maliyet_usd or 0 for s in sklar)
         kar_usd = toplam_usd - maliyet_usd
 
+        # ── SL1 · SATIŞ SAYISI, KAYIT SAYISI DEĞİL ──
+        # Satış kaydı KALEM başına üretiliyor. `len(sklar)` iki
+        # plakalı tek satışa "2" diyordu. Liste artık faturaya göre
+        # grupluyor ve "1 satış" yazıyor; bu uç düzeltilmeseydi
+        # AYNI EKRANDA satır "1", özet "2" derdi — EM2'de düzelttiğimiz
+        # "satırı ve özeti aynı sayıyı söylemiyor" durumunun kopyası.
+        # Faturasız kayıt kendi başına bir satıştır.
+        _satislar = {(s.fatura_id or s.fatura_no or f'tek:{s.id}')
+                     for s in sklar}
+
         return jsonify({
             'ok': True,
-            'adet': len(sklar),
+            'adet': len(_satislar),
+            'kalem_adedi': len(sklar),
             'toplam_usd': toplam_usd,
             'toplam_try': toplam_try,
             'maliyet_usd': maliyet_usd,

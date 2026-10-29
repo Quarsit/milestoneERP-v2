@@ -122,13 +122,79 @@ function marjBul(s) {
   return t > 0 ? (s.kar_usd || 0) / t * 100 : 0;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   SL1 · LİSTE SATIŞ BAŞINA, KALEM BAŞINA DEĞİL
+
+   Satış kaydı STOK/KALEM başına üretiliyor ve bu DOĞRU: ürün bazlı
+   kârlılık ondan besleniyor (F1/F2, DV1). Ama liste o kayıtları
+   olduğu gibi basınca iki plakalı tek bir satış ekranda İKİ SATIR
+   görünüyordu; aynı fatura no, aynı müşteri, aynı tarih. Kullanıcı
+   iki satış yaptığını sanıyor.
+
+   Artık satırlar FATURAYA göre toplanıyor. Faturasız kayıt kendi
+   başına bir gruptur (birleştirecek bir belge yok).
+
+   Kalem bilgisi KAYBOLMUYOR: çok kalemli bir gruba tıklayınca
+   kalemler tek tek listeleniyor ve her biri kendi detayını açıyor.
+   Tek kalemli grup doğrudan detaya gidiyor — araya boş bir adım
+   koymak, en sık durumu yavaşlatmak olurdu.
+   ═══════════════════════════════════════════════════════════════ */
+function gruplaSatislar(kayitlar) {
+  const harita = new Map();
+  for (const x of kayitlar) {
+    /* Faturasız kayıt kendi başına: birleştirecek belge yok. */
+    const anahtar = x.fatura_id || x.fatura_no || ('tek:' + x.id);
+    if (!harita.has(anahtar)) {
+      harita.set(anahtar, {
+        anahtar,
+        kalemler: [],
+        musteri: x.musteri, musteri_ulke: x.musteri_ulke,
+        fatura_no: x.fatura_no, fatura_id: x.fatura_id,
+        siparis_id: x.siparis_id,
+        satis_tarihi: x.satis_tarihi,
+        tutar_usd: 0, maliyet_usd: 0, kar_usd: 0,
+      });
+    }
+    const g = harita.get(anahtar);
+    g.kalemler.push(x);
+    g.tutar_usd += (x.tutar_usd || 0);
+    g.maliyet_usd += (x.maliyet_usd || 0);
+    g.kar_usd += (x.kar_usd || 0);
+    /* En eski tarih grubun tarihi: aynı faturanın kalemleri aynı
+       gün olur, ama veri bozuksa en erkeni göstermek dürüst. */
+    if (x.satis_tarihi && (!g.satis_tarihi || x.satis_tarihi < g.satis_tarihi))
+      g.satis_tarihi = x.satis_tarihi;
+  }
+  for (const g of harita.values()) {
+    g.marj = g.tutar_usd > 0 ? g.kar_usd / g.tutar_usd * 100 : 0;
+    const cinsler = [...new Set(g.kalemler.map(k => k.cins).filter(Boolean))];
+    g.cins_ozet = cinsler.length === 1 ? cinsler[0]
+      : (cinsler.length ? cinsler[0] + ' +' + (cinsler.length - 1) : '—');
+    /* Miktar yalnız BİRİMLER AYNIYSA toplanır. 100 m² + 20 ton
+       toplanıp "120 m²" yazmak, DV1'de düzelttiğimiz hatanın
+       ekrandaki kopyası olurdu. */
+    const birimler = [...new Set(g.kalemler.map(k => k.birim).filter(Boolean))];
+    if (birimler.length === 1) {
+      g.miktar_ozet = g.kalemler.reduce((a, k) => a + (k.miktar || 0), 0)
+        .toLocaleString('tr-TR') + ' ' + birimler[0];
+    } else {
+      g.miktar_ozet = g.kalemler.length + ' kalem';
+    }
+  }
+  return [...harita.values()];
+}
+
 function kpiCiz() {
   const ciro = TUM.reduce((a, s) => a + (s.tutar_usd || 0), 0);
   const kar = TUM.reduce((a, s) => a + (s.kar_usd || 0), 0);
   const marj = ciro > 0 ? kar / ciro * 100 : 0;
   const fatursuz = TUM.filter(s => !s.fatura_no);
   document.getElementById('kCiro').innerHTML = para(ciro).replace(' $', '<small>$</small>');
-  document.getElementById('kCiroEk').textContent = TUM.length + ' satış';
+  /* SL1: KAYIT değil SATIŞ sayılır. İki plakalı tek satış "2 satış"
+     yazıyordu; kullanıcı iki satış yaptığını sanıyordu. */
+  const satisSayisi = gruplaSatislar(TUM).length;
+  document.getElementById('kCiroEk').textContent = satisSayisi + ' satış'
+    + (TUM.length !== satisSayisi ? ' · ' + TUM.length + ' kalem' : '');
   document.getElementById('kKar').innerHTML = para(kar).replace(' $', '<small>$</small>');
   document.getElementById('kKarEk').textContent = 'maliyet ' + para(ciro - kar);
   document.getElementById('kMarj').innerHTML = '%' + marj.toFixed(1).replace('.', ',');
@@ -142,7 +208,10 @@ function kpiCiz() {
 
 function ciz() {
   const s = ARA.toLocaleLowerCase('tr');
-  let liste = TUM.filter(x => {
+  /* SL1 · süzgeçler KALEM üzerinde çalışır, sonra gruplanır.
+     Önce gruplayıp sonra süzmek, "cins = X" süzgecinde X içermeyen
+     kalemleri de gruba takılı bırakırdı. */
+  let kalemler = TUM.filter(x => {
     if (FILTRE === 'faturali' && !x.fatura_no) return false;
     if (FILTRE === 'faturasiz' && x.fatura_no) return false;
     if (FILTRE === 'dusuk' && marjBul(x) >= 15) return false;
@@ -152,22 +221,25 @@ function ciz() {
               .join(' ').toLocaleLowerCase('tr').includes(s)) return false;
     return true;
   });
+  const liste = gruplaSatislar(kalemler);
   liste.sort((a, b) => (b.satis_tarihi || '').localeCompare(a.satis_tarihi || ''));
 
   const g = document.getElementById('govde');
   g.innerHTML = liste.length ? liste.map(x => {
-    const m = marjBul(x);
+    const m = x.marj;
     const renk = m >= 25 ? '--verde' : m >= 15 ? '--kehribar' : '--kirmizi';
+    const cok = x.kalemler.length > 1;
     return `
-    <tr style="border-left-color:var(${renk})" onclick="detayAc('${kacar(x.id)}')">
-      <td class="mono" style="font-size:.8rem">${kacar(x.id)}
+    <tr style="border-left-color:var(${renk})" onclick="grupAc('${kacar(x.anahtar)}')">
+      <td class="mono" style="font-size:.8rem">${kacar(
+        cok ? (x.fatura_no || x.anahtar) : x.kalemler[0].id)}
         <div class="ikincil">${x.fatura_no
-          ? kacar(x.fatura_no)
+          ? (cok ? x.kalemler.length + ' kalem' : kacar(x.fatura_no))
           : '<span style="color:var(--kehribar);font-weight:600">faturasız</span>'}</div></td>
       <td><strong>${kacar(x.musteri || '—')}</strong>
         ${x.musteri_ulke ? '<div class="ikincil">' + kacar(x.musteri_ulke) + '</div>' : ''}</td>
-      <td>${kacar(x.cins || '—')}
-        <div class="ikincil">${kacar(x.stok_tip || '')} · ${(x.miktar || 0).toLocaleString('tr-TR')} ${kacar(x.birim || '')}</div></td>
+      <td>${kacar(x.cins_ozet)}
+        <div class="ikincil">${kacar(x.miktar_ozet)}</div></td>
       <td class="sag mono" style="font-weight:600">${para(x.tutar_usd)}</td>
       <td class="sag mono" style="color:var(--soluk)">${para(x.maliyet_usd)}</td>
       <td class="sag mono" style="font-weight:600;color:var(--verde)">${para(x.kar_usd)}</td>
@@ -177,6 +249,67 @@ function ciz() {
       </td>
     </tr>`;
   }).join('') : '<tr><td colspan="7" class="bos">Satış kaydı yok.</td></tr>';
+}
+
+/* SL1 · gruba tıklanınca: tek kalemliyse doğrudan detay, çok
+   kalemliyse kalemler listesi. */
+function grupAc(anahtar) {
+  const liste = gruplaSatislar(TUM);
+  const g = liste.find(x => x.anahtar === anahtar);
+  if (!g) return;
+  if (g.kalemler.length === 1) { detayAc(g.kalemler[0].id); return; }
+
+  const alan = (l, v, mono) => `<div class="alan"><label>${l}</label><div class="${mono ? 'mono' : ''}">${v || '—'}</div></div>`;
+  const renk = g.marj >= 25 ? '--verde' : g.marj >= 15 ? '--kehribar' : '--kirmizi';
+  const satirlar = g.kalemler.map(k => {
+    const km = marjBul(k);
+    return `
+    <div class="blok" style="display:flex;align-items:center;gap:12px;
+         padding:10px 12px;border-bottom:1px solid var(--cizgi);cursor:pointer"
+         onclick="detayAc('${kacar(k.id)}')">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600">${kacar(k.cins || '—')}${
+          k.ozellik ? ' · ' + kacar(k.ozellik) : ''}</div>
+        <div class="ikincil mono" style="font-size:.76rem">${kacar(k.id)} · ${
+          kacar(k.stok_tip || '')} · ${(k.miktar || 0).toLocaleString('tr-TR')} ${
+          kacar(k.birim || '')}${k.stok_no || k.stok_id
+            ? ' · ' + kacar(k.stok_no || k.stok_id) : ''}</div>
+      </div>
+      <div class="mono sag" style="font-weight:600">${para2(k.tutar_usd)}</div>
+      <div class="mono sag" style="width:92px;color:var(--verde)">${para2(k.kar_usd)}</div>
+      <div class="mono sag" style="width:62px">%${km.toFixed(1).replace('.', ',')}</div>
+    </div>`;
+  }).join('');
+
+  const govde = `
+    <div class="alan-grid">
+      ${alan('Tutar', para2(g.tutar_usd), true)}
+      ${alan('Maliyet', para2(g.maliyet_usd), true)}
+      ${alan('Kâr', `<span style="color:var(--verde);font-weight:700">${para2(g.kar_usd)}</span>`)}
+      ${alan('Marj', `<span style="font-weight:700;color:var(${renk})">%${g.marj.toFixed(1).replace('.', ',')}</span>`)}
+      ${alan('Satış Tarihi', kacar(g.satis_tarihi || '—'), true)}
+      ${alan('Fatura', g.fatura_no
+        ? kacar(g.fatura_no)
+        : '<span class="rozet rz-kehribar">Faturasız</span>')}
+      ${g.siparis_id ? alan('Sipariş', kacar(g.siparis_id), true) : ''}
+      ${alan('Kalem', g.kalemler.length + ' ürün', true)}
+    </div>
+    <div class="panel" style="margin-top:14px;padding:0;overflow:hidden">
+      <div style="padding:10px 12px;font-size:.78rem;font-weight:700;
+           letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);
+           border-bottom:1px solid var(--cizgi)">Kalemler · tıkla, detayı açılsın</div>
+      ${satirlar}
+    </div>
+    <div id="msOzet" style="margin-top:14px"></div>`;
+
+  const eylem = [];
+  if (g.siparis_id)
+    eylem.push(`<button class="blok-btn" onclick="location.href='/siparis'">Siparişi aç</button>`);
+  eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
+  cekmeceAc(kacar(g.musteri || anahtar),
+            `${g.fatura_no || g.kalemler.length + ' kalem'} · ${g.satis_tarihi || ''}`,
+            govde, eylem.join(''));
+  musteriOzetiYukle(g.musteri);
 }
 
 /* KD1 · çekmecenin sonuna MÜŞTERİ ÖZETİ bölümü eklendi (#msOzet).
@@ -268,7 +401,10 @@ async function musteriOzetiYukle(musteri) {
     <div class="panel" style="padding:12px 14px">
       <h4 style="margin:0 0 8px;font-size:.86rem">
         ${kacar(musteri)} · tüm satışlar</h4>
-      ${satir('Satış adedi', d.adet)}
+      ${satir('Satış adedi', d.adet
+        + (d.kalem_adedi && d.kalem_adedi !== d.adet
+           ? ' <span style="color:var(--soluk);font-weight:400">· '
+             + d.kalem_adedi + ' kalem</span>' : ''))}
       ${satir('Ciro', para2(d.toplam_usd))}
       ${satir('Maliyet', para2(d.maliyet_usd))}
       ${satir('Kâr', `<span style="color:var(--verde)">${para2(d.kar_usd)}</span>`)}
