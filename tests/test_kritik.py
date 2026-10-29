@@ -10895,3 +10895,204 @@ def test_sl1_farkli_birimler_toplanmiyor():
     assert 'birimler.length === 1' in govde, (
         'miktar birim ayrımı yapmadan toplanıyor olabilir')
     assert "g.kalemler.length + ' kalem'" in govde
+
+
+# ══════════════════════════════════════════════════════════════════
+#  GA1 · SUNUCUNUN OKUDUĞU GÖVDE ALANINI BİR EKRAN GÖNDERMELİ
+#
+#  HS1'DE ÖLÇÜLEN SINIF. İki yönü de gerçek çıkmıştı:
+#    · `doviz` — hızlı satış formunda DÖVİZ seçimi vardı ama gövdeye
+#      konmuyordu; sunucu bulamayınca USD'ye düşüyor ve EUR seçilen
+#      satışın siparişi, faturası, cari hareketi, çeki ve satış
+#      kayıtlarının HEPSİ USD kaydediliyordu.
+#    · `kdv_dahil_mi` — ekranda böyle bir seçim HİÇ yoktu; sunucu
+#      her zaman False okuyordu ve ekran "KDV dahil" yazıyordu.
+#
+#  İkisi de sessiz: istek 200 dönüyor, kayıt oluşuyor, sayı yanlış.
+#
+#  Bu bekçi her yazma ucu için sunucunun gövdeden okuduğu anahtarları
+#  çıkarıp, o ucu çağıran şablonlarda geçip geçmediğine bakar.
+#
+#  MUAFİYET LİSTESİ KISA TUTULACAK. Uzayan bir liste, bekçinin
+#  sessizce kapanmasıdır; her satırın sebebi yazılı.
+# ══════════════════════════════════════════════════════════════════
+_GA1_MUAF = {
+    # Hızlı satış KDV'yi KENDİ hesaplıyor (HS1, KD1'in kapısından).
+    # Bu okuma geriye dönük uyum için duruyor; ekranın göndermesi
+    # beklenmiyor ve gönderse de üzerine yazılıyor.
+    ('/api/sicak_satis', 'kdv_tutar'),
+    # Satıştan fatura TASLAK olarak oluşur; KDV oranı ve vade
+    # Faturalar ekranından giriliyor. Vade verilmezse `_vade_hesapla`
+    # müşterinin ödeme vadesinden hesaplıyor.
+    ('/api/satislar/<satis_id>/fatura', 'kdv_oran'),
+    ('/api/satislar/<satis_id>/fatura', 'vade_tarihi'),
+    # Satış düzenlemede birim DEĞİŞTİRİLMİYOR: m²'den ton'a geçmek
+    # miktarın anlamını değiştirirdi. Alan okunuyor ama ekran
+    # bilerek göndermiyor.
+    ('/api/satislar/<satis_id>', 'birim'),
+    # Kayıp tarihi verilmezse bugün kullanılıyor.
+    ('/api/proforma/<proforma_id>/kaybedildi', 'tarih'),
+    # Fatura tarihi verilmezse bugün, vade `_vade_hesapla` ile
+    # müşterinin ödeme vadesinden hesaplanıyor (ölçüldü).
+    ('/api/proforma/<proforma_id>/faturaya_donustur', 'fatura_tarihi'),
+    ('/api/proforma/<proforma_id>/faturaya_donustur', 'vade_tarihi'),
+    # Fatura güncellemede maliyet kalemleri yalnız içe aktarma
+    # yolundan geliyor; ekranda böyle bir alan yok.
+    ('/api/fatura/<fatura_id>', 'maliyet_kalemleri'),
+    # Cari harekette fatura tarihi verilmezse hareket tarihi kullanılıyor.
+    ('/api/cari/hareket', 'fatura_tarihi'),
+}
+
+
+def test_ga1_sunucunun_okudugu_govde_alanini_ekran_gonderiyor():
+    """Sunucu bir alanı okuyorsa, onu çağıran ekran göndermeli.
+
+    SINIRI ÖLÇÜLDÜ: HS1 öncesi `base.html` ile koşuldu ve
+    `kdv_dahil_mi` eksikliğini YAKALADI. Ama `doviz` eksikliğini
+    yakalayamadı — çünkü o şablonda `doviz:` KALEM nesnesinin içinde
+    geçiyordu ve bekçi şablonun tamamında arıyor. Yani bekçi
+    "anahtar şablonda hiç yok" durumunu görür, "üst düzey gövdede
+    yok ama kalemde var" durumunu görmez.
+
+    Daha incesi, JS gövde nesnesini ayrıştırmayı gerektirirdi; bu
+    hâliyle de HS1'in iki hatasından birini yakalıyor."""
+    import ast as _ast
+    import io as _io
+    import re as _re
+
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    agac = _ast.parse(kaynak)
+
+    sdizin = os.path.join(KOK, 'templates')
+    sablonlar = {}
+    for ad in sorted(os.listdir(sdizin)):
+        if ad.endswith('.html'):
+            sablonlar[ad] = _io.open(os.path.join(sdizin, ad),
+                                     encoding='utf-8',
+                                     errors='replace').read()
+
+    YAZMA = {'POST', 'PUT', 'PATCH', 'DELETE'}
+    IC_ALAN = {'onay', 'force', 'zorla', 'dry_run', 'test', 'debug'}
+    # Sessiz varsayılanı PARAYI ya da ETİKETİ değiştirebilecek adlar.
+    # `doviz` ve `kdv_dahil_mi` tam bu kümedendi.
+    KRITIK = _re.compile(
+        r'doviz|kur|kdv|tutar|fiyat|oran|matrah|vade|tarih|miktar|birim'
+        r'|maliyet|komisyon|tevkifat|iskonto|avans|tahsilat|bakiye', _re.I)
+
+    acik = []
+    for fn in _ast.walk(agac):
+        if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        yollar, yontemler = [], []
+        for dec in fn.decorator_list:
+            if (isinstance(dec, _ast.Call)
+                    and isinstance(dec.func, _ast.Attribute)
+                    and dec.func.attr == 'route' and dec.args
+                    and isinstance(dec.args[0], _ast.Constant)):
+                yollar.append(dec.args[0].value)
+                for kw in dec.keywords:
+                    if kw.arg == 'methods':
+                        yontemler += [e.value for e in
+                                      getattr(kw.value, 'elts', [])
+                                      if isinstance(e, _ast.Constant)]
+        if not yollar:
+            continue
+        yol = yollar[0]
+        if not yol.startswith('/api/') or yol.startswith('/api/diag/'):
+            continue
+        if not (set(yontemler) & YAZMA):
+            continue
+
+        # Gövde değişkeni: request.get_json() neye atanmış.
+        govde_adlari = set()
+        for d in _ast.walk(fn):
+            if (isinstance(d, _ast.Assign) and len(d.targets) == 1
+                    and isinstance(d.targets[0], _ast.Name)):
+                kod = _ast.unparse(d.value)
+                if ('request.get_json' in kod or 'request.json' in kod
+                        or 'request.form' in kod):
+                    govde_adlari.add(d.targets[0].id)
+        if not govde_adlari:
+            continue
+
+        okunan = set()
+        for d in _ast.walk(fn):
+            if not (isinstance(d, _ast.Call)
+                    and isinstance(d.func, _ast.Attribute)
+                    and d.func.attr == 'get' and d.args
+                    and isinstance(d.args[0], _ast.Constant)
+                    and isinstance(d.args[0].value, str)):
+                continue
+            t = d.func.value
+            ad_t = t.id if isinstance(t, _ast.Name) else (
+                t.attr if isinstance(t, _ast.Attribute) else None)
+            if ad_t in govde_adlari:
+                okunan.add(d.args[0].value)
+        if not okunan:
+            continue
+
+        # Bu ucu çağıran şablonlar — ÖNEK EŞLEME SIKI:
+        # `/api/cari`, `/api/cari/hareket`i yakalamasın.
+        onek = yol.split('<')[0].rstrip('/')
+        if not onek:
+            continue
+        kalip = _re.compile(_re.escape(onek) + r'(?![A-Za-z0-9_/-])')
+        cagiranlar = [a for a, m in sablonlar.items() if kalip.search(m)]
+        if not cagiranlar:
+            continue        # ekransız uç; başka bir bekçinin işi
+        metin = '\n'.join(sablonlar[a] for a in cagiranlar)
+
+        for anahtar in sorted(okunan):
+            if anahtar in IC_ALAN or not KRITIK.search(anahtar):
+                continue
+            if (yol, anahtar) in _GA1_MUAF:
+                continue
+            # `anahtar:` · 'anahtar' · govde.anahtar = · ES6 kısa yazım
+            if _re.search(r'[\'"]?\b%s\b[\'"]?\s*:' % _re.escape(anahtar), metin):
+                continue
+            if _re.search(r'[\'"]%s[\'"]' % _re.escape(anahtar), metin):
+                continue
+            if _re.search(r'\.%s\s*=' % _re.escape(anahtar), metin):
+                continue
+            if _re.search(r'^(?=.*:).*\b%s\b\s*,' % _re.escape(anahtar),
+                          metin, _re.M):
+                continue
+            acik.append(f'{yol} · {anahtar} ({fn.name})')
+
+    assert not acik, (
+        'sunucu bu gövde alanlarını okuyor ama onu çağıran hiçbir ekran '
+        'göndermiyor — alan sessizce varsayılana düşer: '
+        + '; '.join(sorted(acik)))
+
+
+def test_ga1_bekci_hs1_hatasini_yakaliyor():
+    """Bekçi, HS1'de yaşadığımız eksikliği görmeli.
+
+    HS1'de hızlı satış `doviz` göndermiyordu. O hâli taklit edip
+    bekçinin kullandığı eşleştirmenin onu YAKALADIĞINI gösteriyoruz;
+    yoksa yeşil bir bekçiye güvenmiş oluruz."""
+    import re as _re
+    # Ekranın gövdesi (HS1 ÖNCESİ hâli): doviz YOK
+    eski_ekran = """
+      const govde = {
+        musteri,
+        satis_tipi: document.getElementById('hsTip').value,
+        kdv_oran: parseFloat(document.getElementById('hsKdv').value) || 0,
+      };
+    """
+    for anahtar in ('doviz', 'kdv_dahil_mi'):
+        bulundu = (
+            _re.search(r'[\'"]?\b%s\b[\'"]?\s*:' % anahtar, eski_ekran)
+            or _re.search(r'[\'"]%s[\'"]' % anahtar, eski_ekran)
+            or _re.search(r'\.%s\s*=' % anahtar, eski_ekran)
+            or _re.search(r'^(?=.*:).*\b%s\b\s*,' % anahtar, eski_ekran, _re.M))
+        assert not bulundu, (
+            f'bekçinin eşleştirmesi {anahtar!r} yokken VAR sanıyor — '
+            f'HS1 hatasını kaçırırdı')
+    # Ve ŞİMDİKİ ekran ikisini de gönderiyor olmalı
+    import io as _io
+    b = _io.open(os.path.join(KOK, 'templates', 'base.html'),
+                 encoding='utf-8').read()
+    assert "doviz: document.getElementById('hsDoviz').value" in b
+    assert 'kdv_dahil_mi:' in b
