@@ -1250,24 +1250,58 @@ def create_app():
         return {'toplam': q2(toplam), 'tahsil': q2(tahsil), 'yuzde': round(yuzde, 1),
                 'doviz': s_doviz, 'fatura_sayisi': len(faturalar)}
 
+    # ══════════════════════════════════════════════════════════════
+    #  KD1 · KDV MATEMATİĞİNİN TEK KAPISI
+    #
+    #  Bu iki fonksiyon yazılmıştı ama HİÇBİR YERDEN çağrılmıyordu;
+    #  KDV ayrıştırma 10 ayrı uca elle yazılmıştı. Ölçüldü: ölü
+    #  kapının kendisi uçlardan DAHA KÖTÜYDÜ — matrahı ve KDV'yi
+    #  BİRBİRİNDEN BAĞIMSIZ yuvarladığı için ikisinin toplamı genel
+    #  toplamı tutmuyordu:
+    #
+    #      0,45 USD · %20  ->  0,38 + 0,08 = 0,46   (toplam 0,45)
+    #
+    #  1.000.000 denemede 11.968 sapma. Bir faturanın matrahı ile
+    #  KDV'si toplandığında faturanın kendi toplamını vermemesi,
+    #  mutabakatı ve beyanı sessizce bozar.
+    #
+    #  ÇÖZÜM — TAMAMLAYAN YUVARLAMA: bir taraf yuvarlanır, öteki
+    #  ÇIKARMAYLA bulunur. Böylece matrah + KDV == toplam HER ZAMAN.
+    #  Uçlarda zaten bu yapılıyordu; doğru olan davranış kapının
+    #  içine alındı ve uçlar kapıya bağlandı.
+    # ══════════════════════════════════════════════════════════════
+    def _kdv_ayristir(brut, kdv_oran):
+        """KDV DAHİL bir tutardan matrahı sıyırır (tek değer döner).
+
+        Birim fiyattan KDV sıyırmak da aynı işlem — stok alışında
+        birim fiyat matrah olarak saklanıyor.
+        """
+        oran = float(kdv_oran or 0)
+        tutar = float(brut or 0)
+        if oran <= 0:
+            return q2(tutar)
+        return q2(tutar / (1 + oran / 100.0))
+
     def _kdv_hesapla(toplam_tutar, kdv_oran, kdv_dahil_mi):
         """
         Tutar ve KDV oranindan matrah + KDV tutarini hesaplar.
         - kdv_dahil_mi=True  -> tutar KDV dahildir, matrah ve KDV ayristirilir
         - kdv_dahil_mi=False -> tutar matrahdir, KDV ustune eklenir
         Donus: (matrah, kdv_tutar, toplam_kdv_dahil)
+
+        GARANTİ: matrah + kdv_tutar == toplam, kuruşu kuruşuna.
         """
-        tutar = float(toplam_tutar or 0)
-        oran = float(kdv_oran or 0) / 100.0
+        tutar = q2(float(toplam_tutar or 0))
+        oran = float(kdv_oran or 0)
         if oran <= 0:
-            return q2(tutar), 0.0, q2(tutar)
+            return tutar, 0.0, tutar
         if kdv_dahil_mi:
-            matrah = tutar / (1 + oran)
-            kdv = tutar - matrah
-            return q2(matrah), q2(kdv), q2(tutar)
-        else:
-            kdv = tutar * oran
-            return q2(tutar), q2(kdv), q2(tutar + kdv)
+            # Genel toplam KORUNUR; KDV çıkarmayla bulunur.
+            matrah = _kdv_ayristir(tutar, oran)
+            return matrah, q2(tutar - matrah), tutar
+        # Matrah KORUNUR; toplam toplamayla büyür.
+        kdv = q2(tutar * oran / 100.0)
+        return tutar, kdv, q2(tutar + kdv)
 
     # ════════════════════════════════════════════════════════
     # ÇOK DÖVİZLİ MUHASEBE (Faz 7 - Madde 11)
@@ -2574,62 +2608,14 @@ def create_app():
             return m2 * M2_TO_SQFT
         return 0
 
-    def _stok_temel_olcu(stok, stok_tip):
-        """
-        Stoğun TEMEL birimindeki ölçüsü (hesap motorunun kullandığı).
-        BLOK -> tonaj,  PLAKA/EBATLI -> metraj_m2
-        """
-        if stok_tip == 'BLOK':
-            return getattr(stok, 'tonaj', 0) or 0
-        else:
-            return getattr(stok, 'metraj_m2', 0) or 0
-
-    def _birim_cevir(deger, kaynak_birim, hedef_birim, stok=None):
-        """
-        Bir ölçü değerini kaynak birimden hedef birime çevirir.
-        m2 <-> sqft sabit katsayıyla çevrilir.
-        ton <-> m3 BLOK'ta bağımsız ölçülerdir; çevrim için stok kaydı gerekir
-        (stoğun kendi tonaj ve hacim_m3 oranı kullanılır).
-        """
-        if kaynak_birim == hedef_birim:
-            return deger
-        # m2 <-> sqft
-        if kaynak_birim == 'm2' and hedef_birim == 'sqft':
-            return deger * M2_TO_SQFT
-        if kaynak_birim == 'sqft' and hedef_birim == 'm2':
-            return deger / M2_TO_SQFT
-        # ton <-> m3 : stoğun kendi oranıyla
-        if stok and {kaynak_birim, hedef_birim} == {'ton', 'm3'}:
-            tonaj = getattr(stok, 'tonaj', 0) or 0
-            hacim = getattr(stok, 'hacim_m3', 0) or 0
-            if kaynak_birim == 'ton' and hedef_birim == 'm3':
-                return (deger / tonaj * hacim) if tonaj else 0
-            if kaynak_birim == 'm3' and hedef_birim == 'ton':
-                return (deger / hacim * tonaj) if hacim else 0
-        return deger  # çevrilemezse aynen döner
-
-    def _tutar_hesapla(stok, stok_tip, fiyat, fiyat_birim):
-        """
-        Bir stok için tutar = fiyat × (fiyat biriminin karşılığı olan ölçü).
-        Örn: PLAKA, fiyat=90, fiyat_birim='m2' -> 90 × metraj_m2
-             BLOK, fiyat=500, fiyat_birim='ton' -> 500 × tonaj
-        """
-        if not stok or not fiyat:
-            return 0
-        olcu = _stok_olcu(stok, fiyat_birim)
-        return fiyat * olcu
-
-    def _birim_etiket(birim):
-        """Birim kodunu okunabilir etikete çevirir."""
-        return {'ton': 'ton', 'm3': 'm³', 'm2': 'm²', 'sqft': 'sqft'}.get(birim, birim)
-
-    def _stok_durum_degistir(stok_id, stok_tip, yeni_durum):
-        """Stok durumunu güvenli şekilde değiştir. Geçerli durumlar: Serbest, Rezerve, Satildi, Sevkedildi."""
-        stok = _stok_getir(stok_id, stok_tip)
-        if stok:
-            stok.durum = yeni_durum
-            return True
-        return False
+    # ── KD1 · SİLİNDİ: _stok_temel_olcu, _birim_cevir, _tutar_hesapla,
+    #    _birim_etiket, _stok_durum_degistir
+    #
+    #    Beşi de hiçbir yerden çağrılmıyordu; işlerini yapan canlı
+    #    karşılıkları var (`_stok_olcu`, sevkiyatın toplu durum
+    #    güncellemesi). Ölü bir fonksiyonu canlı sanıp çağırmak,
+    #    AF1/TS1/EM2'de düzelttiğimiz hata sınıfının ta kendisi —
+    #    o yüzden dosyada bırakılmadılar.
 
     def _proforma_stoklarini_rezerve_et(proforma):
         """
@@ -2743,6 +2729,138 @@ def create_app():
                            aciklama=f'Siparis {siparis_id} olusturuldu (proforma {proforma.id}) - stok satildi')
                 guncellenen += 1
         return guncellenen
+
+    # ══════════════════════════════════════════════════════════════
+    #  IP1 · SİPARİŞ İPTALİNDE KARAR GEREKEN NOKTALAR
+    #
+    #  Sipariş iptali bir açılır liste seçimi, ama arkasında fatura,
+    #  cari borç, alınmış çek ve tahsil edilmiş para olabiliyor.
+    #  Sistemin bunların ne olacağını TAHMİN etmesi doğru değil:
+    #  alınan çek iade mi edilecek yoksa müşterinin bizde duran
+    #  parası mı olacak — bu bir iş kararı.
+    #
+    #  Bu fonksiyon yalnızca DURUMU ANLATIR, hiçbir şey değiştirmez.
+    # ══════════════════════════════════════════════════════════════
+    def _siparis_iptal_karari(sip):
+        """İptal için karar gereken noktaları toplar. Yoksa None."""
+        faturalar = Fatura.query.filter(
+            Fatura.siparis_id == sip.id,
+            Fatura.durum.notin_(['Iptal', 'Taslak'])).all()
+        if not faturalar:
+            return None
+        f_bilgi, cek_bilgi, tahsilat_bilgi = [], [], []
+        for f in faturalar:
+            _borc = CariHareket.query.filter_by(
+                baglanti_tip='fatura', baglanti_id=f.id,
+                kaynak='fatura').first()
+            f_bilgi.append({
+                'id': f.id, 'no': f.fatura_no, 'durum': f.durum,
+                'toplam': q2(f.toplam or 0), 'doviz': f.doviz or 'USD',
+                'cari_borc': q2(_borc.borc or 0) if _borc else 0,
+            })
+            for ck in Cek.query.filter_by(fatura_id=f.id).filter(
+                    Cek.durum.notin_(['Iptal', 'Karsiliksiz']),
+                    Cek.aktif == True).all():        # noqa: E712
+                cek_bilgi.append({
+                    'id': ck.id, 'no': ck.cek_no or ck.id,
+                    'banka': ck.banka_adi, 'tutar': q2(ck.tutar or 0),
+                    'doviz': ck.doviz or 'USD', 'durum': ck.durum,
+                    'vade': ck.vade_tarihi.isoformat() if ck.vade_tarihi else None,
+                })
+            for h in CariHareket.query.filter(
+                    CariHareket.baglanti_tip == 'fatura',
+                    CariHareket.baglanti_id == f.id,
+                    CariHareket.alacak > 0,
+                    db.func.coalesce(CariHareket.kaynak, '') != 'avans_mahsup'
+            ).all():
+                tahsilat_bilgi.append({
+                    'hareket_id': h.id, 'tutar': q2(h.alacak or 0),
+                    'doviz': h.doviz or 'USD',
+                    'aciklama': h.aciklama or h.islem_tip,
+                })
+        return {'faturalar': f_bilgi, 'cekler': cek_bilgi,
+                'tahsilatlar': tahsilat_bilgi}
+
+    def _siparis_iptal_kararlarini_uygula(sip, karar, onay):
+        """Kullanıcının kararlarını uygular. Döner: (mesaj, hata).
+
+        `onay`:
+          fatura_iptal : True ise faturalar iptal edilir
+          cek          : 'iade'   -> çek iptal, alacağı silinir
+                         'alacak' -> çek durur, faturadan KOPARILIR;
+                                     müşterinin cari alacağı olur
+          tahsilat     : 'sil'    -> tahsilat hareketi silinir
+                         'alacak' -> hareket durur, faturadan koparılır
+        """
+        if not onay.get('fatura_iptal'):
+            return '', ('Fatura iptal edilmeden sipariş iptal edilemez: '
+                        'faturanın borcu cariye yazılmış durumda.')
+        mesaj = []
+        cek_karar = (onay.get('cek') or 'iade').lower()
+        tah_karar = (onay.get('tahsilat') or 'sil').lower()
+
+        # ── 1) ÇEKLER ──
+        for c_b in karar.get('cekler', []):
+            ck = Cek.query.get(c_b['id'])
+            if not ck:
+                continue
+            if cek_karar == 'iade':
+                _cari_hareket_geri_al('cek', ck.id, ck.cari_hareket_id)
+                ck.cari_hareket_id = None
+                _eski = ck.durum
+                ck.aktif = False
+                ck.durum = 'Iptal'
+                ck.fatura_id = None
+                _cek_hareket_ekle(ck, 'İptal', _eski, 'Iptal',
+                                  f'Sipariş {sip.id} iptali — çek iade edildi')
+                mesaj.append(f"{c_b['no']} çeki iade edildi "
+                             f"({c_b['tutar']:,.2f} {c_b['doviz']})")
+            else:
+                # Çek bizde kalıyor: artık bir faturanın tahsilatı
+                # değil, müşterinin bizdeki parası. Faturadan
+                # KOPARILMAZSA fatura iptali "tahsilat var" diye
+                # reddedilir ve kullanıcı çıkmaza girer.
+                ck.fatura_id = None
+                ck.aciklama = ((ck.aciklama or '') +
+                               f' · Sipariş {sip.id} iptal edildi, '
+                               f'çek cari alacak olarak kaldı').strip()
+                mesaj.append(f"{c_b['no']} çeki cari alacak olarak kaldı "
+                             f"({c_b['tutar']:,.2f} {c_b['doviz']})")
+
+        # ── 2) NAKİT/DİĞER TAHSİLATLAR ──
+        for t_b in karar.get('tahsilatlar', []):
+            h = CariHareket.query.get(t_b['hareket_id'])
+            if not h:
+                continue
+            if tah_karar == 'sil':
+                _hareket_kasa_geri_al(h)       # TS1 · kasa da geri alınır
+                db.session.delete(h)
+                mesaj.append(f"{t_b['tutar']:,.2f} {t_b['doviz']} tahsilat "
+                             f"geri alındı")
+            else:
+                h.baglanti_tip = 'cari'
+                h.baglanti_id = None
+                h.aciklama = ((h.aciklama or '') +
+                              f' · Sipariş {sip.id} iptal edildi, '
+                              f'tutar cari alacak olarak kaldı').strip()
+                mesaj.append(f"{t_b['tutar']:,.2f} {t_b['doviz']} tahsilat "
+                             f"cari alacak olarak kaldı")
+        db.session.flush()
+
+        # ── 3) FATURALAR ──
+        for f_b in karar.get('faturalar', []):
+            f = Fatura.query.get(f_b['id'])
+            if not f:
+                continue
+            _ek = _fatura_iptal_geri_al(f)     # TEK KAPI
+            f.durum = 'Iptal'
+            _log_audit('DURUM', 'fatura', f.id,
+                       eski={'durum': f_b['durum']}, yeni={'durum': 'Iptal'},
+                       aciklama=f'Siparis {sip.id} iptali')
+            mesaj.append(f"{f_b['no']} faturası iptal edildi"
+                         + (_ek.strip() and ' (' + _ek.strip() + ')' or ''))
+        db.session.flush()
+        return (' ' + ' · '.join(mesaj) + '.') if mesaj else '', None
 
     def _siparis_stoklarini_serbest_birak(siparis_id, neden='Siparis iptal'):
         """Sipariş iptal/silme: bağlı rezervasyonları iptal, Satildi/Rezerve -> Serbest."""
@@ -3416,21 +3534,16 @@ def create_app():
             app.logger.warning(f'BL-16 ciro ad esitleme atlandi: {_e}')
         return toplam
 
-    def _cari_kimlik_ver(kayit, unvan=None):
-        """Kaydın cari_id'si boşsa adından çözüp yazar. Kayıt üretilen
-        her yolda kimliğin dolması, adla eşleşmeye ihtiyacı zamanla
-        bitirir."""
-        if kayit is None or not hasattr(kayit, 'cari_id'):
-            return None
-        if getattr(kayit, 'cari_id', None):
-            return kayit.cari_id
-        ad = unvan or getattr(kayit, 'musteri', None) or \
-            getattr(kayit, 'cari_unvan', None) or getattr(kayit, 'uretici', None)
-        c = _cari_bul(ad) if ad else None
-        if c:
-            kayit.cari_id = c.id
-            return c.id
-        return None
+    # ── KD1 · SİLİNDİ: _cari_kimlik_ver
+    #
+    #    Kimliği adından doldurmak için yazılmıştı ama hiç
+    #    çağrılmıyordu. Ölçüldü: işi ZATEN yapılıyor — models.py
+    #    içindeki `cari_id_otomatik_doldur` / `stok_cari_id_otomatik_
+    #    doldur` dinleyicileri Proforma, Fatura, SatisKaydi, Sevkiyat,
+    #    Rezervasyon, Siparis ve üç stok modelinde `before_insert`'te
+    #    kimliği dolduruyor. Kayıt üreten 29 yerin hepsi kapsanıyor.
+    #    İki ayrı kapı olması, hangisinin geçerli olduğunu belirsiz
+    #    bırakırdı.
 
     def _cari_risk_durumu(cari, ek_tutar_doviz=0, ek_doviz=None):
         """
@@ -3830,9 +3943,20 @@ def create_app():
             guncellenen += 1
         return guncellenen
 
-    def _fatura_satis_kaydi_olustur(fatura_id):
+    def _fatura_satis_kaydi_olustur(fatura_id, stok_durumu='Teslim Edildi'):
         """
         Fatura 'Kesildi' olunca SatisKaydi olusturur (kar hesabi icin).
+
+        IP1 · `stok_durumu`: satılan stoğun alacağı durum. Varsayılan
+        'Teslim Edildi' (eski davranış, bütün fatura yolları böyle).
+        HIZLI SATIŞ 'Satildi' veriyor: ölçüldü, 'Teslim Edildi' olan
+        stok sipariş iptalinde serbest bırakılamıyor (serbest bırakma
+        yalnız Satildi/Rezerve'ye dokunuyor) ve plakalar kalıcı
+        olarak kilitli kalıyordu.
+        NOT: aynı şey normal fatura yolunda da oluyor — fatura kesmek
+        ile teslim etmek ayrı olaylar ve sevkiyat akışının kendi
+        Sevkedildi/Teslim Edildi adımları var. Orası AYRI bir karar
+        olduğu için burada değiştirilmedi.
         - Stoklu fatura (siparise bagli + rezervasyon var): maliyet stoklardan
         - Transit fatura (rezervasyon yok): maliyet faturadaki alis_maliyeti'nden
         Cift kayit korumasi: bu fatura veya bagli siparisi icin zaten
@@ -4040,7 +4164,7 @@ def create_app():
                     kullanici=session.get('kullanici')
                 )
                 db.session.add(sk)
-                stok.durum = 'Teslim Edildi'
+                stok.durum = stok_durumu          # IP1
                 olusan += 1
 
             # ── F1 · STOK DISI KAYNAKLAR (uretim / dis alim) ──
@@ -4085,46 +4209,98 @@ def create_app():
                 olusan += 1
             return olusan, None
         else:
-            # ── TRANSIT FATURA: tek SatisKaydi, maliyet faturadan ──
+            # ══════════════════════════════════════════════════════
+            #  DV1 · TRANSIT FATURA: KALEM BAŞINA AYRI SatisKaydi
+            #
+            #  Eskiden TEK kayıt üretiliyordu ve o kayıt:
+            #    · cins'i İLK kalemden alıyordu
+            #    · miktarı FARKLI BİRİMLERDEN topluyordu
+            #  Ölçüldü: 100 m² plaka + 20 ton blok satışı
+            #  "CALACATTA · 120 m²" olarak kaydediliyordu. Kârlılık
+            #  ve satış raporları bu kayıttan besleniyor; ikinci ürün
+            #  hiç satılmamış görünüyor, ilkine onun cirosu yazılıyor.
+            #
+            #  Stoklu faturada zaten kaynak başına ayrı kayıt vardı
+            #  (F1/F2). Transit de aynı yola girdi: gelir ve maliyet
+            #  kalemlerin DEĞERİ oranında dağıtılır.
+            #
+            #  Alış maliyeti fatura düzeyinde TEK rakam (`alis_maliyeti`)
+            #  — kalem bazında bilinmiyor. Gelire orantılı dağıtmak,
+            #  her kaleme aynı marjı vermek demek. Bu bir TAHMİN ve
+            #  eskisinden dürüst: eskiden tüm maliyet tek ürüne
+            #  yazılıyordu.
+            # ══════════════════════════════════════════════════════
             alis_mal_usd = _usd(f.alis_maliyeti or 0, f.maliyet_doviz or 'USD')
             maliyet_usd = alis_mal_usd + ek_maliyet_usd
-            kar_usd = satis_toplam_usd - maliyet_usd
-            marj = (kar_usd / satis_toplam_usd * 100) if satis_toplam_usd else 0
+            _dvz = (f.doviz or 'USD').upper()
+            _matrah_orj = float(f.ara_toplam or f.toplam or 0)
 
-            # Kalemlerden ozet bilgi
-            ilk_cins = kalemler[0].get('cins') if kalemler else None
-            top_miktar = sum((k.get('miktar') or 0) for k in kalemler)
-            ilk_birim = kalemler[0].get('birim') if kalemler else None
+            if not kalemler:
+                # Kalem bilgisi yok — bölünecek bir şey de yok.
+                _kalemler = [{'cins': None, 'miktar': 0, 'birim': None,
+                              'toplam_fiyat': _matrah_orj,
+                              'urun_tip': 'TRANSIT'}]
+            else:
+                _kalemler = kalemler
 
-            sk = SatisKaydi(
-                id=_yeni_id('SAT'),
-                stok_id=f'TRANSIT-{fatura_id}',
-                stok_tip='TRANSIT',
-                cins=ilk_cins,
-                siparis_id=f.siparis_id,
-                proforma_id=f.proforma_id,
-                fatura_id=fatura_id,
-                kaynak='fatura',
-                musteri=f.musteri,
-                musteri_ulke=f.musteri_ulke,
-                satis_tarihi=f.fatura_tarihi or date.today(),
-                miktar=top_miktar,
-                birim=ilk_birim,
-                doviz=f.doviz or 'USD',
-                tutar=q2(satis_toplam_usd),
-                kur_usd=q_kur(kur_usd), kur_eur=q_kur(kur_eur),
-                tutar_usd=q2(satis_toplam_usd),
-                tutar_try=q2(satis_toplam_usd * kur_usd if kur_usd else 0),
-                maliyet_usd=q2(maliyet_usd),
-                maliyet_try=q2(maliyet_usd * kur_usd if kur_usd else 0),
-                kar_usd=q2(kar_usd),
-                marj_yuzde=q_oran(marj),
-                fatura_no=f.fatura_no,
-                fatura_tarihi=f.fatura_tarihi,
-                kullanici=session.get('kullanici')
-            )
-            db.session.add(sk)
-            return 1, None
+            # Paylar kalem DEĞERİNE göre; değer yoksa EŞİT pay.
+            _degerler = [float(k.get('toplam_fiyat') or 0) for k in _kalemler]
+            _deger_top = sum(_degerler)
+            if _deger_top <= 0:
+                _n = len(_kalemler)
+                _degerler = [1.0] * _n
+                _deger_top = float(_n)
+
+            # TOPLAM KORUNUR: son kaleme ARTIK verilir, böylece
+            # payların toplamı faturanın matrahını kuruşu kuruşuna
+            # tutar (UN2'deki tam sayı paylaştırmayla aynı gerekçe).
+            _kalan_usd = satis_toplam_usd
+            _kalan_orj = _matrah_orj
+            _kalan_mal = maliyet_usd
+            olusan = 0
+            for _i, _k in enumerate(_kalemler):
+                _son = (_i == len(_kalemler) - 1)
+                _oran = _degerler[_i] / _deger_top
+                _pay_usd = _kalan_usd if _son else satis_toplam_usd * _oran
+                _pay_orj = _kalan_orj if _son else _matrah_orj * _oran
+                _pay_mal = _kalan_mal if _son else maliyet_usd * _oran
+                _kalan_usd -= _pay_usd
+                _kalan_orj -= _pay_orj
+                _kalan_mal -= _pay_mal
+
+                _kar = _pay_usd - _pay_mal
+                _mik = float(_k.get('miktar') or 0)
+                db.session.add(SatisKaydi(
+                    id=_yeni_id('SAT'),
+                    stok_id=f'TRANSIT-{fatura_id}-{_i + 1}',
+                    stok_tip=_k.get('urun_tip') or 'TRANSIT',
+                    cins=_k.get('cins'),
+                    ozellik=_k.get('ozellik'),
+                    siparis_id=f.siparis_id,
+                    proforma_id=f.proforma_id,
+                    fatura_id=fatura_id,
+                    kaynak='fatura',
+                    musteri=f.musteri,
+                    musteri_ulke=f.musteri_ulke,
+                    satis_tarihi=f.fatura_tarihi or date.today(),
+                    miktar=q2(_mik),
+                    birim=_k.get('birim'),
+                    birim_fiyat=q2(_pay_orj / _mik) if _mik else 0,
+                    doviz=_dvz,
+                    tutar=q2(_pay_orj),
+                    kur_usd=q_kur(kur_usd), kur_eur=q_kur(kur_eur),
+                    tutar_usd=q2(_pay_usd),
+                    tutar_try=q2(_pay_usd * kur_usd if kur_usd else 0),
+                    maliyet_usd=q2(_pay_mal),
+                    maliyet_try=q2(_pay_mal * kur_usd if kur_usd else 0),
+                    kar_usd=q2(_kar),
+                    marj_yuzde=q_oran((_kar / _pay_usd * 100) if _pay_usd else 0),
+                    fatura_no=f.fatura_no,
+                    fatura_tarihi=f.fatura_tarihi,
+                    kullanici=session.get('kullanici')
+                ))
+                olusan += 1
+            return olusan, None
 
         # ─── TRANSACTION HELPER (Veri butunlugu icin) ────────────────────────
     def _safe_commit(islem_adi='işlem'):
@@ -4138,18 +4314,11 @@ def create_app():
             app.logger.exception(f'[{islem_adi}] commit hatasi - rollback yapildi')
             return False, str(e)
 
-    def _safe_transaction(func, islem_adi='işlem'):
-        """Bir fonksiyonu cagiri, hata olursa otomatik rollback yapar.
-        Decorator olarak da kullanilabilir.
-        return: (success, sonuc_veya_hata)"""
-        try:
-            sonuc = func()
-            db.session.commit()
-            return True, sonuc
-        except Exception as e:
-            db.session.rollback()
-            app.logger.exception(f'[{islem_adi}] islem hatasi - rollback yapildi')
-            return False, str(e)
+    # ── KD1 · SİLİNDİ: _safe_transaction
+    #    Hiç çağrılmıyordu. Yukarıdaki `_guvenli_commit` canlı ve
+    #    aynı işi yapıyor; iki benzer sarmalayıcıdan birinin ölü
+    #    olduğunu bilmek, hangisini çağıracağını her seferinde
+    #    yeniden araştırmak demekti.
     # ─── /TRANSACTION HELPER ──────────────────────────────────────────────
 
     def _otomatik_migrasyon():
@@ -6201,7 +6370,7 @@ def create_app():
                     kdv_dahil_mi = False
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
-                    fiyat = q2(fiyat_girilen / (1 + kdv_oran/100))
+                    fiyat = _kdv_ayristir(fiyat_girilen, kdv_oran)   # KD1
                 else:
                     fiyat = fiyat_girilen
                 # Toplam tutarlar
@@ -6317,7 +6486,7 @@ def create_app():
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
                     # KDV dahil girilmis: ayristir
-                    fiyat = q2(fiyat_girilen / (1 + kdv_oran/100))
+                    fiyat = _kdv_ayristir(fiyat_girilen, kdv_oran)   # KD1
                 else:
                     # KDV haric girilmis: fiyat zaten matrah
                     fiyat = fiyat_girilen
@@ -6411,7 +6580,7 @@ def create_app():
                 doviz = data.get('doviz','USD')
                 # Birim fiyat KDV hariç (matrah) saklanır
                 if kdv_dahil_mi and kdv_oran > 0:
-                    fiyat = q2(fiyat_girilen / (1 + kdv_oran/100))
+                    fiyat = _kdv_ayristir(fiyat_girilen, kdv_oran)   # KD1
                 else:
                     fiyat = fiyat_girilen
                 # Kasa basina KDV hariç matrah ve KDV tutarı
@@ -9109,13 +9278,12 @@ def create_app():
 
         # Mevcut toplam (KDV dahil) korunur, matrah ve kdv_tutar yeniden hesaplanir
         mevcut_toplam = f.toplam or 0
-        if yeni_kdv_oran > 0:
-            yeni_matrah = mevcut_toplam / (1 + yeni_kdv_oran/100)
-            yeni_kdv_tutar = mevcut_toplam - yeni_matrah
-        else:
-            # KDV YOK: matrah = toplam, kdv_tutar = 0
-            yeni_matrah = mevcut_toplam
-            yeni_kdv_tutar = 0
+        # KD1: tek kapı. Toplam KDV DAHİL olduğu için kapının
+        # "dahil" dalı kullanılıyor; matrah + kdv == toplam garanti.
+        # Eskiden ikisi birbirinden bağımsız yuvarlanıyordu ve
+        # faturanın matrahı ile KDV'si toplamını tutmayabiliyordu.
+        yeni_matrah, yeni_kdv_tutar, _ = _kdv_hesapla(
+            mevcut_toplam, yeni_kdv_oran, True)
 
         eski = {
             'ara_toplam': f.ara_toplam, 'kdv_oran': f.kdv_oran,
@@ -12210,16 +12378,16 @@ def create_app():
         kdv_tutar = 0.0
         matrah = 0.0
         if islem_tip in _fatura_tipleri and kdv_oran > 0:
+            # KD1: tek kapı. Kapı üç değer döner ve matrah + KDV
+            # her zaman toplamı verir.
+            matrah, kdv_tutar, _brut = _kdv_hesapla(
+                islem_tutar, kdv_oran, kdv_dahil_mi)
             if kdv_dahil_mi:
-                # Girilen tutar KDV dahil → matrahı ayır
-                matrah = q2(islem_tutar / (1 + kdv_oran / 100.0))
-                kdv_tutar = q2(islem_tutar - matrah)
                 # borc/alacak zaten genel toplam, değişmez
+                pass
             else:
                 # Girilen tutar matrah → KDV'yi üste ekle, toplamı büyüt
-                matrah = islem_tutar
-                kdv_tutar = q2(matrah * kdv_oran / 100.0)
-                islem_tutar = q2(matrah + kdv_tutar)
+                islem_tutar = _brut
                 if borc > 0:
                     borc = islem_tutar
                 if alacak > 0:
@@ -13227,6 +13395,118 @@ def create_app():
         return jsonify({'ok': True, 'guncellenen': sorted(_eski),
                         'mesaj': _mesaj})
 
+    # ══════════════════════════════════════════════════════════════
+    #  VR1 · ÇİFT BACAKLI TRANSFER, TEK BACAK SİLİNEMEZ
+    #
+    #  Transfer ATOMİK yaratılıyor ("CIFT TARAFLI: kaynaktan CIKIS +
+    #  hedefe GIRIS, tek islemde") ama ATOMİK SİLİNMİYORDU. Ölçüldü:
+    #
+    #   · Kasa virmanı (A→B 3.000 TL), çıkış bacağını sil:
+    #     A parasını geri alır, B'de para DURUR.
+    #     Sistemdeki toplam 10.000 → 13.000 TL. Para yoktan var oldu.
+    #   · Cari→kasa transferi (5.000 TL), cari hareketi sil:
+    #     kasa 5.000 TL'yi tutar, karşılığı olan cari kaydı yoktur.
+    #   · Cari→cari transferi (2.000 TL), bir bacağı sil:
+    #     bir cari alacaklı kalır, karşılığı yoktur.
+    #
+    #  EŞİ NASIL BULUNUR: bağ alanları (kim kime) yapıyı verir, ama
+    #  aynı gün aynı tutarla iki transfer yapılmışsa yapı tek başına
+    #  ayırt etmez. Zaman damgası ayırır: eşler AYNI İSTEKTE
+    #  yaratıldığı için saniyeler içindedir (TS1'de kasa kaydını
+    #  bulurken kullandığımız yöntem).
+    #
+    #  BELİRSİZSE DOKUNULMAZ. Yanlış bacağı silmek, hiç silmemekten
+    #  kötüdür: ikisi de bozulur.
+    # ══════════════════════════════════════════════════════════════
+    def _transfer_esi(hareket, pencere_sn=120):
+        """Bir transfer bacağının EŞİNİ bulur.
+
+        Döner: (es_kayit | None, belirsiz_mi)
+        """
+        def _zaman(x):
+            return (getattr(x, 'guncelleme', None)
+                    or getattr(x, 'olusturma', None))
+
+        ref = _zaman(hareket)
+        adaylar = []
+
+        if isinstance(hareket, KasaHareket):
+            # Kasa ↔ kasa virmanı: eşin kasası bizim baglanti_id'miz,
+            # eşin baglanti_id'si bizim kasamız, yön ters.
+            if (hareket.baglanti_tip or '') != 'virman':
+                return None, False
+            try:
+                karsi_kasa = int(hareket.baglanti_id)
+            except (TypeError, ValueError):
+                return None, False      # cari→kasa bacağı; burada değil
+            ters = 'giris' if (hareket.tip or '') == 'cikis' else 'cikis'
+            adaylar = KasaHareket.query.filter(
+                KasaHareket.id != hareket.id,
+                KasaHareket.kasa_id == karsi_kasa,
+                KasaHareket.baglanti_tip == 'virman',
+                KasaHareket.baglanti_id == str(hareket.kasa_id),
+                KasaHareket.tip == ters,
+                KasaHareket.tutar == hareket.tutar).all()
+
+        elif isinstance(hareket, CariHareket):
+            bt = (hareket.baglanti_tip or '')
+            if bt == 'cari' and (hareket.kaynak or '') == 'virman':
+                # Cari ↔ cari bakiye transferi
+                adaylar = CariHareket.query.filter(
+                    CariHareket.id != hareket.id,
+                    CariHareket.cari_id == hareket.baglanti_id,
+                    CariHareket.baglanti_tip == 'cari',
+                    CariHareket.baglanti_id == hareket.cari_id,
+                    CariHareket.kaynak == 'virman').all()
+            elif bt == 'kasa' and (hareket.kaynak or '') == 'virman':
+                # Cari → kasa: eş bir KASA hareketi. Tutar DÖVİZ
+                # ÇEVRİMİYLE farklı olabilir, o yüzden tutara
+                # bakılmaz; bağ + zaman yeter.
+                try:
+                    kasa_id = int(hareket.baglanti_id)
+                except (TypeError, ValueError):
+                    return None, False
+                adaylar = KasaHareket.query.filter(
+                    KasaHareket.kasa_id == kasa_id,
+                    KasaHareket.baglanti_tip == 'virman',
+                    KasaHareket.baglanti_id == hareket.cari_id).all()
+            else:
+                return None, False
+        else:
+            return None, False
+
+        if not adaylar:
+            return None, False
+        if len(adaylar) == 1:
+            return adaylar[0], False
+        # Birden çok aday: zamanca EN YAKIN olanı. Eşitlik varsa
+        # belirsizdir — dokunulmaz.
+        if not ref:
+            return None, True
+        olculu = []
+        for a in adaylar:
+            z = _zaman(a)
+            if not z:
+                continue
+            olculu.append((abs((z - ref).total_seconds()), a))
+        olculu.sort(key=lambda x: x[0])
+        if not olculu or olculu[0][0] > pencere_sn:
+            return None, True
+        if len(olculu) > 1 and abs(olculu[0][0] - olculu[1][0]) < 0.001:
+            return None, True           # iki eşit aday
+        return olculu[0][1], False
+
+    def _kasa_bakiye_geri_al(kh):
+        """Bir kasa hareketinin bakiye etkisini geri alır."""
+        k = db.session.get(Kasa, kh.kasa_id)
+        if not k:
+            return None
+        if (kh.tip or '') == 'giris':
+            k.bakiye = q2((k.bakiye or 0) - (kh.tutar or 0))
+        else:
+            k.bakiye = q2((k.bakiye or 0) + (kh.tutar or 0))
+        return f'{k.ad}: {kh.tutar:,.2f} {k.doviz or ""}'
+
     def _hareket_kasa_geri_al(hareket):
         """Bir cari hareketin bağlı kasa hareketlerini geri alır.
 
@@ -13360,12 +13640,38 @@ def create_app():
                 db.session.flush()
                 _maliyet_etkilenen_stoklari_tazele(_etkilenen)
 
+        # ── VR1 · TRANSFERİN ÖTEKİ BACAĞI ──
+        # Ölçüldü: cari→cari transferinin bir bacağı silinince öteki
+        # cari alacaklı kalıyor; cari→kasa transferinde kasa parayı
+        # tutuyor ve karşılığı olan kayıt kalmıyor. Transfer atomik
+        # yaratılıyor, atomik silinmeli.
+        _es, _belirsiz = _transfer_esi(hareket)
+        silinen_es = None
+        if _belirsiz:
+            return jsonify({
+                'ok': False, 'error': 'transfer_esi_belirsiz',
+                'mesaj': 'Bu transferin eşi kesin olarak bulunamadı '
+                         '(aynı taraflar arasında yakın zamanlı birden '
+                         'fazla transfer var). Yanlış kaydı silmemek '
+                         'için dokunulmadı; hareketleri kasa/cari '
+                         'ekranından tek tek kontrol edip silin.'}), 409
+        if _es is not None:
+            if isinstance(_es, KasaHareket):
+                _kb = _kasa_bakiye_geri_al(_es)
+                silinen_es = f'kasa hareketi ({_kb})' if _kb else 'kasa hareketi'
+            else:
+                silinen_es = f'karşı cari hareketi ({_es.id})'
+            db.session.delete(_es)
+
         # TS1: bagli kasa hareketi ORTAK yardimcidan geri alinir.
         # Eskiden burada kendi kopyasi vardi ve yalniz
         # `baglanti_tip='cari_hareket'` ariyordu; tahsilatin kasa
         # kaydi `'tahsilat'` ile yazildigi icin hic bulunmuyordu.
         _kasa_geri = _hareket_kasa_geri_al(hareket)
         silinen_kasa = ', '.join(_kasa_geri) if _kasa_geri else None
+        if silinen_es:
+            silinen_kasa = ((silinen_kasa + ' · ') if silinen_kasa else '') \
+                + silinen_es
 
         # KUR FARKI SİMETRİSİ: kapattığı hareketleri yeniden aç,
         # eşleşmeden doğan otomatik kur farkı kayıtlarını sil
@@ -13453,6 +13759,58 @@ def create_app():
 
     # ---------- API: SİPARİŞ ---------- # FAZ 16.3: SİPARİŞ KALEM-AWARE
     # FAZ 16: Çoklu kalem yapısı. Siparis = parent, SiparisKalem = child (1-N).
+
+    # ══════════════════════════════════════════════════════════════
+    #  DV1 · KALEM DÖVİZİ BELGEDEN GELİR
+    #
+    #  ÖLÇÜLDÜ: EUR bir proformanın kalemleri `'USD'` damgalanıyordu
+    #  (`doviz=k.get('doviz','USD')` — belgenin dövizi yerine sabit
+    #  USD). Ekran kalem satırını `k.doviz || p.doviz` ile bastığı
+    #  için EUR proformada HER SATIRDA $ görünüyor, belgenin toplamı
+    #  ise € yazıyordu. Müşteriye giden belgede.
+    #
+    #  Sipariş tarafında aynı şey sayıya dönüşüyordu: kalemler USD,
+    #  sipariş EUR; toplam çevrilmeden toplanıp siparişin döviziyle
+    #  etiketleniyordu. 10.000 USD + 10.000 EUR = "20.000 USD"
+    #  (gerçeği 21.250) ve bu sayı faturaya, cari harekete, satış
+    #  kaydına aynen geçiyordu.
+    #
+    #  KURAL (işin sahibinden): fiyat KENDİ para birimiyle yolculuk
+    #  eder. Proformada 50 EUR ise siparişte de, faturada da, satış
+    #  kaydında da 50 EUR'dur — hiçbir yerde çevrilmez.
+    #
+    #  Bunun gereği: kalemin dövizi BELGENİN dövizidir, ayrıca
+    #  seçilmez. Kalem bilerek farklı bir döviz taşıyorsa belge
+    #  REDDEDİLİR. Çevirmek fiyatı değiştirmek olurdu; sessizce
+    #  toplamak ise yanlış sayı üretmek. Üçüncü yol yok: ticari
+    #  faturanın tek para birimi olur.
+    # ══════════════════════════════════════════════════════════════
+    def _kalem_doviz_denetle(kalemler, belge_doviz):
+        """Kalem dövizlerini belgeninkine sabitler (inplace).
+
+        Döner: (None, None) sorun yoksa; aksi halde (sıra_no, gelen).
+        """
+        bd = (belge_doviz or 'USD').strip().upper()
+        for _i, _k in enumerate(kalemler or []):
+            if not isinstance(_k, dict):
+                continue
+            _gelen = str(_k.get('doviz') or '').strip().upper()
+            if _gelen and _gelen != bd:
+                return _i + 1, _gelen
+            _k['doviz'] = bd
+        return None, None
+
+    def _kalem_doviz_hatasi(sira, gelen, belge_doviz):
+        """Reddi, sebebini söyleyerek döner."""
+        bd = (belge_doviz or 'USD').strip().upper()
+        return jsonify({
+            'ok': False, 'error': 'kalem_dovizi',
+            'mesaj': f'{sira}. kalemin para birimi {gelen}, belgenin '
+                     f'para birimi {bd}. Bir belgenin tüm kalemleri aynı '
+                     f'para biriminde olmalı — kalemi {bd} fiyatıyla girin '
+                     f'ya da belgenin para birimini {gelen} yapın. '
+                     f'(Fiyat çevrilmez: {gelen} girdiyseniz {gelen} kalır.)'
+        }), 400
 
     def _kalem_hesapla(k_data):
         """Bir kalemin m2/m3/sqft/kg toplamlarını hesaplar. Inplace günceller."""
@@ -13612,9 +13970,26 @@ def create_app():
         """
         db.session.flush()
         toplam = 0
-        for k in SiparisKalem.query.filter_by(siparis_id=siparis.id).all():
-            # Şimdilik kalem dövizi sipariş dövizine eşit varsayılıyor.
-            # Farklı dövizler için kur çevrimi eklenebilir.
+        # ── DV1 · KALEM DÖVİZİ SİPARİŞİNKİNE EŞİT OLMALI ──
+        # Eskiden burada "şimdilik eşit varsayılıyor" yazıyordu ve
+        # varsayım DENETLENMİYORDU. Ölçüldü: 10.000 USD + 10.000 EUR
+        # kalemli bir sipariş "20.000 USD" yazıyordu (gerçeği 21.250)
+        # ve bu sayı faturaya, cari harekete ve satış kaydına aynen
+        # geçiyordu. Artık kalem dövizi belgeden MİRAS ALINIYOR
+        # (`_kalem_doviz_denetle`), yani karışık sipariş yazma
+        # yolundan hiç doğmuyor. Burası son çare: eski bir kayıt ya
+        # da betikle üretilmiş bir sipariş karışıksa sessizce yanlış
+        # toplamaktansa GÖRÜNÜR olsun.
+        kalemler = SiparisKalem.query.filter_by(siparis_id=siparis.id).all()
+        _sip_dv = (siparis.doviz or 'USD').upper()
+        _yabanci = sorted({(k.doviz or _sip_dv).upper() for k in kalemler}
+                          - {_sip_dv})
+        if _yabanci:
+            app.logger.error(
+                f'DV1 · sipariş {siparis.id} dövizi {_sip_dv} ama kalemlerde '
+                f'{", ".join(_yabanci)} var. Toplam ÇEVRİLMEDEN hesaplandı; '
+                f'tutar güvenilmez.')
+        for k in kalemler:
             toplam += (k.toplam_fiyat or 0)
         siparis.toplam_tutar = q2(toplam)
 
@@ -13760,6 +14135,12 @@ def create_app():
             db.session.rollback()
             return jsonify({'ok': False, 'mesaj': 'En az bir kalem girilmelidir'}), 400
 
+        # DV1 · kalem dövizi SİPARİŞTEN gelir (inplace sabitlenir).
+        _dv_sira, _dv_gelen = _kalem_doviz_denetle(kalemler_data, sip.doviz)
+        if _dv_sira:
+            db.session.rollback()
+            return _kalem_doviz_hatasi(_dv_sira, _dv_gelen, sip.doviz)
+
         for idx, k_data in enumerate(kalemler_data):
             # Hesaplama
             hesap = _kalem_hesapla(k_data)
@@ -13827,7 +14208,20 @@ def create_app():
         if not kalemler_data:
             return jsonify({'ok': False, 'mesaj': 'En az bir kalem girilmelidir'}), 400
 
-        doviz = data.get('doviz', 'USD')
+        # ── HS1 · BELGE DÖVİZİ ──
+        # Ekran dövizi yalnızca KALEMLERE koyuyordu, gövdeye değil.
+        # Ölçüldü: EUR seçilen satış sipariş/fatura/cari hareket/satış
+        # kaydının HEPSİNDE USD olarak kaydediliyordu — ekran €, veri $.
+        # Ekran artık gövdeye de yazıyor; burada ayrıca kalemlerden
+        # geri düşülüyor ki eski bir sekme açık kalmışsa da doğru
+        # para birimi kullanılsın (sessizce USD'ye düşmektense).
+        doviz = (data.get('doviz') or '').strip().upper()
+        if not doviz:
+            for _k in kalemler_data:
+                if isinstance(_k, dict) and (_k.get('doviz') or '').strip():
+                    doviz = str(_k['doviz']).strip().upper()
+                    break
+        doviz = doviz or 'USD'
         bugun = date.today()
 
         try:
@@ -13849,6 +14243,12 @@ def create_app():
             db.session.flush()
 
             kalem_list_json = []  # fatura kalemler_json için
+            # DV1 · kalem dövizi SİPARİŞTEN gelir (inplace sabitlenir).
+            _dv_sira, _dv_gelen = _kalem_doviz_denetle(kalemler_data, doviz)
+            if _dv_sira:
+                db.session.rollback()
+                return _kalem_doviz_hatasi(_dv_sira, _dv_gelen, doviz)
+
             for idx, k_data in enumerate(kalemler_data):
                 hesap = _kalem_hesapla(k_data)
                 stok_ids = k_data.get('stok_ids', [])
@@ -13888,6 +14288,33 @@ def create_app():
 
             # ── 3) FATURA (doğrudan Kesildi) ──
             ftr_no = data.get('fatura_no') or f'SF-{bugun.strftime("%Y%m%d")}-{sip.id[-4:]}'
+            # ══════════════════════════════════════════════════════
+            #  HS1 · KDV FATURAYA HİÇ YANSIMIYORDU
+            #
+            #  Eskiden: toplam = ara_toplam = sip.toplam_tutar ve
+            #  kdv_tutar = data.get('kdv_tutar', 0) — ekran bu alanı
+            #  HİÇ GÖNDERMİYOR, yani her zaman 0.
+            #
+            #  ÖLÇÜLDÜ: ekran "3.024 € (KDV %20 dahil)" yazarken
+            #  fatura 2.520 € kesiliyor ve cariye 2.520 € borç
+            #  işleniyordu. 504 € müşteriye hiç fatura edilmiyordu.
+            #
+            #  Artık KD1'in tek kapısından geçiyor; matrah + KDV her
+            #  zaman toplamı veriyor. `kdv_dahil_mi` ekrandan geliyor
+            #  (diğer satış formlarındaki gibi seçilebilir): "hariç"
+            #  ise KDV üstüne eklenir ve toplam büyür, "dahil" ise
+            #  girilen tutarın içinden ayrıştırılır.
+            # ══════════════════════════════════════════════════════
+            _kdv_oran = float(data.get('kdv_oran') or 0)
+            _kdv_dahil = bool(data.get('kdv_dahil_mi'))
+            _ara, _kdv_tut, _gen_toplam = _kdv_hesapla(
+                sip.toplam_tutar or 0, _kdv_oran, _kdv_dahil)
+            # Siparişin KDV'si de dolsun: kurulumda `data.get('kdv_tutar')`
+            # okunuyordu ve ekran o alanı hiç göndermiyor — oran 20 iken
+            # tutar 0 kalıyordu. `toplam_tutar` kalemlerin NET toplamı
+            # olarak kalır; bütün sipariş yollarında öyle.
+            sip.kdv_oran = _kdv_oran
+            sip.kdv_tutar = _kdv_tut
             fatura = Fatura(
                 id=_okunur_id('FTR', Fatura, cari=musteri),      # RN1
                 fatura_no=ftr_no,
@@ -13895,9 +14322,9 @@ def create_app():
                 vade_tarihi=_parse_date(data.get('vade_tarihi')) or bugun,
                 siparis_id=sip.id, musteri=musteri,
                 musteri_adres=data.get('musteri_adres'),
-                toplam=sip.toplam_tutar or 0,
-                ara_toplam=sip.toplam_tutar or 0,
-                kdv_oran=data.get('kdv_oran', 0), kdv_tutar=data.get('kdv_tutar', 0),
+                toplam=_gen_toplam,
+                ara_toplam=_ara,
+                kdv_oran=_kdv_oran, kdv_tutar=_kdv_tut,
                 doviz=doviz,
                 odeme_sekli=sip.odeme_sekli, teslim_sekli=sip.teslim_sekli,
                 durum='Taslak', yon='satis', fatura_tipi='stoklu',
@@ -13934,7 +14361,8 @@ def create_app():
             # (Fatura durumu doğrudan atandığı için api_fatura_durum'daki otomatik
             #  oluşturma tetiklenmez; burada açıkça çağırıyoruz.)
             try:
-                sk_adet, sk_hata = _fatura_satis_kaydi_olustur(fatura.id)
+                sk_adet, sk_hata = _fatura_satis_kaydi_olustur(
+                    fatura.id, stok_durumu='Satildi')   # IP1 · hızlı satış
                 if sk_hata:
                     app.logger.warning(f'Sicak satis satis kaydi: {sk_hata}')
             except Exception as _e:
@@ -13959,7 +14387,15 @@ def create_app():
                     hesap_sahibi=(cek_bilgi.get('hesap_sahibi') or '').strip() or None,
                     tutar=q2(cek_tutar), doviz=doviz,
                     keside_tarihi=_parse_date(cek_bilgi.get('keside_tarihi')),
-                    vade_tarihi=_parse_date(data.get('vade_tarihi')) or bugun,
+                    # HS1 · ÇEKİN KENDİ VADESİ. Ekranda "Çek Bilgileri"
+                    # altında bir vade alanı var ve gövdede de
+                    # geliyordu, ama burada okunmuyordu: üstteki fatura
+                    # vadesi çekin vadesini de eziyordu. İki ayrı tarih:
+                    # fatura ne zaman ödenecek, çek ne zaman tahsil
+                    # edilecek. Çek vadesi boşsa fatura vadesine düşer.
+                    vade_tarihi=(_parse_date(cek_bilgi.get('vade_tarihi'))
+                                 or _parse_date(data.get('vade_tarihi'))
+                                 or bugun),
                     cari_id=cari.id, cari_unvan=musteri,
                     durum='Portfoyde', fatura_id=fatura.id,
                     aciklama=f'Sıcak satış {fatura.fatura_no} karşılığı alınan çek',
@@ -13968,12 +14404,19 @@ def create_app():
                 db.session.flush()
                 _cek_hareket_ekle(cek, 'Alındı', None, 'Portfoyde', cek.aciklama or '')
                 # Çek = ödeme: müşterinin borcu düşer → cari ALACAK
-                _cari_hareket_ekle(
+                # IP1: dönen hareket ÇEKE BAĞLANIYOR. Eskiden dönüş
+                # değeri atılıyordu ve `cek.cari_hareket_id` boş
+                # kalıyordu; çek silindiğinde geri alma o bağı arayıp
+                # bulamıyor, alacak cariye asılı kalıyordu.
+                _cek_ch = _cari_hareket_ekle(
                     cari_unvan=musteri, islem_tip='Çek Tahsilatı',
                     borc=0, alacak=cek.tutar or 0, doviz=doviz,
                     aciklama=f'Çek alındı (No: {cek.cek_no or cek.id}) — {fatura.fatura_no}',
                     kaynak='cek', baglanti_tip='cek', baglanti_id=cek.id,
                     vade_tarihi=cek.vade_tarihi, evrak_no=cek.cek_no or cek.id)
+                if _cek_ch:
+                    db.session.flush()
+                    cek.cari_hareket_id = _cek_ch.id
                 cek_olusturuldu = cek.id
                 # Fatura tahsilat durumunu güncelle (çek ödeme sayılır)
                 _fatura_tahsilat_durumu(fatura.id)
@@ -14128,6 +14571,14 @@ def create_app():
                 db.session.delete(k)
             db.session.flush()
 
+            # DV1 · kalem dövizi SİPARİŞTEN gelir (inplace sabitlenir).
+            # `sip.doviz` bu noktada güncellenmiş değeri taşır.
+            _dv_sira, _dv_gelen = _kalem_doviz_denetle(
+                data['kalemler'], sip.doviz)
+            if _dv_sira:
+                db.session.rollback()
+                return _kalem_doviz_hatasi(_dv_sira, _dv_gelen, sip.doviz)
+
             # Yeni kalemleri ekle
             for idx, k_data in enumerate(data['kalemler']):
                 hesap = _kalem_hesapla(k_data)
@@ -14213,8 +14664,46 @@ def create_app():
                 elif esik > 0 and zorla:
                     ekstra_zorla = ' (yonetici odeme kapisini zorla gecti)'
 
+            # ══════════════════════════════════════════════════════
+            #  IP1 · İPTAL, PARA İZLERİNİ SORMADAN BIRAKMAZ
+            #
+            #  ÖLÇÜLDÜ: faturası kesilmiş bir siparişi iptal etmek
+            #  HİÇBİR ŞEYİ geri almıyordu. Fatura "Tahsil Edildi"
+            #  kalıyor, cariye yazılan 3.024 $ borç duruyor, stoklar
+            #  satılmış kalıyordu. Kullanıcı iptal ettiğini sanıyor,
+            #  cari hesapta hayalet bakiye kalıyordu.
+            #
+            #  Karar kullanıcınındır, sistemin değil: fatura iptal
+            #  edilsin mi, alınan para/çek iade mi edilsin yoksa
+            #  cariye ALACAK olarak mı kalsın. Sunucu kararı tahmin
+            #  etmez — neyin kararını beklediğini söyleyerek 409
+            #  döner, ekran sırayla sorar, cevapla birlikte tekrar
+            #  çağırır.
+            # ══════════════════════════════════════════════════════
+            if yeni_durum == 'Iptal Edildi' and eski_durum != 'Iptal Edildi':
+                _karar = _siparis_iptal_karari(sip)
+                _onay = data.get('iptal_onay') or {}
+                if _karar and not _onay:
+                    return jsonify({
+                        'ok': False, 'error': 'iptal_onayi_gerekli',
+                        'mesaj': 'Bu siparişin para kayıtları var. '
+                                 'İptal etmeden önce bunların ne olacağına '
+                                 'karar vermen gerekiyor.',
+                        'karar': _karar}), 409
+                if _karar:
+                    _ek_iptal, _hata = _siparis_iptal_kararlarini_uygula(
+                        sip, _karar, _onay)
+                    if _hata:
+                        db.session.rollback()
+                        return jsonify({'ok': False, 'error': 'iptal_uygulanamadi',
+                                        'mesaj': _hata}), 400
+                else:
+                    _ek_iptal = ''
+            else:
+                _ek_iptal = ''
+
             sip.durum = yeni_durum
-            ekstra = locals().get('ekstra_zorla', '')
+            ekstra = locals().get('ekstra_zorla', '') + _ek_iptal
 
             # İPTAL: bağlı rezervasyonları iptal + stokları Serbest bırak + proformaları iptal
             # (_siparis_stoklarini_serbest_birak hem rezervasyonu iptal eder hem stoğu serbest yapar)
@@ -15045,124 +15534,21 @@ def create_app():
         })
 
     # ---------- API: MALİYET ----------
-    @app.route('/api/stok/gruplar', methods=['GET'])
-    def api_stok_gruplar():
-        """Cari hareket icin gruplandirilmis stok listesi.
-        BLOK: her stok ayri (id ile)
-        PLAKA: blok_no'ya gore grup (ayni blok = ayni alim)
-        EBATLI: kasa_no veya referans'a gore grup
-        """
-        if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
-        # Sadece aktif stoklari (Teslim Edildi haric) goster.
-        # F5 · DUZELTME: 'Sevkedildi' listede YOKTU. Mal gemiye
-        # yuklendigi an bu seciciden kayboluyordu; henuz faturasi
-        # kesilmemis bir sevkiyatin stogunu secmek imkansizdi.
-        # Yoldaki mal HALA BIZIM malimiz — listede kalir.
-        aktif_durumlar = ['Serbest', 'Rezerve', 'Satildi', 'Sevkedildi']
-
-        gruplar = {'blok': [], 'plaka': [], 'ebatli': []}
-
-        # BLOK - her stok ayri grup
-        for s in BlokStok.query.filter(BlokStok.durum.in_(aktif_durumlar)).all():
-            _fd = getattr(s, 'fatura_durumu', 'faturali') or 'faturali'
-            _ek = ' · ⏳ FATURASIZ' if _fd == 'faturasiz' else ''
-            _ref = s.blok_no or s.id
-            _matrah = s.matrah or 0
-            _kdv = s.kdv_tutar or 0
-            gruplar['blok'].append({
-                'grup_id': s.id,  # baglanti_id olarak kullanilacak
-                'etiket': f"{_ref} · {s.cins or '-'} · {s.tonaj or 0:.1f} ton{_ek}",
-                'tip': 'BLOK',
-                'cins': s.cins,
-                'blok_no': s.blok_no,
-                'stok_idler': [s.id],
-                'toplam_miktar': s.tonaj or 0,
-                'birim': 'ton',
-                'adet': 1,
-                'fatura_durumu': _fd,
-                'matrah': q2(_matrah),
-                'kdv': q2(_kdv),
-                'toplam': q2(_matrah + _kdv),
-                'doviz': s.doviz or 'USD'
-            })
-
-        # PLAKA - blok_no'ya gore grupla
-        from collections import defaultdict
-        plaka_gruplar = defaultdict(list)
-        for s in PlakaStok.query.filter(PlakaStok.durum.in_(aktif_durumlar)).all():
-            anahtar = s.blok_no or s.id  # blok_no yoksa kendi id'si
-            plaka_gruplar[anahtar].append(s)
-
-        for blok_no, stoklar in plaka_gruplar.items():
-            ilk = stoklar[0]
-            toplam_m2 = sum(s.metraj_m2 or 0 for s in stoklar)
-            _faturasiz_var = any(getattr(s, 'fatura_durumu', 'faturali') == 'faturasiz' for s in stoklar)
-            _ek = ' · ⏳ FATURASIZ' if _faturasiz_var else ''
-            # Sadece faturasız olanların tutarı (faturalandırma için)
-            _fsiz = [s for s in stoklar if getattr(s, 'fatura_durumu', 'faturali') == 'faturasiz']
-            _hedef = _fsiz if _fsiz else stoklar
-            _matrah = sum(s.matrah or 0 for s in _hedef)
-            _kdv = sum(s.kdv_tutar or 0 for s in _hedef)
-            gruplar['plaka'].append({
-                'grup_id': f"BLOK:{blok_no}",  # baglanti_id format
-                'etiket': f"{blok_no} · {ilk.cins or '-'} · {len(stoklar)} plaka · {toplam_m2:.2f} m²{_ek}",
-                'tip': 'PLAKA',
-                'cins': ilk.cins,
-                'blok_no': blok_no,
-                'stok_idler': [s.id for s in stoklar],
-                'toplam_miktar': toplam_m2,
-                'birim': 'm²',
-                'adet': len(stoklar),
-                'fatura_durumu': 'faturasiz' if _faturasiz_var else 'faturali',
-                'matrah': q2(_matrah),
-                'kdv': q2(_kdv),
-                'toplam': q2(_matrah + _kdv),
-                'doviz': ilk.doviz or 'USD'
-            })
-
-        # EBATLI - kasa_no varsa onun ortak prefix'ine, yoksa cins+olcu kombinasyonuna gore
-        # Aslinda kasa_no genelde "PREFIX-1", "PREFIX-2" formatinda
-        import re as _re
-        ebatli_gruplar = defaultdict(list)
-        for s in EbatliStok.query.filter(EbatliStok.durum.in_(aktif_durumlar)).all():
-            # Kasa_no'dan PREFIX cikar (sondaki -N)
-            if s.kasa_no:
-                m = _re.match(r'^(.*?)-\d+$', s.kasa_no)
-                anahtar = m.group(1) if m else s.kasa_no
-            else:
-                # Kasa_no yok: cins + olcu kombinasyonu
-                anahtar = f"{s.cins or '?'}_{s.boy or 0}x{s.yukseklik or 0}x{s.kalinlik or 0}"
-            ebatli_gruplar[anahtar].append(s)
-
-        for anahtar, stoklar in ebatli_gruplar.items():
-            ilk = stoklar[0]
-            toplam_m2 = sum(((s.boy or 0) * (s.yukseklik or 0) / 10000) * (s.kasa_ici_adet or 1)
-                           for s in stoklar)
-            _faturasiz_var = any(getattr(s, 'fatura_durumu', 'faturali') == 'faturasiz' for s in stoklar)
-            _ek = ' · ⏳ FATURASIZ' if _faturasiz_var else ''
-            _fsiz = [s for s in stoklar if getattr(s, 'fatura_durumu', 'faturali') == 'faturasiz']
-            _hedef = _fsiz if _fsiz else stoklar
-            _matrah = sum(s.matrah or 0 for s in _hedef)
-            _kdv = sum(s.kdv_tutar or 0 for s in _hedef)
-            gruplar['ebatli'].append({
-                'grup_id': f"EBATLI_GRP:{anahtar}",
-                'etiket': f"{anahtar} · {ilk.cins or '-'} · {len(stoklar)} kasa · {toplam_m2:.2f} m²{_ek}",
-                'tip': 'EBATLI',
-                'cins': ilk.cins,
-                'kasa_prefix': anahtar,
-                'olculer': f"{ilk.boy}x{ilk.yukseklik}x{ilk.kalinlik}" if ilk.boy else '',
-                'stok_idler': [s.id for s in stoklar],
-                'toplam_miktar': toplam_m2,
-                'birim': 'm²',
-                'adet': len(stoklar),
-                'fatura_durumu': 'faturasiz' if _faturasiz_var else 'faturali',
-                'matrah': q2(_matrah),
-                'kdv': q2(_kdv),
-                'toplam': q2(_matrah + _kdv),
-                'doviz': ilk.doviz or 'USD'
-            })
-
-        return jsonify(gruplar)
+    # ── DV1 · SİLİNDİ: GET /api/stok/gruplar
+    #
+    #    Cari hareket ekranında fatura kesmek için stokları
+    #    blok/kasa bazında gruplayan uçtu. Hiçbir ekrandan
+    #    çağrılmıyordu (tam yol taraması; önceki ulaşılmaz-uç
+    #    taraması ÖNEK eşlediği için kaçırmıştı — `/api/stok`
+    #    şablonlarda geçiyor ve GET de kullanılıyordu).
+    #
+    #    Ayrıca grubun matrah ve KDV toplamını çevirmeden
+    #    topluyor, sonucu İLK stoğun döviziyle etiketliyordu.
+    #    EBATLI grubu `cins + ölçü` ile kurulduğu için ayrı
+    #    alımlar aynı gruba düşüyordu: farklı dövizdeki iki alım
+    #    tek sayıya toplanıp tek para birimiyle yazılabiliyordu.
+    #    Yarım kurulmuş ve yanlış hesaplayan bir ucu bekletmek,
+    #    yarın birinin onu doğru sanıp bağlaması demekti.
 
     # ══════════════════════════════════════════════════════════
     #  NAKİT AKIŞI — SABİT GİDERLER  (NA1)
@@ -16455,16 +16841,9 @@ def create_app():
         kdv_oran     = float(data.get('kdv_oran', 0) or 0)
         tutar_ham    = float(data.get('tutar', 0) or 0)
 
-        # Net matrah ve KDV hesapla
-        if kdv_dahil_mi and kdv_oran > 0:
-            net_tutar = q2(tutar_ham / (1 + kdv_oran / 100))
-            kdv_tutar = q2(tutar_ham - net_tutar)
-        elif not kdv_dahil_mi and kdv_oran > 0:
-            net_tutar = tutar_ham
-            kdv_tutar = q2(tutar_ham * kdv_oran / 100)
-        else:
-            net_tutar = tutar_ham
-            kdv_tutar = 0.0
+        # Net matrah ve KDV — KD1: tek kapı
+        net_tutar, kdv_tutar, _kdv_brut = _kdv_hesapla(
+            tutar_ham, kdv_oran, kdv_dahil_mi)
 
         def _usd(t, dv):
             return _usd_cevrim(t, dv)          # F15: TCMB çapraz kuru
@@ -17751,15 +18130,9 @@ def create_app():
             return jsonify({'ok': False,
                 'mesaj': f'Tek seferde en çok 500 kayda dağıtılır (seçilen: {len(hedefler)})'}), 400
 
-        if kdv_dahil_mi and kdv_oran > 0:
-            toplam_net = q2(tutar_ham / (1 + kdv_oran / 100))
-            toplam_kdv = q2(tutar_ham - toplam_net)
-        elif not kdv_dahil_mi and kdv_oran > 0:
-            toplam_net = tutar_ham
-            toplam_kdv = q2(tutar_ham * kdv_oran / 100)
-        else:
-            toplam_net = tutar_ham
-            toplam_kdv = 0.0
+        # KD1: tek kapı
+        toplam_net, toplam_kdv, _kdv_brut = _kdv_hesapla(
+            tutar_ham, kdv_oran, kdv_dahil_mi)
 
         satirlar, olcu_notu, kullanilan = _maliyet_dagitim_plani(
             hedefler, toplam_net, toplam_kdv, dagitim)
@@ -18124,16 +18497,9 @@ def create_app():
         if not urun_tipi or not blok_no or not tutar_ham:
             return jsonify({'ok': False, 'mesaj': 'Ürün Tipi, Blok No ve Tutar zorunludur'}), 400
 
-        # Net matrah ve KDV
-        if kdv_dahil_mi and kdv_oran > 0:
-            toplam_net = q2(tutar_ham / (1 + kdv_oran / 100))
-            toplam_kdv = q2(tutar_ham - toplam_net)
-        elif not kdv_dahil_mi and kdv_oran > 0:
-            toplam_net = tutar_ham
-            toplam_kdv = q2(tutar_ham * kdv_oran / 100)
-        else:
-            toplam_net = tutar_ham
-            toplam_kdv = 0.0
+        # Net matrah ve KDV — KD1: tek kapı
+        toplam_net, toplam_kdv, _kdv_brut = _kdv_hesapla(
+            tutar_ham, kdv_oran, kdv_dahil_mi)
 
         def _usd(t, dv):
             return _usd_cevrim(t, dv)          # F15: TCMB çapraz kuru
@@ -19685,12 +20051,16 @@ def create_app():
         c = Cek.query.get(cek_id)
         if not c: return jsonify({'ok': False, 'mesaj': 'Çek bulunamadı'}), 404
         # Çekin oluşturduğu cari hareketi geri al (bakiye düzelsin)
+        #
+        # IP1 · ÖLÇÜLDÜ: burası yalnızca `c.cari_hareket_id` bağına
+        # bakıyordu ve hızlı satış o alanı hiç doldurmuyordu. Çek
+        # silindiğinde "bağlı kayıtlar geri alındı" deniyor ama cari
+        # hareket DURUYORDU — müşteri 3.024 $ alacaklı kalıyordu.
+        # Artık belge bağı üzerinden de aranıyor (TS1 kalıbı).
         fatura_id_etkilenen = c.fatura_id
-        if c.cari_hareket_id:
-            ch = CariHareket.query.get(c.cari_hareket_id)
-            if ch:
-                db.session.delete(ch)
-                c.cari_hareket_id = None
+        _silinen_ch = _cari_hareket_geri_al('cek', c.id, c.cari_hareket_id)
+        if _silinen_ch:
+            c.cari_hareket_id = None
         # Bağlı kasa hareketi varsa geri al — BAKİYEYİ DE DÜZELT.
         # (Sadece hareketi silmek yetmez: kasa.bakiye alanı ayrıca tutuluyor,
         #  düzeltilmezse kasada karşılığı olmayan para görünür.)
@@ -21293,6 +21663,12 @@ def create_app():
                                          f'{", ".join(GECERLI_URUN_TIP)}'}), 400
             _k['urun_tip'] = _t
 
+        # DV1 · kalem dövizi BELGEDEN gelir (inplace sabitlenir).
+        _dv_sira, _dv_gelen = _kalem_doviz_denetle(
+            data.get('kalemler', []), p.doviz)
+        if _dv_sira:
+            return _kalem_doviz_hatasi(_dv_sira, _dv_gelen, p.doviz)
+
         for idx, k in enumerate(data.get('kalemler', [])):
             pk = ProformaKalem(proforma_id=p.id, urun_tip=k.get('urun_tip'), cins=k.get('cins'), yuzey_spec=k.get('ozellik'),
                                blok_no=k.get('blok_no'), en=k.get('en'),
@@ -21300,7 +21676,7 @@ def create_app():
                                adet=k.get('adet',1),
                                kasa_ici_adet=int(k.get('kasa_ici_adet') or 1),
                                miktar=k.get('miktar'), birim=k.get('birim','m2'), birim_fiyat=k.get('birim_fiyat'),
-                               doviz=k.get('doviz','USD'), toplam_fiyat=k.get('toplam_fiyat'), net_fiyat=k.get('net_fiyat'),
+                               doviz=k.get('doviz') or (p.doviz or 'USD'), toplam_fiyat=k.get('toplam_fiyat'), net_fiyat=k.get('net_fiyat'),
                                iskonto=k.get('iskonto',0), iskonto_tip=k.get('iskonto_tip','%'), slab_no=k.get('slab_no'),
                                bundle_no=k.get('bundle_no'), m2_toplam=k.get('m2'), sqft_toplam=k.get('sqft'),
                                agirlik=k.get('agirlik_kg'), sira=idx,
@@ -21504,13 +21880,22 @@ def create_app():
                                              f'{", ".join(GECERLI_URUN_TIP)}'}), 400
                 _k['urun_tip'] = _t
 
+            # DV1 · kalem dövizi BELGEDEN gelir (inplace sabitlenir).
+            # `p.doviz` bu noktada GÜNCELLENMİŞ değeri taşıyor: belge
+            # dövizi değiştirilerek güncelleniyorsa kalemler yeni
+            # dövize göre denetlenir.
+            _dv_sira, _dv_gelen = _kalem_doviz_denetle(
+                data.get('kalemler', []), p.doviz)
+            if _dv_sira:
+                return _kalem_doviz_hatasi(_dv_sira, _dv_gelen, p.doviz)
+
             for idx, k in enumerate(data.get('kalemler', [])):
                 pk = ProformaKalem(
                     proforma_id=p.id, urun_tip=k.get('urun_tip'), cins=k.get('cins'),
                     yuzey_spec=k.get('ozellik'), blok_no=k.get('blok_no'), en=k.get('en'),
                     boy=k.get('boy'), yukseklik=k.get('yukseklik'), kalinlik=k.get('kalinlik'),
                     adet=k.get('adet', 1), miktar=k.get('miktar'), birim=k.get('birim', 'm2'),
-                    birim_fiyat=k.get('birim_fiyat'), doviz=k.get('doviz', 'USD'),
+                    birim_fiyat=k.get('birim_fiyat'), doviz=k.get('doviz') or (p.doviz or 'USD'),
                     toplam_fiyat=k.get('toplam_fiyat'), net_fiyat=k.get('net_fiyat'),
                     iskonto=k.get('iskonto', 0), iskonto_tip=k.get('iskonto_tip', '%'),
                     slab_no=k.get('slab_no'), bundle_no=k.get('bundle_no'),
@@ -26351,12 +26736,9 @@ def create_app():
             kdv_oran = p.kdv_oran or 0
         else:
             kdv_oran = 0  # Ihracat / ihrac_kayitli
-        if kdv_oran > 0:
-            ara_toplam = toplam / (1 + kdv_oran / 100)
-            kdv_tutar = toplam - ara_toplam
-        else:
-            ara_toplam = toplam
-            kdv_tutar = 0
+        # KD1: tek kapı. Proforma toplamı KDV DAHİL; ara toplam ile
+        # KDV'nin toplamı her zaman proformanın toplamını verir.
+        ara_toplam, kdv_tutar, _ = _kdv_hesapla(toplam, kdv_oran, True)
 
         # FATURA TİPİ tespiti:
         # 1) Proforma_tipi == 'teklif' -> fatura da 'teklif' (proforma seviyesinde belirlenmis)
@@ -27666,6 +28048,94 @@ def create_app():
             msg += f', {sk_say} satis kaydi silindi'
         return jsonify({'ok': True, 'mesaj': msg})
 
+    # ══════════════════════════════════════════════════════════════
+    #  IP1 · BİR FATURANIN İPTALİNİ GERİ ALAN TEK KAPI
+    #
+    #  Bu gövde `api_fatura_durum` içindeydi. Sipariş iptali de aynı
+    #  işi yapmak zorunda (işin sahibi "sipariş iptal edilirse fatura
+    #  da iptal edilsin mi diye sorsun" dedi) ve mantığı ikinci kez
+    #  yazmak, AF1/TS1/EM2/KD1'de defalarca düzelttiğimiz "iki ayrı
+    #  gerçek" durumunu kurardı. Tek kapı, iki çağıran.
+    #
+    #  SORUMLULUĞU: faturanın PARA izlerini geri almak. Faturanın
+    #  durumunu DEĞİŞTİRMEZ, tahsilat denetimi YAPMAZ — ikisi de
+    #  çağıranın işi. Çağıran, tahsilat/çek kararlarını kendisi
+    #  vermiş olmalı.
+    # ══════════════════════════════════════════════════════════════
+    def _fatura_iptal_geri_al(f):
+        """Faturanın borç hareketini, mahsubunu ve satış kayıtlarını
+        geri alır; bağlı sipariş/proformayı geri çeker.
+
+        Döner: olanları anlatan metin (boş olabilir).
+        """
+        fatura_id = f.id
+        ekstra = ''
+        # AM1: önce mahsup geri alınır — avans siparişe döner.
+        _geri, _geri_dv = _fatura_avans_mahsup_geri_al(f)
+        borc_hareket = CariHareket.query.filter_by(
+            baglanti_tip='fatura', baglanti_id=fatura_id, kaynak='fatura').first()
+        if borc_hareket:
+            db.session.delete(borc_hareket)
+            ekstra = ' Borc hareketi geri alindi.'
+        if _geri > 0:
+            ekstra += (f' {_geri:,.2f} {_geri_dv} avans mahsubu geri alindi '
+                       f'(avans siparise dondu).')
+        # Bu faturadan olusan SatisKaydi'lari sil (karlilikten dus)
+        sat_kayitlar = SatisKaydi.query.filter_by(fatura_id=fatura_id).all()
+        for sk in sat_kayitlar:
+            # Stoklu satista stok durumunu geri al
+            if sk.stok_tip in ('BLOK', 'PLAKA', 'EBATLI'):
+                stok = _stok_getir(sk.stok_id, sk.stok_tip)
+                if stok and stok.durum == 'Teslim Edildi':
+                    stok.durum = 'Satildi'
+            db.session.delete(sk)
+        if sat_kayitlar:
+            ekstra += f' {len(sat_kayitlar)} satis kaydi geri alindi.'
+
+        # ── DURUM SENKRONIZASYONU: Fatura Iptal -> bagli siparis geri "Onaylandi" ──
+        if f.siparis_id:
+            sip = Siparis.query.get(f.siparis_id)
+            if sip and sip.durum in ('Hazir', 'Teslim Edildi'):
+                eski_sip_durum = sip.durum
+                sip.durum = 'Onaylandi'
+                ekstra += f' Bagli siparis {sip.id} durumu: {eski_sip_durum} -> Onaylandi.'
+                app.logger.info(f'[SENKRO] Fatura {fatura_id} Iptal -> Siparis {sip.id}: {eski_sip_durum} -> Onaylandi')
+
+        # ── DURUM SENKRONIZASYONU: Fatura Iptal -> bagli proforma geri "Onaylandi" ──
+        if f.proforma_id:
+            pf = Proforma.query.get(f.proforma_id)
+            if pf and pf.durum == 'Faturalandi':
+                pf.durum = 'Onaylandi'
+                ekstra += f' Bagli proforma {pf.id} durumu: Faturalandi -> Onaylandi.'
+                app.logger.info(f'[SENKRO] Fatura {fatura_id} Iptal -> Proforma {pf.id}: Faturalandi -> Onaylandi')
+        return ekstra
+
+    # ══════════════════════════════════════════════════════════════
+    #  IP1 · BİR BELGENİN CARİ HAREKETLERİNİ GERİ ALAN TEK KAPI
+    #
+    #  TS1'in kalıbı. ÖLÇÜLDÜ: çeki silmek "bağlı kayıtlar geri
+    #  alındı" diyor ama cari hareket DURUYORDU — geri alma yalnızca
+    #  `cek.cari_hareket_id` bağına bakıyor, hızlı satış ise o alanı
+    #  hiç doldurmuyordu. Hareket `baglanti_tip`/`baglanti_id` ile
+    #  bağlıydı ve kimse oraya bakmıyordu.
+    #
+    #  Artık iki yoldan da aranıyor: hangi yol kullanılmışsa hareket
+    #  bulunur. Yarın üçüncü bir yol çek üretirse de çalışır.
+    # ══════════════════════════════════════════════════════════════
+    def _cari_hareket_geri_al(baglanti_tip, baglanti_id, hareket_id=None):
+        """Bir belgeye bağlı cari hareketleri siler. Döner: silinen sayı."""
+        bulunan = {}
+        if hareket_id:
+            h = CariHareket.query.get(hareket_id)
+            if h:
+                bulunan[h.id] = h
+        for h in CariHareket.query.filter_by(
+                baglanti_tip=baglanti_tip, baglanti_id=baglanti_id).all():
+            bulunan[h.id] = h
+        for h in bulunan.values():
+            db.session.delete(h)
+        return len(bulunan)
+
     @app.route('/api/fatura/<fatura_id>/durum', methods=['POST'])
     def api_fatura_durum(fatura_id):
         """
@@ -27861,44 +28331,10 @@ def create_app():
                              '(ve varsa cekleri) geri almalisiniz. Boylece musteri odemesi '
                              'cari hesapta asili kalmaz.'}), 400
 
-            # AM1: önce mahsup geri alınır — avans siparişe döner.
-            _geri, _geri_dv = _fatura_avans_mahsup_geri_al(f)
-            borc_hareket = CariHareket.query.filter_by(
-                baglanti_tip='fatura', baglanti_id=fatura_id, kaynak='fatura').first()
-            if borc_hareket:
-                db.session.delete(borc_hareket)
-                ekstra = ' Borc hareketi geri alindi.'
-            if _geri > 0:
-                ekstra += (f' {_geri:,.2f} {_geri_dv} avans mahsubu geri alindi '
-                           f'(avans siparise dondu).')
-            # Bu faturadan olusan SatisKaydi'lari sil (karlilikten dus)
-            sat_kayitlar = SatisKaydi.query.filter_by(fatura_id=fatura_id).all()
-            for sk in sat_kayitlar:
-                # Stoklu satista stok durumunu geri al
-                if sk.stok_tip in ('BLOK', 'PLAKA', 'EBATLI'):
-                    stok = _stok_getir(sk.stok_id, sk.stok_tip)
-                    if stok and stok.durum == 'Teslim Edildi':
-                        stok.durum = 'Satildi'
-                db.session.delete(sk)
-            if sat_kayitlar:
-                ekstra += f' {len(sat_kayitlar)} satis kaydi geri alindi.'
-
-            # ── DURUM SENKRONIZASYONU: Fatura Iptal -> bagli siparis geri "Onaylandi" ──
-            if f.siparis_id:
-                sip = Siparis.query.get(f.siparis_id)
-                if sip and sip.durum in ('Hazir', 'Teslim Edildi'):
-                    eski_sip_durum = sip.durum
-                    sip.durum = 'Onaylandi'
-                    ekstra += f' Bagli siparis {sip.id} durumu: {eski_sip_durum} -> Onaylandi.'
-                    app.logger.info(f'[SENKRO] Fatura {fatura_id} Iptal -> Siparis {sip.id}: {eski_sip_durum} -> Onaylandi')
-
-            # ── DURUM SENKRONIZASYONU: Fatura Iptal -> bagli proforma geri "Onaylandi" ──
-            if f.proforma_id:
-                pf = Proforma.query.get(f.proforma_id)
-                if pf and pf.durum == 'Faturalandi':
-                    pf.durum = 'Onaylandi'
-                    ekstra += f' Bagli proforma {pf.id} durumu: Faturalandi -> Onaylandi.'
-                    app.logger.info(f'[SENKRO] Fatura {fatura_id} Iptal -> Proforma {pf.id}: Faturalandi -> Onaylandi')
+            # IP1 · geri alma TEK KAPIDAN. Sipariş iptali de aynı
+            # kapıyı çağırıyor; iki yerde iki ayrı "fatura nasıl geri
+            # alınır" olması, birinin eksik kalması demekti.
+            ekstra += _fatura_iptal_geri_al(f)
 
         f.durum = yeni_durum
         # AM1: avans mahsup edildiyse fatura kismen/tamamen kapanmistir.
@@ -29282,13 +29718,32 @@ def create_app():
                 'mesaj': 'Bu hareket fatura tahsilatından oluştu. Önce fatura tahsilatını silin.'
             }), 400
 
-        k = Kasa.query.get(h.kasa_id)
-        if k:
-            # Bakiyeyi geri al
-            if h.tip == 'giris':
-                k.bakiye = q2((k.bakiye or 0) - (h.tutar or 0))
-            else:
-                k.bakiye = q2((k.bakiye or 0) + (h.tutar or 0))
+        # ── VR1 · VİRMANIN İKİ BACAĞI BİRLİKTE SİLİNİR ──
+        # Ölçüldü: A→B 3.000 TL virmanının çıkış bacağı silinince
+        # A parasını geri alıyor, B'de para duruyordu. Sistemdeki
+        # toplam 10.000'den 13.000'e çıkıyordu — para yoktan var
+        # oluyordu. Transfer atomik yaratılıyor, atomik silinmeli.
+        _es, _belirsiz = _transfer_esi(h)
+        if _belirsiz:
+            return jsonify({
+                'ok': False, 'error': 'transfer_esi_belirsiz',
+                'mesaj': 'Bu virmanın karşı bacağı kesin olarak '
+                         'bulunamadı (aynı kasalar arasında yakın '
+                         'zamanlı birden fazla transfer var). Yanlış '
+                         'kaydı silmemek için dokunulmadı.'}), 409
+
+        _es_notu = ''
+        if _es is not None:
+            _kb = _kasa_bakiye_geri_al(_es)
+            _log_audit('SIL', 'kasa_hareket', _es.id,
+                       eski={'kasa_id': _es.kasa_id, 'tip': _es.tip,
+                             'tutar': _es.tutar},
+                       aciklama='Virmanın karşı bacağı (VR1)')
+            db.session.delete(_es)
+            _es_notu = f' Karşı bacak da geri alındı ({_kb}).' if _kb else \
+                ' Karşı bacak da geri alındı.'
+
+        _kb_bu = _kasa_bakiye_geri_al(h)
 
         _log_audit('SIL', 'kasa_hareket', hareket_id,
                    eski={'kasa_id': h.kasa_id, 'tip': h.tip, 'tutar': h.tutar})
@@ -29297,7 +29752,7 @@ def create_app():
         ok, hata = _safe_commit('Kasa hareketi silme')
         if not ok:
             return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
-        return jsonify({'ok': True, 'mesaj': 'Hareket silindi'})
+        return jsonify({'ok': True, 'mesaj': 'Hareket silindi.' + _es_notu})
 
     @app.route('/api/kasa/<int:kasa_id>/hareket/excel', methods=['GET'])
     def api_kasa_hareket_excel(kasa_id):

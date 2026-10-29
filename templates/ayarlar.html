@@ -186,6 +186,12 @@
   <button class="sekme aktif" data-b="eposta">E-posta</button>
   <button class="sekme" data-b="listeler">Listeler</button>
   <button class="sekme" data-b="banka">Bankalar</button>
+  {# KD1: Bakım, Yönetim panelinde DEĞİL burada. Yönetim paneli
+     firma bağlamını bilerek düşürüyor (session.pop('firma_id')),
+     bakım ucu ise firmaya bağlı çalışıyor — ÖLÇÜLDÜ: düğme orada
+     409 "firma seçilmedi" alıyordu. Çalışmayan bir düğme, hiç
+     olmayan düğmeden kötüdür. #}
+  <button class="sekme" data-b="bakim">Bakım</button>
   {% endif %}
 </div>
 
@@ -496,6 +502,32 @@
   </div>
   <div style="margin-top:14px">
     <button class="btn-yeni" onclick="bankaAc()">+ Yeni Banka Hesabı</button>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     KD1 · BAKIM
+
+     `POST /api/cari/hareket/try_yeniden_hesapla` yazılmıştı ama
+     hiçbir ekrandan çağrılmıyordu — çalıştırmanın tek yolu elle
+     istek atmaktı.
+     ═══════════════════════════════════════════════════════════ -->
+<section class="bolum" id="b-bakim">
+  <div class="panel">
+    <h4>TRY Karşılıklarını Tamamla</h4>
+    <p style="color:var(--soluk);font-size:.83rem;margin-bottom:12px">
+      Dövizli bir cari hareket, kaydedildiği gün kur arşivinde o güne
+      ait kur <strong>yoksa</strong> TRY karşılığı boş kalır. Kuru
+      sonradan girdiğinde bu düğme, karşılığı boş kalmış hareketleri
+      arşivden toptan doldurur. <strong>Dolu olan hiçbir karşılığa
+      dokunmaz</strong> ve elle girilmiş kurları değiştirmez.
+      Aktif firmanın hareketleri üzerinde çalışır.
+    </p>
+    <div id="tryKutu" style="background:var(--notr-bg);border-radius:7px;
+         padding:10px 12px;font-size:.8rem;color:var(--soluk);
+         margin-bottom:12px;display:none"></div>
+    <button class="btn-yeni" id="tryBtn" onclick="tryYenidenHesapla()">
+      TRY Karşılıklarını Tamamla</button>
   </div>
 </section>
 {% endif %}
@@ -1824,6 +1856,41 @@ function yedekIndir(dosya) {
   window.open('/api/yedek/indir/' + encodeURIComponent(dosya), '_blank');
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   KD1 · TRY KARŞILIKLARINI TAMAMLA
+
+   Uç TOPLU yazıyor, o yüzden önce onay soruluyor. Sonuç KALICI
+   olarak gösteriliyor (sadece bildirim değil): "kaç hareket için kur
+   bulunamadı" sayısı, kur arşivine hangi günlerin girilmesi
+   gerektiğini söyleyen tek bilgi — bildirimin kaybolmasıyla
+   kaybolmamalı.
+   ═══════════════════════════════════════════════════════════════ */
+async function tryYenidenHesapla() {
+  if (!await onayla('TRY karşılığı boş kalmış tüm cari hareketler, kur ' +
+      'arşivinden yeniden hesaplanacak.\n\nDolu olan karşılıklara ' +
+      'DOKUNULMAZ. Devam edilsin mi?')) return;
+  const btn = document.getElementById('tryBtn');
+  const kutu = document.getElementById('tryKutu');
+  btn.disabled = true; btn.textContent = 'Hesaplanıyor…';
+  try {
+    const d = await api('/api/cari/hareket/try_yeniden_hesapla', {
+      method: 'POST', body: JSON.stringify({})
+    });
+    const g = Number(d.guncellenen || 0), b = Number(d.bulunmayan || 0);
+    kutu.style.display = 'block';
+    kutu.innerHTML = `<strong>${g}</strong> hareketin TRY karşılığı ` +
+      `dolduruldu.` + (b
+        ? ` <span style="color:var(--kehribar);font-weight:600">${b} hareket` +
+          ` için kur bulunamadı</span> — o günlerin kurunu Döviz Kur` +
+          ` ekranından girip tekrar dene.`
+        : ` Karşılığı eksik hareket kalmadı.`);
+    bildir(d.mesaj || (g + ' hareket güncellendi'));
+  } catch (e) { /* api() zaten bildirdi */ }
+  finally {
+    btn.disabled = false; btn.textContent = 'TRY Karşılıklarını Tamamla';
+  }
+}
+
 async function yedekGeriYukle(dosya) {
   if (!await onayla(`"${dosya}" yedeğinden geri yüklensin mi?\n\nMEVCUT TÜM VERİ SİLİNİR ve bu yedekteki hâliyle değiştirilir.\nİşlem öncesi güvenlik yedeği alınacak.`, { tehlike: true })) return;
   if (!await onayla('Emin misin? Bu işlem geri alınamaz.', { tehlike: true })) return;
@@ -1872,7 +1939,15 @@ document.querySelectorAll('.sekme').forEach(s => s.onclick = () => {
   document.querySelectorAll('.bolum').forEach(b => b.classList.remove('aktif'));
   document.getElementById('b-' + ad).classList.add('aktif');
   document.querySelectorAll('.sekme').forEach(x => x.classList.toggle('aktif', x.dataset.b === ad));
-  if (!yuklendi[ad]) { yuklendi[ad] = true; yukleyici[ad](); }
+  /* KD1: `yukleyici[ad]` doğrudan çağrılıyordu ve yükleyicisi
+     OLMAYAN bir sekme (Bakım — yüklenecek verisi yok) eklendiğinde
+     "yukleyici[ad] is not a function" atıyordu. Hata sekme
+     değişiminin ORTASINDA düşüyor: bölüm açılmış ama sayfadaki
+     betik o noktada durmuş oluyor. Varlık kontrolü, aşağıdaki
+     açılış kodunda zaten yapılıyordu — iki yerde iki kural kalmasın. */
+  if (!yuklendi[ad] && yukleyici[ad]) {
+    yuklendi[ad] = true; yukleyici[ad]();
+  }
 });
 
 /* ── AÇILIŞTA HANGİ SEKME ── (YP2)

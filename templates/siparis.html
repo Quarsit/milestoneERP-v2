@@ -835,8 +835,92 @@ async function detayAc(id) {
   cekmeceAc(kacar(sip.musteri || id), `${sip.id} · ${AD[sip.durum] || sip.durum}`, govde, eylem.join(''));
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   IP1 · İPTAL, PARA KAYITLARINI SORARAK GERİ ALIR
+
+   ESKİDEN: "Sipariş iptal edilsin mi? Bağlı stoklar serbest
+   bırakılır." diye soruyor, sonra HİÇBİR ŞEY geri almıyordu.
+   Ölçüldü: fatura "Tahsil Edildi" kalıyor, cariye yazılan borç
+   duruyor, stoklar satılmış kalıyordu. Kullanıcı iptal ettiğini
+   sanıyor, cari hesapta hayalet bakiye kalıyordu.
+
+   ŞİMDİ: sunucu para kaydı görürse 409 + `karar` döner; burada
+   sırayla sorulur ve cevaplar `iptal_onay` ile geri gönderilir.
+   Kararı sistem değil kullanıcı verir: alınan çek iade mi edilecek,
+   yoksa müşterinin bizde duran parası mı olacak — bu bir iş kararı.
+   ═══════════════════════════════════════════════════════════════ */
+/* Fatura `toplam`, çek/tahsilat `tutar` taşıyor. İlk yazdığımda
+   yalnız `tutar`a bakıyordum ve fatura satırı "0,00 USD" çıkıyordu —
+   tarayıcıda açıp görmesem fark etmezdim. */
+function _ipPara(x) {
+  const v = Number(x.tutar != null ? x.tutar : x.toplam) || 0;
+  return v.toLocaleString('tr-TR',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (x.doviz || '');
+}
+
+async function _iptalKararlariniSor(karar) {
+  const fl = karar.faturalar || [];
+  const ck = karar.cekler || [];
+  const th = karar.tahsilatlar || [];
+
+  /* 1 · FATURA — iptalin kapısı. Onaylanmazsa hiçbir şeye
+     dokunulmaz; sipariş olduğu gibi kalır. */
+  if (fl.length) {
+    const satirlar = fl.map(f => `• ${f.no} · ${_ipPara(f)} (${f.durum})`
+      + (f.cari_borc ? `\n   cariye yazılan ${_ipPara({ tutar: f.cari_borc, doviz: f.doviz })} borç SİLİNECEK` : ''));
+    const onay = await onayla(
+      `Bu siparişin ${fl.length > 1 ? fl.length + ' faturası' : 'faturası'} var:\n\n`
+      + satirlar.join('\n') + '\n\n'
+      + 'Sipariş iptal edilirse bu fatura da İPTAL edilecek ve '
+      + 'faturadan doğan cari borç kaydı ile satış kayıtları geri '
+      + 'alınacak.\n\nDevam edilsin mi?',
+      { tamam: 'Faturayı da iptal et', tehlike: true });
+    if (!onay) return null;
+  }
+
+  const onaylar = { fatura_iptal: true };
+
+  /* 2 · ÇEK — iade mi, cari alacak mı. İkisi de geçerli: çek bizde
+     kalırsa müşterinin bizdeki parası olur. */
+  if (ck.length) {
+    const liste = ck.map(x => `${x.no}${x.banka ? ' · ' + x.banka : ''} · ${_ipPara(x)}`
+      + (x.vade ? ' · vade ' + x.vade : '')).join('\n');
+    const sec = await soruSor(
+      `Bu satış için alınmış ${ck.length > 1 ? ck.length + ' çek' : 'çek'} var:\n\n`
+      + liste + '\n\nÇek ne olsun?',
+      'iade',
+      { etiket: 'Çek',
+        secenekler: [
+          ['iade', 'İade edilsin — çek iptal, cari alacağı silinsin'],
+          ['alacak', 'Bizde kalsın — müşterinin cari ALACAĞI olsun'],
+        ],
+        tamam: 'Devam' });
+    if (sec === null) return null;
+    onaylar.cek = sec;
+  }
+
+  /* 3 · NAKİT / DİĞER TAHSİLAT */
+  if (th.length) {
+    const liste = th.map(x => `${x.aciklama || 'Tahsilat'} · ${_ipPara(x)}`).join('\n');
+    const sec = await soruSor(
+      `Bu faturaya yapılmış tahsilat var:\n\n` + liste
+      + '\n\nTahsilat ne olsun?',
+      'sil',
+      { etiket: 'Tahsilat',
+        secenekler: [
+          ['sil', 'Geri alınsın — tahsilat ve kasa hareketi silinsin'],
+          ['alacak', 'Dursun — müşterinin cari ALACAĞI olsun'],
+        ],
+        tamam: 'Devam' });
+    if (sec === null) return null;
+    onaylar.tahsilat = sec;
+  }
+  return onaylar;
+}
+
 async function durumGecir(id, yeni) {
   if (yeni === 'Iptal Edildi' && !await onayla('Sipariş iptal edilsin mi? Bağlı stoklar serbest bırakılır.')) return;
+  let karar = null;
   try {
     const d = await api(`/api/siparis/${encodeURIComponent(id)}`, {
       method: 'PUT', body: JSON.stringify({ durum: yeni })
@@ -844,7 +928,28 @@ async function durumGecir(id, yeni) {
     bildir(d.mesaj || (AD[yeni] + ' yapıldı'));
     cekmeceKapat();
     await yukle();
-  } catch (e) { /* api() bildirdi */ }
+    return;
+  } catch (e) {
+    /* 409 + karar: sunucu neyin kararını beklediğini söyledi.
+       api() 409'da bildirim GÖSTERMEZ, hatayı yanıtla fırlatır. */
+    if (e && e.status === 409 && e.yanit
+        && e.yanit.error === 'iptal_onayi_gerekli') {
+      karar = e.yanit.karar || {};
+    } else {
+      return;                       /* başka hata: api() bildirdi */
+    }
+  }
+  const onaylar = await _iptalKararlariniSor(karar);
+  if (!onaylar) { bildir('İptal edilmedi — hiçbir şeye dokunulmadı.'); return; }
+  try {
+    const d2 = await api(`/api/siparis/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ durum: yeni, iptal_onay: onaylar })
+    });
+    bildir(d2.mesaj || 'Sipariş iptal edildi');
+    cekmeceKapat();
+    await yukle();
+  } catch (e2) { /* api() bildirdi */ }
 }
 
 /* ── Görünüm + arama ── */

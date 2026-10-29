@@ -1756,14 +1756,21 @@ def test_f5_rapor_depo_kirilimi_verir():
 
 def test_f5_sevk_edilen_mal_fatura_secicisinde_kalir():
     """F5 yan düzeltme: mal gemiye yüklenince fatura/cari hareket
-    seçicisinden kaybolmamalı — hâlâ bizim malımız."""
+    seçicisinden kaybolmamalı — hâlâ bizim malımız.
+
+    DV1 · TEST CANLI UCA TAŞINDI. Eskiden `/api/stok/gruplar`
+    sorgulanıyordu; o uç DV1'de silindi çünkü hiçbir ekrandan
+    çağrılmıyordu (ve grup toplamlarında döviz karıştırıyordu).
+    Kuralın asıl yeri `/api/stok`: maliyet, proforma ve sipariş
+    ekranlarındaki stok seçicileri oradan besleniyor. Testi ölü
+    uçta bırakmak, kuralı hiç denetlememek olurdu."""
     c = istemci('admin', 'ADMIN')
-    r = c.get('/api/stok/gruplar', headers=H)
+    r = c.get('/api/stok?tip=PLAKA&per_page=2000', headers=H)
     assert r.status_code == 200, r.get_data(as_text=True)
-    j = r.get_json()
-    hepsi = str(j)
-    assert 'PLK-F5-Y1' in hepsi or 'T-F5' in hepsi, \
-        'sevk edilmis stok gruplarda gorunmuyor'
+    idler = {x.get('id') for x in (r.get_json() or {}).get('data', [])}
+    assert 'PLK-F5-Y1' in idler, (
+        'sevk edilmiş stok seçicide görünmüyor — henüz faturası '
+        'kesilmemiş bir sevkiyatın stoğu seçilemez hâle gelir')
 
 
 def test_f5_sevkiyat_yolda_olunca_stok_yoldaya_gecer():
@@ -3030,7 +3037,10 @@ def test_yp_sekme_kumeleri_ayrik():
     aya, yon = sekmeler('/ayarlar'), sekmeler('/yonetim')
     assert yon == {'kullanici', 'firmalar', 'yedek'}, yon
     # YP4: "Firma Bilgileri" sekmesi panele taşındı.
-    assert aya == {'eposta', 'listeler', 'banka'}, aya
+    # KD1: "Bakım" EKLENDİ ve bilerek Ayarlar tarafında — yönetim
+    # paneli firma bağlamını düşürüyor, bakım ucu ise firmaya bağlı
+    # çalışıyor (orada 409 "firma seçilmedi" alıyordu, ölçüldü).
+    assert aya == {'eposta', 'listeler', 'banka', 'bakim'}, aya
     assert not (yon & aya), yon & aya
 
 
@@ -9511,3 +9521,1290 @@ def test_yk2_her_yazma_ucu_ya_haritada_ya_kendi_denetimini_yapiyor():
     assert not acik, (
         'yazma muhafızından sessizce geçen uç(lar) — yalnız OKUMA '
         'yetkili kullanıcı da çağırabilir: ' + '; '.join(sorted(acik)))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  KD1 · KDV MATEMATİĞİNİN TEK KAPISI + ÖLÜ FONKSİYON BEKÇİSİ
+#
+#  Sınıf, AF1/TS1/EM2'nin aynısı: ortak kapı YAZILMIŞ ama hiçbir
+#  yerden çağrılmıyor; iş 10 ayrı yere elle kopyalanmış. Buradaki
+#  fark, ölçüm beklenmedik bir şey söyledi: ÖLÜ KAPI, CANLI UÇLARDAN
+#  DAHA KÖTÜYDÜ. Matrahı ve KDV'yi birbirinden bağımsız yuvarladığı
+#  için ikisinin toplamı genel toplamı tutmuyordu:
+#
+#      1.000,35 USD · %20  ->  833,63 + 166,73 = 1.000,36
+#
+#  Yani "ortak kapıya bağla" refleksi, 10 para yoluna hata EKLERDİ.
+#  Kapı önce düzeltildi (tamamlayan yuvarlama: bir taraf yuvarlanır,
+#  öteki çıkarmayla bulunur), sonra uçlar bağlandı.
+# ══════════════════════════════════════════════════════════════════
+def test_kd1_fatura_kdv_duzeltmesi_matrah_ve_kdv_toplami_tutuyor():
+    """Matrah + KDV, faturanın kendi toplamını vermeli."""
+    from models import Fatura
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(Cari(id='MUS-KD1', unvan='MUSTERI KD1',
+                            cari_tip='Müşteri'))
+        db.session.add(Fatura(
+            id='FT-KD1', fatura_no='KD1-001', cari_id='MUS-KD1',
+            musteri='MUSTERI KD1', yon='satis', durum='Kesildi',
+            doviz='USD', toplam=1000.35, ara_toplam=1000.35,
+            kdv_oran=0, kdv_tutar=0,
+            fatura_tarihi=date(2026, 10, 28)))
+        db.session.commit()
+
+    r = c.post('/api/diag/fatura/FT-KD1/kdv_duzelt?kdv_oran=20', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+
+    with fa.app.app_context():
+        f = db.session.get(Fatura, 'FT-KD1')
+        matrah = float(f.ara_toplam or 0)
+        kdv = float(f.kdv_tutar or 0)
+        toplam = float(f.toplam or 0)
+    # ESKI DAVRANIS: 833.63 + 166.73 = 1000.36  (toplam 1000.35)
+    assert round(matrah + kdv, 2) == round(toplam, 2), (
+        f'matrah {matrah} + KDV {kdv} = {round(matrah + kdv, 2)} '
+        f'ama faturanın toplamı {toplam}')
+    assert matrah == 833.63, matrah
+    assert kdv == 166.72, kdv
+
+
+def test_kd1_kdv_ayristirma_elle_yazilmamis():
+    """KDV ayrıştırma formülü TEK yerde olmalı.
+
+    EM2'nin maliyet kapısı bekçisiyle aynı desen: formülün kendisini
+    aramak, onu kopyalayan yeni bir ucu doğduğu gün yakalar."""
+    import io as _io
+    import re as _re
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    satirlar = kaynak.split('\n')
+    # `_kdv_ayristir` govdesinin kendisi MUAF — kapi orada.
+    kapi = [i for i, t in enumerate(satirlar, 1)
+            if 'def _kdv_ayristir(' in t]
+    assert kapi, 'kapı (_kdv_ayristir) bulunamadı'
+    kapi_araligi = range(kapi[0], kapi[0] + 12)
+
+    desen = _re.compile(r'/\s*\(\s*1\s*\+\s*[a-z_]*kdv[a-z_]*')
+    kacak = [f'satır {i}: {t.strip()[:70]}'
+             for i, t in enumerate(satirlar, 1)
+             if desen.search(t) and i not in kapi_araligi]
+    assert not kacak, (
+        'KDV ayrıştırma formülü kapının DIŞINDA elle yazılmış — '
+        '`_kdv_ayristir` / `_kdv_hesapla` kullanılmalı: '
+        + '; '.join(kacak))
+
+    # Kapi TAMAMLAYAN yuvarlama yapiyor mu: bir taraf cikarmayla
+    # bulunmali. "q2(tutar - matrah)" bunun imzasi.
+    g = '\n'.join(satirlar[kapi[0] - 20:kapi[0] + 40])
+    assert 'q2(tutar - matrah)' in g, (
+        'kapı matrahı ve KDV\'yi bağımsız yuvarlıyor olabilir — '
+        'tamamlayan yuvarlama (çıkarma) izi yok')
+
+
+def test_kd1_olu_fonksiyon_yok():
+    """Tanımlanmış ama hiçbir yerden erişilmeyen fonksiyon olmamalı.
+
+    BU SINIFIN BEKÇİSİ. AF1'in ölü çek süzgeci, TS1'in kasa geri
+    alması, EM2'nin maliyet kapısı ve KD1'in KDV kapısı — dördü de
+    "kod doğru ama çağrılmıyor" idi. Tarama, yarın yazılıp bir yere
+    bağlanmayı bekleyen bir fonksiyonu görünür kılar.
+
+    ULAŞILABİLİRLİK: @app.route ve Flask kancaları, dekoratörler,
+    SQLAlchemy dinleyicileri (`listens_for` ve models.py'deki
+    `_event.listen(...)` çağrıları), gövde dışında geçen her ad,
+    dizge içinde geçen adlar (url_for/getattr), şablonlar, static
+    ve projedeki diğer .py dosyaları.
+    """
+    import ast as _ast
+    import io as _io
+    import re as _re
+
+    ANA = os.path.join(KOK, 'flask_app.py')
+    kaynak = _io.open(ANA, encoding='utf-8').read().replace('\r\n', '\n')
+    agac = _ast.parse(kaynak)
+
+    KANCA = {
+        'route', 'before_request', 'after_request', 'before_first_request',
+        'teardown_request', 'teardown_appcontext', 'errorhandler',
+        'context_processor', 'template_filter', 'template_global',
+        'template_test', 'command', 'cli', 'app_errorhandler',
+        'shell_context_processor', 'url_value_preprocessor', 'url_defaults',
+        'user_loader', 'property', 'staticmethod', 'classmethod',
+        'contextmanager', 'cache', 'lru_cache', 'validates', 'event',
+        # ÖLÇÜLDÜ: ilk halimde bu yoktu ve `_cari_hareket_okunur_id`
+        # (RN1 dinleyicisi) "ölü" diye işaretlendi. SQLAlchemy onu
+        # her insert'te çağırıyor.
+        'listens_for', 'hybrid_property', 'setter', 'expression',
+    }
+
+    def _dek(fn):
+        out = []
+        for d in fn.decorator_list:
+            k = d.func if isinstance(d, _ast.Call) else d
+            if isinstance(k, _ast.Attribute):
+                out.append(k.attr)
+            elif isinstance(k, _ast.Name):
+                out.append(k.id)
+        return out
+
+    sinif_ici = set()
+    for s in _ast.walk(agac):
+        if isinstance(s, _ast.ClassDef):
+            for a in _ast.walk(s):
+                if isinstance(a, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    sinif_ici.add((a.name, a.lineno))
+
+    tanim = {}
+    for fn in _ast.walk(agac):
+        if isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            tanim.setdefault(fn.name, []).append(
+                (fn.lineno, fn.end_lineno, _dek(fn),
+                 (fn.name, fn.lineno) in sinif_ici))
+
+    # Dekorator satirlari "kullanim" sayilmaz: dekorator olarak
+    # kullanilmak zaten KANCA uzerinden degerlendiriliyor.
+    dek_satir = set()
+    for fn in _ast.walk(agac):
+        if isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            for d in fn.decorator_list:
+                for a in _ast.walk(d):
+                    dek_satir.add(getattr(a, 'lineno', 0))
+
+    kullanim = {}
+    for d in _ast.walk(agac):
+        ad = None
+        if isinstance(d, _ast.Name) and isinstance(d.ctx, _ast.Load):
+            ad = d.id
+        elif isinstance(d, _ast.Attribute) and isinstance(d.ctx, _ast.Load):
+            ad = d.attr
+        if ad:
+            kullanim.setdefault(ad, set()).add(getattr(d, 'lineno', 0))
+
+    dizge = '\n'.join(d.value for d in _ast.walk(agac)
+                      if isinstance(d, _ast.Constant)
+                      and isinstance(d.value, str))
+
+    # Sablonlar, static ve PROJEDEKI DIGER .py dosyalari.
+    # models.py burada onemli: `_event.listen(Model, 'before_insert',
+    # cari_id_otomatik_doldur)` gibi EMIR KIPLI kayitlar yalnizca
+    # oradaki metinde gorunuyor.
+    disari = []
+    for dizin in ('templates', 'static'):
+        kok = os.path.join(KOK, dizin)
+        for yer, _, dosyalar in os.walk(kok):
+            for ad in dosyalar:
+                if ad.endswith(('.html', '.js')):
+                    disari.append(_io.open(os.path.join(yer, ad),
+                                           encoding='utf-8',
+                                           errors='replace').read())
+    for yer, _, dosyalar in os.walk(KOK):
+        if '/.git' in yer or '__pycache__' in yer:
+            continue
+        for ad in dosyalar:
+            if ad.endswith('.py') and os.path.join(yer, ad) != ANA:
+                disari.append(_io.open(os.path.join(yer, ad),
+                                       encoding='utf-8',
+                                       errors='replace').read())
+    disari = '\n'.join(disari)
+
+    # MUAF: bilerek bekletilen fonksiyonlar. Liste KISA kalmalı —
+    # uzayan bir muafiyet listesi, bekçinin sessizce kapanmasıdır.
+    MUAF = {
+        # GİB senaryosu önerir (IHRACAT / TEMELFATURA). E-fatura
+        # ekranı bağlandığında çağrılacak; silinmesi yerine
+        # bekletilmesi KD1'de bilerek seçildi.
+        '_senaryo_oner',
+    }
+
+    olu = []
+    for ad, yerler in sorted(tanim.items()):
+        if ad in MUAF or ad.startswith('__') or len(yerler) > 1:
+            continue
+        satir, son, dekler, sinifta = yerler[0]
+        if sinifta or (set(dekler) & KANCA):
+            continue
+        dis = {s for s in kullanim.get(ad, set())
+               if not (satir <= s <= son) and s not in dek_satir}
+        if dis:
+            continue
+        kalip = r'\b%s\b' % _re.escape(ad)
+        if _re.search(kalip, dizge) or _re.search(kalip, disari):
+            continue
+        olu.append(f'{ad} (satır {satir}, {son - satir + 1} satır)')
+
+    assert not olu, (
+        'hiçbir yerden çağrılmayan fonksiyon(lar) — ya bir yere '
+        'bağlanmalı ya silinmeli: ' + ', '.join(olu))
+
+
+def test_kd1_bekci_olu_fonksiyonu_gercekten_yakaliyor():
+    """Bekçi, bilerek eklenmiş ölü bir fonksiyonu görmeli.
+
+    HY1'de bekçinin kendisi yanlış yazılmıştı ve "temiz" sonucu
+    şanstı. Bir bekçiye, kırmadığını görmeden güvenilmez."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    sahte = kaynak + (
+        '\n\ndef _kd1_bekci_denemesi_hic_cagrilmayan():\n'
+        '    return 42\n')
+    agac = _ast.parse(sahte)
+    adlar = {f.name for f in _ast.walk(agac)
+             if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef))}
+    assert '_kd1_bekci_denemesi_hic_cagrilmayan' in adlar
+    # Govde disinda HICBIR kullanimi olmamali — bekcinin olculdugu sey.
+    kullanim = [d for d in _ast.walk(agac)
+                if isinstance(d, _ast.Name)
+                and d.id == '_kd1_bekci_denemesi_hic_cagrilmayan'
+                and isinstance(d.ctx, _ast.Load)]
+    assert not kullanim, 'deneme fonksiyonu beklenmedik şekilde çağrılıyor'
+
+
+def test_kd1_uc_uc_artik_bir_ekrandan_cagriliyor():
+    """Bağlanan üç uç şablonlarda GEÇMELİ (SD4/EK1 ile aynı bekçi)."""
+    import io as _io
+    _sablon = os.path.join(KOK, 'templates')
+    tum = ''
+    for ad in os.listdir(_sablon):
+        if ad.endswith('.html'):
+            tum += _io.open(os.path.join(_sablon, ad),
+                            encoding='utf-8', errors='replace').read()
+    for yol, nerede in (
+            ('/api/cari/hareket/try_yeniden_hesapla', 'TRY karşılığı bakımı'),
+            ('/api/satislar/lookup', 'satış süzgeç listeleri'),
+            ('/api/satislar/musteri/', 'müşteri satış özeti')):
+        assert yol in tum, f'{nerede} ({yol}) hiçbir şablonda yok'
+    satislar = _io.open(os.path.join(_sablon, 'satislar.html'),
+                        encoding='utf-8').read()
+    assert 'suzgecListeleri' in satislar
+    assert 'musteriOzetiYukle' in satislar
+    ayarlar = _io.open(os.path.join(_sablon, 'ayarlar.html'),
+                       encoding='utf-8').read()
+    assert 'tryYenidenHesapla' in ayarlar
+
+    # ── BAKIM SEKMESİ DOĞRU PANELDE Mİ ──
+    # ÖLÇÜLDÜ: önce Yönetim paneline koymuştum ve düğme 409 "firma
+    # seçilmedi" alıyordu — panel firma bağlamını bilerek düşürüyor
+    # (session.pop('firma_id')), bakım ucu ise firmaya bağlı. Tarayıcıda
+    # basmadan görünmezdi: sekme vardı, düğme vardı, sonuç yoktu.
+    c = istemci('admin', 'ADMIN')
+    _aya = c.get('/ayarlar').get_data(as_text=True)
+    _yon = c.get('/yonetim').get_data(as_text=True)
+    assert 'id="b-bakim"' in _aya, 'Bakım bölümü Ayarlar\'da basılmıyor'
+    assert 'id="b-bakim"' not in _yon, (
+        'Bakım bölümü Yönetim panelinde — orada firma seçili değil, '
+        'düğme 409 alır')
+
+
+def test_kd1_try_yeniden_hesapla_bos_karsiligi_dolduruyor():
+    """Kur sonradan girilince boş TRY karşılığı dolmalı."""
+    c = istemci('admin', 'ADMIN')
+    _t = date(2026, 3, 17)
+    with fa.app.app_context():
+        db.session.add(Cari(id='MUS-KD2', unvan='MUSTERI KD2',
+                            cari_tip='Müşteri', para_birimi='USD'))
+        db.session.add(CariHareket(
+            id='HR-KD2', cari_id='MUS-KD2', cari_unvan='MUSTERI KD2',
+            hareket_tarihi=_t, islem_tip='Satis Faturasi',
+            doviz='USD', borc=1000, alacak=0,
+            borc_try=None, alacak_try=None))
+        # `_kur_getir` önceliği: alis -> efektif -> satis
+        db.session.add(DovizKur(doviz='USD', tarih=_t, alis=38.40,
+                                satis=38.60, efektif=38.40))
+        db.session.commit()
+
+    r = c.post('/api/cari/hareket/try_yeniden_hesapla', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    j = r.get_json()
+    assert j.get('ok') is True, j
+    assert j.get('guncellenen', 0) >= 1, j
+
+    with fa.app.app_context():
+        h = db.session.get(CariHareket, 'HR-KD2')
+        assert h.borc_try == 38400.0, h.borc_try
+        assert float(h.kur_uygulanan or 0) == 38.40, h.kur_uygulanan
+        assert h.kur_kaynak == 'TCMB', h.kur_kaynak
+
+
+def test_kd1_satis_suzgeci_ve_musteri_ozeti():
+    """Süzgeç listesi ve müşteri özeti gerçek veriyi döndürmeli."""
+    from models import SatisKaydi
+    c = istemci('admin', 'ADMIN')
+    with fa.app.app_context():
+        db.session.add(Cari(id='MUS-KD3', unvan='KD3 STONE LLC',
+                            cari_tip='Müşteri', para_birimi='USD'))
+        for i, (tutar, maliyet, t) in enumerate((
+                (10000, 7000, date(2026, 2, 3)),
+                (20000, 13000, date(2026, 6, 9))), 1):
+            db.session.add(SatisKaydi(
+                id=f'SK-KD3-{i}', cari_id='MUS-KD3',
+                musteri='KD3 STONE LLC', cins='KD3 Beyaz',
+                stok_tip='PLAKA', miktar=100, birim='m2',
+                doviz='USD', tutar_usd=tutar, maliyet_usd=maliyet,
+                kar_usd=tutar - maliyet, satis_tarihi=t))
+        db.session.commit()
+
+    d = c.get('/api/satislar/lookup', headers=H)
+    assert d.status_code == 200, d.get_data(as_text=True)[:200]
+    j = d.get_json()
+    assert 'KD3 STONE LLC' in (j.get('musteriler') or []), j
+    assert 'KD3 Beyaz' in (j.get('cinsler') or []), j
+
+    o = c.get('/api/satislar/musteri/KD3%20STONE%20LLC/ozet', headers=H)
+    assert o.status_code == 200, o.get_data(as_text=True)[:200]
+    jo = o.get_json()
+    assert jo.get('adet') == 2, jo
+    assert float(jo.get('toplam_usd') or 0) == 30000.0, jo
+    assert float(jo.get('kar_usd') or 0) == 10000.0, jo
+    # 10.000 / 30.000 = %33,33
+    assert round(float(jo.get('marj_yuzde') or 0), 2) == 33.33, jo
+    assert jo.get('ilk_satis') == '2026-02-03', jo
+    assert jo.get('son_satis') == '2026-06-09', jo
+
+
+def test_kd1_sablon_betikleri_ayristirilabiliyor():
+    """Her şablonun satır içi <script>'i node ile ayrıştırılmalı.
+
+    BU YAMADA OLDU: çekmeceye eklediğim bir yorumun içindeki ters
+    tırnak, onu saran şablon dizgesini orada sonlandırdı ve
+    satislar.html'in TÜM betiği ayrıştırılamaz hâle geldi — tablo
+    "Yükleniyor…"da kaldı, süzgeçler boş geldi. 289 test geçti,
+    çünkü hiçbiri şablon JS'ini ayrıştırmıyordu.
+
+    `js_denetim.py` bunu yakalıyor ama yalnızca `gonder.sh`
+    içinde — yani push anında. Takımın içinde de olması gerekiyor:
+    hatanın DOĞDUĞU yerde çıkması, push'ta çıkmasından iyidir.
+    """
+    import io as _io
+    import os as _os
+    import re as _re
+    import shutil as _shutil
+    import subprocess as _sp
+    import tempfile as _tf
+
+    node = _shutil.which('node') or _shutil.which('nodejs')
+    if not node:
+        import pytest as _pytest
+        _pytest.skip('node yok')
+
+    _sablon = _os.path.join(KOK, 'templates')
+    # src= taşıyan <script> dış dosya; gövdesi yok.
+    desen = _re.compile(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', _re.S)
+    kirik = []
+    gec = _tf.mkdtemp()
+    for ad in sorted(_os.listdir(_sablon)):
+        if not ad.endswith('.html'):
+            continue
+        metin = _io.open(_os.path.join(_sablon, ad),
+                         encoding='utf-8', errors='replace').read()
+        for sira, m in enumerate(desen.finditer(metin), 1):
+            js = m.group(1)
+            # Jinja ifadeleri JS degil: degeri sabitle, blogu at.
+            js = _re.sub(r'\{\{.*?\}\}', '0', js, flags=_re.S)
+            js = _re.sub(r'\{%.*?%\}', '', js, flags=_re.S)
+            if not js.strip():
+                continue
+            yol = _os.path.join(gec, f'{ad}.{sira}.js')
+            _io.open(yol, 'w', encoding='utf-8').write(js)
+            r = _sp.run([node, '--check', yol],
+                        capture_output=True, text=True)
+            if r.returncode != 0:
+                ilk = [s for s in r.stderr.split('\n')
+                       if 'Error' in s or ':' in s][:3]
+                kirik.append(f'{ad} (script #{sira}): ' + ' / '.join(ilk))
+    assert not kirik, ('şablon betiği ayrıştırılamıyor — o sayfadaki '
+                       'HİÇBİR düğme çalışmaz: ' + '; '.join(kirik))
+
+
+def test_kd1_betik_bekcisi_kirik_betigi_yakaliyor():
+    """Bekçi, bu yamada yaptığım hatanın tam kopyasını görmeli."""
+    import os as _os
+    import shutil as _shutil
+    import subprocess as _sp
+    import tempfile as _tf
+    node = _shutil.which('node') or _shutil.which('nodejs')
+    if not node:
+        import pytest as _pytest
+        _pytest.skip('node yok')
+    # Sablon dizgesinin ICINDE ters tirnak tasiyan bir yorum
+    sahte = (
+        'function f(x) {\n'
+        '  const g = `<div>\n'
+        '    <!-- aciklama: `GET /api/bir/sey` yazilmisti -->\n'
+        '    <div id="y"></div>`;\n'
+        '  return g;\n'
+        '}\n')
+    p = _os.path.join(_tf.mkdtemp(), 'k.js')
+    open(p, 'w', encoding='utf-8').write(sahte)
+    r = _sp.run([node, '--check', p], capture_output=True, text=True)
+    assert r.returncode != 0, (
+        'bekçinin dayandığı `node --check`, şablon dizgesini bölen '
+        'ters tırnağı yakalamıyor')
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DV1 · FİYAT KENDİ PARA BİRİMİYLE YOLCULUK EDER
+#
+#  ÖLÇÜLDÜ: EUR bir proformanın kalemleri `'USD'` damgalanıyordu
+#  (`doviz=k.get('doviz','USD')` — belgenin dövizi yerine sabit
+#  USD). Ekran kalem satırını `k.doviz || p.doviz` ile bastığı için
+#  EUR proformada HER SATIRDA $ görünüyordu; müşteriye giden
+#  belgede. Sipariş tarafında aynı şey sayıya dönüşüyordu:
+#
+#     10.000 USD + 10.000 EUR kalemli sipariş -> "20.000 USD"
+#     (gerçeği 21.250) ve bu sayı faturaya, cari harekete ve
+#     satış kaydına aynen geçiyordu.
+#
+#  KURAL: proformada 50 EUR ise siparişte de, faturada da, satış
+#  kaydında da 50 EUR. Hiçbir yerde çevrilmez. Bunun gereği, kalem
+#  dövizinin BELGEDEN miras alınması; farklı bir döviz bilerek
+#  gönderilirse belge reddedilir.
+# ══════════════════════════════════════════════════════════════════
+def _dv1_kurulum():
+    from models import Firma
+    with fa.app.app_context():
+        if not Cari.query.get('DV1-MUS'):
+            db.session.add(Cari(id='DV1-MUS', unvan='DV1 STONE LLC',
+                                cari_tip='Müşteri', para_birimi='EUR',
+                                gorunurluk='acik'))
+        for dv, k in (('USD', 40.0), ('EUR', 45.0)):
+            if not DovizKur.query.filter_by(
+                    doviz=dv, tarih=date(2026, 10, 28)).first():
+                db.session.add(DovizKur(doviz=dv, tarih=date(2026, 10, 28),
+                                        alis=k, satis=k, efektif=k))
+        db.session.commit()
+    return istemci('admin', 'ADMIN')
+
+
+_DV1_KALEM = {'urun_tip': 'PLAKA', 'cins': 'DV1 CALACATTA', 'miktar': 100,
+              'birim': 'm2', 'birim_fiyat': 50}
+
+
+def test_dv1_kalem_dovizi_belgeden_geliyor():
+    """EUR proformanın kalemi EUR olmalı; 50 EUR, 50 EUR kalmalı."""
+    from models import Proforma, ProformaKalem
+    c = _dv1_kurulum()
+    r = c.post('/api/proforma', headers=H, json={
+        'musteri': 'DV1 STONE LLC', 'tarih': '2026-10-28',
+        'doviz': 'EUR', 'kalemler': [dict(_DV1_KALEM)]})
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    pid = r.get_json()['id']
+    with fa.app.app_context():
+        p = db.session.get(Proforma, pid)
+        kalemler = ProformaKalem.query.filter_by(proforma_id=pid).all()
+        assert p.doviz == 'EUR', p.doviz
+        assert kalemler, 'kalem yazılmamış'
+        for k in kalemler:
+            # ESKI DAVRANIS: k.doviz == 'USD'
+            assert (k.doviz or '').upper() == 'EUR', (
+                f'belge EUR ama kalem {k.doviz} — ekran kalem satırını '
+                f'`k.doviz || p.doviz` ile basıyor, EUR belgede $ görünür')
+            assert float(k.birim_fiyat or 0) == 50.0, k.birim_fiyat
+
+
+def test_dv1_farkli_dovizli_kalem_reddediliyor():
+    """Kalem bilerek farklı döviz taşıyorsa belge 400 almalı."""
+    c = _dv1_kurulum()
+    r = c.post('/api/proforma', headers=H, json={
+        'musteri': 'DV1 STONE LLC', 'tarih': '2026-10-28',
+        'doviz': 'EUR', 'kalemler': [dict(_DV1_KALEM, doviz='USD')]})
+    assert r.status_code == 400, r.status_code
+    j = r.get_json()
+    assert j.get('error') == 'kalem_dovizi', j
+    # Sebep SOYLENMELI: hangi kalem, hangi para birimi
+    assert 'USD' in j.get('mesaj', '') and 'EUR' in j.get('mesaj', ''), j
+
+
+def test_dv1_proforma_dovizi_degisince_kalemler_takip_ediyor():
+    """Belgenin dövizi değişince kalemler yeni dövize geçmeli."""
+    from models import Proforma, ProformaKalem
+    c = _dv1_kurulum()
+    r = c.post('/api/proforma', headers=H, json={
+        'musteri': 'DV1 STONE LLC', 'tarih': '2026-10-28',
+        'doviz': 'USD', 'kalemler': [dict(_DV1_KALEM)]})
+    pid = r.get_json()['id']
+    # USD -> EUR. Yönü USD'DEN ÇIKACAK şekilde seçmek önemli: ilk
+    # yazdığımda EUR -> USD yapmıştım ve test ESKİ KODDA DA geçti,
+    # çünkü eski kod kalemi zaten sabit 'USD' yapıyordu. Bir test,
+    # düzeltmeden önce düşmüyorsa hiçbir şey ölçmüyordur.
+    r2 = c.put(f'/api/proforma/{pid}', headers=H, json={
+        'musteri': 'DV1 STONE LLC', 'doviz': 'EUR',
+        'kalemler': [dict(_DV1_KALEM)]})
+    assert r2.status_code == 200, r2.get_data(as_text=True)[:300]
+    with fa.app.app_context():
+        p = db.session.get(Proforma, pid)
+        assert p.doviz == 'EUR', p.doviz
+        for k in ProformaKalem.query.filter_by(proforma_id=pid).all():
+            assert (k.doviz or '').upper() == 'EUR', (
+                f'belge EUR oldu ama kalem {k.doviz} kaldı')
+
+
+def test_dv1_karisik_dovizli_siparis_olusturulamiyor():
+    """Sıcak satış karışık dövizli kalem kabul etmemeli.
+
+    ESKIDEN: 10.000 USD + 10.000 EUR kabul ediliyor, sipariş
+    'toplam_tutar=20000 USD' yazıyor, fatura ve cari hareket de
+    o sayıyı alıyordu."""
+    c = _dv1_kurulum()
+    r = c.post('/api/sicak_satis', headers=H, json={
+        'musteri': 'DV1 STONE LLC', 'tarih': '2026-10-28',
+        'siparis_tarihi': '2026-10-28', 'doviz': 'USD',
+        'kalemler': [
+            dict(_DV1_KALEM, cins='DV1 A', birim_fiyat=100, doviz='USD'),
+            dict(_DV1_KALEM, cins='DV1 B', birim_fiyat=100, doviz='EUR'),
+        ]})
+    assert r.status_code == 400, (
+        f'karışık dövizli sipariş kabul edildi ({r.status_code}) — '
+        f'toplam çevrilmeden toplanır ve tek para birimiyle etiketlenir')
+    assert r.get_json().get('error') == 'kalem_dovizi', r.get_json()
+
+
+def test_dv1_transit_faturada_kalem_basina_satis_kaydi():
+    """Transit faturada her kalem kendi satış kaydını almalı.
+
+    ESKIDEN tek kayıt vardı: cins İLK kalemden, miktar FARKLI
+    BİRİMLERDEN toplanarak. 100 m² plaka + 20 ton blok satışı
+    "CALACATTA · 120 m²" olarak kaydediliyordu."""
+    from models import SatisKaydi
+    c = _dv1_kurulum()
+    r = c.post('/api/sicak_satis', headers=H, json={
+        'musteri': 'DV1 STONE LLC', 'tarih': '2026-10-28',
+        'siparis_tarihi': '2026-10-28', 'doviz': 'USD',
+        'kalemler': [
+            {'urun_tip': 'PLAKA', 'cins': 'DV1 PLAKA', 'miktar': 100,
+             'birim': 'm2', 'birim_fiyat': 100, 'adet': 1,
+             'boy': 300, 'yukseklik': 180, 'kalinlik': 2},
+            {'urun_tip': 'BLOK', 'cins': 'DV1 BLOK', 'miktar': 20,
+             'birim': 'ton', 'birim_fiyat': 500, 'adet': 1,
+             'boy': 300, 'yukseklik': 180, 'en': 170},
+        ]})
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    fid = r.get_json().get('fatura_id')
+    assert fid, r.get_json()
+
+    with fa.app.app_context():
+        kayitlar = SatisKaydi.query.filter_by(fatura_id=fid).all()
+        assert len(kayitlar) == 2, (
+            f'{len(kayitlar)} satış kaydı — 2 kalem için 2 olmalı: '
+            + str([(k.cins, k.miktar, k.birim) for k in kayitlar]))
+        esle = {k.cins: k for k in kayitlar}
+        assert set(esle) == {'DV1 PLAKA', 'DV1 BLOK'}, list(esle)
+        # Her kayıt KENDİ birimini ve miktarını taşır
+        assert esle['DV1 PLAKA'].birim == 'm2', esle['DV1 PLAKA'].birim
+        assert esle['DV1 BLOK'].birim == 'ton', esle['DV1 BLOK'].birim
+        assert float(esle['DV1 PLAKA'].miktar or 0) == 100.0
+        assert float(esle['DV1 BLOK'].miktar or 0) == 20.0
+        # TOPLAM KORUNUR: paylar faturanın matrahını tam verir
+        toplam = round(sum(float(k.tutar or 0) for k in kayitlar), 2)
+        assert toplam == 20000.0, (
+            f'payların toplamı {toplam}, fatura matrahı 20000')
+        toplam_usd = round(sum(float(k.tutar_usd or 0) for k in kayitlar), 2)
+        assert toplam_usd == 20000.0, toplam_usd
+
+
+def test_dv1_stok_gruplar_ucu_silindi():
+    """Ölü ve döviz karıştıran uç gerçekten kalkmış olmalı.
+
+    404 DEĞİL 405 dönüyor: yol artık `/api/stok/<stok_id>`
+    kuralına düşüyor ve o kural GET kabul etmiyor. Önemli olan
+    veri DÖNMEMESİ."""
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/api/stok/gruplar', headers=H)
+    assert r.status_code in (404, 405), r.status_code
+    assert b'gruplar' not in r.get_data(), r.get_data()[:120]
+
+
+def test_dv1_sabit_yollu_her_uc_bir_ekrandan_cagriliyor():
+    """Parametresiz /api/ uçlarının TAM YOLU bir yerde geçmeli.
+
+    BU TARAMANIN KÖR NOKTASIYDI. `ulasilmaz_uc_tara` ÖNEK
+    eşliyordu: `/api/stok/gruplar` için `/api/stok` şablonlarda
+    geçiyor ve GET de kullanılıyor, bu yüzden uç "ulaşılabilir"
+    sayılıyordu — oysa tam yolu hiçbir yerde yoktu ve uç yarım
+    kurulmuş hâlde, döviz karıştırarak duruyordu.
+
+    Parametresiz yollarda tahmine gerek yok: tam dizge aranır."""
+    import ast as _ast
+    import io as _io
+    import re as _re
+
+    ANA = os.path.join(KOK, 'flask_app.py')
+    kaynak = _io.open(ANA, encoding='utf-8').read().replace('\r\n', '\n')
+    agac = _ast.parse(kaynak)
+
+    tuketici = []
+    for dizin in ('templates', 'static', 'blueprints'):
+        kok = os.path.join(KOK, dizin)
+        if not os.path.isdir(kok):
+            continue
+        for yer, _, dosyalar in os.walk(kok):
+            for ad in dosyalar:
+                if ad.endswith(('.html', '.js', '.py')):
+                    tuketici.append(_io.open(
+                        os.path.join(yer, ad), encoding='utf-8',
+                        errors='replace').read())
+    tuketici = '\n'.join(tuketici)
+
+    olu = []
+    for fn in _ast.walk(agac):
+        if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        for dec in fn.decorator_list:
+            if not (isinstance(dec, _ast.Call)
+                    and isinstance(dec.func, _ast.Attribute)
+                    and dec.func.attr == 'route' and dec.args
+                    and isinstance(dec.args[0], _ast.Constant)):
+                continue
+            yol = dec.args[0].value
+            if not yol.startswith('/api/') or '<' in yol:
+                continue
+            # Teshis uclari BILEREK ekransiz: ADMIN'in elle cagirdigi
+            # tani araclari. `_diag_guard` onlari zaten kapatiyor.
+            if yol.startswith('/api/diag/'):
+                continue
+            if _re.search(_re.escape(yol), tuketici):
+                continue
+            if kaynak.count(yol) > 1:
+                continue        # flask_app kendi icinde cagiriyor
+            olu.append(f'{yol} ({fn.name}, satır {fn.lineno})')
+
+    assert not olu, (
+        'tam yolu hiçbir ekranda/blueprint\'te geçmeyen uç(lar) — '
+        'ya bağlanmalı ya silinmeli: ' + ', '.join(sorted(olu)))
+
+
+def test_dv1_kalem_dovizi_sabit_usd_yazilmamis():
+    """KALEM dövizi sabit 'USD'ye düşmemeli — belgeden gelmeli.
+
+    BELGENİN kendi dövizi için `data.get('doviz','USD')` doğrudur:
+    orada varsayılan gerçekten USD. Yanlış olan, KALEMİN dövizini
+    belgeye bakmadan USD yapmaktı. Bekçi yalnız kalem değişkenlerine
+    (`k`, `_k`, `k_data`, `kalem`) bakar; kapsamı geniş tutmak,
+    doğru satırları da kırmızıya boyayıp bekçiyi kapattırırdı."""
+    import io as _io
+    import re as _re
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    desen = _re.compile(
+        r"doviz\s*=\s*(k|_k|kl|kalem|k_data|pk|_kalem)\.get\("
+        r"'doviz'\s*,\s*'[A-Z]{3}'\)")
+    kacak = []
+    for i, t in enumerate(kaynak.split('\n'), 1):
+        if t.lstrip().startswith('#'):
+            continue                  # yorum; açıklama metni olabilir
+        if desen.search(t):
+            kacak.append(f'satır {i}: {t.strip()[:70]}')
+    assert not kacak, (
+        'kalem dövizi belgeden değil sabit bir para biriminden '
+        'alınıyor: ' + '; '.join(kacak))
+
+
+# ══════════════════════════════════════════════════════════════════
+#  HS1 · HIZLI SATIŞ: EKRANIN SÖYLEDİĞİ İLE KAYDEDİLEN AYNI OLMALI
+#
+#  İşin sahibi formu kullanırken bildirdi; ölçünce üçü de doğrulandı
+#  ve ikisi daha çıktı:
+#
+#  1. KDV faturaya HİÇ yansımıyordu. `toplam = ara_toplam =
+#     sip.toplam_tutar` ve `kdv_tutar = data.get('kdv_tutar', 0)` —
+#     ekran o alanı hiç göndermiyor. Ekran "3.024 € (KDV %20 dahil)"
+#     yazarken fatura 2.520 € kesiliyor, cariye 2.520 € borç
+#     işleniyordu: 504 € müşteriye hiç fatura edilmiyordu.
+#  2. Döviz gövdede GÖNDERİLMİYORDU, yalnız kalemlere konuyordu.
+#     EUR seçilen satışın siparişi, faturası, cari hareketi ve satış
+#     kayıtlarının hepsi USD kaydediliyordu — ekran €, veri $.
+#     (DV1'den sonra aynı eksik, satışın 400 ile reddedilmesine yol
+#     açıyordu: kalem EUR, belge USD.)
+#  3. KDV dahil/hariç seçilemiyordu; ekran hariç hesaplayıp "dahil"
+#     yazıyordu.
+#  4. Üstteki tek vade alanı hem faturanın hem ÇEKİN vadesini
+#     belirliyordu; çekin kendi alanı gövdede geliyor ama sunucuda
+#     okunmuyordu.
+#  5. Siparişin kdv_tutar'ı da hep 0 kalıyordu (aynı sebep).
+# ══════════════════════════════════════════════════════════════════
+def _hs1_kurulum(ek=''):
+    from models import Firma, PlakaStok
+    with fa.app.app_context():
+        if not Cari.query.get('HS1-MUS'):
+            db.session.add(Cari(id='HS1-MUS', unvan='HS1 ACAR MERMER',
+                                cari_tip='Müşteri', para_birimi='TRY',
+                                gorunurluk='acik'))
+        for dv, k in (('USD', 40.0), ('EUR', 45.0)):
+            if not DovizKur.query.filter_by(
+                    doviz=dv, tarih=date(2026, 10, 29)).first():
+                db.session.add(DovizKur(doviz=dv, tarih=date(2026, 10, 29),
+                                        alis=k, satis=k, efektif=k))
+        idler = []
+        for i in range(1, 6):
+            sid = f'PLK-HS1{ek}-{i:02d}'
+            idler.append(sid)
+            if not PlakaStok.query.get(sid):
+                db.session.add(PlakaStok(
+                    id=sid, blok_no=f'HS1{ek}', cins='HS1 CEPPO',
+                    ozellik='BOOKMATCHED', boy=298, yukseklik=169,
+                    kalinlik=2, metraj_m2=5.04, alis_fiyati=36.0,
+                    alis_fiyat_birim='m2', matrah=181.44, doviz='USD',
+                    durum='Serbest', giris_tarihi=date(2026, 10, 29)))
+        db.session.commit()
+    return istemci('admin', 'ADMIN'), idler
+
+
+def _hs1_govde(idler, **ek):
+    g = {
+        'musteri': 'HS1 ACAR MERMER', 'satis_tipi': 'yurtici',
+        'odeme_sekli': 'Cek', 'kasa_id': None, 'teslim_sekli': 'EXW',
+        'vade_tarihi': '2026-10-30',
+        'doviz': 'EUR', 'kdv_oran': 20, 'kdv_dahil_mi': False,
+        'kalemler': [{
+            'urun_tip': 'PLAKA', 'cins': 'HS1 CEPPO',
+            'ozellik': 'BOOKMATCHED', 'stok_ids': idler,
+            'adet': 5, 'miktar': 25.2, 'birim': 'm2',
+            'birim_fiyat': 100, 'doviz': 'EUR', 'sira': 1,
+            'boy': 298, 'yukseklik': 169, 'kalinlik': 2}],
+        'cek': {'cek_no': 'CK-HS1', 'banka_adi': 'İş Bankası',
+                'tutar': None, 'vade_tarihi': '2026-12-15'},
+    }
+    g.update(ek)
+    return g
+
+
+def test_hs1_kdv_faturaya_ve_cariye_yansiyor():
+    """Ekran 3.024 € diyorsa fatura da cari de 3.024 € olmalı."""
+    from models import Fatura, CariHareket, Siparis
+    c, idler = _hs1_kurulum('A')
+    r = c.post('/api/sicak_satis', headers=H,
+               json=_hs1_govde(idler, fatura_no='HS1-A-001'))
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    fid = r.get_json()['fatura_id']
+    with fa.app.app_context():
+        f = db.session.get(Fatura, fid)
+        # ESKI DAVRANIS: ara_toplam=2520, kdv_tutar=0, toplam=2520
+        assert float(f.ara_toplam or 0) == 2520.0, f.ara_toplam
+        assert float(f.kdv_tutar or 0) == 504.0, (
+            f'KDV {f.kdv_tutar} — ekran %20 dedi, faturaya yansımamış')
+        assert float(f.toplam or 0) == 3024.0, f.toplam
+        # Matrah + KDV == toplam (KD1 garantisi)
+        assert round(float(f.ara_toplam) + float(f.kdv_tutar), 2) \
+            == round(float(f.toplam), 2)
+        # CARİYE KDV DAHİL TUTAR BORÇ YAZILMALI
+        borc = [h for h in CariHareket.query.filter_by(
+            cari_id='HS1-MUS').all() if (h.borc or 0) > 0
+            and h.baglanti_id == fid]
+        assert borc, 'faturadan cariye borç hareketi oluşmamış'
+        assert float(borc[0].borc or 0) == 3024.0, (
+            f'cariye {borc[0].borc} borç işlendi, fatura 3024 — '
+            f'aradaki fark hiç tahsil edilmez')
+        # Siparişin KDV'si de dolmalı
+        sip = db.session.get(Siparis, f.siparis_id)
+        assert float(sip.kdv_tutar or 0) == 504.0, sip.kdv_tutar
+
+
+def test_hs1_kdv_dahil_secilince_matrah_ayristiriliyor():
+    """'Dahil' seçilince girilen tutarın içinden KDV ayrılmalı."""
+    from models import Fatura
+    c, idler = _hs1_kurulum('B')
+    r = c.post('/api/sicak_satis', headers=H, json=_hs1_govde(
+        idler, kdv_dahil_mi=True, fatura_no='HS1-B-001'))
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    with fa.app.app_context():
+        f = db.session.get(Fatura, r.get_json()['fatura_id'])
+        assert float(f.ara_toplam or 0) == 2100.0, f.ara_toplam
+        assert float(f.kdv_tutar or 0) == 420.0, f.kdv_tutar
+        assert float(f.toplam or 0) == 2520.0, f.toplam
+
+
+def test_hs1_secilen_doviz_her_kayda_gidiyor():
+    """EUR seçilen satış hiçbir yerde USD olmamalı."""
+    from models import Fatura, Siparis, CariHareket, SatisKaydi, Cek
+    c, idler = _hs1_kurulum('C')
+    r = c.post('/api/sicak_satis', headers=H,
+               json=_hs1_govde(idler, fatura_no='HS1-C-001'))
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    j = r.get_json()
+    assert j.get('doviz') == 'EUR', j
+    fid = j['fatura_id']
+    with fa.app.app_context():
+        f = db.session.get(Fatura, fid)
+        assert (f.doviz or '').upper() == 'EUR', f.doviz
+        sip = db.session.get(Siparis, f.siparis_id)
+        assert (sip.doviz or '').upper() == 'EUR', sip.doviz
+        for h in CariHareket.query.filter_by(cari_id='HS1-MUS').all():
+            if h.baglanti_id in (fid, j.get('cek_id')):
+                assert (h.doviz or '').upper() == 'EUR', (h.id, h.doviz)
+        sk = SatisKaydi.query.filter_by(fatura_id=fid).all()
+        assert sk, 'satış kaydı oluşmamış'
+        for x in sk:
+            assert (x.doviz or '').upper() == 'EUR', (x.id, x.doviz)
+        if j.get('cek_id'):
+            ck = db.session.get(Cek, j['cek_id'])
+            assert (ck.doviz or '').upper() == 'EUR', ck.doviz
+
+
+def test_hs1_doviz_gonderilmezse_kalemden_dusuluyor():
+    """Eski bir sekme `doviz` göndermezse sessizce USD olmamalı.
+
+    DV1'in kapısı kalem ile belgeyi karşılaştırıyor; gövdede döviz
+    yoksa belge USD'ye düşüyor ve EUR kalemli satış 400 alıyordu.
+    Artık kalemlerden geri düşülüyor."""
+    from models import Fatura
+    c, idler = _hs1_kurulum('D')
+    g = _hs1_govde(idler, fatura_no='HS1-D-001')
+    g.pop('doviz')                      # eski ekranın gövdesi
+    r = c.post('/api/sicak_satis', headers=H, json=g)
+    assert r.status_code == 200, (
+        f'{r.status_code} — gövdede döviz yokken satış reddedildi: '
+        + r.get_data(as_text=True)[:200])
+    with fa.app.app_context():
+        f = db.session.get(Fatura, r.get_json()['fatura_id'])
+        assert (f.doviz or '').upper() == 'EUR', f.doviz
+
+
+def test_hs1_cekin_kendi_vadesi_geciyor():
+    """Çekin vadesi fatura vadesinden AYRI olmalı."""
+    from models import Cek, Fatura
+    c, idler = _hs1_kurulum('E')
+    r = c.post('/api/sicak_satis', headers=H,
+               json=_hs1_govde(idler, fatura_no='HS1-E-001'))
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    j = r.get_json()
+    with fa.app.app_context():
+        f = db.session.get(Fatura, j['fatura_id'])
+        ck = db.session.get(Cek, j['cek_id'])
+        assert f.vade_tarihi == date(2026, 10, 30), f.vade_tarihi
+        # ESKI DAVRANIS: cek.vade_tarihi de 2026-10-30 oluyordu
+        assert ck.vade_tarihi == date(2026, 12, 15), (
+            f'çekin vadesi {ck.vade_tarihi} — ekranda 15.12.2026 '
+            f'girilmişti, fatura vadesi onu ezmiş')
+
+
+def test_hs1_cek_vadesi_bossa_fatura_vadesine_dusuyor():
+    """Çek vadesi boşsa eski davranış korunur."""
+    from models import Cek
+    c, idler = _hs1_kurulum('F')
+    g = _hs1_govde(idler, fatura_no='HS1-F-001')
+    g['cek']['vade_tarihi'] = None
+    r = c.post('/api/sicak_satis', headers=H, json=g)
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    with fa.app.app_context():
+        ck = db.session.get(Cek, r.get_json()['cek_id'])
+        assert ck.vade_tarihi == date(2026, 10, 30), ck.vade_tarihi
+
+
+def test_hs1_ekran_dovizi_ve_kdv_durumunu_gonderiyor():
+    """Form gövdesi `doviz` ve `kdv_dahil_mi` taşımalı.
+
+    Sunucu düzelse de ekran göndermezse hiçbir şey değişmez; bu
+    ikisi AYNI yamanın iki yarısı."""
+    import io as _io
+    b = _io.open(os.path.join(KOK, 'templates', 'base.html'),
+                 encoding='utf-8').read()
+    assert "doviz: document.getElementById('hsDoviz').value" in b, \
+        'hızlı satış gövdesi döviz göndermiyor'
+    assert "kdv_dahil_mi: document.getElementById('hsKdvDahil')" in b, \
+        'hızlı satış gövdesi KDV durumunu göndermiyor'
+    assert 'id="hsKdvDahil"' in b, 'KDV dahil/hariç seçeneği yok'
+    # Etiketler: hangi vade neyin vadesi
+    assert 'Fatura Vadesi' in b, 'fatura vadesi etiketi belirsiz'
+    assert 'Çek Vadesi' in b, 'çek vadesi etiketi belirsiz'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  IP1 · İPTAL, PARA İZLERİNİ SORMADAN BIRAKMAZ
+#
+#  İşin sahibi bildirdi, ölçüldü: faturası kesilmiş bir siparişi
+#  satış hattından iptal etmek HİÇBİR ŞEYİ geri almıyordu. Fatura
+#  "Tahsil Edildi" kalıyor, cariye yazılan 3.024 $ borç duruyor,
+#  stoklar satılmış kalıyordu.
+#
+#  Üstüne iki şey daha çıktı:
+#   · Çeki silmek "bağlı kayıtlar geri alındı" diyordu ama cari
+#     hareket DURUYORDU: geri alma `cek.cari_hareket_id` bağını
+#     arıyor, hızlı satış o alanı hiç doldurmuyordu (TS1'in aynısı).
+#   · Hızlı satış stokları 'Teslim Edildi' yapıyordu; serbest
+#     bırakma yalnız Satildi/Rezerve'ye dokunduğu için plakalar
+#     KALICI olarak kilitli kalıyordu — ne serbest ne satılabilir.
+#
+#  Karar kullanıcınındır: sunucu neyin kararını beklediğini söyleyip
+#  409 döner, ekran sırayla sorar.
+# ══════════════════════════════════════════════════════════════════
+def _ip1_satis(ek):
+    """Hızlı satış kurar; (istemci, siparis_id, fatura_id, cek_id) döner."""
+    from models import Firma, PlakaStok, Siparis
+    with fa.app.app_context():
+        if not Cari.query.get('IP1-MUS'):
+            db.session.add(Cari(id='IP1-MUS', unvan='IP1 ACAR MERMER',
+                                cari_tip='Müşteri', para_birimi='USD',
+                                gorunurluk='acik'))
+        if not DovizKur.query.filter_by(
+                doviz='USD', tarih=date(2026, 10, 29)).first():
+            db.session.add(DovizKur(doviz='USD', tarih=date(2026, 10, 29),
+                                    alis=40, satis=40, efektif=40))
+        idler = []
+        for i in range(1, 6):
+            sid = f'PLK-IP1{ek}-{i:02d}'
+            idler.append(sid)
+            if not PlakaStok.query.get(sid):
+                db.session.add(PlakaStok(
+                    id=sid, blok_no=f'IP1{ek}', cins='IP1 CEPPO',
+                    boy=298, yukseklik=169, kalinlik=2, metraj_m2=5.04,
+                    alis_fiyati=36.0, alis_fiyat_birim='m2', matrah=181.44,
+                    doviz='USD', durum='Serbest',
+                    giris_tarihi=date(2026, 10, 29)))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    r = c.post('/api/sicak_satis', headers=H, json={
+        'musteri': 'IP1 ACAR MERMER', 'satis_tipi': 'yurtici',
+        'odeme_sekli': 'Cek', 'teslim_sekli': 'EXW',
+        'fatura_no': f'IP1-{ek}-001', 'vade_tarihi': '2026-10-30',
+        'doviz': 'USD', 'kdv_oran': 20, 'kdv_dahil_mi': False,
+        'kalemler': [{
+            'urun_tip': 'PLAKA', 'cins': 'IP1 CEPPO', 'stok_ids': idler,
+            'adet': 5, 'miktar': 25.2, 'birim': 'm2', 'birim_fiyat': 100,
+            'doviz': 'USD', 'sira': 1,
+            'boy': 298, 'yukseklik': 169, 'kalinlik': 2}],
+        'cek': {'cek_no': f'CK-IP1-{ek}', 'banka_adi': 'İş Bankası',
+                'tutar': None, 'vade_tarihi': '2026-12-15'},
+    })
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    j = r.get_json()
+    with fa.app.app_context():
+        sip = Siparis.query.filter_by(musteri='IP1 ACAR MERMER').order_by(
+            Siparis.id.desc()).first()
+        sip_id = sip.id
+    return c, sip_id, j['fatura_id'], j.get('cek_id'), idler
+
+
+def test_ip1_hizli_satis_stogu_satildi_birakiyor():
+    """'Teslim Edildi' bırakmak stoğu kalıcı kilitliyordu."""
+    from models import PlakaStok
+    c, sip_id, fid, cek_id, idler = _ip1_satis('A')
+    with fa.app.app_context():
+        for sid in idler:
+            s = db.session.get(PlakaStok, sid)
+            assert s.durum == 'Satildi', (sid, s.durum)
+
+
+def test_ip1_cekin_cari_hareketi_cekle_baglaniyor():
+    """`cek.cari_hareket_id` boş kalırsa geri alma hareketi bulamaz."""
+    from models import Cek
+    c, sip_id, fid, cek_id, idler = _ip1_satis('B')
+    with fa.app.app_context():
+        ck = db.session.get(Cek, cek_id)
+        assert ck.cari_hareket_id, (
+            'çekin cari hareket bağı boş — silinince alacak cariye asılı '
+            'kalır')
+
+
+def test_ip1_cek_silinince_cari_alacak_da_gidiyor():
+    """TS1 kalıbı: 'geri alındı' diyorsa gerçekten geri almalı."""
+    from models import CariHareket
+    c, sip_id, fid, cek_id, idler = _ip1_satis('C')
+    with fa.app.app_context():
+        once = CariHareket.query.filter_by(
+            baglanti_tip='cek', baglanti_id=cek_id).count()
+        assert once == 1, once
+    r = c.delete(f'/api/cek/{cek_id}', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    with fa.app.app_context():
+        kalan = CariHareket.query.filter_by(
+            baglanti_tip='cek', baglanti_id=cek_id).count()
+        assert kalan == 0, (
+            f'çek silindi ama {kalan} cari hareket duruyor — '
+            f'müşteri alacaklı görünür')
+
+
+def test_ip1_faturali_siparis_iptali_karar_istiyor():
+    """Sormadan iptal etmemeli; neyin kararını beklediğini söylemeli."""
+    from models import Siparis, CariHareket, Fatura
+    c, sip_id, fid, cek_id, idler = _ip1_satis('D')
+    r = c.put(f'/api/siparis/{sip_id}', headers=H,
+              json={'durum': 'Iptal Edildi'})
+    assert r.status_code == 409, r.status_code
+    j = r.get_json()
+    assert j.get('error') == 'iptal_onayi_gerekli', j
+    k = j.get('karar') or {}
+    assert k.get('faturalar'), k
+    assert k['faturalar'][0]['id'] == fid, k
+    assert float(k['faturalar'][0]['cari_borc']) == 3024.0, k
+    assert k.get('cekler') and k['cekler'][0]['id'] == cek_id, k
+    # HİÇBİR ŞEYE DOKUNULMAMIŞ OLMALI
+    with fa.app.app_context():
+        assert db.session.get(Siparis, sip_id).durum == 'Hazir'
+        assert db.session.get(Fatura, fid).durum != 'Iptal'
+        assert CariHareket.query.filter_by(cari_id='IP1-MUS').count() >= 2
+
+
+def test_ip1_cek_iade_secilince_her_sey_geri_aliniyor():
+    """Çek iade: cari sıfırlanmalı, stok serbest, satış kaydı silinmeli."""
+    from models import Siparis, Fatura, Cek, CariHareket, SatisKaydi, PlakaStok
+    c, sip_id, fid, cek_id, idler = _ip1_satis('E')
+    r = c.put(f'/api/siparis/{sip_id}', headers=H, json={
+        'durum': 'Iptal Edildi',
+        'iptal_onay': {'fatura_iptal': True, 'cek': 'iade',
+                       'tahsilat': 'sil'}})
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    with fa.app.app_context():
+        assert db.session.get(Siparis, sip_id).durum == 'Iptal Edildi'
+        assert db.session.get(Fatura, fid).durum == 'Iptal'
+        assert db.session.get(Cek, cek_id).durum == 'Iptal'
+        kalan = CariHareket.query.filter_by(cari_id='IP1-MUS').all()
+        kalan = [h for h in kalan
+                 if h.baglanti_id in (fid, cek_id)]
+        assert not kalan, [(h.id, h.islem_tip, h.borc, h.alacak)
+                           for h in kalan]
+        assert SatisKaydi.query.filter_by(fatura_id=fid).count() == 0
+        for sid in idler:
+            assert db.session.get(PlakaStok, sid).durum == 'Serbest', sid
+
+
+def test_ip1_cek_alacak_secilince_musteri_alacakli_kaliyor():
+    """Çek bizde kalırsa borç silinir, alacak DURUR — bu doğru."""
+    from models import Fatura, Cek, CariHareket
+    c, sip_id, fid, cek_id, idler = _ip1_satis('F')
+    r = c.put(f'/api/siparis/{sip_id}', headers=H, json={
+        'durum': 'Iptal Edildi',
+        'iptal_onay': {'fatura_iptal': True, 'cek': 'alacak',
+                       'tahsilat': 'alacak'}})
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    with fa.app.app_context():
+        assert db.session.get(Fatura, fid).durum == 'Iptal'
+        ck = db.session.get(Cek, cek_id)
+        assert ck.durum == 'Portfoyde', ck.durum
+        # Çek faturadan KOPARILMALI: kopmazsa fatura iptali
+        # "tahsilat var" diye reddedilir ve kullanıcı çıkmaza girer.
+        assert ck.fatura_id is None, ck.fatura_id
+        borclar = [h for h in CariHareket.query.filter_by(
+            cari_id='IP1-MUS').all() if h.baglanti_id == fid]
+        assert not borclar, 'fatura borcu geri alınmamış'
+        alacak = [h for h in CariHareket.query.filter_by(
+            cari_id='IP1-MUS').all() if h.baglanti_id == cek_id]
+        assert alacak and float(alacak[0].alacak or 0) == 3024.0, alacak
+
+
+def test_ip1_fatura_iptali_tek_kapidan_geciyor():
+    """`_fatura_iptal_geri_al` tek kaynak olmalı."""
+    import io as _io
+    import re as _re
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    assert 'def _fatura_iptal_geri_al(' in kaynak
+    # İki çağıran: fatura durum ucu + sipariş iptali
+    assert kaynak.count('_fatura_iptal_geri_al(') >= 3, (
+        'ortak kapı tek yerden çağrılıyor — ikinci çağıran kaybolmuş')
+    # Borç hareketini silen kod kapının DIŞINDA tekrarlanmamalı
+    kacak = [f'satır {i}' for i, t in enumerate(kaynak.split('\n'), 1)
+             if "baglanti_tip='fatura'" in t and 'kaynak=\'fatura\'' in t]
+    assert len(kacak) <= 2, (
+        'fatura borç hareketini arayan birden fazla yer var: ' + str(kacak))
+
+
+def test_ip1_ekran_iptal_kararlarini_soruyor():
+    """Sunucu 409 dönse de ekran sormuyorsa hiçbir şey değişmez."""
+    import io as _io
+    s = _io.open(os.path.join(KOK, 'templates', 'siparis.html'),
+                 encoding='utf-8').read()
+    assert 'iptal_onayi_gerekli' in s, 'ekran 409 kararını işlemiyor'
+    assert 'iptal_onay' in s, 'ekran kararları geri göndermiyor'
+    assert '_iptalKararlariniSor' in s
+    for secim in ("'iade'", "'alacak'", "'sil'"):
+        assert secim in s, f'{secim} seçeneği ekranda yok'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  VR1 · ÇİFT BACAKLI TRANSFER, TEK BACAK SİLİNEMEZ
+#
+#  "Yan etki yaratan işlem, geri alınırken o yan etkiyi bırakıyor"
+#  sınıfının taramasından çıktı (TS1 ve IP1 ile aynı aile). Üçü de
+#  ölçüldü:
+#
+#   · Kasa virmanı A→B 3.000 TL, çıkış bacağını sil:
+#     A parasını geri alır, B'de para DURUR. Sistemdeki toplam
+#     10.000 → 13.000 TL. PARA YOKTAN VAR OLDU.
+#   · Cari→kasa transferi 5.000 TL, cari hareketi sil:
+#     kasa parayı tutar, karşılığı olan kayıt yoktur.
+#   · Cari→cari transferi 2.000 TL, bir bacağı sil:
+#     bir cari alacaklı kalır, karşılığı yoktur.
+#
+#  Transfer atomik YARATILIYOR ama atomik SİLİNMİYORDU.
+# ══════════════════════════════════════════════════════════════════
+def _vr1_kurulum(ek):
+    from models import Kasa
+    with fa.app.app_context():
+        for ad, bak in ((f'VR1 A{ek}', 10000), (f'VR1 B{ek}', 0)):
+            if not Kasa.query.filter_by(ad=ad).first():
+                db.session.add(Kasa(ad=ad, doviz='TRY', bakiye=bak))
+        for cid, unv in ((f'VR1-C1{ek}', f'VR1 ALFA{ek}'),
+                         (f'VR1-C2{ek}', f'VR1 BETA{ek}')):
+            if not Cari.query.get(cid):
+                db.session.add(Cari(id=cid, unvan=unv, cari_tip='Müşteri',
+                                    para_birimi='TRY', gorunurluk='acik'))
+        db.session.commit()
+        a = Kasa.query.filter_by(ad=f'VR1 A{ek}').first().id
+        b = Kasa.query.filter_by(ad=f'VR1 B{ek}').first().id
+    return istemci('admin', 'ADMIN'), a, b
+
+
+def _vr1_toplam(kasa_idler):
+    from models import Kasa
+    with fa.app.app_context():
+        return round(sum(float(db.session.get(Kasa, k).bakiye or 0)
+                         for k in kasa_idler), 2)
+
+
+def test_vr1_virmanin_tek_bacagi_silinince_para_yoktan_var_olmuyor():
+    """Toplam para KORUNMALI."""
+    from models import KasaHareket
+    c, a, b = _vr1_kurulum('A')
+    once = _vr1_toplam([a, b])
+    r = c.post('/api/kasa/virman', headers=H, json={
+        'kaynak_kasa_id': a, 'hedef_kasa_id': b, 'tutar': 3000,
+        'tarih': '2026-10-29', 'aciklama': 'VR1 testi'})
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    assert _vr1_toplam([a, b]) == once, 'virman toplamı değiştirmemeli'
+
+    with fa.app.app_context():
+        bacaklar = KasaHareket.query.filter_by(
+            baglanti_tip='virman').filter(
+            KasaHareket.kasa_id.in_((a, b))).all()
+        assert len(bacaklar) == 2, len(bacaklar)
+        ilk = bacaklar[0].id
+    d = c.delete(f'/api/kasa/hareket/{ilk}', headers=H)
+    assert d.status_code == 200, d.get_data(as_text=True)[:200]
+    # ESKI DAVRANIS: 10.000 -> 13.000
+    assert _vr1_toplam([a, b]) == once, (
+        f'tek bacak silinince toplam {_vr1_toplam([a, b])} oldu, '
+        f'{once} olmalıydı — para yoktan var oldu')
+    with fa.app.app_context():
+        kalan = KasaHareket.query.filter_by(baglanti_tip='virman').filter(
+            KasaHareket.kasa_id.in_((a, b))).count()
+        assert kalan == 0, f'{kalan} bacak öksüz kaldı'
+
+
+def test_vr1_cariden_kasaya_transfer_silinince_kasa_parayi_tutmuyor():
+    """Cari kaydı silinince kasadaki karşılığı da gitmeli."""
+    from models import Kasa, KasaHareket, CariHareket
+    c, a, b = _vr1_kurulum('B')
+    once = _vr1_toplam([a])
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'VR1-C1B', 'islem_tip': 'Bakiye Transfer',
+        'transfer_yonu': 'kasa', 'hedef_kasa_id': a, 'tutar': 5000,
+        'doviz': 'TRY', 'hareket_tarihi': '2026-10-29'})
+    assert r.status_code == 200, r.get_data(as_text=True)[:250]
+    assert _vr1_toplam([a]) == round(once + 5000, 2)
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(
+            cari_id='VR1-C1B', baglanti_tip='kasa').first()
+        assert h, 'cari tarafı oluşmamış'
+        hid = h.id
+    d = c.delete(f'/api/cari/hareket/{hid}', headers=H)
+    assert d.status_code == 200, d.get_data(as_text=True)[:250]
+    # ESKI DAVRANIS: kasa 5.000'i tutuyordu
+    assert _vr1_toplam([a]) == once, (
+        f'kasa {_vr1_toplam([a])} ile kaldı, {once} olmalıydı — '
+        f'karşılığı olmayan para')
+    with fa.app.app_context():
+        assert KasaHareket.query.filter_by(
+            kasa_id=a, baglanti_tip='virman').count() == 0
+
+
+def test_vr1_cariden_cariye_transfer_tek_tarafli_kalmiyor():
+    """İki cari hareketinden biri silinince öteki de gitmeli."""
+    from models import CariHareket
+    c, a, b = _vr1_kurulum('C')
+    r = c.post('/api/cari/hareket', headers=H, json={
+        'cari_id': 'VR1-C1C', 'islem_tip': 'Bakiye Transfer',
+        'transfer_yonu': 'cari', 'hedef_cari_id': 'VR1-C2C',
+        'tutar': 2000, 'doviz': 'TRY', 'hareket_tarihi': '2026-10-29'})
+    assert r.status_code == 200, r.get_data(as_text=True)[:250]
+    with fa.app.app_context():
+        hs = CariHareket.query.filter(
+            CariHareket.cari_id.in_(('VR1-C1C', 'VR1-C2C'))).all()
+        assert len(hs) == 2, len(hs)
+        hid = hs[0].id
+    d = c.delete(f'/api/cari/hareket/{hid}', headers=H)
+    assert d.status_code == 200, d.get_data(as_text=True)[:250]
+    with fa.app.app_context():
+        kalan = CariHareket.query.filter(
+            CariHareket.cari_id.in_(('VR1-C1C', 'VR1-C2C'))).all()
+        assert not kalan, (
+            'transferin öteki bacağı kaldı: '
+            + str([(h.id, h.cari_id, h.borc, h.alacak) for h in kalan]))
+
+
+def test_vr1_tahsilat_silme_bozulmadi():
+    """VR1 eşi TS1'in tahsilat yolunu ETKİLEMEMELİ.
+
+    `_transfer_esi` yalnız `kaynak='virman'` kayıtlara bakıyor;
+    bakmasaydı tahsilat silerken yanlış bir kaydı eş sanıp silerdi.
+    Bu testin işi o sınırı çivilemek."""
+    from models import Kasa, KasaHareket, CariHareket
+    c, a, b = _vr1_kurulum('D')
+    # Kasaya elle bir giris: virman DEGIL
+    r = c.post('/api/kasa/hareket', headers=H, json={
+        'kasa_id': a, 'tip': 'giris', 'tutar': 1234,
+        'tarih': '2026-10-29', 'aciklama': 'VR1 elle giris'})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)[:200]
+    with fa.app.app_context():
+        kh = KasaHareket.query.filter_by(
+            kasa_id=a, tutar=1234).first()
+        assert kh is not None
+        khid = kh.id
+    once = _vr1_toplam([a])
+    d = c.delete(f'/api/kasa/hareket/{khid}', headers=H)
+    assert d.status_code == 200, d.get_data(as_text=True)[:200]
+    assert _vr1_toplam([a]) == round(once - 1234, 2), (
+        'elle girilen hareket silinince yalnız kendi etkisi gitmeli')
+
+
+def test_vr1_her_bag_tipinin_geri_alma_yolu_var():
+    """Yaratılan her bağlantı tipinin bir geri alma yolu olmalı.
+
+    DÜRÜST SINIR: bu bekçi, BUGÜNKÜ üç hatayı yakalamazdı ve
+    yakalamıyor da (tabanda da geçiyor). Çünkü onlarda geri alma
+    yolu VARDI, sadece eş bacağı bulamıyordu — yapısal değil
+    davranışsal bir eksiklikti; onu yukarıdaki üç davranış testi
+    çiviliyor.
+
+    Bunun işi daha dar ve yine de değerli: yarın YENİ bir bağlantı
+    tipiyle hareket yaratılır ve hiçbir geri alma yolu yazılmazsa
+    (AF1'in ölü çek süzgeci, IP1'in çek bağı gibi) takımı kırar."""
+    import ast as _ast
+    import io as _io
+    import re as _re
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    agac = _ast.parse(kaynak)
+
+    yaratilan = set()
+    for d in _ast.walk(agac):
+        if not (isinstance(d, _ast.Call) and isinstance(d.func, _ast.Name)):
+            continue
+        if d.func.id not in ('CariHareket', 'KasaHareket',
+                             '_cari_hareket_ekle'):
+            continue
+        for kw in d.keywords:
+            if (kw.arg == 'baglanti_tip' and isinstance(kw.value, _ast.Constant)
+                    and isinstance(kw.value.value, str)):
+                yaratilan.add(kw.value.value)
+
+    # Geri alınabilen tipler: bir süzgeçle aranıp silinen ya da ortak
+    # kapıdan geçenler.
+    geri = set(_re.findall(r"baglanti_tip\s*(?:==|=)\s*'([^']+)'", kaynak))
+    for m in _re.finditer(r"baglanti_tip\.in_\(\(?\[?([^)\]]+)", kaynak):
+        geri |= set(_re.findall(r"'([^']+)'", m.group(1)))
+
+    # BİLEREK GERİ ALINMAYANLAR — her biri sebebiyle.
+    MUAF = {
+        # Kur farkı kayıtları `kapanis_hareket_id` üzerinden geri
+        # alınıyor (`_kur_farki_geri_al`), bağ tipinden değil.
+        'hareket',
+        # Sipariş bağı: avans devri ve mahsup. Bunlar siparişin
+        # kendi akışıyla geri alınıyor (avans siparişe döner).
+        'siparis',
+    }
+    acik = sorted(yaratilan - geri - MUAF)
+    assert not acik, (
+        'bu bağlantı tipleriyle hareket yaratılıyor ama geri alma '
+        'yolu yok: ' + ', '.join(acik))

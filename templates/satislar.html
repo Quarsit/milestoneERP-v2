@@ -49,6 +49,15 @@
   <button class="cip" data-f="faturali">Faturalı</button>
   <button class="cip" data-f="faturasiz">Faturasız</button>
   <button class="cip" data-f="dusuk">Düşük marj (&lt;%15)</button>
+  <!-- KD1: `GET /api/satislar/lookup` yazılmıştı ama hiçbir ekrandan
+       çağrılmıyordu. Listeler SUNUCUDAN geliyor, ekrandaki 300
+       satırdan türetilmiyor: sayfalama yüzünden ekranda olmayan bir
+       müşteri süzgeçte de görünmezdi ve kullanıcı "o müşteri yok"
+       sanırdı. -->
+  <select id="sMusteri" style="max-width:190px">
+    <option value="">Tüm müşteriler</option></select>
+  <select id="sCins" style="max-width:170px">
+    <option value="">Tüm cinsler</option></select>
   <div class="suz"><input id="ara" placeholder="Müşteri, cins, fatura no ara…" autocomplete="off"></div>
 </div>
 
@@ -73,6 +82,7 @@
    Satış kaydı, fatura "Kesildi" olduğunda otomatik oluşur; sıcak satışta da düşer. */
 
 let TUM = [], OZET = {}, FILTRE = '', ARA = '';
+let F_MUSTERI = '', F_CINS = '';
 
 async function yukle() {
   try {
@@ -84,6 +94,26 @@ async function yukle() {
     return;
   }
   kpiCiz(); ciz();
+}
+
+/* KD1 · süzgeç listeleri sunucudan. Hata olursa SESSİZCE geçilir:
+   liste gelmezse süzgeçler "Tümü"de kalır ve ekran çalışmaya devam
+   eder — bir yardımcı listenin yokluğu satış tablosunu kapatmamalı. */
+async function suzgecListeleri() {
+  try {
+    const d = await api('/api/satislar/lookup');
+    const doldur = (id, degerler) => {
+      const s = document.getElementById(id);
+      if (!s) return;
+      for (const v of (degerler || [])) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        s.appendChild(o);
+      }
+    };
+    doldur('sMusteri', d.musteriler);
+    doldur('sCins', d.cinsler);
+  } catch (e) { /* süzgeç yoksa ekran yine çalışır */ }
 }
 
 function marjBul(s) {
@@ -116,6 +146,8 @@ function ciz() {
     if (FILTRE === 'faturali' && !x.fatura_no) return false;
     if (FILTRE === 'faturasiz' && x.fatura_no) return false;
     if (FILTRE === 'dusuk' && marjBul(x) >= 15) return false;
+    if (F_MUSTERI && x.musteri !== F_MUSTERI) return false;   /* KD1 */
+    if (F_CINS && x.cins !== F_CINS) return false;            /* KD1 */
     if (s && ![x.id, x.musteri, x.cins, x.fatura_no, x.stok_tip].filter(Boolean)
               .join(' ').toLocaleLowerCase('tr').includes(s)) return false;
     return true;
@@ -147,6 +179,17 @@ function ciz() {
   }).join('') : '<tr><td colspan="7" class="bos">Satış kaydı yok.</td></tr>';
 }
 
+/* KD1 · çekmecenin sonuna MÜŞTERİ ÖZETİ bölümü eklendi (#msOzet).
+   GET /api/satislar/musteri/<musteri>/ozet yazılmıştı ama hiçbir
+   ekrandan çağrılmıyordu. Yeri burası: tek bir satışa bakarken "bu
+   müşteriyle toplamda nereye geldik" sorusunun cevabı, satışın kendi
+   kârını okumak kadar gerekli — tek satışın marjı yüksek olup
+   müşterinin genel marjı düşük olabilir. Bölüm çekmece AÇILDIKTAN
+   sonra asenkron doldurulur, çekmece özeti beklemez.
+
+   DİKKAT: aşağıdaki `govde` bir şablon dizgesidir. İçine ters tırnak
+   koymak (bir yorumda bile) dizgeyi orada sonlandırır ve TÜM betik
+   ayrıştırılamaz hâle gelir — ölçüldü, ekran "Yükleniyor…"da kaldı. */
 function detayAc(id) {
   const x = TUM.find(s => s.id === id);
   if (!x) return;
@@ -170,7 +213,8 @@ function detayAc(id) {
         : '<span class="rozet rz-kehribar">Faturasız</span>')}
       ${x.siparis_id ? alan('Sipariş', kacar(x.siparis_id), true) : ''}
       ${(x.stok_no || x.stok_id) ? alan('Stok', kacar(x.stok_no || x.stok_id), true) : ''}
-    </div>`;
+    </div>
+    <div id="msOzet" style="margin-top:14px"></div>`;
 
   const eylem = [];
   if (!x.fatura_no && yazabilir('fatura'))
@@ -196,6 +240,44 @@ function detayAc(id) {
     eylem.push(`<button class="blok-btn" onclick="sFaturaBilgiAc('${kacar(id)}')">Fatura bilgisi</button>`);
   eylem.push(`<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
   cekmeceAc(kacar(x.musteri || id), `${x.id} · ${x.satis_tarihi || ''}`, govde, eylem.join(''));
+  musteriOzetiYukle(x.musteri);   /* KD1 */
+}
+
+/* KD1 · MÜŞTERİ ÖZETİ
+   Çekmece açıldıktan SONRA dolduruluyor; uç yavaşsa ya da hata
+   verirse çekmecenin kendisi etkilenmiyor ve bölüm sessizce boş
+   kalıyor. Tek satışın detayı, bir yardımcı özet yüzünden
+   görünmez kalmamalı. */
+async function musteriOzetiYukle(musteri) {
+  const kutu = document.getElementById('msOzet');
+  if (!kutu || !musteri) return;
+  let d;
+  try {
+    d = await api('/api/satislar/musteri/' +
+                  encodeURIComponent(musteri) + '/ozet');
+  } catch (e) { return; }
+  if (!d || !d.adet) return;
+  const marj = Number(d.marj_yuzde || 0);
+  const renk = marj >= 25 ? '--verde' : marj >= 15 ? '--kehribar' : '--kirmizi';
+  const satir = (l, v) => `<div style="display:flex;justify-content:space-between;
+      padding:5px 0;border-bottom:1px solid var(--cizgi)">
+      <span style="color:var(--soluk)">${l}</span>
+      <span class="mono" style="font-weight:600">${v}</span></div>`;
+  const aralik = [d.ilk_satis, d.son_satis].filter(Boolean);
+  kutu.innerHTML = `
+    <div class="panel" style="padding:12px 14px">
+      <h4 style="margin:0 0 8px;font-size:.86rem">
+        ${kacar(musteri)} · tüm satışlar</h4>
+      ${satir('Satış adedi', d.adet)}
+      ${satir('Ciro', para2(d.toplam_usd))}
+      ${satir('Maliyet', para2(d.maliyet_usd))}
+      ${satir('Kâr', `<span style="color:var(--verde)">${para2(d.kar_usd)}</span>`)}
+      ${satir('Marj', `<span style="color:var(${renk})">%${
+         marj.toFixed(1).replace('.', ',')}</span>`)}
+      ${aralik.length === 2 && aralik[0] !== aralik[1]
+         ? satir('Dönem', kacar(aralik[0]) + ' → ' + kacar(aralik[1]))
+         : (aralik.length ? satir('Satış tarihi', kacar(aralik[0])) : '')}
+    </div>`;
 }
 
 async function faturaOlustur(id) {
@@ -225,6 +307,13 @@ let araZaman;
 document.getElementById('ara').addEventListener('input', e => {
   clearTimeout(araZaman);
   araZaman = setTimeout(() => { ARA = e.target.value; ciz(); }, 200);
+});
+/* KD1 */
+document.getElementById('sMusteri').addEventListener('change', e => {
+  F_MUSTERI = e.target.value; ciz();
+});
+document.getElementById('sCins').addEventListener('change', e => {
+  F_CINS = e.target.value; ciz();
 });
 
 /* ═══ SD4 · SATIŞ DÜZENLEME ═══ */
@@ -335,6 +424,7 @@ async function sDuzenleKaydet() {
 }
 
 yukle();
+suzgecListeleri();   /* KD1 */
 </script>
 <!-- SD4 · SATIŞ DÜZENLEME
      Satışın tutar tarafı hiçbir yerden düzenlenemiyordu. Bu kayıt

@@ -1072,8 +1072,24 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
           </select>
         </div>
         <div class="hs-alan"><label>Fatura No</label><input id="hsFaturaNo" placeholder="MST-2026-001"></div>
-        <div class="hs-alan"><label>Vade Tarihi</label><input id="hsVade" type="date"></div>
+        <!-- HS1: etiket "Vade Tarihi" idi ve aşağıda çekin de bir
+             vadesi var; hangisinin neyin vadesi olduğu belirsizdi.
+             Bu alan FATURANIN vadesi: müşteri parayı ne zaman
+             ödeyecek. Çekin vadesi "Çek Bilgileri" altında, ayrı. -->
+        <div class="hs-alan"><label>Fatura Vadesi</label><input id="hsVade" type="date"></div>
         <div class="hs-alan"><label>KDV Oranı (%)</label><input id="hsKdv" type="number" value="0" oninput="hsKalemCiz()"></div>
+      </div>
+      <!-- HS1: KDV dahil/hariç seçimi YOKTU. Ekran toplamı KDV'yi
+           üstüne ekleyerek hesaplıyor ama "(KDV %20 dahil)" yazıyordu;
+           kullanıcı hangisinin geçerli olduğunu seçemiyordu. Diğer
+           satış/maliyet formlarında bu seçim var — aynı sözlerle. -->
+      <div class="hs-satir hs-f4">
+        <div class="hs-alan"><label>KDV Durumu</label>
+          <select id="hsKdvDahil" onchange="hsKalemCiz()">
+            <option value="0">Hariç — KDV üstüne eklenir</option>
+            <option value="1">Dahil — girilen tutar KDV içeriyor</option>
+          </select>
+        </div>
       </div>
 
       <div class="hs-kutu">
@@ -1106,7 +1122,13 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
           <div class="hs-alan"><label>Çek No</label><input id="hsCekNo" placeholder="CK-104"></div>
           <div class="hs-alan"><label>Banka</label><input id="hsCekBanka" placeholder="İş Bankası"></div>
           <div class="hs-alan"><label>Tutar</label><input id="hsCekTutar" type="number" step="0.01" placeholder="boş = fatura toplamı"></div>
-          <div class="hs-alan"><label>Vade</label><input id="hsCekVade" type="date"></div>
+          <!-- HS1: bu alan gövdede gönderiliyordu ama sunucu onu
+               okumuyor, çekin vadesine FATURA vadesini yazıyordu.
+               Artık çekin kendi vadesi geçerli; boş bırakılırsa
+               fatura vadesine düşer. -->
+          <div class="hs-alan"><label>Çek Vadesi</label>
+            <input id="hsCekVade" type="date"
+                   title="Boş bırakılırsa fatura vadesi kullanılır"></div>
         </div>
       </div>
     </div>
@@ -1940,6 +1962,7 @@ async function hizliSatisAc() {
     const el = document.getElementById(i); if (el) el.value = '';
   });
   document.getElementById('hsKdv').value = 0;
+  document.getElementById('hsKdvDahil').value = '0';   /* HS1 */
   hsKalemCiz(); hsOdemeDegisti();
   if (!HS_CARILER.length) {
     try {
@@ -2060,11 +2083,31 @@ function hsKalemCiz() {
       <span class="m">${para(k._toplam, dov)}</span>
       <button class="hs-sil" onclick="hsKalemSil(${i})" title="Sil">✕</button>
     </div>`).join('') : '<div class="bos" style="padding:14px">Henüz kalem eklenmedi.</div>';
+  /* HS1 · KDV ÖNİZLEMESİ SUNUCUYLA AYNI HESABI YAPAR.
+     Eskiden her durumda `ara * (1 + kdv/100)` hesaplanıp sonuca
+     "(KDV %x dahil)" yazılıyordu — seçim yoktu ve sunucu KDV'yi
+     zaten HİÇ işlemiyordu. Şimdi ikisi de aynı kuralı izliyor:
+     hariç -> KDV üstüne eklenir, dahil -> girilen tutarın içinden
+     ayrıştırılır (matrah + KDV her zaman toplamı verir). */
   const ara = HS_KALEMLER.reduce((a, k) => a + k._toplam, 0);
   const kdv = parseFloat(document.getElementById('hsKdv').value) || 0;
-  const t = ara * (1 + kdv / 100);
+  const dahilEl = document.getElementById('hsKdvDahil');
+  const dahil = dahilEl ? dahilEl.value === '1' : false;
+  let matrah = ara, kdvTutar = 0, t = ara;
+  if (kdv > 0) {
+    if (dahil) {
+      matrah = Math.round((ara / (1 + kdv / 100)) * 100) / 100;
+      kdvTutar = Math.round((ara - matrah) * 100) / 100;
+      t = ara;
+    } else {
+      kdvTutar = Math.round(ara * kdv / 100 * 100) / 100;
+      t = Math.round((ara + kdvTutar) * 100) / 100;
+    }
+  }
   const g = document.getElementById('hsGenelToplam');
-  if (g) g.textContent = para(t, dov) + (kdv > 0 ? ` (KDV %${kdv} dahil)` : '');
+  if (g) g.textContent = para(t, dov) + (kdv > 0
+    ? ` (matrah ${para(matrah, dov)} + KDV ${para(kdvTutar, dov)})`
+    : '');
 }
 
 async function hizliSatisKaydet() {
@@ -2083,7 +2126,13 @@ async function hizliSatisKaydet() {
     teslim_sekli: document.getElementById('hsTeslim').value,
     fatura_no: document.getElementById('hsFaturaNo').value,
     vade_tarihi: document.getElementById('hsVade').value || null,
+    /* HS1: `doviz` GÖNDERİLMİYORDU. Döviz yalnız kalemlere
+       konuyordu; sunucu gövdede bulamayınca USD'ye düşüyor ve
+       sipariş/fatura/cari hareket/satış kaydının HEPSİ USD
+       kaydediliyordu. Ekran € gösterirken veri $ oluyordu. */
+    doviz: document.getElementById('hsDoviz').value,
     kdv_oran: parseFloat(document.getElementById('hsKdv').value) || 0,
+    kdv_dahil_mi: document.getElementById('hsKdvDahil').value === '1',
     kalemler: HS_KALEMLER.map((k, i) => ({ ...k, sira: i + 1, _toplam: undefined }))
   };
   if (odeme === 'Cek') {
