@@ -684,7 +684,10 @@ const RENK = { 'Taslak':'--cizgi-koyu', 'Ic Onay':'--kehribar', 'Gonderildi':'--
                'Faturalandi':'--kehribar', 'Iptal':'--kirmizi', 'Revize':'--soluk' };
 /* ON1: 3 → 2 basamak. Resmi muhasebe programı 2 basamakla çalışıyor;
    3. hane iki sistem arasında yuvarlama farkı üretiyordu. */
-const q2 = x => Math.round((parseFloat(x) || 0) * 100) / 100;
+/* YV1: yerel `q2` KALDIRILDI — `Math.round(x*100)/100` İKİLİ
+   gösterimden yuvarlıyor ve sunucunun `Decimal(str(x))` kuralından
+   ayrışıyordu (0,145 → ekran 0,14, sunucu 0,15). base.html'deki
+   ortak `q2` sunucunun birebir ikizi. */
 const q3 = q2;   // eski ad, aynı yuvarlama
 
 let TUM = [], DURUM = '', ARA = '', KALEMLER = [], CARILER = [], BANKALAR = [], SIPARISLER = [];
@@ -2320,8 +2323,10 @@ function toplamlar() {
   const ara = Math.max(0, kalemToplam - iskonto);
   const tur = document.getElementById('fTur').value;
   const kdvOran = tur === 'yurt_ici' ? (parseFloat(document.getElementById('fKdv').value) || 0) : 0;
-  const kdv = ara * kdvOran / 100;
-  const genel = q2(ara + kdv);
+  /* YV1: ortak kapı — taban önce yuvarlanır. */
+  const _h = kdvHesapla(ara, kdvOran, false);
+  const kdv = _h.kdv;
+  const genel = _h.toplam;
   const avTip = document.getElementById('fAvTip').value;
   const avDeger = parseFloat(document.getElementById('fAv').value) || 0;
   const avans = q2(avTip === 'SAB' ? avDeger : genel * avDeger / 100);

@@ -201,9 +201,14 @@ def test_th1_th2_kismi_tahsilat_ve_iptal():
     adm = istemci('admin', 'ADMIN')
     with fa.app.app_context():
         kid = Kasa.query.filter_by(ad='USD Banka').first().id
+    # YK3: aynı tahsilat BİLEREK iki kez gönderiliyor (kısmi tahsilat
+    # birikimi sınanıyor). Yineleme kalkanı bunu normalde durdurur ve
+    # kullanıcıya "yine de kaydedilsin mi?" diye sorar; burada o onayı
+    # taklit ediyoruz.
     for _ in range(2):
         r = adm.post('/api/fatura/FT1/tahsilat',
-                     json={'tutar': 30000, 'kasa_id': kid, 'doviz': 'USD'}, headers=H)
+                     json={'tutar': 30000, 'kasa_id': kid, 'doviz': 'USD',
+                           'yineleme_onay': True}, headers=H)
         assert r.status_code == 200, r.get_data(as_text=True)   # TH1: 500 degil
 
     def durum():
@@ -1613,7 +1618,11 @@ def test_as1_depodaki_plaka_ikinci_kez_girilemez():
              'fiyat_birim': 'm2', 'fatura_durumu': 'faturasiz'}
     r1 = c.post('/api/stok/ekle', headers=H, json=dict(govde))
     assert r1.status_code == 200, r1.get_data(as_text=True)[:200]
-    r2 = c.post('/api/stok/ekle', headers=H, json=dict(govde))
+    # YK3: ucun KENDİ mükerrer denetimi sınanıyor; kalkan araya
+    # girmesin diye onay veriliyor. Üretimde sıra şu: kalkan sorar,
+    # kullanıcı onaylar, sonra ucun kendi mesajı çıkar.
+    r2 = c.post('/api/stok/ekle', headers=H,
+                json=dict(govde, yineleme_onay=True))
     assert r2.status_code == 400, \
         f'aynı slab ikinci kez kabul edildi: {r2.get_data(as_text=True)[:200]}'
     _y = r2.get_json()
@@ -4570,8 +4579,10 @@ def test_or6_maliyet_katkiya_aliniyor_ve_iki_kez_girmiyor():
     assert r2.status_code == 200 and r2.get_json()['eklenen'] == 1
 
     # AYNI maliyet ikinci kez giremez
+    # YK3: ucun kendi "zaten eklenmiş" denetimi sınanıyor (bkz. AS1).
     r3 = c.post(f'/api/ortaklik/{oid}/maliyet_katki', headers=H, json={
-        'taraf': 'biz', 'maliyet_idler': ['MAL-OR6-1']})
+        'taraf': 'biz', 'maliyet_idler': ['MAL-OR6-1'],
+        'yineleme_onay': True})
     assert r3.get_json()['eklenen'] == 0, r3.get_json()
     assert 'zaten' in ' '.join(r3.get_json()['atlanan'])
     with fa.app.app_context():
@@ -11096,3 +11107,2184 @@ def test_ga1_bekci_hs1_hatasini_yakaliyor():
                  encoding='utf-8').read()
     assert "doviz: document.getElementById('hsDoviz').value" in b
     assert 'kdv_dahil_mi:' in b
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  OY1 · OKUMA YETKİSİ — SAYFA KİLİTLİ, VERİSİ AÇIK
+#
+#  ÖLÇÜLEN SINIF: `_okuma_yetki_guard` yolu bir modüle bağlayamazsa
+#  "tanimlanmamis API — sessizce gec" diyor. `karlilik` ve `raporlar`
+#  birer yetki modülü; menü, sayfa kapısı ve raporlar.html bölüm
+#  bölüm hepsini gizliyor — ama o sayfaların API'leri haritada YOKTU.
+#
+#  Sonuç (ölçüldü): `/api/maliyet` 403 veren kullanıcı
+#  `/api/karlilik`ten kalem kalem maliyet_usd + kar_usd + marj
+#  okuyordu.
+# ═══════════════════════════════════════════════════════════════════
+
+def _oy1_kullanici(ad, yetkiler):
+    """Verilen yetkilerle kullanıcı kurar, istemcisini döner."""
+    from models import Kullanici
+    import json as _json
+    with fa.app.app_context():
+        k = Kullanici.query.filter_by(ad=ad).first()
+        if not k:
+            k = Kullanici(ad=ad, sifre='x', rol='SATIS',
+                          cari_kapsam='tumu', firma_kapsam='tumu')
+            db.session.add(k)
+        k.cari_kapsam = 'tumu'
+        k.firma_kapsam = 'tumu'
+        k.yetkiler = _json.dumps(yetkiler)
+        db.session.commit()
+    return istemci(ad, 'SATIS')
+
+
+@pytest.fixture(scope='module')
+def oy1_veri():
+    """Maliyet ve kâr TAŞIYAN bir satış + bir blok + bir cari bakiyesi.
+
+    Boş cevap "korunuyor" demek DEĞİL — ilk ölçümümde
+    `/api/rapor/yaslandirilmis_cari` boş döndü ve bir an korunuyor
+    sandım; satır yoktu, o kadar."""
+    from models import SatisKaydi, BlokStok, Cari, CariHareket
+    with fa.app.app_context():
+        if not BlokStok.query.filter_by(id='BOY1').first():
+            db.session.add(BlokStok(
+                id='BOY1', blok_no='OY-1', cins='OYTEST', boy=300,
+                yukseklik=150, en=120, hacim_m3=5.4, tonaj=15,
+                durum='Satildi', alis_fiyati=15000, doviz='USD'))
+        if not SatisKaydi.query.filter_by(id='SKOY1').first():
+            db.session.add(SatisKaydi(
+                id='SKOY1', stok_tip='blok', stok_id='BOY1', blok_no='OY-1',
+                cins='OYTEST', musteri='ACIK CARI', cari_id='C1',
+                doviz='USD', birim_fiyat=5000, miktar=1, tutar=5000,
+                tutar_usd=5000, maliyet_usd=1200, kar_usd=3800,
+                marj_yuzde=76.0, satis_tarihi=date(2026, 1, 5),
+                teslim_tarihi=date(2026, 1, 5)))
+        if not Cari.query.filter_by(id='COY1').first():
+            db.session.add(Cari(id='COY1', unvan='OY CARI',
+                                cari_tip='Müşteri', ulke='USA',
+                                para_birimi='USD', gorunurluk='acik'))
+            db.session.flush()
+            db.session.add(CariHareket(
+                id='HOY1', cari_id='COY1', islem_tip='Fatura (Satis)',
+                borc=77777, alacak=0, doviz='USD', kur_uygulanan=40,
+                borc_try=3111080, alacak_try=0,
+                baglanti_tip='fatura_kesim', baglanti_id='FOY1',
+                hareket_tarihi=date(2026, 1, 1)))
+        db.session.commit()
+    yield
+
+
+# Para alanı döndürdüğü hâlde yetki SORMAYAN uçların AÇIK listesi.
+# Her biri gerekçeli; listede olmayan yeni bir uç testi düşürür.
+OY1_MUAF = {
+    # Kullanıcının KENDİ bildirimleri.
+    '/api/bildirim',
+    # Kullanıcının KENDİ SMTP ayarı (şifre asla dönmez).
+    '/api/v2/eposta/ayar',
+    # Yalnızca unvan listesi; erişim süzgecinden geçiyor (AS1 notu).
+    '/api/musteri',
+    '/api/acente_liste',
+    # Konteyner listesi — para alanı yok, iki ekrandan yönetiliyor.
+    '/api/konteyner',
+    # ── 403 DEĞİL, KIRPARAK koruyan iki uç ──
+    # Bunlar 200 dönüyor ama gövdelerini bölüm bölüm süzüyorlar
+    # (`/api/ara` → `_gorebilir`, `/api/dashboard/ozet` → BG1).
+    # Kör muafiyet değil: ÖLÇÜLDÜ, tüm modülleri gizli kullanıcıya
+    # `/api/ara` 41 bayt (`gruplar: []`), `/api/dashboard/ozet` 33
+    # bayt (bütün bölümler düşmüş) dönüyor. Kırptıklarını
+    # test_oy1_kirpan_uclar_rakam_sizdirmiyor ayrıca sınıyor —
+    # yoksa bu liste gerçek bir deliği örtebilirdi.
+    '/api/ara',
+    '/api/dashboard/ozet',
+}
+
+
+def _oy1_para_donduren_get_uclari():
+    """flask_app.py'deki salt-GET /api/ uçlarından para alanı
+    döndürenler. (satır, fonksiyon, kural) döner."""
+    import ast as _ast
+    import io as _io
+    import re as _re
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    # Yol adına DEĞİL, gövdenin döndürdüğü alan adlarına bakılıyor.
+    # İlk ölçütüm yol adına bakıyordu ve `/api/blok/<no>/izleme`yi
+    # "nötr" saymıştı — oysa alis_fiyati + matrah + tüm maliyet
+    # kayıtlarını döndürüyor. Yol adı neyin döndüğünü söylemiyor.
+    para = _re.compile(r'alis_fiyat|maliyet|kar_usd|kar_try|marj|matrah|'
+                       r'bakiye|borc|alacak|komisyon|kdv_tutar|'
+                       r'toplam_usd|tutar_usd|satis_usd', _re.I)
+    cikti = []
+    for fn in _ast.walk(_ast.parse(kaynak)):
+        if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        kurallar, yontemler = [], []
+        for dec in fn.decorator_list:
+            if (isinstance(dec, _ast.Call)
+                    and isinstance(dec.func, _ast.Attribute)
+                    and dec.func.attr == 'route' and dec.args
+                    and isinstance(dec.args[0], _ast.Constant)):
+                kurallar.append(dec.args[0].value)
+                for kw in dec.keywords:
+                    if kw.arg == 'methods':
+                        yontemler += [e.value
+                                      for e in getattr(kw.value, 'elts', [])
+                                      if isinstance(e, _ast.Constant)]
+        if not kurallar:
+            continue
+        kural = kurallar[0]
+        if not kural.startswith('/api/') or kural.startswith('/api/diag/'):
+            continue
+        if (set(yontemler) or {'GET'}) - {'GET'}:
+            continue
+        if not para.search(_ast.unparse(fn)):
+            continue
+        cikti.append((fn.lineno, fn.name, kural))
+    return cikti
+
+
+def test_oy1_para_donduren_her_get_ucu_yetki_soruyor(oy1_veri):
+    """ÇİVİ: para döndüren hiçbir salt-GET /api/ ucu, tüm modülleri
+    gizli olan bir kullanıcıya 200 vermemeli.
+
+    Bu test haritanın KOPYASINI değil GERÇEK KAPIYI sınıyor: istek
+    atılıyor. Yeni bir rapor/kârlılık ucu eklenip haritaya
+    yazılmazsa burası düşer — sınıfın geri gelmesini bu engelliyor.
+    """
+    import re as _re
+    c = _oy1_kullanici('oy1hicbiri', {})          # her modül gizli
+    sizan = []
+    for satir, fn, kural in _oy1_para_donduren_get_uclari():
+        if kural in OY1_MUAF:
+            continue
+        yol = _re.sub(r'<path:[^>]+>', 'x/y', kural)
+        yol = _re.sub(r'<int:[^>]+>', '1', yol)
+        yol = _re.sub(r'<[^>]+>', 'SKOY1', yol)
+        r = c.get(yol, headers=H)
+        if r.status_code == 200:
+            sizan.append(f'{kural}  (satır {satir}, {fn})')
+    assert not sizan, (
+        'tüm modülleri gizli kullanıcı para alanı döndüren bu uçları '
+        'okuyabiliyor:\n  ' + '\n  '.join(sizan))
+
+
+def test_oy1_karlilik_uclari_karlilik_yetkisi_istiyor(oy1_veri):
+    """`/api/maliyet` 403 verirken `/api/karlilik` kalem kalem
+    maliyet + kâr + marj döndürüyordu."""
+    c = _oy1_kullanici('oy1satisci',
+                       {'satislar': 'okuma', 'siparis': 'okuma'})
+    # Kontrol noktası: aynı modülü gövdesinde soran kardeş uç
+    assert c.get('/api/ortaklik', headers=H).status_code == 403
+    for yol in ('/api/karlilik', '/api/karlilik/musteri_ozet',
+                '/api/karlilik/cins_ozet', '/api/karlilik/SKOY1/dokum'):
+        r = c.get(yol, headers=H)
+        assert r.status_code == 403, (
+            f'{yol} → {r.status_code}; gövde: '
+            f'{r.get_data(as_text=True)[:200]}')
+
+
+def test_oy1_karlilik_yetkisi_varsa_okunuyor(oy1_veri):
+    """Kapıyı kaparken anahtarı da kırmadığımızın kanıtı.
+
+    DİKKAT: bu test TABANDA DA GEÇER (taban herkese 200 veriyor).
+    Hata ölçen bir test değil, GERİLEME çivisi — işi yetkiyi fazla
+    kısmadığımı göstermek. Hatayı ölçen testler tabanda düşüyor."""
+    c = _oy1_kullanici('oy1karli', {'karlilik': 'okuma'})
+    r = c.get('/api/karlilik', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    assert 'kar_usd' in r.get_data(as_text=True)
+
+
+def test_oy1_rapor_uclari_kapali(oy1_veri):
+    """Maliyet analizi, stok maliyeti ve satış performansı
+    `raporlar` yetkisi olmayana kapalı."""
+    c = _oy1_kullanici('oy1raporsuz',
+                       {'satislar': 'okuma', 'siparis': 'okuma'})
+    for yol in ('/api/rapor/maliyet_analiz', '/api/rapor/stok_maliyet',
+                '/api/rapor/satis_performans', '/api/rapor/stok_durum',
+                '/api/rapor/yaslandirilmis_cari', '/api/rapor/donusum',
+                '/api/rapor/konteyner_takip'):
+        r = c.get(yol, headers=H)
+        assert r.status_code == 403, f'{yol} → {r.status_code}'
+
+
+def test_oy1_coklu_harita_capraz_ekranlari_kirmiyor(oy1_veri):
+    """EN ÖNEMLİ KORUMA: rapor uçları başka ekranlardan da okunuyor
+    ve ekran bölümü İKİ modülün VEYA'sı ile açılıyor.
+
+    `/api/rapor` önekini tek bir modüle bağlasam `raporlar` yetkisi
+    olmayan ama `stok` yetkisi olan birinin STOK ekranı ve
+    dashboard'u kırılırdı — YK1'in `/api/cek/ozet` tuzağının aynısı.
+    raporlar.html'in kendi `gorunur()` kuralı burada şartname."""
+    # stok yetkisi YETER (stok.html + dashboard.html çapraz okuyor)
+    c = _oy1_kullanici('oy1stokcu', {'stok': 'okuma'})
+    for yol in ('/api/rapor/stok_durum', '/api/rapor/stok_maliyet'):
+        assert c.get(yol, headers=H).status_code == 200, yol
+    # ama kârlılık ve cari raporları ona kapalı
+    for yol in ('/api/rapor/satis_performans',
+                '/api/rapor/yaslandirilmis_cari', '/api/karlilik'):
+        assert c.get(yol, headers=H).status_code == 403, yol
+
+    # cari yetkisi YETER (cari.html + dashboard.html çapraz okuyor)
+    c2 = _oy1_kullanici('oy1carici', {'cari': 'okuma'})
+    r = c2.get('/api/rapor/yaslandirilmis_cari', headers=H)
+    assert r.status_code == 200, r.get_data(as_text=True)[:200]
+    assert 'COY1' in r.get_data(as_text=True), 'veri gelmiyor, test ölçmez'
+    assert c2.get('/api/rapor/stok_maliyet',
+                  headers=H).status_code == 403
+
+    # maliyet yetkisi maliyet analizine YETER
+    c3 = _oy1_kullanici('oy1maliyetci', {'maliyet': 'okuma'})
+    assert c3.get('/api/rapor/maliyet_analiz',
+                  headers=H).status_code == 200
+    # sevkiyat yetkisi konteyner takibine YETER
+    c4 = _oy1_kullanici('oy1sevkci', {'sevkiyat': 'okuma'})
+    assert c4.get('/api/rapor/konteyner_takip',
+                  headers=H).status_code == 200
+    # raporlar yetkisi HEPSİNE yeter
+    c5 = _oy1_kullanici('oy1raporcu', {'raporlar': 'okuma'})
+    for yol in ('/api/rapor/stok_durum', '/api/rapor/stok_maliyet',
+                '/api/rapor/yaslandirilmis_cari',
+                '/api/rapor/maliyet_analiz', '/api/rapor/satis_performans',
+                '/api/rapor/konteyner_takip'):
+        assert c5.get(yol, headers=H).status_code == 200, yol
+    # `/api/rapor/donusum` İSTİSNA: gövdesinde `proforma` yetkisi
+    # arıyor (teklif dönüşüm oranı proforma verisi). Sunucu ekranın
+    # kuralından SIKI; yön güvenli olduğu için yetkiyi gevşetmedim,
+    # ekranın o bölümünü de `proforma`ya bağladım ki bölüm hata
+    # vermek yerine gizlensin.
+    assert c5.get('/api/rapor/donusum', headers=H).status_code == 403
+    c6 = _oy1_kullanici('oy1proformaci',
+                        {'raporlar': 'okuma', 'proforma': 'okuma'})
+    assert c6.get('/api/rapor/donusum', headers=H).status_code == 200
+
+
+def test_oy1_kirpan_uclar_rakam_sizdirmiyor(oy1_veri):
+    """TABANDA DA GEÇER — bu iki uç zaten kırpıyordu; işi muaf
+    listesinin gerçek bir deliği örtmediğini sürekli sınamak.
+
+    OY1_MUAF'taki iki uç 403 vermiyor, KIRPIYOR. Muafiyetin
+    gerçek bir deliği örtmediğini burada sınıyoruz: tüm modülleri
+    gizli kullanıcıya rakam gelmemeli (BG1'in ilkesi)."""
+    c = _oy1_kullanici('oy1kirpma', {})
+    r = c.get('/api/ara?q=ACIK', headers=H)
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d.get('gruplar') == [] and d.get('toplam') == 0, d
+
+    r2 = c.get('/api/dashboard/ozet', headers=H)
+    assert r2.status_code == 200
+    d2 = r2.get_json()
+    for alan in ('ciro', 'alacak', 'borc', 'stok', 'kasa', 'acik_siparis'):
+        assert alan not in d2, f'{alan} yetkisiz kullanıcıya geliyor: {d2}'
+
+
+def test_oy1_blok_izleme_stok_yetkisi_istiyor(oy1_veri):
+    """`/api/blok/<no>/izleme`, `/api/iz`in başka adla ikizi:
+    alis_fiyati + matrah + bloğun tüm maliyet kayıtları. Haritada
+    `/api/iz` 'stok'a bağlıydı, bu bağlı değildi."""
+    c = _oy1_kullanici('oy1stoksuz', {'satislar': 'okuma'})
+    assert c.get('/api/iz/blok/BOY1', headers=H).status_code == 403
+    assert c.get('/api/blok/OY-1/izleme', headers=H).status_code == 403
+    c2 = _oy1_kullanici('oy1stoklu', {'stok': 'okuma'})
+    assert c2.get('/api/blok/OY-1/izleme', headers=H).status_code == 200
+
+
+def test_oy1_cek_ve_sabit_gider_kasa_yetkisi_istiyor(oy1_veri):
+    """KULLANICI KARARI: YK1 bu uçları okumada bilerek açık
+    bırakmıştı (Bugün ekranı `/api/cek/ozet`i çapraz okuyor).
+    Kullanıcı o kırılmayı kabul etti: özet dahil hepsi `kasa`
+    yetkisi istiyor."""
+    c = _oy1_kullanici('oy1kasasiz', {'satislar': 'okuma'})
+    for yol in ('/api/cek', '/api/cek/ozet', '/api/cek/X1',
+                '/api/sabit_gider', '/api/nakit_plan'):
+        r = c.get(yol, headers=H)
+        assert r.status_code == 403, f'{yol} → {r.status_code}'
+    c2 = _oy1_kullanici('oy1kasali', {'kasa': 'okuma'})
+    for yol in ('/api/cek', '/api/cek/ozet', '/api/sabit_gider',
+                '/api/nakit_plan'):
+        assert c2.get(yol, headers=H).status_code == 200, yol
+
+
+def test_oy1_cek_yazma_davranisi_degismedi(oy1_veri):
+    """TABANDA DA GEÇER — gerileme çivisi, hata ölçümü değil.
+
+    Üç önek YAZMA_EK_MAP'ten URL_MODUL_MAP'e taşındı. Yazma
+    kapısı URL_MODUL_MAP'e daha önce bakıyor ve modül iki haritada
+    da 'kasa' — yazma davranışı AYNI kalmalı."""
+    # kasa okuma yetkisi YAZMAYA yetmez (YK1'in ölçtüğü hata)
+    c = _oy1_kullanici('oy1kasaokur', {'kasa': 'okuma'})
+    r = c.post('/api/cek', json={'tutar': 1}, headers=H)
+    assert r.status_code == 403, r.get_data(as_text=True)[:200]
+    assert (r.get_json() or {}).get('error') == 'yetki_yok'
+    r2 = c.post('/api/sabit_gider', json={'ad': 'x'}, headers=H)
+    assert r2.status_code == 403
+
+
+def test_oy1_dashboard_satis_istatistik_yetki_soruyor(oy1_veri):
+    """`/api/dashboard` öneki OKUMA_MUAF_PATHS'te — okuma kapısı o
+    yolu HİÇ denetlemiyor. Kardeşleri bunu gövdelerinde yapıyor
+    (`/ozet` 4, `/detay` 2 yetki sorusu); bu uç SIFIR soruyordu ve
+    kâr_usd + en kârlı 5 müşteri + en kârlı 5 cins + ortalama marjı
+    oturum açan herkese veriyordu."""
+    c = _oy1_kullanici('oy1dashsuz',
+                       {'siparis': 'okuma', 'dashboard': 'okuma'})
+    r = c.get('/api/dashboard/satis_istatistik', headers=H)
+    assert r.status_code == 403, r.get_data(as_text=True)[:200]
+    # Kardeş uçlar bozulmadı
+    assert c.get('/api/dashboard/ozet', headers=H).status_code == 200
+    c2 = _oy1_kullanici('oy1dashli',
+                        {'karlilik': 'okuma', 'dashboard': 'okuma'})
+    assert c2.get('/api/dashboard/satis_istatistik',
+                  headers=H).status_code == 200
+
+
+def test_oy1_civi_kendi_kacirdigi_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — ölçüt test dosyasında, yamada değil.
+    İşi çivinin kendi kör noktasını sürekli sınamak.
+
+    Çivi, OY1'de ölçtüğümüz delikleri GERÇEKTEN yakalıyor mu?
+
+    Ölçütüm bir kez yol adına bakıyordu ve `/api/blok/<no>/izleme`yi
+    kaçırdı. Yeşil bir bekçiye güvenmemek için ölçütü HER İKİ hâlde
+    sınıyorum."""
+    uclar = {k: (s, f) for s, f, k in _oy1_para_donduren_get_uclari()}
+    # Ölçülen deliklerin hepsi çivinin kapsamında OLMALI
+    for kural in ('/api/karlilik', '/api/karlilik/<satis_id>/dokum',
+                  '/api/rapor/maliyet_analiz', '/api/rapor/stok_maliyet',
+                  '/api/rapor/yaslandirilmis_cari',
+                  '/api/blok/<blok_no>/izleme'):
+        assert kural in uclar, (
+            f'{kural} çivinin kapsamında değil — ölçüt onu kaçırıyor')
+    # Ve muaf listesi, kapsamdaki bir ucu sessizce yutmuyor olmalı
+    for kural in OY1_MUAF:
+        assert kural not in ('/api/karlilik', '/api/rapor/stok_maliyet')
+
+
+def test_oy1_dashboard_ciro_kari_karlilik_istiyor(oy1_veri):
+    """TARAYICININ BULDUĞU, TESTİMİN KAÇIRDIĞI SIZINTI.
+
+    Kâr ve marj ciroyla AYNI PAKETTEYDİ ve `satislar` yetkisi üçünü
+    birlikte açıyordu: `satislar=okuma, karlilik=gizli` satışçının
+    dashboard'unda "kâr 3.800 $ · marj %76" yazıyordu — aynı
+    kullanıcı `/api/karlilik`ten 403 alırken.
+
+    `/api/dashboard/ozet`i TÜM MODÜLLERİ GİZLİ kullanıcıyla ölçüp
+    (33 bayt) muaf saymıştım; `satislar` açıkken bölüm açılıyor ve
+    kârı beraberinde getiriyor. Muafiyeti o yüzden zayıf kurmuşum.
+
+    Kullanıcı kararı: ciro `satislar` ile gelir, kâr/marj YALNIZCA
+    `karlilik` ile."""
+    c = _oy1_kullanici('oy1cirocu',
+                       {'satislar': 'okuma', 'dashboard': 'okuma'})
+    d = c.get('/api/dashboard/ozet', headers=H).get_json()
+    assert 'ciro' in d, f'ciro gelmiyor, test ölçmez: {d}'
+    assert 'yillik' in d['ciro'], d['ciro']
+    # Anahtar HİÇ gelmemeli — 0 da gelmemeli (ekran "%0 marj" yazardı)
+    for alan in ('yillik_kar', 'aylik_kar', 'yillik_marj'):
+        assert alan not in d['ciro'], (
+            f'{alan} karlilik yetkisi olmayana sızıyor: {d["ciro"]}')
+
+    c2 = _oy1_kullanici('oy1karciro',
+                        {'karlilik': 'okuma', 'dashboard': 'okuma'})
+    d2 = c2.get('/api/dashboard/ozet', headers=H).get_json()
+    for alan in ('yillik_kar', 'aylik_kar', 'yillik_marj'):
+        assert alan in d2['ciro'], (
+            f'{alan} karlilik yetkilisine de gelmiyor — kapıyı kaparken '
+            f'anahtarı kırmışım: {d2["ciro"]}')
+    # KESİN RAKAM İDDİA ETMİYORUM: ilk hâlimde `== 3800.0` yazmıştım
+    # ve tam takımda düştü (başka testler satış ekliyor, yıllık kâr
+    # 345.602 oldu). İzole koşuda geçip takımda düşen bir test,
+    # ölçtüğü şeyi yanlış seçmiş demektir. Ölçülen şey alanın
+    # GELMESİ ve gerçek bir sayı olması.
+    assert isinstance(d2['ciro']['yillik_kar'], (int, float)), d2['ciro']
+    assert d2['ciro']['yillik_kar'] > 0, d2['ciro']
+
+
+def test_oy1_dashboard_ekrani_olmayan_kari_yazmiyor():
+    """Alan gelmediğinde ekran "kâr 0,00 $" YAZMAMALI.
+
+    `para(undefined)` sıfır üretir ve kart satışçıya şirketin sıfır
+    kâr ettiğini söylerdi — yetki kapatmak yanlış bilgi vermeye
+    dönüşmüş olurdu. `_ipPara` dersi: sunucuyu düzeltmek yetmiyor,
+    ekranın alan yokken ne yazdığına bakmak gerekiyor."""
+    import io as _io
+    d = _io.open(os.path.join(KOK, 'templates', 'dashboard.html'),
+                 encoding='utf-8').read()
+    # Koşulsuz yazım KALMAMIŞ olmalı
+    assert '`${c.yil} · kâr ${para(c.yillik_kar)}' not in d, (
+        'yıllık kâr koşulsuz yazılıyor')
+    assert '`bu ay · kâr ${para(c.aylik_kar)}`);' not in d, (
+        'aylık kâr koşulsuz yazılıyor')
+    # Ve alan denetimi var olmalı
+    assert 'c.yillik_kar != null' in d
+    assert 'c.aylik_kar != null' in d
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  KC1 · DÖVİZ ÇEVRİMİ TEK KAPIDAN
+#
+#  SINIF: aynı hesap iki ayrı yerde. Ortak kapı `_usd_cevrim` (F15)
+#  dururken sekiz yerde elle yazılmış çevrim vardı; ikisi zaten
+#  kapıya bağlanmıştı ("F15: TCMB çapraz kuru"), altısı unutulmuştu.
+#
+#  Kopyalar kapıdan ÜÇ noktada ayrışıyordu — hepsi ölçüldü:
+#    · USD/EUR/TRY dışındaki döviz AYNEN dönüyordu
+#      (1.000 GBP = 1.000 USD) ya da TRY sanılıp bölünüyordu
+#    · kur arşivi boşsa 0 dönüyordu — UN1'in notu: "sıfır yazmak
+#      maliyeti yok ederdi"
+#    · her zaman EN SON kuru kullanıyordu, belgenin tarihini değil
+#
+#  Ayrıca `api_rapor_yaslandirilmis_cari` içinde ortak kapıyla
+#  BİREBİR AYNI ADI taşıyan yerel bir `_try_karsilik` vardı;
+#  USD/EUR dışındaki her döviz için çarpanı 1'di.
+# ═══════════════════════════════════════════════════════════════════
+
+def _kc1_kapi(ad):
+    """`create_app` içinde yuvalı yardımcıyı kapanıştan çeker.
+
+    İLK HÂLİM yalnız view fonksiyonlarının DOĞRUDAN serbest
+    değişkenlerine bakıyordu ve `_stok_alim_usd`i bulamadı — onu
+    hiçbir view doğrudan çağırmıyor, araya başka bir yardımcı
+    giriyor. Artık bir kat derine de bakıyor."""
+    gorulen, sira = set(), []
+    for f in fa.app.view_functions.values():
+        sira.append(f)
+    i = 0
+    while i < len(sira):
+        f = sira[i]
+        i += 1
+        kod = getattr(f, '__code__', None)
+        kap = getattr(f, '__closure__', None)
+        if not kod or not kap:
+            continue
+        if id(f) in gorulen:
+            continue
+        gorulen.add(id(f))
+        if ad in kod.co_freevars:
+            return kap[kod.co_freevars.index(ad)].cell_contents
+        for h in kap:
+            try:
+                v = h.cell_contents
+            except ValueError:
+                continue
+            if callable(v) and getattr(v, '__closure__', None):
+                sira.append(v)
+    raise AssertionError(f'{ad} bulunamadı')
+
+
+# KC1 testlerinin KENDİ GÜNÜ. Küresel kur durumuna yaslanmak
+# kırılgan: başka testler bugüne ve İLERİ tarihlere kur yazıyor,
+# `_kur_getir` (tarih süzgeci yok) onları görüyor. Ölçüldü — dört
+# testim izole koşuda geçip tam takımda düştü. Bu gün hiçbir testte
+# geçmiyor; çevrimlere tarih AÇIKÇA veriliyor.
+KC1_GUN = date(2026, 2, 11)
+KC1_KURLAR = {'USD': 48.0, 'EUR': 56.0, 'GBP': 62.0}
+
+
+@pytest.fixture(scope='module')
+def kc1_kur():
+    """KC1_GUN'de USD 48 · EUR 56 · GBP 62."""
+    from models import DovizKur
+    with fa.app.app_context():
+        for dv, k in KC1_KURLAR.items():
+            v = DovizKur.query.filter_by(doviz=dv, tarih=KC1_GUN).first()
+            if v:
+                v.alis, v.satis, v.efektif = k, k + 0.2, k
+            else:
+                db.session.add(DovizKur(doviz=dv, tarih=KC1_GUN, alis=k,
+                                        satis=k + 0.2, efektif=k))
+        # GBP'nin BUGÜN de bir kuru olmalı: tarihsiz çağrılar
+        # (`_stok_alim_usd` tarih almıyor) bugüne bakıyor. Diğer
+        # testler USD/EUR'u değiştirebilir — o yüzden beklenen değer
+        # test içinde KAPIYA SORULARAK hesaplanıyor, sabit yazılmıyor.
+        if not DovizKur.query.filter_by(doviz='GBP',
+                                        tarih=date.today()).first():
+            db.session.add(DovizKur(doviz='GBP', tarih=date.today(),
+                                    alis=KC1_KURLAR['GBP'],
+                                    satis=KC1_KURLAR['GBP'] + 0.2,
+                                    efektif=KC1_KURLAR['GBP']))
+        db.session.commit()
+    yield
+
+
+def test_kc1_stok_alim_bedeli_bilinmeyen_dovizi_usd_sanmiyor(kc1_kur):
+    """1.000 GBP'lik stok, 1.000 USD DEĞİLDİR.
+
+    İLK HÂLİMDE `_usd_cevrim`i DOĞRUDAN çağırıyordum ve test
+    TABANDA DA GEÇİYORDU — kapı zaten doğruydu, hata kopyalardaydı.
+    DV1'in dersi: tabanda düşmeyen test bir şey ölçmez. Artık
+    kopyanın bulunduğu ÇAĞRI YERİ ölçülüyor: `_stok_alim_usd`,
+    elle yazılı hâlinde `return ham` ile bilinmeyen dövizi aynen
+    geçiriyordu."""
+    from models import BlokStok
+    with fa.app.app_context():
+        alim = _kc1_kapi('_stok_alim_usd')
+        b = BlokStok.query.filter_by(id='B-KC1G').first()
+        if not b:
+            b = BlokStok(id='B-KC1G', blok_no='KC1-G', cins='KCTEST',
+                         boy=300, yukseklik=150, en=120, hacim_m3=5.4,
+                         tonaj=15, durum='Serbest', doviz='GBP',
+                         alis_fiyati=1000, alis_fiyat_birim='ton',
+                         matrah=1000)
+            db.session.add(b)
+            db.session.commit()
+        usd = alim(b)
+        # Beklenen değer KAPIYA SORULUYOR, sabit yazılmıyor: başka
+        # testler bugünün USD/EUR kurlarını değiştiriyor ve sabit
+        # rakam yazdığımda bu test izole koşuda geçip tam takımda
+        # düştü. Ölçülen şey ÇEVRİLMİŞ OLMASI.
+        getir, yakin = _kc1_kapi('_kur_getir'), _kc1_kapi('_en_yakin_kur')
+        _g = float(getir('GBP') or 0) or float(yakin('GBP') or 0)
+        _u = float(getir('USD') or 0) or float(yakin('USD') or 0)
+        beklenen = 1000 * _g / _u
+        assert abs(usd - beklenen) < 5, (
+            f'GBP stok {usd:,.2f} USD değerlendi — {beklenen:,.2f} olmalı')
+        assert abs(usd - 1000) > 50, (
+            f'çevrilmemiş: {usd} — GBP hâlâ USD sanılıyor')
+
+
+def test_kc1_kur_yoksa_alim_bedeli_sifirlanmiyor(kc1_kur):
+    """TABANDA DA GEÇER — gerileme çivisi, hata ölçümü değil.
+
+    Kur arşivinde HİÇ olmayan bir döviz, bedeli SIFIRLAMAMALI.
+    UN1'in notu: "sıfır yazmak maliyeti yok ederdi."
+
+    DÜRÜSTÇESİ: elle yazılı kopya SIFIRLAMAYI yalnız EUR/TRY için
+    yapıyordu (`return 0.0`); bilinmeyen dövizde o da tutarı
+    koruyordu (`return ham`). Yani bu senaryoda taban ile yama aynı
+    cevabı veriyor. Sıfırlama dalını ayırt etmek için arşivde HİÇ
+    USD kuru olmaması gerekirdi — paylaşılan test veritabanında
+    bunu izole edemiyorum. Test yine de duruyor: kapının tutarı
+    koruma sözünü çağrı yerinden çiviliyor."""
+    from models import BlokStok
+    with fa.app.app_context():
+        alim = _kc1_kapi('_stok_alim_usd')
+        b = BlokStok.query.filter_by(id='B-KC1Z').first()
+        if not b:
+            b = BlokStok(id='B-KC1Z', blok_no='KC1-Z', cins='KCTEST',
+                         boy=300, yukseklik=150, en=120, hacim_m3=5.4,
+                         tonaj=15, durum='Serbest', doviz='ZZZ',
+                         alis_fiyati=1000, alis_fiyat_birim='ton',
+                         matrah=1000)
+            db.session.add(b)
+            db.session.commit()
+        usd = alim(b)
+        assert abs(usd - 1000) < 0.01, (
+            f'kuru olmayan döviz {usd} oldu — tutar korunmalıydı')
+
+
+def test_kc1_komsu_kur_aramalari_ayni_alani_tercih_ediyor(kc1_kur):
+    """`_kur_getir` ve `_en_yakin_kur` AYNI kur alanını seçmeli.
+
+    Biri `alis or efektif or satis`, öteki `satis or alis` diyordu:
+    aynı çevrim hangi yoldan geçtiğine göre farklı kur veriyordu.
+    Ölçüldü — 1.000 EUR bir yoldan 56.000, öbüründen 56.200 TL
+    (%0,4). Kullanıcı kararı: ALIŞ kuru esas.
+
+    TARİH AÇIKÇA VERİLİYOR: tarihsiz çağrıda ikisi zaten farklı
+    kümeye bakıyor (`_kur_getir` tarih süzmez, yani İLERİ tarihli
+    bir satırı da alır; `_en_yakin_kur` `<= bugün` süzer). O ayrı
+    bir konu — burada ölçülen ALAN seçimi."""
+    with fa.app.app_context():
+        getir = _kc1_kapi('_kur_getir')
+        yakin = _kc1_kapi('_en_yakin_kur')
+        for dv, k in KC1_KURLAR.items():
+            a = float(getir(dv, KC1_GUN) or 0)
+            b = float(yakin(dv, KC1_GUN) or 0)
+            assert abs(a - b) < 0.001, (
+                f'{dv}: _kur_getir {a} · _en_yakin_kur {b} — '
+                f'iki arama farklı alan seçiyor')
+            assert abs(a - k) < 0.001, (
+                f'{dv}: {a} geldi, alış kuru {k} olmalıydı')
+
+
+def test_kc1_yaslandirma_gbp_dogru_degerliyor(kc1_kur):
+    """ÖLÇÜLEN HATA: 1.000 sterlinlik alacak raporda 1.000 TL.
+
+    `api_rapor_yaslandirilmis_cari` içinde ortak kapıyla aynı adı
+    taşıyan yerel bir `_try_karsilik` vardı; USD/EUR dışındaki her
+    döviz için çarpanı 1'di — sterlin zaten TL sayılıyordu.
+
+    Hareketler KC1_GUN tarihli: rapor artık hareketin KENDİ
+    tarihindeki kuru kullanıyor, o da bu testin kurları."""
+    from models import Cari, CariHareket
+    with fa.app.app_context():
+        for kod, dv in (('KC1U', 'USD'), ('KC1G', 'GBP')):
+            if Cari.query.filter_by(id=f'C-{kod}').first():
+                continue
+            db.session.add(Cari(id=f'C-{kod}', unvan=f'{kod} MUSTERI',
+                                cari_tip='Müşteri', para_birimi=dv,
+                                gorunurluk='acik'))
+            db.session.flush()
+            db.session.add(CariHareket(
+                id=f'H-{kod}', cari_id=f'C-{kod}',
+                islem_tip='Fatura (Satis)', borc=1000, alacak=0,
+                doviz=dv, kur_uygulanan=None, borc_try=0, alacak_try=0,
+                baglanti_tip='fatura_kesim', baglanti_id=f'F-{kod}',
+                hareket_tarihi=KC1_GUN))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/rapor/yaslandirilmis_cari', headers=H).get_json()
+    bul = {x['cari_id']: x for x in d.get('cariler', [])}
+    assert 'C-KC1G' in bul, 'GBP cari raporda yok, test ölçmez'
+    gbp = float(bul['C-KC1G']['toplam_borc_try'])
+    usd = float(bul['C-KC1U']['toplam_borc_try'])
+    assert abs(usd - 1000 * KC1_KURLAR['USD']) < 100, usd
+    assert abs(gbp - 1000 * KC1_KURLAR['GBP']) < 200, (
+        f'1.000 GBP alacak {gbp:,.0f} TL değerlenmiş — '
+        f'{1000 * KC1_KURLAR["GBP"]:,.0f} olmalı')
+
+
+def test_kc1_hareket_kendi_gununun_kuruyla_degerleniyor(kc1_kur):
+    """Aynı tutar, FARKLI tarihli iki hareket, farklı TL değeri.
+
+    İLK HÂLİMDE `_usd_cevrim`i doğrudan çağırıyordum; tabanda da
+    geçiyordu çünkü kapı zaten tarih alabiliyordu. Ölçülmesi gereken
+    ÇAĞRI YERİ: yaşlandırma raporu hareketin kurunu nereden
+    alıyor. Elle yazılı kopya her zaman EN SON kuru kullanıyordu."""
+    from models import Cari, CariHareket, DovizKur
+    from datetime import timedelta as _td
+    onceki = KC1_GUN - _td(days=30)
+    with fa.app.app_context():
+        for dv, k in (('USD', 40.0),):
+            v = DovizKur.query.filter_by(doviz=dv, tarih=onceki).first()
+            if v:
+                v.alis, v.satis, v.efektif = k, k, k
+            else:
+                db.session.add(DovizKur(doviz=dv, tarih=onceki, alis=k,
+                                        satis=k, efektif=k))
+        if not Cari.query.filter_by(id='C-KC1T').first():
+            db.session.add(Cari(id='C-KC1T', unvan='KC1T MUSTERI',
+                                cari_tip='Müşteri', para_birimi='USD',
+                                gorunurluk='acik'))
+            db.session.flush()
+            # AYNI tutar, iki FARKLI gün
+            for ek, gun in (('A', onceki), ('B', KC1_GUN)):
+                db.session.add(CariHareket(
+                    id=f'H-KC1T{ek}', cari_id='C-KC1T',
+                    islem_tip='Fatura (Satis)', borc=1000, alacak=0,
+                    doviz='USD', kur_uygulanan=None, borc_try=0,
+                    alacak_try=0, baglanti_tip='fatura_kesim',
+                    baglanti_id=f'F-KC1T{ek}', hareket_tarihi=gun))
+        db.session.commit()
+    c = istemci('admin', 'ADMIN')
+    d = c.get('/api/rapor/yaslandirilmis_cari', headers=H).get_json()
+    bul = {x['cari_id']: x for x in d.get('cariler', [])}
+    assert 'C-KC1T' in bul, 'cari raporda yok, test ölçmez'
+    toplam = float(bul['C-KC1T']['toplam_borc_try'])
+    # 1.000 × 40  +  1.000 × 48  =  88.000
+    assert abs(toplam - 88000) < 200, (
+        f'{toplam:,.0f} TL — her hareket KENDİ gününün kuruyla '
+        f'değerlenseydi 88.000 olurdu (40 + 48). Hepsi en son kurla '
+        f'değerlenseydi 96.000 çıkardı.')
+
+
+def test_kc1_kur_tablosunu_kendi_sorgulayan_kod_yok():
+    """ÇİVİ: `DovizKur.query` yalnızca KAPILARDA ve kur yönetim
+    uçlarında olabilir.
+
+    İLK ÖLÇÜTÜM ARİTMETİĞİ KOVALIYORDU (`tutar * kur_eur / kur_usd`)
+    ve iki kusuru vardı — ikisi de ölçüldü:
+      · Gölge `_try_karsilik`'in biçimini KAÇIRIYORDU; orada kur
+        adlarının yanında işleç yok, koşullu bir seçim var:
+            k = kur or (kur_usd if d=='USD' else kur_eur ... else 1)
+      · Yuvalı `def`'ler yüzünden bulguyu YANLIŞ fonksiyona
+        yazıyordu ve meşru USD→TRY çarpımlarını da işaretliyordu.
+
+    Bu ölçüt daha keskin: kur tablosunu KENDİ sorgulayan kod,
+    birazdan elle çevirecek demektir. Nitekim ölçüt değişince iki
+    çevrim yeri daha çıktı (`_stok_alim_usd`,
+    `_devreden_kdv_kalemi_olustur`) — aritmetik ölçütü onları da
+    kaçırmıştı.
+
+    Muaflar, her biri sebebiyle:
+      · `_kur_getir` / `_en_yakin_kur` — arama kapılarının kendisi
+      · `guncel_kurlari_cek` / `api_doviz_kur` /
+        `api_doviz_kur_guncelle` — kur YÖNETİMİ uçları; işleri
+        zaten kur tablosunu okuyup yazmak
+    """
+    import ast as _ast
+    import io as _io
+    MUAF = {'_kur_getir', '_en_yakin_kur', 'guncel_kurlari_cek',
+            'api_doviz_kur', 'api_doviz_kur_guncelle'}
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    bulgular = []
+
+    def gez(dugum, yol):
+        for c in _ast.iter_child_nodes(dugum):
+            y = (yol + [c.name]
+                 if isinstance(c, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                 else yol)
+            if (isinstance(c, _ast.Attribute) and c.attr == 'query'
+                    and isinstance(c.value, _ast.Name)
+                    and c.value.id == 'DovizKur'):
+                if not (set(y) & MUAF):
+                    bulgular.append(
+                        f'{" › ".join(y[-2:]) or "<modül>"} '
+                        f'(satır {c.lineno})')
+            gez(c, y)
+
+    gez(_ast.parse(kaynak), [])
+    assert not bulgular, (
+        'kur tablosunu kendi sorgulayan kod — çevrim ortak kapıdan '
+        'geçmeli (`_usd_cevrim` / `_try_karsilik`):\n  '
+        + '\n  '.join(sorted(set(bulgular))))
+
+
+def test_kc1_civi_eski_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — çivinin kendi kör noktasını sınar.
+
+    Çivi, KC1 öncesi yazılmış kodu GERÇEKTEN yakalıyor mu? Yeşil
+    bir bekçiye güvenmemek için, kaldırdığımız yerlerin hepsinin
+    ortak işaretini (kendi `DovizKur` sorgusu) doğrudan deniyoruz —
+    ARİTMETİK ölçütünün kaçırdığı gölge `_try_karsilik` dahil."""
+    import ast as _ast
+    ESKI_KOD = '''
+def _ornek():
+    def _try_karsilik(tutar, doviz, kur):
+        usd_kur = DovizKur.query.filter_by(doviz='USD').first()
+        kur_usd = (usd_kur.efektif if usd_kur else 0) or 45.07
+        k = kur or (kur_usd if doviz == 'USD' else 1)
+        return tutar * (k or 1)
+'''
+    bulundu = []
+
+    def gez(d, yol):
+        for c in _ast.iter_child_nodes(d):
+            y = (yol + [c.name]
+                 if isinstance(c, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                 else yol)
+            if (isinstance(c, _ast.Attribute) and c.attr == 'query'
+                    and isinstance(c.value, _ast.Name)
+                    and c.value.id == 'DovizKur'):
+                bulundu.append(y)
+            gez(c, y)
+
+    gez(_ast.parse(ESKI_KOD), [])
+    assert bulundu, (
+        'çivi, gölge `_try_karsilik` biçimini yakalayamıyor — '
+        'aritmetik ölçütünün kaçırdığı tam olarak buydu')
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  YV1 · ÖNİZLEME İLE SAKLANAN RAKAM AYNI OLSUN
+#
+#  Sunucu tutarı ÖNCE iki haneye yuvarlıyor (`q2`); ekranlar
+#  yuvarlamıyordu. Fatura formu kalem toplamını ham tutuyor
+#  (`toplam_fiyat: miktar * fiyat`), yani 10,07 m² × 36,33 $ gibi
+#  SIRADAN bir satır ara toplama fazladan ondalık taşıyor.
+#
+#  ÖLÇÜLDÜ — 200.000 sahte fatura, gerçekçi iki ondalıklı miktar ve
+#  fiyatlarla:
+#      KDV hariç   55.612 / 200.000  (%27,8)
+#      KDV dahil   45.967 / 200.000  (%23,0)
+#  Fark hep tam 0,01. Saklanan rakam yanlış değildi; EKRAN başka
+#  bir sayı gösteriyordu.
+# ═══════════════════════════════════════════════════════════════════
+
+def _yv1_node():
+    import shutil as _shutil
+    return _shutil.which('node') or _shutil.which('nodejs')
+
+
+def _yv1_kapi_betigi():
+    """base.html'deki ortak kapıyı (q2 / kdvAyristir / kdvHesapla)
+    olduğu gibi çıkarır — kopyasını değil, GERÇEĞİNİ sınarız."""
+    import io as _io
+    import re as _re
+    b = _io.open(os.path.join(KOK, 'templates', 'base.html'),
+                 encoding='utf-8').read()
+    parcalar = []
+    for ad in ('q2', 'kdvAyristir', 'kdvHesapla'):
+        m = _re.search(rf'^function {ad}\(', b, _re.M)
+        assert m, f'base.html içinde `{ad}` yok'
+        i, d = b.index('{', m.end() - 1), 0
+        for j in range(i, len(b)):
+            if b[j] == '{':
+                d += 1
+            elif b[j] == '}':
+                d -= 1
+                if d == 0:
+                    break
+        parcalar.append(b[m.start():j + 1])
+    return '\n'.join(parcalar)
+
+
+def test_yv1_ekran_kdvsi_sunucuyla_bire_bir_ayni():
+    """ÇİVİ: base.html'deki `kdvHesapla`, sunucunun `_kdv_hesapla`sı
+    ile AYNI sayıyı vermeli.
+
+    Naif bir çeviri YETMİYOR, ölçüldü:
+      · `Math.round(n*100)/100` İKİLİ gösterimden yuvarlar ve
+        0,145'i AŞAĞI indirir; sunucu `Decimal(str(n))` ile
+        "0.145" dizgesini YUKARI yuvarlıyor.
+      · `toFixed(10)` ters yönde bozar: 15330,994999999999'u onuncu
+        hanede yukarı yuvarlayıp sahte bir eşitlik yaratıyor —
+        200.000 girdide 316 ayrışma vermişti.
+    Doğrusu `String(n)`: JS'in en kısa round-trip gösterimi,
+    Python'un `str()` ile aynı algoritma.
+    """
+    import json as _json
+    import random as _random
+    import subprocess as _sp
+    node = _yv1_node()
+    if not node:
+        pytest.skip('node yok')
+
+    rnd = _random.Random(4242)
+    girdiler = []
+    for _ in range(4000):
+        ara = 0.0
+        for _k in range(rnd.randint(1, 4)):
+            ara += round(rnd.uniform(1, 60), 2) * round(rnd.uniform(8, 400), 2)
+        girdiler.append([ara, rnd.choice([0, 1, 8, 10, 18, 20]),
+                         rnd.choice([0, 1])])
+    # yarım-kuruş sınırlarını BİLEREK zorla
+    for _ in range(2000):
+        ara = round(rnd.uniform(0, 100000), 2) + rnd.choice(
+            [0, 0.005, 0.0049, 0.0051, 0.145, 0.045])
+        girdiler.append([round(ara, 6), rnd.choice([1, 8, 10, 18, 20]),
+                         rnd.choice([0, 1])])
+
+    betik = _yv1_kapi_betigi() + """
+const g = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const c = g.map(([t, o, d]) => {
+  const r = kdvHesapla(t, o, d === 1);
+  return [r.matrah, r.kdv, r.toplam];
+});
+process.stdout.write(JSON.stringify(c));
+"""
+    r = _sp.run([node, '-e', betik], input=_json.dumps(girdiler),
+                capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:600]
+    js = _json.loads(r.stdout)
+
+    with fa.app.app_context():
+        hesapla = _kc1_kapi('_kdv_hesapla')
+        ayri = []
+        for (t, o, d), (jm, jk, jt) in zip(girdiler, js):
+            pm, pk, pt = hesapla(t, o, bool(d))
+            if (abs(pm - jm) >= 0.005 or abs(pk - jk) >= 0.005
+                    or abs(pt - jt) >= 0.005):
+                ayri.append(f'tutar {t} oran %{o} dahil={d}: '
+                            f'sunucu ({pm}, {pk}, {pt}) · '
+                            f'ekran ({jm}, {jk}, {jt})')
+        assert not ayri, (
+            f'{len(ayri)} / {len(girdiler)} girdide ekran ile sunucu '
+            f'ayrışıyor:\n  ' + '\n  '.join(ayri[:6]))
+
+
+def test_yv1_ekran_kapisi_toplami_bozmuyor():
+    """Ekranın kapısı da matrah + KDV == toplam sözünü tutmalı."""
+    import json as _json
+    import random as _random
+    import subprocess as _sp
+    node = _yv1_node()
+    if not node:
+        pytest.skip('node yok')
+    rnd = _random.Random(99)
+    girdiler = [[round(rnd.uniform(0.01, 500000), 4),
+                 rnd.choice([1, 8, 10, 18, 20]), rnd.choice([0, 1])]
+                for _ in range(4000)]
+    betik = _yv1_kapi_betigi() + """
+const g = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const bozuk = [];
+for (const [t, o, d] of g) {
+  const r = kdvHesapla(t, o, d === 1);
+  if (Math.abs((r.matrah + r.kdv) - r.toplam) >= 0.005)
+    bozuk.push([t, o, d, r.matrah, r.kdv, r.toplam]);
+}
+process.stdout.write(JSON.stringify(bozuk));
+"""
+    r = _sp.run([node, '-e', betik], input=_json.dumps(girdiler),
+                capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:600]
+    bozuk = _json.loads(r.stdout)
+    assert not bozuk, f'{len(bozuk)} girdide matrah+KDV ≠ toplam: {bozuk[:4]}'
+
+
+def test_yv1_ekranlarda_elle_kdv_hesabi_kalmadi():
+    """ÇİVİ: hiçbir şablon KDV'yi kendi başına hesaplamamalı.
+
+    Sınıfın geri gelmesini bu engelliyor: yeni bir ekran
+    `tutar * oran / 100` yazarsa burası düşer ve yazan kişi ortak
+    kapıya yönlendirilir.
+
+    MUAF: `base.html` — kapının KENDİSİ orada."""
+    import io as _io
+    import os as _os
+    import re as _re
+    KALIP = _re.compile(
+        r'\*\s*\w*[oO]ran\w*\s*/\s*100'          # tutar * oran / 100
+        r'|/\s*\(\s*1\s*\+\s*\w+\s*/\s*100')     # tutar / (1 + oran/100)
+    # `q2(...)` ya da ortak kapıyla sarılmışsa MEŞRU: sunucunun
+    # yuvarlamasını birebir uyguluyor demektir.
+    SARILI = _re.compile(r'\b(q2|kdvHesapla|kdvAyristir)\s*\(')
+    sdizin = _os.path.join(KOK, 'templates')
+    bulgular = []
+    for ad in sorted(_os.listdir(sdizin)):
+        if not ad.endswith('.html') or ad == 'base.html':
+            continue
+        metin = _io.open(_os.path.join(sdizin, ad), encoding='utf-8',
+                         errors='replace').read()
+        yorumda = False
+        for i, t in enumerate(metin.split('\n'), 1):
+            g = t.strip()
+            # BLOK YORUMU: ilk hâlim yalnız satır BAŞINA bakıyordu ve
+            # `/* ... */` içindeki açıklama satırlarını hata sanıyordu.
+            if yorumda:
+                if '*/' in t:
+                    yorumda = False
+                continue
+            if '/*' in t and '*/' not in t[t.index('/*'):]:
+                yorumda = True
+                continue
+            if g.startswith(('*', '//', '<!--', '/*')) or not KALIP.search(t):
+                continue
+            if SARILI.search(t):
+                continue
+            bulgular.append(f'{ad}:{i}  {g[:72]}')
+    assert not bulgular, (
+        'elle KDV hesabı — `kdvHesapla` / `kdvAyristir` kullanılmalı:'
+        '\n  ' + '\n  '.join(bulgular))
+
+
+def test_yv1_civi_eski_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — çivinin kör noktasını sınar.
+
+    Kaldırdığımız üç biçimi de yakalıyor mu?"""
+    import re as _re
+    KALIP = _re.compile(
+        r'\*\s*\w*[oO]ran\w*\s*/\s*100'
+        r'|/\s*\(\s*1\s*\+\s*\w+\s*/\s*100')
+    for eski in (
+            '  const kdv = ara * oran / 100;',
+            '  const kdv = matrah * oran / 100;',
+            '  const net = (kdvDahil && kdvOran > 0) ? fiyat / (1 + kdvOran / 100) : fiyat;',
+            '  if (dahil) { toplam = tutar; matrah = tutar / (1 + oran / 100); kdv = toplam - matrah; }'):
+        assert KALIP.search(eski), f'çivi bunu kaçırıyor: {eski.strip()[:60]}'
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  YK3 · AYNI İSTEK İKİ KEZ GELİRSE İKİNCİ KAYIT OLUŞMASIN
+#
+#  ÖLÇÜLDÜ — aynı gövde aynı uca iki kez:
+#    fatura tahsilatı   200 / 200  ✗ aynı 500 $ iki kez düştü;
+#                       bakiye 10.000 → 9.500 → 9.000
+#    hızlı satış        200 / 200  ✗ aynı `fatura_no` ile iki fatura
+#    çek kaydı          200 / 200  ✗ aynı `cek_no` iki kez
+#    maliyet · sabit gider         ✗
+#
+#  Ekranların düğme kilidi ilk savunma ama tek savunma olamaz: ağ
+#  koptuğunda tarayıcı isteği kendisi yineliyor.
+# ═══════════════════════════════════════════════════════════════════
+
+def _yk3_kur():
+    """Ölçüm için cari + kasa + fatura."""
+    from models import Cari, Fatura, Kasa
+    with fa.app.app_context():
+        if not Cari.query.filter_by(id='C-YK3').first():
+            db.session.add(Cari(id='C-YK3', unvan='YK3 MUSTERI',
+                                cari_tip='Müşteri', para_birimi='USD',
+                                gorunurluk='acik'))
+        if not Kasa.query.filter_by(ad='YK3 KASA').first():
+            db.session.add(Kasa(ad='YK3 KASA', doviz='USD', bakiye=0))
+        db.session.commit()
+        if not Fatura.query.filter_by(id='F-YK3').first():
+            db.session.add(Fatura(id='F-YK3', fatura_no='YK3-1',
+                                  musteri='YK3 MUSTERI', cari_id='C-YK3',
+                                  toplam=10000, ara_toplam=10000,
+                                  doviz='USD', durum='Kesildi',
+                                  yon='satis', fatura_tarihi=date.today()))
+            db.session.commit()
+        return Kasa.query.filter_by(ad='YK3 KASA').first().id
+
+
+def test_yk3_ayni_tahsilat_iki_kez_dusmuyor():
+    """ÖLÇÜLEN HATA: aynı 500 $ iki kez düşüyor, bakiye 9.000 oluyor."""
+    from models import CariHareket
+    kid = _yk3_kur()
+    c = istemci('admin', 'ADMIN')
+    govde = {'tutar': 500, 'doviz': 'USD', 'kasa_id': kid,
+             'aciklama': 'YK3 ölçüm'}
+    with fa.app.app_context():
+        once = CariHareket.query.count()
+    r1 = c.post('/api/fatura/F-YK3/tahsilat', json=govde, headers=H)
+    assert r1.status_code == 200, r1.get_data(as_text=True)[:200]
+    r2 = c.post('/api/fatura/F-YK3/tahsilat', json=govde, headers=H)
+    assert r2.status_code == 409, (
+        f'ikinci tahsilat kabul edildi: {r2.get_data(as_text=True)[:200]}')
+    assert (r2.get_json() or {}).get('error') == 'yineleme_suphesi'
+    with fa.app.app_context():
+        assert CariHareket.query.count() == once + 1, 'ikinci hareket yazılmış'
+
+
+def test_yk3_kullanici_onaylarsa_gecebiliyor():
+    """Kalkan ENGELLEMİYOR, SORUYOR. Meşru hiçbir kayıt kaybolmamalı.
+
+    `base.html`deki `api()` 409'u görünce kullanıcıya sorar ve
+    onaylanırsa `yineleme_onay` ile yeniden gönderir."""
+    from models import Maliyet
+    from models import BlokStok
+    with fa.app.app_context():
+        if not BlokStok.query.filter_by(id='B-YK3').first():
+            db.session.add(BlokStok(
+                id='B-YK3', blok_no='YK3-1', cins='YK3TEST', boy=300,
+                yukseklik=150, en=120, hacim_m3=5.4, tonaj=15,
+                durum='Serbest', doviz='USD', alis_fiyati=100,
+                alis_fiyat_birim='ton'))
+            db.session.commit()
+        once = Maliyet.query.count()
+    c = istemci('admin', 'ADMIN')
+    govde = {'maliyet_tip': 'Nakliye', 'baglanti_tip': 'stok',
+             'baglanti_id': 'B-YK3', 'tutar': 640, 'doviz': 'USD',
+             'kdv_oran': 0, 'aciklama': 'YK3 onay'}
+    assert c.post('/api/maliyet', json=govde,
+                  headers=H).status_code == 200
+    assert c.post('/api/maliyet', json=govde,
+                  headers=H).status_code == 409
+    # ONAYLI ikinci istek GEÇMELİ
+    r3 = c.post('/api/maliyet', json=dict(govde, yineleme_onay=True),
+                headers=H)
+    assert r3.status_code == 200, r3.get_data(as_text=True)[:200]
+    with fa.app.app_context():
+        assert Maliyet.query.count() == once + 2, 'onaylı kayıt yazılmadı'
+
+
+def test_yk3_basarisiz_istek_iz_birakmiyor():
+    """TABANDA DA GEÇER — tabanda kalkan yok, iki 400 zaten doğal.
+    İşi, kalkan eklendikten SONRA bu davranışın bozulmadığını
+    çivilemek; yama sırasında tam burada bir kusur çıkmıştı.
+
+    BAŞARISIZ istek tekrar denendiğinde GERÇEK hatasını vermeli.
+
+    İz `before_request`te yazılıyor (yarış koruması için şart) ama
+    400 alan bir istek de iz bırakıyordu: kullanıcı formu düzeltmeden
+    tekrar denediğinde "bu kaydı az önce oluşturdunuz" görüyordu —
+    yanıltıcı. Artık başarısız isteğin izi siliniyor."""
+    c = istemci('admin', 'ADMIN')
+    bos = {'cari_id': 'C-YK3'}            # islem_tip yok → 400
+    r1 = c.post('/api/cari/hareket', json=bos, headers=H)
+    r2 = c.post('/api/cari/hareket', json=bos, headers=H)
+    assert r1.status_code == 400, r1.get_data(as_text=True)[:150]
+    assert r2.status_code == 400, (
+        f'ikinci denemede gerçek hata yerine {r2.status_code}: '
+        f'{r2.get_data(as_text=True)[:150]}')
+
+
+def test_yk3_silme_kalkanin_disinda():
+    """Yinelenen SİLME zararsız: ikinci istek silinecek şey bulamaz.
+
+    Tehlikeli olan yinelenen OLUŞTURMA. Üstelik DELETE'in gövdesi
+    yok, yani onay bayrağını taşıyamazdı — kullanıcı duvara toslar
+    ve çıkış yolu olmazdı. ÖLÇÜLDÜ: DELETE kapsamdayken üç mevcut
+    test düşüyordu, üçü de kaydı silip yeniden kuran senaryolardı."""
+    import io as _io
+    import re as _re
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    i = kaynak.index('def _yineleme_kalkani')
+    kesit = kaynak[i:i + 1400]
+    m = _re.search(r"request\.method not in \(([^)]*)\)", kesit)
+    assert m, 'kalkanın yöntem listesi bulunamadı'
+    assert 'DELETE' not in m.group(1), (
+        f'DELETE kalkan kapsamında: {m.group(1)}')
+    for y in ('POST', 'PUT', 'PATCH'):
+        assert y in m.group(1), f'{y} kapsam dışı kalmış'
+
+
+def test_yk3_ayni_cek_numarasi_iki_kez_girilemez():
+    """20 saniyelik pencere GÜNLER sonrasını yakalamaz; fiziksel bir
+    çek ise iki kez var olamaz. Ölçüt aynı BANKA + aynı NUMARA —
+    farklı bankalar aynı numarayı kullanabilir."""
+    from models import Cek
+    _yk3_kur()
+    c = istemci('admin', 'ADMIN')
+    govde = {'cek_no': 'YK3-CEK-7', 'banka_adi': 'YK3 Bank',
+             'tutar': 3300, 'doviz': 'USD', 'yon': 'alinan',
+             'tip': 'musteri', 'cari_id': 'C-YK3',
+             'vade_tarihi': date.today().isoformat()}
+    assert c.post('/api/cek', json=govde, headers=H).status_code == 200
+    # Pencereyi atlamak için onay ver: yakalayan artık NUMARA denetimi.
+    # İKİ AYRI ONAY: `yineleme_onay` çift tıklama içindir, numara
+    # denetiminin kendi onayı `mukerrer_onay`. Tek bayrak olsaydı biri
+    # ötekini susturur, numara denetimi hiç çalışmazdı — ölçüldü.
+    r2 = c.post('/api/cek', json=dict(govde, yineleme_onay=True),
+                headers=H)
+    assert r2.status_code == 409, (
+        f'aynı çek numarası ikinci kez kabul edildi: '
+        f'{r2.get_data(as_text=True)[:200]}')
+    # BAŞKA bankada aynı numara SERBEST
+    r3 = c.post('/api/cek', json=dict(govde, banka_adi='YK3 Diger Bank',
+                                      yineleme_onay=True,
+                                      mukerrer_onay=True), headers=H)
+    assert r3.status_code == 200, (
+        f'farklı bankada aynı numara engellendi: '
+        f'{r3.get_data(as_text=True)[:200]}')
+
+
+def test_yk3_kalkan_merkezi_kapida():
+    """ÇİVİ: kalkan `before_request` olmalı — uç uç DEĞİL.
+
+    OY1'de tam bunu ölçtük: sayfa kilitliydi ama API'si açıktı,
+    çünkü denetim uç uç yapılmış ve birkaçı atlanmıştı. Merkezî
+    kapı HENÜZ YAZILMAMIŞ uçları da kapsar."""
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    assert '@app.before_request\n    def _yineleme_kalkani' in kaynak, (
+        'kalkan before_request değil — merkezî olma özelliğini kaybeder')
+    # Ekran tarafı da TEK kapıda
+    b = _io.open(os.path.join(KOK, 'templates', 'base.html'),
+                 encoding='utf-8').read()
+    assert 'd.onay_alani' in b, (
+        'api() 409 yineleme yanıtını ele almıyor')
+    assert '_o[d.onay_alani] = true' in b, (
+        'onaylanan istek yeniden gönderilmiyor')
+    # Onay alanı YANITTAN okunuyor: ayrı denetimlerin ayrı onayı olsun
+    # diye. Tek sabit bayrak kullansaydım biri ötekini sustururdu —
+    # ölçüldü, çek numarası denetimi tam bu yüzden hiç çalışmadı.
+
+
+def test_yk3_bildirim_suresi_uzatildi():
+    """Kullanıcı isteği: bildirimler 2,6 saniyede kayboluyordu."""
+    import io as _io
+    import re as _re
+    b = _io.open(os.path.join(KOK, 'templates', 'base.html'),
+                 encoding='utf-8').read()
+    m = _re.search(r"classList\.remove\('acik'\),\s*hata\s*\?\s*(\d+)\s*:\s*(\d+)", b)
+    assert m, 'bildirim süresi bulunamadı'
+    _hata, _ok = int(m.group(1)), int(m.group(2))
+    assert _ok >= 5000, f'başarı bildirimi {_ok} ms — en az 5.000 olmalı'
+    assert _hata >= _ok, f'hata bildirimi ({_hata}) başarıdan kısa ({_ok})'
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  KB1 · KASA BAKİYESİ ATOMİK ARTIRIMLA GÜNCELLENİR
+#
+#  ÖLÇÜLDÜ — GERÇEK PostgreSQL 16, READ COMMITTED, aynı kasaya
+#  eşzamanlı para girişleri:
+#      8 iş parçacığı × 10 × 100 $ → hareket 80, bakiye 1.700 $
+#                                    (beklenen 8.000) · 6.300 $ KAYIP
+#      3 iş parçacığı × 5  × 100 $ → 700 $ kayıp
+#      2 iş parçacığı × 5  × 100 $ → 200 $ kayıp
+#
+#  SEBEP: `kasa.bakiye = q2((kasa.bakiye or 0) + tutar)` Python'da
+#  oku-değiştir-yaz. İki istek aynı anda ESKİ değeri okur, biri
+#  kaybolur. Hareketler kayıtlı kalır, yalnız bakiye eksilir.
+#
+#  BU TESTLER SQLite'TA KOŞUYOR ve SQLite tüm veritabanını
+#  kilitlediği için yarışı GİZLER — eşzamanlılık testi yazsaydım
+#  TABANDA DA GEÇERDİ, yani hiçbir şey ölçmezdi. Onun yerine
+#  artırımın gerçekten VERİTABANINDA yapıldığını sınıyoruz.
+# ═══════════════════════════════════════════════════════════════════
+
+def test_kb1_bakiye_artirimi_veritabaninda_yapiliyor():
+    """ÇİVİ: `_kasa_bakiye_ekle` bir UPDATE yayınlamalı ve artırım
+    SQL'in içinde olmalı — Python'da hesaplanıp yazılmış bir sabit
+    değil."""
+    from sqlalchemy import event as _ev
+    from models import Kasa
+    yayinlar = []
+
+    with fa.app.app_context():
+        k = Kasa.query.filter_by(ad='KB1 KASA').first()
+        if not k:
+            k = Kasa(ad='KB1 KASA', doviz='USD', bakiye=1000)
+            db.session.add(k)
+            db.session.commit()
+        ekle = _kc1_kapi('_kasa_bakiye_ekle')
+        motor = db.session.get_bind()
+
+        def yakala(conn, cursor, ifade, parametre, baglam, cok):
+            yayinlar.append(ifade)
+
+        _ev.listen(motor, 'before_cursor_execute', yakala)
+        try:
+            ekle(k, 250)
+            db.session.commit()
+        finally:
+            _ev.remove(motor, 'before_cursor_execute', yakala)
+
+    guncellemeler = [y for y in yayinlar
+                     if y.strip().upper().startswith('UPDATE')
+                     and 'bakiye' in y]
+    assert guncellemeler, (
+        f'UPDATE yayınlanmadı — artırım Python tarafında yapılmış '
+        f'olabilir. Yayınlar: {yayinlar[:3]}')
+    sql = guncellemeler[0]
+    # `bakiye = ... bakiye ...` — sütun KENDİSİNE atıf yapmalı
+    assert sql.count('bakiye') >= 2, (
+        f'UPDATE sütunun kendisini okumuyor, yani artırım atomik '
+        f'değil:\n{sql}')
+
+
+def test_kb1_atomik_artirim_eski_sonucu_veriyor():
+    """Düzeltme RAKAMI değiştirmemeli — yalnız yarışı kapatmalı.
+
+    Eski hesap `q2((bakiye or 0) + delta)` idi; yenisi aynı
+    yuvarlamayı SQL tarafında yapıyor."""
+    from models import Kasa
+    with fa.app.app_context():
+        ekle = _kc1_kapi('_kasa_bakiye_ekle')
+        for baslangic, delta in ((0, 100.005), (1000, -250.004),
+                                 (33.33, 66.67), (0, 0.145),
+                                 (99.99, 0.011), (500, -500)):
+            k = Kasa(ad=f'KB1-{baslangic}-{delta}', doviz='USD',
+                     bakiye=baslangic)
+            db.session.add(k)
+            db.session.commit()
+            # `q2` fabrikanın içinde; kapanıştan çekiyoruz.
+            beklenen = _kc1_kapi('q2')(baslangic + delta)
+            ekle(k, delta)
+            db.session.commit()
+            db.session.refresh(k)
+            assert abs(float(k.bakiye) - beklenen) < 0.005, (
+                f'{baslangic} + {delta}: {k.bakiye} geldi, '
+                f'{beklenen} olmalıydı')
+
+
+def test_kb1_elle_oku_degistir_yaz_kalmadi():
+    """ÇİVİ: hiçbir yerde bakiye Python tarafında artırılmamalı.
+
+    METİN DEĞİL AST: ilk hâlim satır metnine bakıyordu ve kapının
+    KENDİ açıklamasındaki örnek satırı hata sanıyordu (üçlü tırnak
+    içinde olduğu için `#` denetimi de yakalamıyordu). AST yalnız
+    GERÇEK atamaları görür.
+
+    Sınıfın geri gelmesini bu engelliyor: yeni bir uç bakiyeyi
+    Python'da artırırsa burası düşer."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    bulgular = []
+    for d in _ast.walk(_ast.parse(kaynak)):
+        hedefler, deger = [], None
+        if isinstance(d, _ast.Assign):
+            hedefler, deger = d.targets, d.value
+        elif isinstance(d, _ast.AugAssign):
+            hedefler, deger = [d.target], d.value
+        else:
+            continue
+        for h in hedefler:
+            if not (isinstance(h, _ast.Attribute) and h.attr == 'bakiye'):
+                continue
+            if not isinstance(h.value, _ast.Name):
+                continue
+            nesne = h.value.id
+            sag = _ast.unparse(deger)
+            # AugAssign her zaman oku-değiştir-yaz; Assign ise yalnız
+            # sağ taraf AYNI alanı okuyorsa.
+            if isinstance(d, _ast.AugAssign) or f'{nesne}.bakiye' in sag:
+                bulgular.append(
+                    f'satır {d.lineno}: {nesne}.bakiye = {sag[:60]}')
+    assert not bulgular, (
+        'bakiye Python tarafında artırılıyor — `_kasa_bakiye_ekle` '
+        'kullanılmalı:\n  ' + '\n  '.join(bulgular))
+
+
+def test_kb1_civi_eski_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — çivinin kör noktasını sınar.
+
+    Kaldırdığımız biçimlerin hepsini yakalıyor mu?"""
+    import re as _re
+    KALIP = _re.compile(r'\.bakiye\s*(=\s*q2\(\(|\+=|-=)')
+    for eski in (
+            '            kasa.bakiye = q2((kasa.bakiye or 0) + hedef_tutar)',
+            '        kaynak.bakiye = q2((kaynak.bakiye or 0) - tutar)',
+            '        k.bakiye += tutar',
+            '        k.bakiye -= tutar'):
+        assert KALIP.search(eski), f'çivi bunu kaçırıyor: {eski.strip()[:60]}'
+# ══════════════════════════════════════════════════════════════════
+# RZ2 · AYNI STOK İKİ KEZ SATILMASIN  (yarış durumu)
+# ══════════════════════════════════════════════════════════════════
+# RZ1 bu sınıfı çözmüştü ama kapısı (`_stok_serbestten_al`) yalnız
+# 'Serbest' kaynağı kabul ediyor, bu yüzden yalnız İKİ yolda
+# kullanılabildi. Kaynağı 'Serbest' VEYA 'Rezerve' kabul eden üç yol
+# açıkta kalmıştı: `_kalem_rezervasyonlari_olustur`,
+# `api_proforma_siparise_donustur`, `api_kesim_ekle`.
+#
+# ÖLÇÜLDÜ — gerçek PostgreSQL 16, READ COMMITTED, gerçek uçla:
+#   20 deneme, her birinde AYNI bloğa 2 eşzamanlı sipariş
+#     yama öncesi   iki rezervasyonlu blok  20/20  (%100)
+#     yama sonrası  iki rezervasyonlu blok   0/20
+#
+# Hata bugün GÖRÜNMÜYORDU: belge numarası çakışması (BN1) ikinci
+# isteği daha erken, HTTP 500 ile öldürüyor ve stoğa hiç varmıyordu.
+# Yani numara hatası bunu KAZARA perdeliyordu. Ölçüm için numara
+# üreticisi çakışmaz hâle getirilip hata yalıtıldı. Yamaların sırası
+# bu yüzden RZ2 → BN1: ters sırada BN1 perdeyi kaldırır ve bugün
+# görünmeyen hata görünür hâle gelir.
+#
+# SQLite'TA EŞZAMANLILIK TESTİ YAZILMADI: SQLite yarışı gizler, öyle
+# bir test tabanda da geçerdi. Aşağıdakiler MEKANİZMAYI çiviliyor.
+
+
+def _rz2_blok(bid, durum='Serbest'):
+    with fa.app.app_context():
+        if db.session.get(BlokStok, bid) is None:
+            db.session.add(BlokStok(
+                id=bid, blok_no=bid, cins='TEST', boy=300,
+                yukseklik=150, en=120, hacim_m3=5.4, tonaj=15,
+                alis_fiyati=1000, doviz='USD', durum=durum,
+                giris_tarihi=date.today()))
+            db.session.commit()
+        else:
+            db.session.get(BlokStok, bid).durum = durum
+            db.session.commit()
+
+
+def _rz2_siparis(bid, musteri, durum, **ek):
+    g = {'musteri': musteri, 'doviz': 'USD', 'durum': durum,
+         'kalemler': [{'urun_tip': 'BLOK', 'cins': 'TEST', 'adet': 1,
+                       'miktar': 15, 'birim': 'ton', 'birim_fiyat': 500,
+                       'doviz': 'USD', 'stok_ids': [bid]}],
+         'yineleme_onay': True}
+    g.update(ek)
+    return g
+
+
+def test_rz2_stok_kapisi_atomik_update_yayinliyor():
+    """ÇİVİ: `_stok_durum_degistir` tek bir UPDATE yayınlamalı ve o
+    UPDATE mevcut durumu KOŞUL olarak taşımalı.
+
+    Koşul SQL'in içinde olmazsa kapı kapı değildir: Python'da
+    okunup Python'da karar verilen her şeyin arasına ikinci bir
+    istek girebilir. "Atomik" iddiası burada söz değil, ölçüm."""
+    from sqlalchemy import event as _ev
+    yayinlar = []
+    _rz2_blok('RZ2-SQL', 'Serbest')
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_stok_durum_degistir')
+        stok = db.session.get(BlokStok, 'RZ2-SQL')
+        motor = db.session.get_bind()
+
+        def yakala(conn, cursor, ifade, parametre, baglam, cok):
+            yayinlar.append(ifade)
+
+        _ev.listen(motor, 'before_cursor_execute', yakala)
+        try:
+            assert kapi(stok, 'Rezerve', ('Serbest', 'Rezerve')) is True
+            db.session.commit()
+        finally:
+            _ev.remove(motor, 'before_cursor_execute', yakala)
+
+    guncellemeler = [y for y in yayinlar
+                     if y.strip().upper().startswith('UPDATE')
+                     and 'durum' in y]
+    assert guncellemeler, (
+        f'UPDATE yayınlanmadı — karar Python tarafında verilmiş '
+        f'olabilir. Yayınlar: {yayinlar[:3]}')
+    sql = guncellemeler[0].upper()
+    assert 'WHERE' in sql and ('IN (' in sql or 'IS NULL' in sql), (
+        f'UPDATE mevcut durumu koşul olarak taşımıyor, yani kapı '
+        f'atomik değil:\n{guncellemeler[0]}')
+
+
+def test_rz2_kapi_gercekten_kapi_mi():
+    """Hedef durum izinli kümede YOKSA ikinci geçiş reddedilmeli.
+
+    Onaylanmış siparişte hedef 'Satildi' ve izinli küme
+    ('Serbest','Rezerve') — 'Satildi' kümede olmadığı için geçiş
+    gerçek bir kapıdır. Teklif aşamasında hedef 'Rezerve' ve kümede
+    OLDUĞU için ikisi de geçer; kullanıcının kararı bu (aynı blok
+    ikinci teklife işlenebilsin, ama uyarılsın)."""
+    # Bloklar bağlamın DIŞINDA kurulur: `_rz2_blok` kendi
+    # app_context'ini açıyor, dıştaki açık işlemle çakışınca SQLite
+    # "database is locked" veriyor.
+    _rz2_blok('RZ2-KAPI', 'Serbest')
+    _rz2_blok('RZ2-TEKLIF', 'Rezerve')
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_stok_durum_degistir')
+        s = db.session.get(BlokStok, 'RZ2-KAPI')
+        assert kapi(s, 'Satildi', ('Serbest', 'Rezerve')) is True
+        assert kapi(s, 'Satildi', ('Serbest', 'Rezerve')) is False, (
+            'ikinci geçiş de kabul edildi — kapı kapı değil')
+        t = db.session.get(BlokStok, 'RZ2-TEKLIF')
+        assert kapi(t, 'Rezerve', ('Serbest', 'Rezerve')) is True
+        assert kapi(t, 'Rezerve', ('Serbest', 'Rezerve')) is True, (
+            'teklif aşaması kapatıldı — karar "serbest kalsın, '
+            'uyarılsın" idi')
+        db.session.rollback()
+
+
+def test_rz2_kapi_null_durumu_geciriyor():
+    """Göç öncesi satırlarda `durum` NULL olabilir.
+
+    Mevcut kod her yerde `k.durum or 'Serbest'` diyor, yani NULL'ı
+    serbest sayıyor. `IN` NULL ile eşleşmediği için kapı eski
+    satırları takardı — eklediğimiz kapının yeni bir hata
+    doğurmaması gerekiyor."""
+    _rz2_blok('RZ2-NULL', 'Serbest')
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_stok_durum_degistir')
+        db.session.query(BlokStok).filter(
+            BlokStok.id == 'RZ2-NULL').update(
+                {BlokStok.durum: None}, synchronize_session=False)
+        db.session.commit()
+        s = db.session.get(BlokStok, 'RZ2-NULL')
+        assert kapi(s, 'Rezerve', ('Serbest', 'Rezerve')) is True, (
+            'durumu NULL olan eski satır kapıda takıldı')
+        db.session.rollback()
+
+
+def test_rz2_kalem_rezervasyonu_kapiya_bagli():
+    """ÇİVİ: `_kalem_rezervasyonlari_olustur` durumu ELLE yazmamalı.
+
+    METİN DEĞİL AST. Sınıfın geri gelmesini bu engelliyor: biri
+    kapıyı atlayıp yeniden `stok.durum = ...` yazarsa burası
+    düşer."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    hedef = None
+    for d in _ast.walk(_ast.parse(kaynak)):
+        if (isinstance(d, _ast.FunctionDef)
+                and d.name == '_kalem_rezervasyonlari_olustur'):
+            hedef = d
+            break
+    assert hedef is not None, '_kalem_rezervasyonlari_olustur yok'
+    govde = _ast.unparse(hedef)
+    assert '_stok_durum_degistir' in govde, (
+        'kalem rezervasyonu atomik kapıya bağlı değil')
+    elle = []
+    for d in _ast.walk(hedef):
+        if not isinstance(d, _ast.Assign):
+            continue
+        for h in d.targets:
+            if isinstance(h, _ast.Attribute) and h.attr == 'durum':
+                elle.append(f'satır {d.lineno}: '
+                            f'{_ast.unparse(h)} = '
+                            f'{_ast.unparse(d.value)[:40]}')
+    assert not elle, (
+        'durum elle yazılıyor — `_stok_durum_degistir` '
+        'kullanılmalı:\n  ' + '\n  '.join(elle))
+
+
+def test_rz2_musait_olmayan_stok_sessiz_atlanmiyor():
+    """Kapı eklemek YENİ bir sessiz kayıp doğurmamalı.
+
+    Zaten satılmış bir stok siparişe eklenmek istenince eskiden
+    sessizce atlanıyordu: sipariş o stok olmadan oluşuyor,
+    kullanıcı ekranda hiçbir şey görmüyordu. Avladığımız sınıfın
+    aynısı; cevap artık söylüyor."""
+    adm = istemci('admin', 'ADMIN')
+    _rz2_blok('RZ2-SATILDI', 'Satildi')
+    c = adm.post('/api/siparis', headers=H,
+                 json=_rz2_siparis('RZ2-SATILDI', 'RZ2 MUSTERI',
+                                   'Onaylandi'))
+    assert c.status_code == 200, c.get_data(as_text=True)
+    j = c.get_json()
+    atl = j.get('atlanan_stoklar') or []
+    assert len(atl) == 1 and atl[0]['stok_id'] == 'RZ2-SATILDI', (
+        f'atlanan stok cevapta bildirilmiyor: {j}')
+    assert 'eklenemedi' in (j.get('mesaj') or ''), (
+        f'mesaj atlamadan söz etmiyor: {j.get("mesaj")}')
+    with fa.app.app_context():
+        assert Rezervasyon.query.filter_by(
+            stok_id='RZ2-SATILDI', iptal_nedeni=None).count() == 0
+
+
+def test_rz2_teklif_cakismasi_uyarip_onay_istiyor():
+    """Kullanıcının kararı: teklif aşamasında blok serbest kalsın,
+    aynı blok ikinci bir teklife de işlenebilsin — AMA sistem bunun
+    başka bir teklife bağlı olduğunu söyleyip onay istesin.
+
+    Onay YK3'ün `onay_alani` düzeneğiyle alınıyor; yeni ekran kodu
+    gerekmiyor."""
+    adm = istemci('admin', 'ADMIN')
+    _rz2_blok('RZ2-CAKIS', 'Serbest')
+    r1 = adm.post('/api/siparis', headers=H,
+                  json=_rz2_siparis('RZ2-CAKIS', 'RZ2 BIRINCI',
+                                    'Teklif Asam.'))
+    assert r1.status_code == 200, r1.get_data(as_text=True)
+
+    r2 = adm.post('/api/siparis', headers=H,
+                  json=_rz2_siparis('RZ2-CAKIS', 'RZ2 IKINCI',
+                                    'Teklif Asam.'))
+    assert r2.status_code == 409, (
+        f'ikinci teklif uyarı almadı: {r2.status_code} '
+        f'{r2.get_data(as_text=True)[:200]}')
+    j = r2.get_json()
+    assert j.get('error') == 'blok_baska_teklifte'
+    assert j.get('onay_alani') == 'teklif_cakisma_onay'
+    assert j.get('onay_sorusu'), 'onay sorusu yok'
+    assert 'RZ2-CAKIS' in (j.get('mesaj') or ''), (
+        f'mesaj hangi bloktan söz ettiğini söylemiyor: {j.get("mesaj")}')
+    assert j.get('cakisanlar'), 'çakışan kayıtlar bildirilmiyor'
+
+    r3 = adm.post('/api/siparis', headers=H,
+                  json=_rz2_siparis('RZ2-CAKIS', 'RZ2 IKINCI',
+                                    'Teklif Asam.',
+                                    teklif_cakisma_onay=True))
+    assert r3.status_code == 200, (
+        f'onaylandığı hâlde geçmedi: {r3.get_data(as_text=True)[:200]}')
+    with fa.app.app_context():
+        assert Rezervasyon.query.filter_by(
+            stok_id='RZ2-CAKIS', iptal_nedeni=None).count() == 2, (
+            'onaydan sonra ikinci teklife bağlanmadı')
+
+
+def test_rz2_kesim_kaynagi_uretimden_once_sahipleniyor():
+    """ÇİVİ: kesimde kaynak, İLK YAZMADAN ÖNCE atomik alınmalı.
+
+    Sıra tesadüf değil, ölçümle bulundu:
+      · daha ERKEN olamaz — aradaki doğrulama hataları kaynağı
+        'Tukendi' bırakıp kesimsiz çıkarırdı.
+      · daha GEÇ olamaz — üretim döngüsünde her plakanın kimliği bir
+        sorgu açıyor, o sorgu bekleyen plakaları flush ediyor. Plaka
+        kimlikleri blok no + slab'den BELİRLENİMLİ türüyor
+        (`PLK-RZ-B-C1-01`), yani aynı bloğun iki kesimi HEP aynı
+        kimliği üretir; kaybeden istek kapı konuşmadan
+        `plaka_stok_pkey` ihlaliyle ölüp çıplak 500 veriyordu.
+        (Önce `no_autoflush` ile denedim — yetmedi, kirlenme kapıdan
+        ÖNCE, üretim döngüsünün kendi içinde oluyordu.)
+
+    Bu test o SIRAYI çiviliyor; biri kapıyı aşağı taşırsa düşer."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    hedef = None
+    for d in _ast.walk(_ast.parse(kaynak)):
+        if (isinstance(d, _ast.FunctionDef)
+                and d.name == 'api_kesim_ekle'):
+            hedef = d
+            break
+    assert hedef is not None, 'api_kesim_ekle yok'
+
+    kapi_satiri = yazma_satiri = None
+    for d in _ast.walk(hedef):
+        if not isinstance(d, _ast.Call):
+            continue
+        ad = _ast.unparse(d.func)
+        if (ad == '_stok_durum_degistir' and kapi_satiri is None
+                and "'Tukendi'" in _ast.unparse(d)):
+            kapi_satiri = d.lineno
+        if (ad in ('db.session.add', 'db.session.flush')
+                and yazma_satiri is None):
+            yazma_satiri = d.lineno
+    assert kapi_satiri is not None, (
+        'kesim kaynağı atomik kapıdan geçmiyor')
+    assert yazma_satiri is not None, 'db.session.add bulunamadı'
+    assert kapi_satiri < yazma_satiri, (
+        f'kapı ilk yazmadan SONRA ({kapi_satiri} > {yazma_satiri}): '
+        f'kaybeden istek, kapı konuşmadan birincil anahtar '
+        f'ihlaliyle 500 verir')
+
+    elle = [f'satır {d.lineno}'
+            for d in _ast.walk(hedef)
+            if isinstance(d, _ast.Assign)
+            and any(isinstance(h, _ast.Attribute) and h.attr == 'durum'
+                    and _ast.unparse(d.value) == "'Tukendi'"
+                    for h in d.targets)]
+    assert not elle, (
+        "kaynak hâlâ elle 'Tukendi' yapılıyor: " + ', '.join(elle))
+
+
+def test_rz2_tarayici_onayi_alan_basina_izliyor():
+    """ÇİVİ: `api()` onayı ALAN BAŞINA izlemeli, tek bayrakla değil.
+
+    Eskiden `_yinelemeOnaylandi` tek bir bayraktı. Bir istek iki ayrı
+    onay isterse (önce teklif çakışması, sonra YK3 yineleme)
+    ikincisi SORULMADAN sessizce düşerdi — kapı eklerken
+    doğurduğumuz yeni bir sessiz kayıp olurdu."""
+    import io as _io
+    metin = _io.open(os.path.join(KOK, 'templates', 'base.html'),
+                     encoding='utf-8').read()
+    kod = [s for s in metin.split('\n')
+           if '_yinelemeOnaylandi' in s and not s.strip().startswith('*')
+           and 'Eskiden' not in s]
+    assert not kod, (
+        'onay hâlâ tek bayrakla izleniyor:\n  '
+        + '\n  '.join(k.strip()[:80] for k in kod))
+    assert '_onaylanan' in metin, 'alan başına onay izlenmiyor'
+    assert 'onay_sorusu' in metin, (
+        'sunucunun verdiği onay sorusu kullanılmıyor — her onay '
+        '"Yine de kaydedilsin mi?" diye sorulur')
+
+
+def test_rz2_atlananlar_dokunulmayan_uctan_da_bildiriliyor():
+    """Bildirim UÇ BAŞINA değil, tek `after_request` kancasında.
+
+    Stok rezerve eden BEŞ uç var: api_siparis_ekle,
+    api_sicak_satis, api_siparis_guncelle, api_siparis_stok_ekle,
+    api_proforma_siparise_donustur. Uç başına yazsaydım biri
+    unutulur ve o uç sessizce korumasız kalırdı — OY1'de ölçtüğümüz
+    hatanın aynısı.
+
+    Bu test HİÇ DOKUNMADIĞIM bir uçtan ölçüyor: sipariş
+    GÜNCELLEME (PUT). Bildirim oradan da geliyorsa kanca gerçekten
+    hepsini kapsıyor."""
+    adm = istemci('admin', 'ADMIN')
+    _rz2_blok('RZ2-PUT-A', 'Serbest')
+    _rz2_blok('RZ2-PUT-B', 'Satildi')
+    r = adm.post('/api/siparis', headers=H,
+                 json=_rz2_siparis('RZ2-PUT-A', 'RZ2 PUT', 'Onaylandi'))
+    assert r.status_code == 200, r.get_data(as_text=True)
+    sid = r.get_json()['id']
+
+    p = adm.put(f'/api/siparis/{sid}', headers=H,
+                json=_rz2_siparis('RZ2-PUT-B', 'RZ2 PUT', 'Onaylandi'))
+    assert p.status_code == 200, p.get_data(as_text=True)
+    j = p.get_json()
+    atl = j.get('atlanan_stoklar') or []
+    assert any(a.get('stok_id') == 'RZ2-PUT-B' for a in atl), (
+        f'dokunulmayan uçtan (PUT) bildirim gelmedi: {j}')
+    assert 'eklenemedi' in (j.get('mesaj') or ''), (
+        f'mesaj atlamadan söz etmiyor: {j.get("mesaj")}')
+
+
+def test_rz2_siparis_ekrani_sunucu_mesajini_gosteriyor():
+    """Sunucunun söylediği EKRANA ÇIKMALI.
+
+    `siparis.html` kendi metnini kuruyor ve `d.mesaj` hiç
+    okunmuyordu. Kapı bir stoğu geçirmediğinde sunucu söylüyor ama
+    kullanıcı görmüyordu — kapıyı koyup susmak, avladığımız sessiz
+    kaybın aynısı olurdu. Yamayı kurarken tam bu tuzağa düşmüştüm;
+    test onu çiviliyor."""
+    import io as _io
+    metin = _io.open(os.path.join(KOK, 'templates', 'siparis.html'),
+                     encoding='utf-8').read()
+    i = metin.find('Sipariş oluşturuldu · ')
+    assert i > 0, 'sipariş kaydetme bildirimi bulunamadı'
+    cevre = metin[max(0, i - 500):i + 220]
+    assert 'd.mesaj' in cevre, (
+        'ekran sunucunun mesajını yok sayıyor — `atlanan_stoklar` '
+        'bildirimi kullanıcıya hiç görünmez')
+    assert 'atlanan_stoklar' in metin, (
+        'atlama olduğunda uyarı rengiyle gösterilmiyor')
+
+
+def test_rz2_civi_eski_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — çivinin kör noktasını sınar.
+
+    Kaldırdığımız biçimleri AST gerçekten görüyor mu?"""
+    import ast as _ast
+    for eski in ("stok.durum = hedef_stok_durum",
+                 "k.durum = 'Tukendi'",
+                 "stok.durum = 'Satildi' if x else 'Rezerve'"):
+        d = _ast.parse(eski).body[0]
+        assert isinstance(d, _ast.Assign)
+        assert any(isinstance(h, _ast.Attribute) and h.attr == 'durum'
+                   for h in d.targets), f'çivi bunu kaçırıyor: {eski}'
+# ══════════════════════════════════════════════════════════════════
+# BN1 · AYNI ANDA İKİ BELGE AYNI NUMARAYI ALMASIN
+# ══════════════════════════════════════════════════════════════════
+# Üç üretici de önce-kontrol-sonra-yaz: numara üretilip döndükten
+# sonra satır COMMIT edilene kadar başka bir işlem aynı numarayı
+# üretebiliyordu. Kaybeden istekte `duplicate key value violates
+# unique constraint "..._pkey"` ve kullanıcı ÇIPLAK HTTP 500
+# görüyor; girdiği kayıt kayboluyor.
+#
+# ÖLÇÜLDÜ — gerçek PostgreSQL 16, READ COMMITTED, gerçek uçlar,
+# 15 deneme × 2 eşzamanlı istek (gövdeler FARKLI, YK3 kalkanı
+# devrede değil):
+#
+#     _okunur_id              POST /api/siparis      15/15 → 0/15
+#     _cari_hareket_okunur_id fatura tahsilatı       15/15 → 0/15
+#     _stok_okunur_id         POST /api/stok/ekle    15/15 → 0/15
+#
+# Pencere `_okunur_id` için merdivenle ölçüldü: 0 ms %100,
+# 5 ms %80, 10 ms ve üstü %0 — yani ~10 ms. Dar, ama üretimde
+# `gunicorn -w 3` ile gerçek paralellik var. En acı hâli tahsilat:
+# para geldi, kullanıcı hata gördü, kayıt yok.
+#
+# SQLite'TA EŞZAMANLILIK TESTİ YAZILMADI: SQLite yazmaları tek
+# veritabanı kilidiyle sıralıyor, yarış pencere bulamıyor, öyle bir
+# test tabanda da geçerdi. Aşağıdakiler MEKANİZMAYI çiviliyor.
+
+
+def _bn1_uretici(ad):
+    """Üreticinin AST düğümünü döner."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    for d in _ast.walk(_ast.parse(kaynak)):
+        if isinstance(d, _ast.FunctionDef) and d.name == ad:
+            return d
+    return None
+
+
+def test_bn1_uc_uretici_de_kilidi_aliyor():
+    """ÇİVİ: numara üreten ÜÇ yol da kilidi almalı.
+
+    Biri atlanırsa o belge türü sessizce korumasız kalır —
+    OY1'de ölçtüğümüz hatanın aynısı. Üçü ayrı yollar:
+      _okunur_id              SIP, FTR, PI, SEV, MYT, KSM, ORT
+      _cari_hareket_okunur_id HR-* (24 ayrı hareket yolu)
+      _stok_okunur_id         BLK / PLK / EBT
+    """
+    import ast as _ast
+    eksik = []
+    for ad in ('_okunur_id', '_cari_hareket_okunur_id',
+               '_stok_okunur_id'):
+        d = _bn1_uretici(ad)
+        assert d is not None, f'{ad} yok'
+        if '_belge_no_kilidi' not in _ast.unparse(d):
+            eksik.append(ad)
+    assert not eksik, (
+        'bu üreticiler kilidi almıyor, numaraları hâlâ yarışa açık: '
+        + ', '.join(eksik))
+
+
+def test_bn1_kilit_taramadan_once_aliniyor():
+    """ÇİVİ: kilit, taramadan ÖNCE alınmalı.
+
+    Sonra alınırsa hiçbir şey değişmez: tarama zaten bayat veriyi
+    okumuş olur. Pencere tam tarama ile commit arasında, o yüzden
+    kilit taramadan önce olmak ZORUNDA. Biri kilidi aşağı taşırsa
+    burası düşer."""
+    import ast as _ast
+    import io as _io
+    # Taramayı KAYNAK SATIRLARINDA arıyorum. İlk hâlim `ast.walk`
+    # düğümlerini unparse edip içinde arıyordu ve FunctionDef'in
+    # kendisi de geliyordu: gövdenin tamamı metne dönüyor, satır
+    # numarası ise `def` satırı oluyordu. Kilit her zaman "sonra"
+    # görünüyordu.
+    satirlar = _io.open(os.path.join(KOK, 'flask_app.py'),
+                        encoding='utf-8').read().replace(
+                            '\r\n', '\n').split('\n')
+    for ad, tarama in (('_okunur_id', '.like('),
+                       ('_cari_hareket_okunur_id', 'LIKE :k'),
+                       ('_stok_okunur_id', 'db.session.get(')):
+        d = _bn1_uretici(ad)
+        kilit_satiri = None
+        for c in _ast.walk(d):
+            if (isinstance(c, _ast.Call)
+                    and _ast.unparse(c.func) == '_belge_no_kilidi'
+                    and kilit_satiri is None):
+                kilit_satiri = c.lineno
+        tarama_satiri = None
+        for no in range(d.lineno, (d.end_lineno or d.lineno) + 1):
+            t = satirlar[no - 1]
+            if t.strip().startswith('#'):
+                continue
+            if tarama in t:
+                tarama_satiri = no
+                break
+        assert kilit_satiri is not None, f'{ad}: kilit çağrısı yok'
+        assert tarama_satiri is not None, (
+            f'{ad}: tarama ("{tarama}") bulunamadı')
+        assert kilit_satiri < tarama_satiri, (
+            f'{ad}: kilit taramadan SONRA alınıyor '
+            f'({kilit_satiri} > {tarama_satiri}) — pencere açık kalır')
+
+
+def test_bn1_cari_hareket_kilidi_kendi_baglantisinda_aliyor():
+    """ÇİVİ: `_cari_hareket_okunur_id` kilidi KENDİ bağlantısında
+    almalı.
+
+    O bir `before_insert` eşleme dinleyicisi ve kendisine verilen
+    ham `baglanti` ile çalışıyor. Kilit `db.session` üzerinden
+    alınırsa numarayı yazacak işlemin DIŞINDA kalabilir ve hiçbir
+    şey korumaz."""
+    import ast as _ast
+    d = _bn1_uretici('_cari_hareket_okunur_id')
+    cagrilar = [_ast.unparse(c) for c in _ast.walk(d)
+                if isinstance(c, _ast.Call)
+                and _ast.unparse(c.func) == '_belge_no_kilidi']
+    assert cagrilar, 'kilit çağrısı yok'
+    assert any('baglanti' in c for c in cagrilar), (
+        f'kilit kendi bağlantısında alınmıyor: {cagrilar}')
+
+
+def test_bn1_kilit_islem_kapsamli():
+    """ÇİVİ: `pg_advisory_xact_lock` — `pg_advisory_lock` DEĞİL.
+
+    İşlem kapsamlı kilit COMMIT/ROLLBACK ile kendiliğinden
+    bırakılıyor. Oturum kapsamlı olanı elle bırakmak gerekir ve bir
+    hata yolunda bırakılmazsa kilit açıkta kalır: o andan sonra
+    HİÇBİR belge numarası üretilemez, sistem kilitlenir."""
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read()
+    assert 'pg_advisory_xact_lock' in kaynak, (
+        'işlem kapsamlı kilit kullanılmıyor')
+    kotu = [s.strip() for s in kaynak.replace('\r\n', '\n').split('\n')
+            if 'pg_advisory_lock' in s and not s.strip().startswith('#')]
+    assert not kotu, (
+        'oturum kapsamlı kilit var — bırakılmazsa sistem kilitlenir:\n  '
+        + '\n  '.join(k[:80] for k in kotu))
+
+
+def test_bn1_tek_kilit_anahtari():
+    """ÇİVİ: TEK küresel anahtar — ön ek başına anahtar YOK.
+
+    Bir istek iki ayrı ön ek için numara üretebiliyor (fatura kesen
+    uç FTR ve MYT üretiyor). İki ayrı kilit, iki işlemin ters sırada
+    alması hâlinde kilitlenmeye (deadlock) açık olurdu. Tek
+    anahtarda o sıra sorunu yok.
+
+    Kilit çağrıları ARGÜMANSIZ (ya da yalnız `baglanti`) olmalı:
+    biri ön ek geçirmeye başlarsa anahtar ön eke göre türetilmeye
+    başlar ve kilitlenme kapısı açılır."""
+    import ast as _ast
+    kilitler = []
+    for ad in ('_okunur_id', '_cari_hareket_okunur_id',
+               '_stok_okunur_id'):
+        d = _bn1_uretici(ad)
+        for c in _ast.walk(d):
+            if (isinstance(c, _ast.Call)
+                    and _ast.unparse(c.func) == '_belge_no_kilidi'):
+                kilitler.append((ad, [_ast.unparse(a) for a in c.args]))
+    assert kilitler, 'kilit çağrısı yok'
+    kotu = [(a, g) for a, g in kilitler
+            if [x for x in g if x != 'baglanti']]
+    assert not kotu, (
+        f'kilit çağrısına ön ek/anahtar geçiriliyor — kilitlenme '
+        f'kapısı: {kotu}')
+
+
+def test_bn1_sqlitede_etkisiz_ve_sessiz():
+    """SQLite'ta kilit SESSİZCE etkisiz olmalı — ve bu DOĞRU.
+
+    SQLite yazmaları tek veritabanı kilidiyle zaten sıralıyor,
+    yarış orada pencere bulamıyor. `pg_advisory_xact_lock`
+    SQLite'ta yok; çağrılsa her numara üretimi istisnaya düşer ve
+    `_yeni_id` RASTGELESİNE kaçardı — okunur numaralar biterdi.
+
+    Bu test iki şeyi birden çiviliyor: False dönüyor (yani kilit
+    denenmedi) ve HİÇBİR SQL yayınlanmıyor."""
+    from sqlalchemy import event as _ev
+    yayinlar = []
+    with fa.app.app_context():
+        kilitle = _kc1_kapi('_belge_no_kilidi')
+        assert kilitle is not None, '_belge_no_kilidi kapanışta yok'
+        motor = db.session.get_bind()
+
+        def yakala(conn, cursor, ifade, parametre, baglam, cok):
+            yayinlar.append(ifade)
+
+        _ev.listen(motor, 'before_cursor_execute', yakala)
+        try:
+            sonuc = kilitle()
+        finally:
+            _ev.remove(motor, 'before_cursor_execute', yakala)
+    assert sonuc is False, (
+        f'SQLite üzerinde kilit denenmiş ({sonuc}) — her numara '
+        f'üretimi istisnaya düşer ve rastgeleye kaçar')
+    assert not yayinlar, (
+        f'SQLite üzerinde SQL yayınlandı: {yayinlar[:2]}')
+
+
+def test_bn1_numaralar_okunur_ve_sirali_kaldi():
+    """TABANDA DA GEÇER — kilit DÜZENİ bozmadı mı?
+
+    Kilit çakışmayı kapatıyor ama numaraların okunur ve sıralı
+    kalması da şart. Buradaki asıl risk şu: kilit bir istisna
+    doğurursa `_okunur_id` sessizce `_yeni_id` rastgelesine düşer,
+    çakışma biter ama okunur numara da biter. Bu test onu yakalar.
+
+    (Gerçek PostgreSQL'de 8 eşzamanlı sipariş de ölçüldü:
+     SIP-BN-ACR26-01..08, delik yok, tekrar yok, rastgeleye düşen
+     yok.)"""
+    import re as _re
+    adm = istemci('admin', 'ADMIN')
+    idler = []
+    for i in range(3):
+        r = adm.post('/api/siparis', headers=H, json={
+            'musteri': 'BN1 MUSTERI', 'doviz': 'USD',
+            'durum': 'Onaylandi',
+            'kalemler': [{'urun_tip': 'BLOK', 'cins': 'TEST',
+                          'adet': 1, 'miktar': 15, 'birim': 'ton',
+                          'birim_fiyat': 500 + i, 'doviz': 'USD'}],
+            'yineleme_onay': True})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        idler.append(r.get_json()['id'])
+    rastgele = [i for i in idler
+                if not _re.fullmatch(r'SIP-[A-Z0-9-]*\d\d-\d+', i)]
+    assert not rastgele, (
+        f'numara rastgeleye düştü — kilit istisna doğuruyor '
+        f'olabilir: {rastgele}')
+    siralar = [int(i.rsplit('-', 1)[-1]) for i in idler]
+    assert siralar == sorted(siralar) and len(set(siralar)) == 3, (
+        f'numaralar sıralı/tekil değil: {idler}')
+
+
+def test_bn1_civi_eski_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — çivinin kör noktasını sınar.
+
+    "Kilit taramadan önce" denetimi, kilidi aşağı taşıyan bir
+    değişikliği gerçekten görüyor mu?"""
+    import ast as _ast
+    kaynak = ('def f():\n'
+              '    son = q.filter(m.id.like(k)).all()\n'
+              '    _belge_no_kilidi()\n')
+    satirlar = kaynak.split('\n')
+    d = _ast.parse(kaynak).body[0]
+    kilit = None
+    for c in _ast.walk(d):
+        if (isinstance(c, _ast.Call)
+                and _ast.unparse(c.func) == '_belge_no_kilidi'):
+            kilit = c.lineno
+    tarama = None
+    for no in range(d.lineno, (d.end_lineno or d.lineno) + 1):
+        if '.like(' in satirlar[no - 1]:
+            tarama = no
+            break
+    assert kilit and tarama and kilit > tarama, (
+        f'çivi, kilidi taramadan sonra alan kodu kaçırıyor '
+        f'(kilit={kilit}, tarama={tarama})')
+# ══════════════════════════════════════════════════════════════════
+# GB1 · GRUPLANMIŞ ALIŞ FATURASI BORCU ATOMİK OLSUN
+# ══════════════════════════════════════════════════════════════════
+# Aynı alış faturasının kalemleri TEK `CariHareket` satırında
+# birikiyor (C1/B3 kalıbı). Birikim ve çıkarma Python'da
+# OKU-DEĞİŞTİR-YAZ yapılıyordu — KB1'in (`kasa.bakiye`) aynı sınıfı,
+# başka kaynakta.
+#
+# ÖLÇÜLDÜ — gerçek PostgreSQL 16, READ COMMITTED, gerçek uçlar:
+#
+#   BİRİKİM  POST /api/stok/ekle · 6 çift × 2 eşzamanlı giriş
+#     yazılan blok 11 · borç beklenen 11.000 · gerçek 6.000
+#     → 5.000 USD KAYIP (%45,5)
+#
+#   ÇIKARMA  DELETE /api/stok/BLOK/<id> (mali_islem=fatura_duzelt)
+#     8 kalemlik grup · 3 çift eşzamanlı silme
+#     silinen 6 · borç beklenen 2.000 · gerçek 5.000
+#     → 3.000 USD FAZLA · kalem sayısı 5 (2 olmalı)
+#
+# Belirtiler ters ve ikisi de sinsi: birikimde tedarikçiye olan borç
+# EKSİK görünüyor, çıkarmada depodan düşmüş mal için borç FAZLA
+# kalıyor.
+#
+# BİRİKİM YÖNÜ BN1 İLE KAZARA KAPANMIŞTI (danışma kilidi işlem
+# kapsamlı, stok girişi de numara üretiyor). Buna güvenilmedi: iki
+# yön de bağımsız olarak atomik. ÖLÇÜLDÜ — BN1 kilidi devre dışı
+# bırakılıp yalnız GB1 ile koşuldu: rakamlar tam (12.000/12.000,
+# 12 kalem).
+#
+# BİLİNEN SINIR: BN1 kilidi olmadan iki ilk-giriş birbirini
+# görmediği için AYNI fatura için İKİ grup satırı açılabiliyor
+# (ölçüldü: 2 satır). Para doğru — toplam iki satıra dağılıyor,
+# kayıp yok — ama ekstrede aynı fatura iki satır görünür. Üretimde
+# BN1 bunu engelliyor; tek satır güvencesi için şema kısıtı
+# (benzersiz indeks) gerekirdi ve o ayrı bir karar.
+#
+# SQLite'TA EŞZAMANLILIK TESTİ YAZILMADI: SQLite yarışı gizler,
+# öyle bir test tabanda da geçerdi. Aşağıdakiler MEKANİZMAYI
+# çiviliyor.
+
+
+def _gb1_grup(ad, alacak=3000.0, kalem=3):
+    """Gruplanmış bir alış faturası satırı kurar."""
+    with fa.app.app_context():
+        h = CariHareket.query.filter_by(id=ad).first()
+        if h is None:
+            h = CariHareket(
+                id=ad, cari_id='C1', cari_unvan='ACIK CARI',
+                islem_tip='Alis Faturasi', evrak_no=ad,
+                borc=0, alacak=alacak, doviz='USD',
+                kdv_tutar=0, matrah=alacak, kalem_sayisi=kalem,
+                baglanti_tip='stok_fatura', baglanti_id=ad,
+                hareket_tarihi=date.today())
+            db.session.add(h)
+        else:
+            h.alacak, h.matrah, h.kalem_sayisi = alacak, alacak, kalem
+        db.session.commit()
+    return ad
+
+
+def test_gb1_kapi_atomik_update_yayinliyor():
+    """ÇİVİ: `_ch_grup_degistir` bir UPDATE yayınlamalı ve artırım
+    SQL'in İÇİNDE olmalı — Python'da hesaplanıp yazılmış bir sabit
+    değil.
+
+    Sütun KENDİSİNE atıf yapmazsa "atomik" iddiası sözde kalır."""
+    from sqlalchemy import event as _ev
+    yayinlar = []
+    _gb1_grup('GB1-SQL')
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_ch_grup_degistir')
+        assert kapi is not None, '_ch_grup_degistir kapanışta yok'
+        grup = CariHareket.query.filter_by(id='GB1-SQL').first()
+        motor = db.session.get_bind()
+
+        def yakala(conn, cursor, ifade, parametre, baglam, cok):
+            yayinlar.append(ifade)
+
+        _ev.listen(motor, 'before_cursor_execute', yakala)
+        try:
+            kapi(grup, tutar_delta=1000, kalem_delta=1)
+            db.session.commit()
+        finally:
+            _ev.remove(motor, 'before_cursor_execute', yakala)
+
+    guncellemeler = [y for y in yayinlar
+                     if y.strip().upper().startswith('UPDATE')
+                     and 'alacak' in y]
+    assert guncellemeler, (
+        f'UPDATE yayınlanmadı — artırım Python tarafında olabilir. '
+        f'Yayınlar: {yayinlar[:3]}')
+    sql = guncellemeler[0]
+    assert sql.count('alacak') >= 2, (
+        f'UPDATE sütunun kendisini okumuyor, artırım atomik değil:\n{sql}')
+
+
+def test_gb1_kapi_eski_sonucu_veriyor():
+    """Düzeltme RAKAMI değiştirmemeli — yalnız yarışı kapatmalı.
+
+    Eski hesap birikimde `q2(eski + delta)`, çıkarmada
+    `q2(max(0, eski - pay))` idi. Yeni kapı aynı sayıları vermeli;
+    sıfır tabanı da korunmalı (eski kod `max(0.0, ...)` diyordu)."""
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_ch_grup_degistir')
+        q2 = _kc1_kapi('q2')
+        for baslangic, delta, beklenen in (
+                (1000.0, 500.0, 1500.0),
+                (1000.0, -250.004, 749.996),
+                (1000.0, -5000.0, 0.0),          # sıfır tabanı
+                (0.0, 100.005, 100.01),
+                (33.33, 66.67, 100.0)):
+            _gb1_grup('GB1-PAR', alacak=baslangic, kalem=5)
+            grup = CariHareket.query.filter_by(id='GB1-PAR').first()
+            yeni, _ = kapi(grup, tutar_delta=delta)
+            db.session.commit()
+            db.session.refresh(grup)
+            bek = q2(beklenen)
+            assert abs(float(grup.alacak) - float(bek)) < 0.011, (
+                f'{baslangic} + {delta}: {grup.alacak} geldi, '
+                f'{bek} olmalıydı')
+            assert abs(float(yeni) - float(grup.alacak)) < 0.005, (
+                f'kapı {yeni} döndü ama satırda {grup.alacak} var')
+
+
+def test_gb1_kalem_sayisi_sifirin_altina_inmiyor():
+    """Sayaç negatife düşmemeli — grup satırı eksi kalemle kalmaz."""
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_ch_grup_degistir')
+        _gb1_grup('GB1-SIFIR', alacak=1000.0, kalem=1)
+        grup = CariHareket.query.filter_by(id='GB1-SIFIR').first()
+        for _ in range(3):
+            _, kalan = kapi(grup, kalem_delta=-1)
+            db.session.commit()
+        assert kalan == 0, f'sayaç {kalan} oldu, 0 olmalıydı'
+
+
+def test_gb1_elle_oku_degistir_yaz_kalmadi():
+    """ÇİVİ: grup alanları Python tarafında artırılmamalı.
+
+    METİN DEĞİL AST. Sınıfın geri gelmesini bu engelliyor: biri
+    kapıyı atlayıp yeniden `grup.alacak = ...` yazarsa burası
+    düşer."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    ALANLAR = ('alacak', 'kdv_tutar', 'matrah', 'kalem_sayisi')
+    bulgular = []
+    for d in _ast.walk(_ast.parse(kaynak)):
+        if isinstance(d, _ast.AugAssign):
+            hedefler, deger = [d.target], d.value
+        elif isinstance(d, _ast.Assign):
+            hedefler, deger = d.targets, d.value
+        else:
+            continue
+        for h in hedefler:
+            if not (isinstance(h, _ast.Attribute) and h.attr in ALANLAR):
+                continue
+            if not isinstance(h.value, _ast.Name):
+                continue
+            nesne = h.value.id
+            if nesne not in ('_grup', 'mevcut'):
+                continue
+            sag = _ast.unparse(deger)
+            if (isinstance(d, _ast.AugAssign)
+                    or f'{nesne}.{h.attr}' in sag
+                    or 'max(' in sag):
+                bulgular.append(
+                    f'satır {d.lineno}: {nesne}.{h.attr} = {sag[:60]}')
+    assert not bulgular, (
+        'grup alanı Python tarafında artırılıyor — '
+        '`_ch_grup_degistir` kullanılmalı:\n  ' + '\n  '.join(bulgular))
+
+
+def test_gb1_grup_silme_karari_dusumden_sonra():
+    """ÇİVİ: grup satırını silme KARARI, atomik düşümden SONRA
+    verilmeli.
+
+    Eskiden kalan kalem sayısı ÖNCE Python'da hesaplanıyor, karar
+    ona göre veriliyordu. Son kalemi iki kişi aynı anda silerse
+    ikisi de "kalan 0" görüp ikisi de silmeye çalışırdı. Artık
+    sayaç atomik azalıyor ve karar veritabanının DÖNDÜRDÜĞÜ sayıya
+    göre veriliyor.
+
+    Biri kararı yukarı taşırsa burası düşer."""
+    import ast as _ast
+    import io as _io
+    kaynak = _io.open(os.path.join(KOK, 'flask_app.py'),
+                      encoding='utf-8').read().replace('\r\n', '\n')
+    hedef = None
+    for d in _ast.walk(_ast.parse(kaynak)):
+        if (isinstance(d, _ast.FunctionDef)
+                and d.name == 'api_stok_sil'):
+            hedef = d
+            break
+    assert hedef is not None, 'api_stok_sil yok'
+    kapi_satiri = silme_satiri = None
+    for c in _ast.walk(hedef):
+        if not isinstance(c, _ast.Call):
+            continue
+        ad = _ast.unparse(c.func)
+        m = _ast.unparse(c)
+        if (ad == '_ch_grup_degistir' and 'tutar_delta' in m
+                and kapi_satiri is None):
+            kapi_satiri = c.lineno
+        if (ad == 'db.session.delete' and '_grup' in m
+                and silme_satiri is None):
+            silme_satiri = c.lineno
+    assert kapi_satiri is not None, (
+        'çıkarma atomik kapıdan geçmiyor')
+    assert silme_satiri is not None, 'grup silme çağrısı yok'
+    assert kapi_satiri < silme_satiri, (
+        f'silme kararı düşümden ÖNCE veriliyor '
+        f'({kapi_satiri} > {silme_satiri}) — son kalemi iki kişi '
+        f'aynı anda silerse ikisi de silmeye çalışır')
+
+
+def test_gb1_son_kalem_silinince_grup_gidiyor():
+    """Düzeltme DAVRANIŞI bozmadı mı?
+
+    Tek kalemli bir grubun kalemi silinince borç sıfırlanmalı,
+    sayaç sıfıra inmeli ve grup satırı gitmeli. Atomik düşüme
+    geçerken bu davranışı korumak zorundaydım.
+
+    (Tabanda DÜŞER — kapıyı doğrudan çağırıyor. İlk hâlinde
+    docstring'ine "tabanda da geçer" yazmıştım; yanlıştı,
+    düzelttim.)"""
+    with fa.app.app_context():
+        kapi = _kc1_kapi('_ch_grup_degistir')
+        _gb1_grup('GB1-SON', alacak=1000.0, kalem=1)
+        grup = CariHareket.query.filter_by(id='GB1-SON').first()
+        yeni, kalan = kapi(grup, tutar_delta=-1000.0, kalem_delta=-1)
+        assert kalan == 0, f'kalan {kalan}'
+        assert abs(float(yeni)) < 0.005, f'borç {yeni} kaldı'
+        db.session.delete(grup)
+        db.session.commit()
+        assert CariHareket.query.filter_by(id='GB1-SON').count() == 0
+
+
+def test_gb1_civi_eski_hatayi_yakaliyor():
+    """TABANDA DA GEÇER — çivinin kör noktasını sınar.
+
+    Kaldırdığımız biçimlerin hepsini AST gerçekten görüyor mu?"""
+    import ast as _ast
+    for eski in (
+            "_grup.alacak = q2(max(0.0, (_grup.alacak or 0) - _pay))",
+            "mevcut.kdv_tutar = q2((mevcut.kdv_tutar or 0) + _ek_kdv)",
+            "mevcut.kalem_sayisi = (mevcut.kalem_sayisi or 0) + 1",
+            "_grup.kalem_sayisi = max(0, (_grup.kalem_sayisi or 1) - 1)"):
+        d = _ast.parse(eski).body[0]
+        h = d.targets[0]
+        sag = _ast.unparse(d.value)
+        nesne = h.value.id
+        assert (f'{nesne}.{h.attr}' in sag or 'max(' in sag), (
+            f'çivi bunu kaçırıyor: {eski}')

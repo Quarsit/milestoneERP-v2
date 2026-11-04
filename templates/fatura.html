@@ -452,9 +452,13 @@ function yfHesapla() {
   document.getElementById('yfKdv').disabled = !yurtici;
   document.getElementById('yfTevkifat').disabled = !yurtici;
 
-  const ara = YF_KALEMLER.reduce((t, k) => t + (k.toplam_fiyat || 0), 0);
+  /* YV1: `ara` ham kalem toplamlarından geliyor ve fazladan
+     ondalık taşıyabiliyor; sunucu onu ÖNCE yuvarlıyor. Ortak kapı
+     aynı sırayı uyguluyor. */
+  const _araHam = YF_KALEMLER.reduce((t, k) => t + (k.toplam_fiyat || 0), 0);
   const oran = yurtici ? (parseFloat(document.getElementById('yfKdv').value) || 0) : 0;
-  const kdv = ara * oran / 100;
+  const _h = kdvHesapla(_araHam, oran, false);
+  const ara = _h.matrah, kdv = _h.kdv;
   const tv = yurtici ? document.getElementById('yfTevkifat').value : '';
   let tevkifat = 0;
   if (tv && tv.includes('/')) {
@@ -885,8 +889,9 @@ function duzToplamCiz() {
   const dv = f.doviz || 'USD';
   const matrah = parseFloat(document.getElementById('dMatrah').value) || 0;
   const oran = (f.satis_tipi === 'yurtici') ? (parseFloat(document.getElementById('dKdv').value) || 0) : 0;
-  const kdv = matrah * oran / 100;
-  const toplam = matrah + kdv;
+  /* YV1: ortak kapı. */
+  const _h = kdvHesapla(matrah, oran, false);
+  const kdv = _h.kdv, toplam = _h.toplam;
   const kur = parseFloat(document.getElementById('dKur').value) || 0;
   const s2 = v => v.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   let satir = `Matrah ${s2(matrah)}${oran ? ` + KDV ${s2(kdv)}` : ''} = <b>${s2(toplam)} ${kacar(dv)}</b>`;

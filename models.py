@@ -1998,6 +1998,33 @@ def _cari_firma_uyeligi(oturum, baglam, ornekler):
         oturum.add(CariFirma(cari_id=c.id, firma_id=fid))
 
 
+class IstekIzi(db.Model):
+    """YK3 · YİNELENEN İSTEK KALKANI için istek parmak izi.
+
+    ÖLÇÜLDÜ: aynı gövde aynı uca iki kez gönderildiğinde beş uç da
+    İKİNCİ kaydı yazıyordu — fatura tahsilatı (aynı 500 $ iki kez
+    düştü, bakiye 10.000 → 9.500 → 9.000), hızlı satış (aynı
+    `fatura_no` ile iki fatura), çek kaydı (aynı `cek_no` iki kez),
+    maliyet, sabit gider.
+
+    NEDEN BELLEKTE DEĞİL: uygulamanın kendi notu üretimde
+    `gunicorn -w 3` diyor. Bellekteki bir sözlük yalnız bir
+    süreçte dururdu; ikinci istek başka bir işçiye düşünce kalkan
+    sessizce devre dışı kalırdı — üçte iki etkili bir koruma,
+    korumasızlıktan daha kötüdür çünkü korunduğunu sanırsın.
+
+    `anahtar` BENZERSİZ: iki istek tam aynı anda gelirse ikisi de
+    aramada boş bulur; benzersizlik kısıtı ikincisini veritabanı
+    düzeyinde durdurur (yarış koşulu).
+    """
+    __tablename__ = 'istek_izi'
+    id         = db.Column(db.Integer, primary_key=True)
+    anahtar    = db.Column(db.String(64), unique=True, index=True)
+    kullanici  = db.Column(db.String(60))
+    yol        = db.Column(db.String(200))
+    olusturma  = db.Column(db.DateTime, default=datetime.now, index=True)
+
+
 _event.listen(db.session, 'before_flush', _cari_firma_uyeligi)
 
 

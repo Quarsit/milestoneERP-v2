@@ -36,6 +36,7 @@ from sqlalchemy import func
 from sqlalchemy import text as sa_text   # RN1: dinleyici icinde ham SQL
 from flask_migrate import Migrate
 import logging, uuid, os, json
+import hashlib, random          # YK3: istek parmak izi ve seyrek budama
 from datetime import datetime, date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import requests
@@ -47,6 +48,7 @@ from models import Cek, CekHareket
 from models import KalemKarsilama          # F1: kalem kaynak kirilimi
 from models import CariErisim, CariKisi   # CRM-B: erisim ve kisiler
 from models import Bildirim              # BL1: sistem ici bildirimler
+from models import IstekIzi              # YK3: yinelenen istek kalkani
 from models import CariAktivite              # CRM-E: temas kaydi
 from models import SabitGider, NakitPlan   # NA1: nakit akisi
 from models import KdvIadeDosya
@@ -730,6 +732,43 @@ def create_app():
         ('/api/kesim', 'kesim'),
         # F6: iz surme stok kaydini okur -> stok yetkisi
         ('/api/iz', 'stok'),
+        # ── OY1 · OKUMA KAPISININ HİÇ GÖRMEDİĞİ YOLLAR ──
+        # ÖLÇÜLDÜ (`karlilik=gizli, maliyet=gizli, cari=gizli` kullanıcı):
+        #   /api/maliyet                → 403  ✓
+        #   /api/cari                   → 403  ✓
+        #   /api/ortaklik               → 403  ✓  (aynı modül, gövdede sorar)
+        #   /api/karlilik               → 200  maliyet_usd + kar_usd + marj
+        #   /api/karlilik/<id>/dokum    → 200  bloğun alış bedeli
+        #   /api/rapor/stok_maliyet     → 200  tüm stok alım maliyeti
+        #   /api/rapor/yaslandirilmis_cari → 200  /api/cari'nin yasakladığı cari
+        # Sebep: okuma kapısı yolu bir modüle bağlayamayınca
+        # "tanimlanmamis API — sessizce gec" diyor. Yani SAYFA kilitliydi,
+        # VERİSİ açıktı.
+        #
+        # Eşleme burada UYDURULMUYOR; sistem dört yerde zaten söylemiş:
+        #   · YETKI_MODULLERI'nde 'karlilik' ve 'raporlar' var
+        #   · menü /karlilik'ı 'karlilik', /raporlar'ı 'raporlar' ile gizliyor
+        #   · sayfa kapıları yetkisizi dashboard'a geri atıyor
+        #   · raporlar.html her bölümü `gorunur(modul)` ile gizleyip
+        #     "Yetkin yok." yazıyor
+        # Eksik olan tek şey sunucunun bunu uygulamasıydı.
+        ('/api/karlilik', 'karlilik'),
+        ('/api/rapor', 'raporlar'),
+        # Blok izleme `/api/iz`in başka adla ikizi: alis_fiyati, matrah
+        # ve bloğun tüm maliyet kayıtlarını döndürüyor; kendi açıklaması
+        # "tüm maliyet/karlılık zinciri sorgulanabilir" diyor. F6 kararı
+        # burada da geçerli.
+        ('/api/blok', 'stok'),
+        # YK1'in okumada BİLEREK açık bıraktığı uçlar (kullanıcı kararı):
+        # çek listesi, detayı, ÖZETİ, sabit gider ve nakit planı artık
+        # `kasa` yetkisi istiyor. Bugün ekranındaki çek kartı kasa
+        # yetkisi olmayanda boş görünür — istenen davranış bu.
+        # YAZMA davranışı DEĞİŞMİYOR: bu üç önek YAZMA_EK_MAP'te de
+        # 'kasa'ya bağlıydı ve yazma kapısı URL_MODUL_MAP'e daha önce
+        # bakıyor; oradan kaldırıldılar.
+        ('/api/cek', 'kasa'),
+        ('/api/sabit_gider', 'kasa'),
+        ('/api/nakit_plan', 'kasa'),
         ('/api/lookup', 'ayarlar'),
         ('/api/ayarlar', 'ayarlar'),
         ('/api/yedek', 'ayarlar'),
@@ -743,15 +782,20 @@ def create_app():
     # API - sessizce gec" diyordu. Olculdu: yalnizca OKUMA yetkili
     # kullanici POST /api/cek ile cek kaydedebiliyordu (cariye alacak
     # hareketi de olusuyordu).
-    # URL_MODUL_MAP'e eklenmedi: okuma guard'i da o haritayi kullanir
-    # ve Bugun ekranindaki /api/cek/ozet gibi capraz okumalar kasa
-    # yetkisi olmayan satiscida kirilirdi.
+    #
+    # OY1: cek / nakit_plan / sabit_gider BURADAN KALDIRILDI ve
+    # URL_MODUL_MAP'e tasindi. YK1'in gerekcesi suydu: "URL_MODUL_MAP'e
+    # eklenmedi: okuma guard'i da o haritayi kullanir ve Bugun
+    # ekranindaki /api/cek/ozet gibi capraz okumalar kasa yetkisi
+    # olmayan satiscida kirilirdi." Olculdu ve dogruydu — ama o
+    # serbestlik kasa yetkisi olmayan herkese butun cekleri ve sabit
+    # giderleri okutuyordu. Kullanici kirilmayi bilerek kabul etti:
+    # Bugun ekranindaki cek karti kasa yetkisi olmayanda bos gorunur.
+    # YAZMA davranisi degismiyor; iki haritada da modul 'kasa' ve
+    # yazma kapisi URL_MODUL_MAP'e bu haritadan ONCE bakiyor.
     # Deger bir DEMET ise herhangi birinde yazma yetkisi yeterli
     # (konteyner hem proforma hem sevkiyat ekranindan yonetiliyor).
     YAZMA_EK_MAP = [
-        ('/api/cek', 'kasa'),
-        ('/api/nakit_plan', 'kasa'),
-        ('/api/sabit_gider', 'kasa'),
         ('/api/avans', 'cari'),
         ('/api/konteyner', ('proforma', 'sevkiyat')),
         ('/api/sicak_satis', 'fatura'),
@@ -791,6 +835,177 @@ def create_app():
         # degistirebiliyor (sil_zorla, durum_otomatik_duzelt...). Artik
         # asagidaki _diag_guard ile ADMIN sarti araniyor.
     ]
+
+    # ─── YK3 · YİNELENEN İSTEK KALKANI ───────────────────────────────
+    #
+    # ÖLÇÜLDÜ — aynı gövde aynı uca iki kez gönderildi:
+    #   fatura tahsilatı   200 / 200   ✗ iki kayıt
+    #                      aynı 500 $ iki kez düştü; fatura bakiyesi
+    #                      10.000 → 9.500 → 9.000 oldu ve ikinci yanıt
+    #                      hiç itiraz etmedi.
+    #   hızlı satış        200 / 200   ✗ aynı `fatura_no` ile iki fatura
+    #   çek kaydı          200 / 200   ✗ aynı `cek_no` iki kez
+    #   maliyet kaydı      200 / 200   ✗
+    #   sabit gider        200 / 200   ✗
+    #
+    # Ekranların düğme kilidi ilk savunma ama TEK savunma olamaz: ağ
+    # koptuğunda tarayıcı isteği kendisi yineliyor, ikinci sekme ve
+    # "geri" tuşu da kilidi atlıyor.
+    #
+    # NEDEN MERKEZÎ KAPI, uç uç denetim değil:
+    # OY1'de tam bunu ölçtük — sayfa kilitliydi ama API'si açıktı,
+    # çünkü denetim uç uç yapılmış ve birkaçı atlanmıştı. Tek kapı
+    # HENÜZ YAZILMAMIŞ uçları da kapsar. Evin `_okuma_yetki_guard` /
+    # `_yazma_yetki_guard` düzeni de böyle.
+    #
+    # YANLIŞ RED RİSKİ KAPALI: reddedilen istek 409 ve
+    # `yineleme_suphesi` döner; `base.html`deki `api()` sarmalayıcısı
+    # kullanıcıya sorar ve onaylarsa `yineleme_onay` ile yeniden
+    # gönderir. Yani meşru hiçbir kayıt kaybolmaz.
+    # 5 SANİYE (kullanıcı kararı). Ölçüldü: 20 saniyede mevcut 7
+    # test düşüyordu ve hepsinin örüntüsü aynıydı — kaydı oluştur,
+    # sil, aynısını yeniden oluştur. Bu gerçek bir akış: yanlış
+    # girdim, sildim, yeniden girdim. Ekrandan yapıldığında 8-10
+    # saniye sürüyor; 5 saniye mekanik tekrarı (çift tıklama, ağ
+    # yeniden denemesi) yakalar, insanı yakalamaz.
+    YINELEME_PENCERE_SN = 5
+    # Kalkandan MUAF yollar — her biri gerekçesiyle.
+    YINELEME_MUAF = (
+        '/api/firma/sec',        # yazmaz, oturumdaki seçimi taşır
+        '/api/bildirim',         # okundu işaretleme; tekrarı zararsız
+        '/api/ayarlar/lookup',   # liste güncelleme, idempotent
+        '/api/doviz_kur',        # kur tazeleme
+    )
+
+    def _yineleme_anahtari():
+        """kullanıcı + firma + yöntem + yol + gövde → tek parmak izi."""
+        try:
+            ham = request.get_data(cache=True) or b''
+        except Exception:
+            ham = b''
+        try:
+            # Gövde JSON ise anahtarları SIRALA: aynı veri, farklı
+            # sırayla gelirse yine aynı izi vermeli.
+            _g = json.loads(ham.decode('utf-8')) if ham else None
+            _g = json.dumps(_g, sort_keys=True, ensure_ascii=False,
+                            default=str)
+        except Exception:
+            _g = ham.decode('utf-8', 'replace')
+        _kim = f"{session.get('kullanici') or '-'}|{session.get('firma_id') or '-'}"
+        return hashlib.sha256(
+            f'{_kim}|{request.method}|{request.path}|{_g}'.encode('utf-8')
+        ).hexdigest()
+
+    @app.before_request
+    def _yineleme_kalkani():
+        # ── DELETE KAPSAM DIŞI ──
+        # Yinelenen SİLME zararsız: ikinci istek silinecek bir şey
+        # bulamaz. Tehlikeli olan yinelenen OLUŞTURMA — ikinci kayıt
+        # gerçekten oluşuyor.
+        # Üstelik DELETE'in gövdesi yok, yani "yine de yap" onayını
+        # taşıyamazdı; kullanıcı duvara toslar ve çıkış yolu olmazdı.
+        # ÖLÇÜLDÜ: DELETE kapsamdayken üç mevcut test düşüyordu, üçü
+        # de aynı kaydı silip yeniden kuran senaryolardı.
+        if request.method not in ('POST', 'PUT', 'PATCH'):
+            return None
+        if not request.path.startswith('/api/'):
+            return None
+        if 'kullanici' not in session:
+            return None
+        for _m in YINELEME_MUAF:
+            if request.path.startswith(_m):
+                return None
+        # Kullanıcı "yine de kaydet" dediyse geç.
+        # Onay hem GÖVDEDEN hem SORGU DİZESİNDEN okunur: gövdesiz
+        # bir istek de "yine de yap" diyebilmeli.
+        if request.args.get('yineleme_onay'):
+            return None
+        try:
+            _d = request.get_json(silent=True) or {}
+            if isinstance(_d, dict) and _d.get('yineleme_onay'):
+                return None
+        except Exception:
+            pass
+
+        anahtar = _yineleme_anahtari()
+        simdi = datetime.now()
+        sinir = simdi - timedelta(seconds=YINELEME_PENCERE_SN)
+        try:
+            iz = IstekIzi.query.filter_by(anahtar=anahtar).first()
+            if iz is not None:
+                if iz.olusturma and iz.olusturma >= sinir:
+                    return jsonify({
+                        'ok': False, 'error': 'yineleme_suphesi',
+                        # Ekran onayı HANGİ alana yazacağını yanıttan
+                        # okur; böylece ayrı denetimlerin ayrı onayı
+                        # olur ve biri ötekini susturmaz.
+                        'onay_alani': 'yineleme_onay',
+                        'mesaj': 'Bu kaydı az önce oluşturdunuz. '
+                                 'Çift tıklama ya da bağlantı yenilenmesi '
+                                 'olabilir.'}), 409
+                # Pencere geçmiş: aynı istek SONRADAN tekrar meşru.
+                iz.olusturma = simdi
+                db.session.commit()
+                return None
+            db.session.add(IstekIzi(
+                anahtar=anahtar, kullanici=session.get('kullanici'),
+                yol=request.path[:200], olusturma=simdi))
+            db.session.commit()
+            # İstek başarısız biterse bu izi silelim (aşağıdaki
+            # `_yineleme_izini_temizle`).
+            g.yineleme_anahtari = anahtar
+        except Exception as e:
+            # YARIŞ: iki istek aynı anda geldi, ikisi de aramada boş
+            # buldu, benzersizlik kısıtı ikincisini durdurdu. Bu tam
+            # olarak yakalamak istediğimiz durum.
+            db.session.rollback()
+            if 'anahtar' in str(e).lower() or 'unique' in str(e).lower():
+                return jsonify({
+                    'ok': False, 'error': 'yineleme_suphesi',
+                    'onay_alani': 'yineleme_onay',
+                    'mesaj': 'Bu kayıt şu anda zaten işleniyor.'}), 409
+            # Kalkan çalışmıyorsa isteği DURDURMUYORUZ: kalkan bir
+            # kolaylık, iş akışını kesmemeli.
+            app.logger.warning(f'Yineleme kalkani hatasi: {e}')
+        return None
+
+    @app.after_request
+    def _yineleme_izini_temizle(yanit):
+        """BAŞARISIZ istek iz BIRAKMAZ.
+
+        ÖLÇÜLDÜ: iz `before_request`te yazılıyor (yarış koruması
+        için şart), ama 400 alan bir istek de iz bırakıyordu —
+        kullanıcı formu düzeltip tekrar denediğinde gerçek hata
+        yerine "bu kaydı az önce oluşturdunuz" görüyordu.
+        Başarısızsa izi siliyoruz; yarış koruması yine duruyor
+        çünkü eşzamanlı ikinci istek henüz yanıt dönmeden
+        engelleniyor."""
+        anahtar = getattr(g, 'yineleme_anahtari', None)
+        if anahtar and yanit.status_code >= 400:
+            try:
+                IstekIzi.query.filter_by(anahtar=anahtar).delete(
+                    synchronize_session=False)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        return yanit
+
+    @app.before_request
+    def _yineleme_izlerini_buda():
+        """Eski izleri temizle — tablo sonsuza kadar büyümesin.
+
+        Her istekte sorgu açmamak için seyrek çalışır."""
+        if random.random() > 0.01:
+            return None
+        try:
+            IstekIzi.query.filter(
+                IstekIzi.olusturma < datetime.now() - timedelta(hours=6)
+            ).delete(synchronize_session=False)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return None
+    # ─── /YİNELENEN İSTEK KALKANI ────────────────────────────────────
 
     @app.before_request
     def _diag_guard():
@@ -901,6 +1116,49 @@ def create_app():
         '/api/ayarlar/firma',     # firma bilgisi (belge/proforma çapraz)
     ]
 
+    # ─── OY1 · ÇOK MODÜLLÜ OKUMA HARİTASI ─────────────────────────────
+    # Rapor uçlarının her biri BİRDEN ÇOK ekrandan okunuyor ve ekran
+    # bölümü iki modülün VEYA'sı ile açılıyor. raporlar.html'in kendi
+    # kuralı (`gorunur()`), satır satır:
+    #
+    #   stokYukle           stok     VEYA raporlar   → stok_durum
+    #   cariYukle           cari     VEYA raporlar   → yaslandirilmis_cari
+    #   konteynerYukle      sevkiyat VEYA raporlar   → konteyner_takip
+    #   performansYukle     karlilik VEYA raporlar   → satis_performans
+    #   maliyetAnalizYukle  maliyet  VEYA raporlar   → maliyet_analiz
+    #   stokMaliyetYukle    stok     VEYA raporlar   → stok_maliyet
+    #   donusumYukle        raporlar                 → donusum
+    #
+    # EKRAN BURADA ŞARTNAMEDİR. `/api/rapor` önekini tek bir modüle
+    # bağlarsam `raporlar` yetkisi olmayan ama `stok` yetkisi olan bir
+    # kullanıcının STOK ekranı ve dashboard'u kırılır (stok.html ve
+    # dashboard.html `stok_durum`u çapraz okuyor) — YK1'in
+    # `/api/cek/ozet` tuzağının aynısı. Tek modüllük harita bu VEYA'yı
+    # ifade EDEMEZ; yazma tarafında aynı ihtiyaç için YAZMA_EK_MAP'te
+    # demet desteği var, okumada yoktu.
+    #
+    # Yalnızca OKUMA kapısı bu haritaya bakar: buradaki uçların hepsi
+    # GET; `/api/rapor` ve `/api/karlilik` altında tek bir yazma ucu
+    # yok, dolayısıyla yazma kapısına eklenecek bir şey de yok.
+    #
+    # `/api/rapor/acente_performans` BURADA DEĞİL: onu yalnızca
+    # siparis.html çağırıyor, Raporlar sayfası çağırmıyor. Aşağıdaki
+    # ALT_YOL deseni onu 'siparis'e bağlıyor; buraya 'raporlar' da
+    # eklemek, hiçbir ekranın göstermediği acente komisyonlarını
+    # rapor yetkilisine açmak olurdu.
+    OKUMA_COKLU_DESENLER = [
+        (_re_alt.compile(r'^/api/rapor/stok_durum'), ('stok', 'raporlar')),
+        (_re_alt.compile(r'^/api/rapor/stok_maliyet'), ('stok', 'raporlar')),
+        (_re_alt.compile(r'^/api/rapor/yaslandirilmis_cari'),
+         ('cari', 'raporlar')),
+        (_re_alt.compile(r'^/api/rapor/konteyner_takip'),
+         ('sevkiyat', 'raporlar')),
+        (_re_alt.compile(r'^/api/rapor/satis_performans'),
+         ('karlilik', 'raporlar')),
+        (_re_alt.compile(r'^/api/rapor/maliyet_analiz'),
+         ('maliyet', 'raporlar')),
+    ]
+
     @app.before_request
     def _okuma_yetki_guard():
         """GET isteklerinde, kullanicinin ilgili modul icin en az OKUMA
@@ -932,6 +1190,18 @@ def create_app():
             for _desen, _m in ALT_YOL_DESENLERI:
                 if _desen.match(request.path):
                     modul = _m
+                    break
+        # OY1: cok modullu rapor uclari. ONEK haritasindan ONCE —
+        # `/api/rapor` oneki asagida 'raporlar'a bagli ve bu desenler
+        # tam olarak ondan muaf tutulacak uclar.
+        if not modul:
+            for _desen, _mler in OKUMA_COKLU_DESENLER:
+                if _desen.match(request.path):
+                    # Herhangi birinde okuma varsa gec; yoksa mesajda
+                    # ILKI gorunur (yazma kapisindaki demet mantiginin
+                    # aynisi).
+                    modul = next((x for x in _mler
+                                  if _yetki_var_mi(x, 'okuma')), _mler[0])
                     break
         for prefix, m in URL_MODUL_MAP:
             if modul:
@@ -1126,6 +1396,141 @@ def create_app():
             set_committed_value(stok, 'durum', yeni_durum)
             return True
         return False
+
+    def _stok_durum_degistir(stok, yeni_durum, izinli):
+        """RZ2 — stok durumunu ATOMİK olarak değiştirir.
+
+        RZ1'in `_stok_serbestten_al` kapısı aynı işi yalnız 'Serbest'
+        kaynağı için yapıyor; bu yüzden yalnız İKİ yolda
+        kullanılabildi (`_proforma_stoklarini_rezerve_et`,
+        `api_rezervasyon_ekle`). Kaynağı 'Serbest' VEYA 'Rezerve'
+        kabul eden üç yol kapıya bağlanamadı ve açıkta kaldı:
+        `_kalem_rezervasyonlari_olustur`,
+        `api_proforma_siparise_donustur`, `api_kesim_ekle`.
+
+        ÖLÇÜLDÜ — gerçek PostgreSQL 16, READ COMMITTED. 20 deneme,
+        her denemede AYNI bloğa 2 eşzamanlı sipariş (farklı müşteri):
+
+            200 dönen istek            40/40
+            İKİ rezervasyonlu blok     20/20     %100
+
+        İki müşteri de bloğun kendisine ayrıldığını görüyor. Blok tek.
+
+        BU HATA BUGÜN GÖRÜNMÜYOR: belge numarası çakışması (BN1)
+        ikinci isteği daha erken, HTTP 500 ile öldürüyor; stoğa hiç
+        varmıyor. Yani numara hatası bu hatayı KAZARA perdeliyor.
+        Ölçüm için numara üreticisini çakışmaz hâle getirip yalıttım.
+        Yamalar bu yüzden RZ2 → BN1 sırasıyla gidiyor: ters sırada
+        BN1 perdeyi kaldırır ve bugün görünmeyen hata görünür olur.
+
+        KAPININ MANTIĞI: `izinli` içinde `yeni_durum` YOKSA geçiş
+        gerçek bir kapıdır — ikinci işlem 0 satır günceller, False
+        alır. VARSA (teklif aşamasında Rezerve→Rezerve) ikisi de
+        geçer; istenen de bu. Kullanıcının kararı: "teklif
+        rezervasyonunda serbest kalsın ama aynı blok ikinci bir
+        teklife işlenebilsin, ancak uyarsın ve onay alsın."
+        Uyarı `_teklif_cakismasi` ile veriliyor.
+
+        NULL DURUM: göç öncesi satırlarda `durum` NULL olabilir ve
+        mevcut kod her yerde `k.durum or 'Serbest'` diyor. `IN`
+        NULL ile eşleşmediği için 'Serbest' izinliyse NULL da
+        geçiriliyor — yoksa eski satırlar kapıda takılırdı.
+        """
+        from sqlalchemy.orm.attributes import set_committed_value
+        M = type(stok)
+        _izin = tuple(izinli)
+        _kosul = M.durum.in_(_izin)
+        if 'Serbest' in _izin:
+            _kosul = db.or_(_kosul, M.durum.is_(None))
+        n = (db.session.query(M)
+             .filter(M.id == stok.id, _kosul)
+             .update({M.durum: yeni_durum}, synchronize_session=False))
+        if n == 1:
+            set_committed_value(stok, 'durum', yeni_durum)
+            return True
+        return False
+
+    def _rz2_atlandi(stok_id, sebep):
+        """RZ2 — kapı bir stoğu geçirmediğinde SESSİZ KALMAMAK için.
+
+        Kapıyı tek başına eklemek yeni bir sessiz kayıp doğururdu:
+        ikinci sipariş o stok olmadan oluşur, kullanıcı ekranda
+        hiçbir şey görmez. Atlananlar istek boyunca burada toplanıp
+        uç noktanın cevabında geri veriliyor.
+        """
+        _l = getattr(g, '_rz2_atlanan', None)
+        if _l is None:
+            _l = []
+            g._rz2_atlanan = _l
+        _l.append({'stok_id': stok_id, 'sebep': sebep})
+
+    @app.after_request
+    def _rz2_atlananlari_bildir(yanit):
+        """RZ2 · atlanan stokları HER başarılı cevaba ekler.
+
+        NEDEN TEK YERDE, uç nokta başına değil: stok rezerve eden
+        BEŞ uç var —
+            api_siparis_ekle · api_sicak_satis ·
+            api_siparis_guncelle · api_siparis_stok_ekle ·
+            api_proforma_siparise_donustur
+        Uç başına yazsaydım biri unutulur ve o uç sessizce
+        korumasız kalırdı; OY1'de ölçtüğümüz hatanın aynısı. Burada
+        bir yazma yolu eklense bile bildirim kendiliğinden işliyor.
+
+        Hata cevaplarına DOKUNULMUYOR: orada zaten sebebi söyleyen
+        bir mesaj var, üstüne yazmak onu bulandırırdı.
+        """
+        try:
+            _atl = getattr(g, '_rz2_atlanan', None)
+            if not _atl or yanit.status_code not in (200, 201):
+                return yanit
+            _v = yanit.get_json(silent=True)
+            if not isinstance(_v, dict):
+                return yanit
+            _v['atlanan_stoklar'] = _atl
+            _v['mesaj'] = (
+                (_v.get('mesaj') or '')
+                + f' — ancak {len(_atl)} stok eklenemedi: '
+                + ', '.join(str(a.get('stok_id')) for a in _atl)
+                + ' (bu arada başkasına ayrılmış ya da müsait değil).')
+            yanit.set_data(json.dumps(_v, ensure_ascii=False,
+                                      default=str))
+            yanit.headers['Content-Type'] = 'application/json'
+        except Exception as _e:
+            app.logger.warning(f'[RZ2] atlanan bildirimi eklenemedi: {_e}')
+        return yanit
+
+    def _teklif_cakismasi(kalemler_data):
+        """RZ2 · bu stoklar BAŞKA bir teklife/siparişe bağlı mı?
+
+        Kullanıcının kararı: teklif aşamasında blok serbest kalsın,
+        aynı blok ikinci bir teklife de işlenebilsin — AMA sistem
+        bunun başka bir teklife bağlı olduğunu söyleyip onay istesin.
+
+        Onay YK3'ün `onay_alani` düzeneğiyle alınıyor: 409 +
+        `onay_alani`, tarayıcı soruyor, kullanıcı onaylarsa istek
+        aynı gövdeyle `teklif_cakisma_onay: true` olarak dönüyor.
+        Yeni ekran kodu gerekmiyor; `api()` sarmalayıcısı zaten
+        bütün yazma isteklerini bu yoldan geçiriyor.
+        """
+        _idler = []
+        for _k in (kalemler_data or []):
+            for _s in (_k.get('stok_ids') or []):
+                if _s and _s not in _idler:
+                    _idler.append(_s)
+        if not _idler:
+            return []
+        _cakisan = []
+        for _r in Rezervasyon.query.filter(
+                Rezervasyon.stok_id.in_(_idler),
+                Rezervasyon.iptal_nedeni.is_(None)).all():
+            _cakisan.append({
+                'stok_id': _r.stok_id,
+                'musteri': _r.musteri,
+                'siparis_id': _r.siparis_id,
+                'proforma_id': _r.proforma_id,
+            })
+        return _cakisan
 
     def _stok_getir(stok_id, stok_tip):
         """Tip ve ID'ye göre doğru tablo'dan stok kaydını döner."""
@@ -1362,13 +1767,25 @@ def create_app():
             onceki = DovizKur.query.filter(
                 DovizKur.doviz == doviz, DovizKur.tarih <= hedef).order_by(
                 DovizKur.tarih.desc()).first()
-            if onceki and (onceki.satis or onceki.alis):
-                return float(onceki.satis or onceki.alis)
+            # ── KC1 · ALAN SIRASI `_kur_getir` İLE AYNI ──
+            # Burası `satis or alis` diyordu, `_kur_getir` ise
+            # `alis or efektif or satis`. Aynı çevrim, hangi yoldan
+            # geçtiğine göre farklı kur: ölçüldü, 1.000 EUR bir
+            # yoldan 56.000 TL, öbüründen 56.200 TL (%0,4).
+            # Tam gün kaydı varsa `_kur_getir` cevap veriyor, yoksa
+            # burası — yani fark ARŞİV DIŞI tarihlerde çıkıyordu ve
+            # tam da orada iki ekran birbirini tutmuyordu.
+            # Kullanıcı kararı: ALIŞ kuru esas (VUK'un değerleme
+            # kuralıyla da örtüşüyor).
+            def _alan(k):
+                return k.alis or k.efektif or k.satis
+            if onceki and _alan(onceki):
+                return float(_alan(onceki))
             sonraki = DovizKur.query.filter(
                 DovizKur.doviz == doviz, DovizKur.tarih >= hedef).order_by(
                 DovizKur.tarih.asc()).first()
-            if sonraki and (sonraki.satis or sonraki.alis):
-                return float(sonraki.satis or sonraki.alis)
+            if sonraki and _alan(sonraki):
+                return float(_alan(sonraki))
         except Exception as exc:
             app.logger.warning(f'_en_yakin_kur: {exc}')
         return None
@@ -1813,22 +2230,10 @@ def create_app():
         if not kdv_tutar or kdv_tutar <= 0:
             return None
         try:
-            # USD karsiligi hesapla (kur)
-            if doviz == 'USD':
-                usd_k = kdv_tutar
-            else:
-                k = DovizKur.query.filter_by(doviz='USD').order_by(
-                    DovizKur.tarih.desc()).first()
-                kur = (k.alis if k else 0) or 1
-                if doviz == 'TRY':
-                    usd_k = kdv_tutar / kur if kur else 0
-                elif doviz == 'EUR':
-                    eur_k = DovizKur.query.filter_by(doviz='EUR').order_by(
-                        DovizKur.tarih.desc()).first()
-                    eur_kur = (eur_k.alis if eur_k else 0) or 0
-                    usd_k = (kdv_tutar * eur_kur / kur) if kur else 0
-                else:
-                    usd_k = kdv_tutar
+            # KC1: USD karşılığı ortak kapıdan. Elle yazılı hâli
+            # USD/EUR/TRY dışını sessizce geçiriyordu ve kur
+            # bulunamazsa 0 yazıyordu.
+            usd_k = _usd_cevrim(kdv_tutar, doviz)
 
             m = Maliyet(
                 id=_okunur_id('MYT', Maliyet, basamak=4),   # RN1
@@ -1966,6 +2371,95 @@ def create_app():
                                               if g['blok'] > 1 else ''))
         return ' · '.join(cikti)
 
+    def _ch_grup_degistir(grup, tutar_delta=0, kdv_delta=0,
+                          matrah_delta=0, kalem_delta=0):
+        """GB1 — gruplanmış alış faturası satırını ATOMİK değiştirir.
+
+        Aynı alış faturasının kalemleri TEK bir `CariHareket`
+        satırında birikiyor (C1/B3 kalıbı: "tek hareket + N kalem").
+        Birikim ve çıkarma Python'da OKU-DEĞİŞTİR-YAZ yapılıyordu:
+
+            _yeni = q2((grup.alacak or 0) + tutar)   ← OKU
+            grup.alacak = _yeni                      ← YAZ
+
+        İki istek aynı anda gelirse ikisi de ESKİ toplamı okur,
+        biri kaybolur. KB1'in (`kasa.bakiye`) aynı sınıfı, başka
+        kaynakta.
+
+        ÖLÇÜLDÜ — gerçek PostgreSQL 16, READ COMMITTED, gerçek
+        uçlar:
+
+          BİRİKİM (POST /api/stok/ekle, aynı fatura no)
+            6 çift × 2 eşzamanlı giriş
+              yazılan blok           11
+              borç beklenen     11.000,00 USD
+              borç gerçek        6.000,00 USD   ✗ 5.000 kayıp (%45,5)
+
+          ÇIKARMA (DELETE /api/stok/BLOK/<id>, mali_islem=fatura_duzelt)
+            8 kalemlik grup · 3 çift eşzamanlı silme
+              silinen stok            6
+              borç beklenen      2.000,00 USD
+              borç gerçek        5.000,00 USD   ✗ 3.000 FAZLA
+              kalem sayısı       5  (2 olmalı)
+
+        İki yönün belirtisi de sinsi ve ters: birikimde tedarikçiye
+        olan borç EKSİK görünüyor, çıkarmada depodan düşmüş mal
+        için borç FAZLA kalıyor. Stok defteri bir rakam söylüyor,
+        cari ekstre başka.
+
+        BİRİKİM YÖNÜ BN1 İLE KAZARA KAPANMIŞTI: BN1'in danışma
+        kilidi işlem kapsamlı ve stok girişi de belge numarası
+        ürettiği için o işlemin tamamı sıraya giriyor (ölçüldü:
+        yama sonrası 12/12, kayıp yok). Buna GÜVENMİYORUM — o
+        yolda numara üretimi değişirse koruma sessizce ortadan
+        kalkar. İki yön de burada bağımsız olarak atomik.
+
+        ÇIKARMA YÖNÜ AÇIKTAYDI: `api_stok_sil` numara üretmiyor,
+        kilidi çıkarmadan önce almıyordu.
+
+        TAŞINABİLİRLİK: ham SQL yok. `GREATEST` ve `::numeric`
+        PostgreSQL'e özel; testler SQLite'ta koşuyor. Negatife
+        düşmeyi `case` ile engelliyorum (eski kod `max(0.0, ...)`
+        diyordu) — iki lehçede de çalışıyor.
+
+        GERİ OKUMA GÜVENLİ: UPDATE satır kilidini ALIYOR ve
+        commit'e kadar tutuyor, yani okuduğumuz değerin arasına
+        başka işlem giremez. Çağıran bu değerden `alacak_try` ve
+        kalan kalem sayısını hesaplıyor.
+
+        Dönen: (yeni_alacak, yeni_kalem_sayisi). Satır yoksa
+        (None, None).
+        """
+        _id = getattr(grup, 'id', None)
+        if _id is None:
+            return (None, None)
+        M = type(grup)
+
+        def _artir(sutun, delta):
+            _if = func.coalesce(sutun, 0) + float(delta)
+            _if = db.case((_if < 0, 0), else_=_if)
+            return func.round(db.cast(_if, db.Numeric(18, 4)), 2)
+
+        _yeni = {}
+        if tutar_delta:
+            _yeni[M.alacak] = _artir(M.alacak, q2(tutar_delta))
+        if kdv_delta:
+            _yeni[M.kdv_tutar] = _artir(M.kdv_tutar, q2(kdv_delta))
+        if matrah_delta:
+            _yeni[M.matrah] = _artir(M.matrah, q2(matrah_delta))
+        if kalem_delta:
+            _ks = func.coalesce(M.kalem_sayisi, 0) + int(kalem_delta)
+            _yeni[M.kalem_sayisi] = db.case((_ks < 0, 0), else_=_ks)
+        if _yeni:
+            db.session.query(M).filter(M.id == _id).update(
+                _yeni, synchronize_session=False)
+            try:
+                db.session.expire(grup, ['alacak', 'kdv_tutar',
+                                         'matrah', 'kalem_sayisi'])
+            except Exception:
+                pass
+        return (float(grup.alacak or 0), int(grup.kalem_sayisi or 0))
+
     def _stok_cari_hareket_olustur(stok_id, uretici_unvan, toplam_tutar, doviz, fatura_no='', aciklama='',
                                    fatura_durumu='faturali', alis_tarihi=None,
                                    matrah=None, kdv_tutar=None, kdv_oran=None):
@@ -2044,21 +2538,31 @@ def create_app():
 
             if mevcut:
                 # Ayni faturaya ait bir sonraki kalem: tutari BIRIKTIR.
-                _yeni_toplam = q2((mevcut.alacak or 0) + toplam_tutar)
+                # GB1 · ATOMİK BİRİKİM. Eskiden `alacak`, `kdv_tutar`,
+                # `matrah` ve `kalem_sayisi` Python'da oku-değiştir-yaz
+                # ediliyordu; iki kalem aynı anda girilince biri
+                # kayboluyordu (ölçüldü: %45,5 borç kaybı). Artırım
+                # artık veritabanında, tek ifadede.
+                #
+                # `alacak_try` yeni toplamdan türüyor, o yüzden kapının
+                # DÖNDÜRDÜĞÜ değerden hesaplanıyor — satır kilidi
+                # bizde olduğu için o değer güvenilir.
+                _yeni_toplam, _ = _ch_grup_degistir(
+                    mevcut, tutar_delta=toplam_tutar,
+                    kdv_delta=(kdv_tutar or 0),
+                    matrah_delta=(matrah if matrah is not None else 0),
+                    kalem_delta=1)
                 _try_val, _kur = _try_karsilik(_yeni_toplam, doviz, tarih=borc_tarihi)
-                mevcut.alacak = _yeni_toplam
                 mevcut.alacak_try = _try_val
                 mevcut.kur_uygulanan = _kur
                 # YAMA B3: KDV bilesenleri de BIRIKIR.
                 # Bir hareket N stok kalemini temsil ettigi icin (C1),
                 # grubun KDV'si tum kalemlerin toplamidir.
-                _ek_kdv = kdv_tutar or 0
-                _ek_matrah = matrah if matrah is not None else 0
-                mevcut.kdv_tutar = q2((mevcut.kdv_tutar or 0) + _ek_kdv)
-                mevcut.matrah = q2((mevcut.matrah or 0) + _ek_matrah)
+                # (KDV, matrah ve kalem sayısı yukarıda ATOMİK
+                #  olarak arttı — GB1. Burada yalnız oran kalıyor:
+                #  o bir biriktirme değil, ilk kalemden alınan sabit.)
                 if kdv_oran and not (mevcut.kdv_oran or 0):
                     mevcut.kdv_oran = kdv_oran
-                mevcut.kalem_sayisi = (mevcut.kalem_sayisi or 0) + 1
                 # Aciklamayi GRUBA uygun hale getir.
                 # Ilk kalemin aciklamasi tekil olabiliyor:
                 #   "PLAKA alis — CEPPO None #1 — M1721"
@@ -2304,6 +2808,88 @@ def create_app():
                 return aday
         return 'XXX'
 
+    # ── BN1 · BELGE NUMARASI KİLİDİ ──
+    # Tek küresel anahtar. Üç üreticinin HEPSİ bunu alıyor, yani
+    # aynı anda yalnız BİR işlem numara üretebiliyor.
+    #
+    # NEDEN ÖN EK BAŞINA DEĞİL: bir istek iki ayrı ön ek için numara
+    # üretebiliyor (fatura kesen uç FTR ve MYT üretiyor). İki ayrı
+    # kilit, iki işlemin ters sırada alması hâlinde kilitlenmeye
+    # (deadlock) açık olurdu. Tek anahtarda o sıra sorunu YOK.
+    # Bedeli: belge üretimi kısa süre sıraya giriyor. Bu ölçekte
+    # (birkaç kullanıcı) doğruluk, o beklemeden değerli.
+    BN1_KILIT_ANAHTARI = 7260113
+
+    def _belge_no_kilidi(baglanti=None):
+        """BN1 — numara üretimini işlem boyunca sıraya alır.
+
+        ÖLÇÜLEN HATA — gerçek PostgreSQL 16, READ COMMITTED,
+        15 deneme × 2 eşzamanlı istek, gövdeler FARKLI (YK3
+        kalkanı devrede değil):
+
+            _okunur_id              (POST /api/siparis)    15/15  %100
+            _cari_hareket_okunur_id (fatura tahsilatı)     15/15  %100
+            _stok_okunur_id         (POST /api/stok/ekle)  15/15  %100
+
+        Kaybeden istekte `duplicate key value violates unique
+        constraint "..._pkey"` ve kullanıcı ÇIPLAK HTTP 500
+        görüyor; girdiği kayıt kaybolyor. Tahsilatta en acı
+        hâli: para geldi, kullanıcı hata gördü, kayıt yok.
+
+        SEBEP: üç üretici de önce-kontrol-sonra-yaz. Numara
+        üretilip döndükten sonra satır COMMIT edilene kadar başka
+        bir işlem aynı numarayı üretebiliyor. Pencere `_okunur_id`
+        için merdivenle ölçüldü: 0 ms %100, 5 ms %80, 10 ms ve
+        üstü %0 — yani ~10 ms. Dar, ama üretimde `gunicorn -w 3`
+        ile gerçek paralellik var ve tahsilat kaybı 10 ms'lik bir
+        pencereyle bile kabul edilemez.
+
+        NEDEN SAYAÇ TABLOSU DEĞİL: sayaç, belgelerin yanında
+        İKİNCİ bir doğruluk kaynağı olurdu ve ayrıştığı an yine
+        mükerrer numara üretir, kurtarma yolu da olmaz (yedekten
+        dönüş, veri aktarımı, elle silinen kayıt). Mevcut kod
+        numarayı her seferinde GERÇEĞİN KENDİSİNDEN türetiyor —
+        kendi kendini onaran bu özelliği bozmak istemedim. Kilit o
+        özelliği koruyup yalnız yarış penceresini kapatıyor: şema
+        yok, göç yok, numara biçimi aynı.
+
+        `xact` kapsamı: kilit COMMIT/ROLLBACK ile kendiliğinden
+        bırakılıyor. Elle bırakma yok, yani bir hata yolunda kilit
+        açıkta kalamaz.
+
+        PostgreSQL'E ÖZEL. SQLite'ta sessizce etkisiz ve bu
+        DOĞRU: SQLite yazmaları tek bir veritabanı kilidiyle zaten
+        sıralıyor, yani orada yarış pencere bulamıyor. Testler de
+        SQLite'ta koştuğu için davranış değişmiyor.
+
+        `baglanti` verilirse kilit O BAĞLANTIDA alınıyor:
+        `_cari_hareket_okunur_id` bir `before_insert` eşleme
+        dinleyicisi ve kendisine verilen ham bağlantıyla çalışıyor.
+        Kilit, numarayı yazacak İŞLEMİN KENDİSİNDE olmak zorunda;
+        `db.session` üzerinden alınan kilit o işlemin dışında
+        kalabilirdi.
+        """
+        try:
+            if baglanti is not None:
+                _ad = getattr(getattr(baglanti, 'dialect', None),
+                              'name', '')
+                if _ad != 'postgresql':
+                    return False
+                baglanti.execute(sa_text('SELECT pg_advisory_xact_lock(:a)'),
+                                 {'a': BN1_KILIT_ANAHTARI})
+                return True
+            _ad = getattr(db.session.get_bind().dialect, 'name', '')
+            if _ad != 'postgresql':
+                return False
+            db.session.execute(sa_text('SELECT pg_advisory_xact_lock(:a)'),
+                               {'a': BN1_KILIT_ANAHTARI})
+            return True
+        except Exception as _e:
+            # Kilit alınamazsa BUGÜNKÜ davranışa düşüyoruz (korumasız
+            # üretim) — yamadan önceki hâl, yani kötüleşme yok.
+            app.logger.warning(f'[BN1] numara kilidi alinamadi: {_e}')
+            return False
+
     @db.event.listens_for(CariHareket, 'before_insert')
     def _cari_hareket_okunur_id(esleme, baglanti, hareket):
         """RN1 — cari hareket kimliğini okunur yapar: HR-STN26-0007.
@@ -2391,6 +2977,13 @@ def create_app():
                 # okunurluk kaybolur. Benzersizlik her durumda korunur.
                 _fk = ''
             kok = f'HR-{_fk}-{kis}{yil}-' if _fk else f'HR-{kis}{yil}-'
+            # BN1 · tarama ile yazma arasına başka işlem girmesin.
+            # Kilit, numarayı yazacak İŞLEMİN KENDİSİNDE alınıyor:
+            # burası bir `before_insert` eşleme dinleyicisi ve
+            # `baglanti` o yazmanın bağlantısı. Ölçüm: 15/15 → 0/15.
+            # Zaten okunur kimliklere yukarıda `return` edildiği için
+            # kilit boşuna alınmıyor.
+            _belge_no_kilidi(baglanti)
             satir = baglanti.execute(sa_text(
                 'SELECT id FROM cari_hareket WHERE id LIKE :k'), {'k': kok + '%'}).fetchall()
             son = 0
@@ -2448,6 +3041,11 @@ def create_app():
         if not kok:
             return _yeni_id(on_ek)
         try:
+            # BN1 · belirlenimli aday da önce-kontrol-sonra-yaz:
+            # `get` None dönüyor ama satır henüz YAZILMADI, iki
+            # istek aynı kimliği üretebiliyor. Ölçüm
+            # (POST /api/stok/ekle, 2 eşzamanlı): 15/15 → 0/15.
+            _belge_no_kilidi()
             temiz = ''.join(h for h in str(kok).translate(TURKCE_ASCII).upper()
                             if h.isalnum() or h == '-').strip('-')
             if not temiz:
@@ -2476,6 +3074,9 @@ def create_app():
         eski rastgele kimliğe düşer — kayıt asla kaybolmaz.
         """
         try:
+            # BN1 · tarama ile commit arasına başka işlem girmesin.
+            # Ölçüm (POST /api/siparis, 2 eşzamanlı): 15/15 → 0/15.
+            _belge_no_kilidi()
             yil = (tarih or date.today()).strftime('%y')
             if orta:
                 kok_ic = ''.join(h for h in str(orta).translate(TURKCE_ASCII).upper()
@@ -2985,6 +3586,12 @@ def create_app():
         if not sip:
             return 0
 
+        # KC1: çevrimlerin kullanacağı BELGE GÜNÜ. Satış kaydının
+        # `satis_tarihi` alanına yazılan günle aynı olmalı; yoksa
+        # kayıt bir kurla yazılıp başka bir kurla yeniden
+        # hesaplanabilir.
+        _teslim_gun = teslim_tarihi or date.today()
+
         # Mevcut satış kayıtlarını kontrol et (idempotent)
         mevcut_stoklar = {sk.stok_id for sk in SatisKaydi.query.filter_by(siparis_id=siparis_id).all()}
 
@@ -3028,17 +3635,21 @@ def create_app():
             _kalemler = SiparisKalem.query.filter_by(siparis_id=siparis_id).order_by(SiparisKalem.sira).all()
             if not _kalemler:
                 return 0
-            _u = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-            _e = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-            _ku = (_u.alis if _u else 0) or 0
-            _ke = (_e.alis if _e else 0) or 0
-
+            # ── KC1 · ÇEVRİM TEK KAPIDAN ──
+            # Elle yazılmış kopya kapıdan ÜÇ noktada ayrışıyordu
+            # (ölçüldü, 1.000 birim üzerinden):
+            #   · USD/EUR/TRY dışındaki döviz AYNEN dönüyordu —
+            #     1.000 GBP = 1.000 USD sayılıyordu (%22,6 hata).
+            #     GBP teorik değil: ICE_AKTAR_DOVIZLER onu kabul
+            #     ediyor, dashboard'ın kur tablosu ayrıca işliyor.
+            #   · Kur arşivi boşsa 0 dönüyordu. UN1'in notu aynen
+            #     şöyle: "sıfır yazmak maliyeti yok ederdi."
+            #   · Her zaman EN SON kuru kullanıyordu; belgenin
+            #     tarihini hiç sormuyordu.
+            # Kapı üçünü de doğru yapıyor. F15 bu işi iki yerde
+            # (16945, 18601) zaten yapmıştı — yarım kalmıştı.
             def _sk_usd(t, d):
-                if not t: return 0
-                if d in ('USD', None, ''): return t
-                if d == 'EUR': return (t * _ke / _ku) if _ku else 0
-                if d == 'TRY': return (t / _ku) if _ku else 0
-                return t
+                return _usd_cevrim(t, d, _teslim_gun)
 
             olusan = 0
             for _k in _kalemler:
@@ -3057,9 +3668,17 @@ def create_app():
                     miktar=_k.miktar, birim=_k.birim,
                     doviz=_k.doviz or sip.doviz or 'USD',
                     tutar=_tut_usd,
-                    kur_usd=q_kur(_ku), kur_eur=q_kur(_ke),
+                    # KC1: `_ku` / `_ke` elle kurulan kur değişkenleriydi,
+                    # çevrim kapıya bağlanınca kalktılar. Kayda yazılan
+                    # kurlar artık arşivden, TESLİM GÜNÜNE göre okunuyor;
+                    # TRY karşılığı da ortak `_try_karsilik` kapısından.
+                    kur_usd=q_kur(_kur_getir('USD', _teslim_gun)
+                                  or _en_yakin_kur('USD', _teslim_gun) or 0),
+                    kur_eur=q_kur(_kur_getir('EUR', _teslim_gun)
+                                  or _en_yakin_kur('EUR', _teslim_gun) or 0),
                     tutar_usd=_tut_usd,
-                    tutar_try=q2(_tut_usd * _ku if _ku else 0),
+                    tutar_try=q2(_try_karsilik(
+                        _tut_usd, 'USD', None, _teslim_gun)[0]),
                     maliyet_usd=0, maliyet_try=0,
                     kar_usd=_tut_usd,
                     marj_yuzde=q_oran(100 if _tut_usd else 0),
@@ -3078,23 +3697,26 @@ def create_app():
                                      if sk.stok_id], kaynak='kalem-yedek')
             return olusan
 
-        # Güncel kurlar (her döviz ayrı satır) - alım fiyatı çevrimi için önce lazım
-        usd_kur_kayit = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-        eur_kur_kayit = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-        kur_usd = (usd_kur_kayit.alis if usd_kur_kayit else 0) or 0
-        kur_eur = (eur_kur_kayit.alis if eur_kur_kayit else 0) or 0
+        # KC1: kur tablosunu kendi sorgulamak yerine arama kapısından.
+        # Eskiden en son satır çekiliyordu (belgenin tarihi hiç
+        # sorulmuyordu) ve yalnız `.alis` okunuyordu. Kapı
+        # `alis → efektif → satis` sırasını uyguluyor, tam gün kaydı
+        # yoksa arşivdeki en yakın güne düşüyor.
+        # SatisKaydi'nın `kur_usd` / `kur_eur` alanlarına da bunlar yazılıyor.
+        kur_usd = (float(_kur_getir('USD', _teslim_gun) or 0)
+                   or float(_en_yakin_kur('USD', _teslim_gun) or 0))
+        kur_eur = (float(_kur_getir('EUR', _teslim_gun) or 0)
+                   or float(_en_yakin_kur('EUR', _teslim_gun) or 0))
 
         def _usd_cevir(tutar, dvz):
-            """Verilen tutarı USD'ye çevir."""
-            if not tutar:
-                return 0
-            if dvz == 'USD' or not dvz:
-                return tutar
-            elif dvz == 'EUR':
-                return (tutar * kur_eur / kur_usd) if kur_usd else 0
-            elif dvz == 'TRY':
-                return (tutar / kur_usd) if kur_usd else 0
-            return tutar
+            """Verilen tutarı USD'ye çevir — KC1: tek kapıdan.
+
+            Gövdesi elle yazılıydı; bkz. yukarıdaki KC1 notu.
+            `kur_usd` / `kur_eur` DURUYOR: SatisKaydi'na `kur_usd=`
+            ve `kur_eur=` alanları olarak yazılıyorlar ve TRY
+            çevriminde de kullanılıyorlar.
+            """
+            return _usd_cevrim(tutar, dvz, _teslim_gun)
 
         # ── MALİYET HESABI ──
         # 1) EK MALİYETLER: Maliyet tablosundan (nakliye, işçilik, gümrük vs.)
@@ -3213,17 +3835,12 @@ def create_app():
             birim = satis_birim
 
             # USD/TRY karşılık
-            tutar_usd = tutar
-            tutar_try = 0
-            if doviz == 'USD':
-                tutar_usd = tutar
-                tutar_try = tutar * kur_usd if kur_usd else 0
-            elif doviz == 'EUR':
-                tutar_usd = tutar * kur_eur / kur_usd if kur_usd else 0
-                tutar_try = tutar * kur_eur if kur_eur else 0
-            elif doviz == 'TRY':
-                tutar_try = tutar
-                tutar_usd = tutar / kur_usd if kur_usd else 0
+            # KC1: aynı iki çevrim, iki ortak kapıdan. Elle yazılı
+            # hâli USD/EUR/TRY dışını sessizce geçiyordu ve kur
+            # yoksa 0 yazıyordu. `_try_karsilik` de kur bulamazsa
+            # 0 değil, tutarı koruyup uyarıyor (E1a kararı).
+            tutar_usd = _usd_cevir(tutar, doviz)
+            tutar_try, _ = _try_karsilik(tutar, doviz, None, _teslim_gun)
 
             # ── STOĞUN KENDİ ALIM MALİYETİ (birim sistemine göre) ──
             # alis_fiyati, alis_fiyat_birim biriminde birim fiyat
@@ -3238,7 +3855,10 @@ def create_app():
             # TOPLAM MALİYET = stoğun alım maliyeti + paya düşen ek maliyet
             _pay_ek_usd, _pay_ek_try = _ek_maliyet_payi(r.id)
             stok_maliyet_usd = alim_maliyet_usd + _pay_ek_usd
-            stok_maliyet_try = (alim_maliyet_usd * kur_usd if kur_usd else 0) + _pay_ek_try
+            # KC1: USD→TRY de ortak kapıdan. `kur_usd` yoksa 0 yazmak
+            # maliyeti yok ederdi; kapı tutarı koruyup uyarıyor (E1a).
+            stok_maliyet_try = _try_karsilik(
+                alim_maliyet_usd, 'USD', None, _teslim_gun)[0] + _pay_ek_try
 
             # Kar/marj
             kar_usd = tutar_usd - stok_maliyet_usd
@@ -3860,19 +4480,9 @@ def create_app():
             except Exception:
                 alis_olcu = 0
             ham = float(alis_fiyat or 0) * float(alis_olcu or 0)
-        if stok_doviz == 'USD':
-            return ham
-        usd_k = DovizKur.query.filter_by(doviz='USD').order_by(
-            DovizKur.tarih.desc()).first()
-        eur_k = DovizKur.query.filter_by(doviz='EUR').order_by(
-            DovizKur.tarih.desc()).first()
-        ku = float((usd_k.alis if usd_k else 0) or 0)
-        ke = float((eur_k.alis if eur_k else 0) or 0)
-        if stok_doviz == 'EUR':
-            return (ham * ke / ku) if ku else 0.0
-        if stok_doviz == 'TRY':
-            return (ham / ku) if ku else 0.0
-        return ham
+        # KC1: çevrim tek kapıdan. Stoğun ALIM maliyeti — kur
+        # bulunamazsa 0 dönmek maliyeti yok ederdi (UN1 kararı).
+        return _usd_cevrim(ham, stok_doviz)
 
     def _stok_maliyet_kalemleri(stok_id, haric=False):
         """Stoğa işlenmiş maliyet kalemleri.
@@ -3979,17 +4589,24 @@ def create_app():
                 return 0, None  # siparis teslimi zaten kayit olusturmus
 
         # Kurlar
-        usd_k = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-        eur_k = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-        kur_usd = (usd_k.alis if usd_k else 0) or 0
-        kur_eur = (eur_k.alis if eur_k else 0) or 0
+        # KC1: kur tablosunu kendi sorgulamak yerine arama kapısından.
+        # Eskiden en son satır çekiliyordu (belgenin tarihi hiç
+        # sorulmuyordu) ve yalnız `.alis` okunuyordu. Kapı
+        # `alis → efektif → satis` sırasını uyguluyor, tam gün kaydı
+        # yoksa arşivdeki en yakın güne düşüyor.
+        _fat_gun_k = getattr(f, 'fatura_tarihi', None) or date.today()
+        kur_usd = (float(_kur_getir('USD', _fat_gun_k) or 0)
+                   or float(_en_yakin_kur('USD', _fat_gun_k) or 0))
+        kur_eur = (float(_kur_getir('EUR', _fat_gun_k) or 0)
+                   or float(_en_yakin_kur('EUR', _fat_gun_k) or 0))
+        # KC1: çevrim FATURANIN TARİHİNDEKİ kurla. Elle yazılı kopya
+        # her zaman en son kuru kullanıyordu — geriye tarihli bir
+        # fatura, kesildiği günün değil bugünün kuruyla
+        # değerleniyordu. Ölçülen örnekte %5 fark.
+        _fat_gun = getattr(f, 'fatura_tarihi', None) or date.today()
 
         def _usd(tutar, dvz):
-            if not tutar: return 0
-            if dvz == 'USD' or not dvz: return tutar
-            if dvz == 'EUR': return (tutar * kur_eur / kur_usd) if kur_usd else 0
-            if dvz == 'TRY': return (tutar / kur_usd) if kur_usd else 0
-            return tutar
+            return _usd_cevrim(tutar, dvz, _fat_gun)
 
         # Fatura kalemleri
         try:
@@ -4956,10 +5573,15 @@ def create_app():
         if _auth_required():
             return _auth_required()
         bugun = date.today()
-        kur_usd = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-        kur_eur = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-        k_usd = kur_usd.efektif if kur_usd else 1
-        k_eur = kur_eur.efektif if kur_eur else 1
+        # KC1: kur tablosunu kendi sorgulayan kod, birazdan elle
+        # çevirecek demektir. Çevrimler `_usd_cevrim` ve
+        # `_try_karsilik` kapılarına taşındı; burada yalnız USD→TRY
+        # oranı kalıyor ve o da `_kur_getir` sırasıyla (alış → efektif
+        # → satış) okunuyor. Eskiden yalnız `.efektif` okunuyordu ve
+        # bulunamazsa 1 (!) kullanılıyordu — bir doları bir lira
+        # saymak demekti.
+        k_usd = (float(_kur_getir('USD') or 0)
+                 or float(_en_yakin_kur('USD') or 0) or 1)
 
         # COKLU DOVIZ TOPLAMI: TRY uzerinden topla, ana dovize cevir
         # SUM(borc) ile 1000 USD + 500 EUR birbirine eklenirdi - yanlis.
@@ -5023,22 +5645,13 @@ def create_app():
             for r in rows:
                 f = r.alis_fiyati or 0
                 dov = r.doviz or 'USD'
-                if tip == 'BLOK':
-                    m3 = r.hacim_m3 or 0
-                    if dov == 'USD':
-                        usd += f * m3
-                    elif dov == 'EUR':
-                        usd += f * m3 * (k_eur / k_usd) if k_usd else f * m3
-                    else:
-                        usd += (f * m3) / k_usd if k_usd else f * m3
-                else:
-                    m2 = r.metraj_m2 or 0
-                    if dov == 'USD':
-                        usd += f * m2
-                    elif dov == 'EUR':
-                        usd += f * m2 * (k_eur / k_usd) if k_usd else f * m2
-                    else:
-                        usd += (f * m2) / k_usd if k_usd else f * m2
+                # KC1: çevrim tek kapıdan. Elle yazılı hâlde `else`
+                # dalı USD/EUR dışındaki HER dövizi k_usd'ye BÖLÜYOR,
+                # yani TRY sanıyordu: 1.000 GBP → 20,83 USD.
+                # Buraya tarih VERİLMİYOR — bu bir ANLIK stok değeri,
+                # bugünün kuru doğru olan.
+                _olcu = (r.hacim_m3 or 0) if tip == 'BLOK' else (r.metraj_m2 or 0)
+                usd += _usd_cevrim(f * _olcu, dov)
                 maliyet_deger = maliyet_dict.get(r.id) or 0
                 usd += maliyet_deger
             return q2(usd)
@@ -5050,14 +5663,9 @@ def create_app():
         # Aggregate active orders' total via Siparis.toplam_tutar (per-line fields live on SiparisKalem).
         sip_usd = 0
         for _s in aktif_sip:
-            _t = _s.toplam_tutar or 0
-            _d = _s.doviz or 'USD'
-            if _d == 'USD':
-                sip_usd += _t
-            elif _d == 'EUR':
-                sip_usd += _t * (k_eur / k_usd) if k_usd else _t
-            else:
-                sip_usd += _t / k_usd if k_usd else _t
+            # KC1: aynı hata, aynı kapı. Açık siparişlerin anlık
+            # değeri — bugünün kuru doğru olan, tarih verilmiyor.
+            sip_usd += _usd_cevrim(_s.toplam_tutar or 0, _s.doviz or 'USD')
         yaklasan_siparis_raw = Siparis.query.filter(
             Siparis.termin >= bugun,
             Siparis.termin <= bugun + timedelta(days=14),
@@ -5085,7 +5693,8 @@ def create_app():
             'ebatli': len(ebatli_rows), 'ebatli_usd': stok_deger(ebatli_rows, 'EBATLI'), 'ebatli_try': q2(stok_deger(ebatli_rows, 'EBATLI')*k_usd),
             'ebatli_m2': q2(sum(r.metraj_m2 or 0 for r in ebatli_rows)),
             'ebatli_sqft': q2(sum(r.metraj_sqft or 0 for r in ebatli_rows)),
-            'siparis': len(aktif_sip), 'siparis_usd': q2(sip_usd), 'siparis_try': q2(sip_usd * k_usd),
+            'siparis': len(aktif_sip), 'siparis_usd': q2(sip_usd),
+            'siparis_try': q2(_try_karsilik(sip_usd, 'USD')[0]),
             'rezervasyon': Rezervasyon.query.filter_by(iptal_nedeni=None).count(),
             'sevkiyat': Sevkiyat.query.filter(Sevkiyat.durum.notin_(['Teslim Edildi','Iptal'])).count(),
         }
@@ -5156,7 +5765,12 @@ def create_app():
         except Exception:
             akis_siparisler = []
 
-        return render_template('dashboard.html', stats=stats, yaklasan=yaklasan_siparis, kur_usd=kur_usd, kur_eur=kur_eur,
+        # KC1: `kur_usd` / `kur_eur` buraya DovizKur KAYITLARI olarak
+        # geçiriliyordu ve dashboard.html ikisini de kullanmıyordu
+        # (şablondaki `d.kur_usd` API yanıtından geliyor, bu
+        # bağlamdan değil). Çevrimler kapılara taşınınca kayıt
+        # sorguları kalktı; ölü argümanlar da kaldırıldı.
+        return render_template('dashboard.html', stats=stats, yaklasan=yaklasan_siparis,
                                today=bugun, toplam_alacak=q2(toplam_alacak), toplam_borc=q2(toplam_borc),
                                net_bakiye=q2(net_bakiye), yaklasan_odemeler=yaklasan_odemeler, yaklasan_tahsilatlar=yaklasan_tahsilatlar,
                                akis_siparisler=akis_siparisler,
@@ -5819,18 +6433,14 @@ def create_app():
                     hedef_map[bid] = tutar or 0
 
         # USD kuru (alim fiyati USD'ye cevrimi icin)
-        _uk = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-        _ek = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-        kur_usd_v = (_uk.alis if _uk else 0) or 0
-        kur_eur_v = (_ek.alis if _ek else 0) or 0
-
         def _alim_usd(fiyat, dvz):
-            """Alim fiyatini USD'ye cevir."""
-            if not fiyat: return 0
-            if dvz == 'USD' or not dvz: return fiyat
-            if dvz == 'EUR': return (fiyat * kur_eur_v / kur_usd_v) if kur_usd_v else 0
-            if dvz == 'TRY': return (fiyat / kur_usd_v) if kur_usd_v else 0
-            return fiyat
+            """Alim fiyatini USD'ye cevir — KC1: tek kapıdan.
+
+            Listeleme ucu; tarih verilmiyor, bugünün kuru. Değişen
+            tek şey: bilinmeyen döviz artık USD sanılmıyor ve kur
+            arşivi boşsa fiyat sıfırlanmıyor.
+            """
+            return _usd_cevrim(fiyat, dvz)
 
         items = []
         for s in paginated.items:
@@ -7179,8 +7789,9 @@ def create_app():
                     # yazilacak; stok silinmeden once alanlari
                     # topluyoruz.
                     'stok': stok})
-                _grup.kalem_sayisi = max(
-                    0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
+                # GB1 · sayaç da atomik: iki kalem aynı anda silinince
+                # bir azaltma kayboluyordu (ölçümde 5 kaldı, 2 olmalıydı).
+                _ch_grup_degistir(_grup, kalem_delta=-1)
                 _grup = None
             else:
                 _kk_t, _kk_k = _try_karsilik(_pay, _grup.doviz or 'TRY',
@@ -7200,23 +7811,33 @@ def create_app():
                     kullanici=session.get('kullanici')))
                 # Orijinal harekete DOKUNULMAZ; yalnizca kalem sayaci
                 # azalir ki son kalemde grup yanlislikla silinmesin.
-                _grup.kalem_sayisi = max(
-                    0, (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1)
+                # GB1 · sayaç ATOMİK azalıyor.
+                _ch_grup_degistir(_grup, kalem_delta=-1)
                 _grup = None
 
         if _grup:
-            _kalan_kalem = (getattr(_grup, 'kalem_sayisi', 1) or 1) - 1
+            # ── GB1 · ATOMİK ÇIKARMA ──
+            # Eskiden kalan kalem sayısı ÖNCE Python'da hesaplanıp
+            # karar veriliyordu, sonra `alacak` oku-değiştir-yaz ile
+            # düşülüyordu. İki kalem aynı anda silinince bir çıkarma
+            # kayboluyordu: ölçümde 6 silmede borç 6.000 değil 3.000
+            # düştü, yani depodan düşmüş mal için 3.000 USD borç
+            # ekstrede kaldı.
+            #
+            # Artık önce ATOMİK olarak düşülüyor, karar SONRA ve
+            # veritabanının döndürdüğü sayıya göre veriliyor. Son
+            # kalemi iki kişi aynı anda silse bile sayaç bir kez
+            # sıfırlanır ve grup bir kez silinir.
+            _yeni, _kalan_kalem = _ch_grup_degistir(
+                _grup, tutar_delta=-_pay, kalem_delta=-1)
             if _kalan_kalem <= 0:
                 db.session.delete(_grup)
                 silinen_ch += 1
             else:
-                _yeni = q2(max(0.0, (_grup.alacak or 0) - _pay))
                 _t, _k = _try_karsilik(_yeni, _grup.doviz or 'TRY',
                                        tarih=_grup.hareket_tarihi)
-                _grup.alacak = _yeni
                 _grup.alacak_try = _t
                 _grup.kur_uygulanan = _k
-                _grup.kalem_sayisi = _kalan_kalem
                 _temel = (_grup.aciklama or '').split('  ·  ')[0]
                 _grup.aciklama = f'{_temel}  ·  {_kalan_kalem} kalem'
         # ESKI (gruplanmamis) kayitlar icin geriye uyumluluk
@@ -10178,23 +10799,20 @@ def create_app():
         tip_filtre = request.args.get('tip')
         durum_filtre = request.args.get('durum')
 
-        # Kur bilgisi (USD karşılığı için)
-        usd_kur = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-        eur_kur = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-        kur_usd = (usd_kur.efektif if usd_kur and usd_kur.efektif else 45.07) or 45.07
-        kur_eur = (eur_kur.efektif if eur_kur and eur_kur.efektif else 48.50) or 48.50
+        # KC1: çevrim `_usd_cevrim`e taşındı; bu kur değişkenleri ölü
+        # kaldı. Koda gömülü 45.07 / 48.50 yedekleri de onlarla
+        # birlikte kalktı — kur arşivi boşken envanteri donmuş bir
+        # rakamla değerliyorlardı.
 
         def _usd(tutar, doviz):
-            if not tutar:
-                return 0
-            d = (doviz or 'USD').upper()
-            if d == 'USD':
-                return tutar
-            if d == 'TRY':
-                return tutar / kur_usd if kur_usd else 0
-            if d == 'EUR':
-                return tutar * kur_eur / kur_usd if kur_usd else 0
-            return tutar
+            """KC1: tek kapıdan.
+
+            Elle yazılı hâli bilinmeyen dövizi AYNEN döndürüyordu ve
+            kurları `.efektif` alanından okuyup bulamazsa koda gömülü
+            45.07'ye düşüyordu — kapı `alis → efektif → satis`
+            sırasını kullanıyor ve kur yoksa tutarı koruyup uyarıyor.
+            """
+            return _usd_cevrim(tutar, doviz)
 
         # Tüm stokları topla
         kayitlar = []  # her stok: tip, cins, uretici, durum, miktar, birim, deger_usd
@@ -10322,8 +10940,13 @@ def create_app():
 
         return jsonify({
             'ok': True,
-            'kur_usd': q_kur(kur_usd),
-            'kur_eur': q_kur(kur_eur),
+            # KC1: yanıtta gösterilen kurlar arama kapısından.
+            # Eskiden yalnız `.efektif` okunuyor, bulunamazsa koda
+            # gömülü 45.07 / 48.50 gösteriliyordu.
+            'kur_usd': q_kur(float(_kur_getir('USD') or 0)
+                             or float(_en_yakin_kur('USD') or 0)),
+            'kur_eur': q_kur(float(_kur_getir('EUR') or 0)
+                             or float(_en_yakin_kur('EUR') or 0)),
             'toplam_stok_adedi': len(kayitlar),
             'toplam_deger_usd': q2(sum(k['deger_usd'] for k in kayitlar)),
             # ── F5 · DEPO KIRILIMI ──
@@ -11053,6 +11676,50 @@ def create_app():
                 _slab_sira += 1
                 return _deger
 
+            # ══ RZ2 · KAYNAĞI ÜRETİMDEN ÖNCE ATOMİK SAHİPLEN ══
+            # Eskiden kaynak EN SONDA, düz atamayla 'Tukendi'
+            # yapılıyordu. Durum denetimi 300+ satır yukarıda; aynı
+            # bloğu iki kişi aynı anda keserse ikisi de geçiyor ve
+            # TEK fiziksel bloktan İKİ takım plaka doğuyordu —
+            # hayalet stok.
+            #
+            # NEDEN TAM BURADA: burası son doğrulamadan sonraki, ilk
+            # yazmadan önceki dikiş.
+            #   · daha ERKEN olamaz — aradaki doğrulama hataları
+            #     kaynağı 'Tukendi' bırakıp kesimsiz çıkarırdı.
+            #   · daha GEÇ olamaz — üretim döngüsünde her plakanın
+            #     kimliği bir sorgu açıyor, o sorgu bekleyen
+            #     plakaları flush ediyor. Plaka kimlikleri blok no +
+            #     slab'den BELİRLENİMLİ türüyor (`PLK-RZ-B-C1-01`),
+            #     yani aynı bloğun iki kesimi HEP aynı kimliği
+            #     üretir; kaybeden istek kapı konuşmadan
+            #     `plaka_stok_pkey` ihlaliyle ölüp çıplak 500
+            #     veriyordu. (Ölçüldü; önce `no_autoflush` ile
+            #     denedim, yetmedi — kirlenme kapıdan ÖNCE, üretim
+            #     döngüsünün kendi içinde oluyordu.)
+            #
+            # Karşılaştırma OKUNAN değere değil KESILEBILIR kümesine
+            # yapılıyor: okuma anı da yarışın içinde, 'Tukendi'
+            # okursak 'Tukendi'→'Tukendi' geçişi yine başarılı
+            # olurdu. 'Tukendi' bu kümede olmadığı için kapı gerçek.
+            #
+            # Geri alma bilgisi (`onceki_durumlar`) kapıdan ÖNCE
+            # okunuyor; aşağıda `kesim.kaynak_onceki_durum`a yazılan
+            # da bu sözlük. Hata olursa uçtaki `except` zaten
+            # rollback yapıyor, sahiplenme geri alınır.
+            onceki_durumlar = {}
+            for k in kaynaklar:
+                onceki_durumlar[k.id] = k.durum or 'Serbest'
+                if not _stok_durum_degistir(k, 'Tukendi', KESILEBILIR):
+                    db.session.rollback()
+                    return jsonify({
+                        'ok': False, 'error': 'kaynak_bu_arada_degisti',
+                        'mesaj': f'Kaynak stok '
+                                 f'({_baglanti_okunabilir("stok", k.id)}) '
+                                 f'bu arada başka bir işlemde kullanıldı. '
+                                 f'Kesim YAPILMADI — ekranı yenileyip '
+                                 f'yeniden deneyin.'}), 409
+
             kesim = Kesim(
                 id=kesim_id,
                 kesim_tarihi=_kesim_tarih,
@@ -11247,13 +11914,13 @@ def create_app():
             # Kaynak stoklarini TUKETILDI durumuna al.
             # ÖNCE her kaynağın mevcut durumunu sakla (geri alma için) — müşteri için
             # kesilen rezerve/satılmış bloklar geri alınınca doğru duruma dönsün.
-            onceki_durumlar = {}
-            for k in kaynaklar:
-                onceki_durumlar[k.id] = k.durum or 'Serbest'
+            # RZ2 · durum ARTIK YUKARIDA, üretimden önce atomik
+            # olarak alındı; `onceki_durumlar` da orada, kapıdan
+            # önce okundu. Burada yalnız geri alma bilgisi yazılıyor
+            # ve kaynağın miktarı sıfırlanıyor.
             kesim.kaynak_onceki_durum = json.dumps(onceki_durumlar)
 
             for k in kaynaklar:
-                k.durum = 'Tukendi'
                 if kaynak_tip_db == 'BLOK':
                     k.hacim_m3 = 0
                 else:
@@ -11567,21 +12234,42 @@ def create_app():
             cari_q = cari_q.filter(Cari.cari_tip == cari_tip_filtre)
         cariler = cari_q.all()
 
-        # USD/EUR kurları (TRY bazında bakiyeler için)
-        usd_kur = (DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first())
-        eur_kur = (DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first())
-        kur_usd = (usd_kur.efektif if usd_kur and usd_kur.efektif else 45.07) or 45.07
-        kur_eur = (eur_kur.efektif if eur_kur and eur_kur.efektif else 48.50) or 48.50
+        # ── KC1 · ORTAK KAPIYI GÖLGELEYEN KOPYA KALDIRILDI ──
+        # Burada, ortak kapıyla BİREBİR AYNI ADI taşıyan yerel bir
+        # `_try_karsilik` vardı. Okuyan kapıyı kullandığını sanıyordu;
+        # gövdesi şuydu:
+        #
+        #     k = kur or (kur_usd if d=='USD' else
+        #                 kur_eur if d=='EUR' else 1)
+        #     return tutar * (k or 1)
+        #
+        # USD ve EUR DIŞINDAKİ HER DÖVİZ İÇİN ÇARPAN 1 — yani tutar
+        # zaten TL'ymiş gibi sayılıyordu.
+        #
+        # ÖLÇÜLDÜ (üç cariye 1.000'er birim alacak, kurlar
+        # USD 48,00 · EUR 56,00 · GBP 62,00):
+        #     USD   48.000,00 TL   ✓
+        #     EUR   56.000,00 TL   ✓
+        #     GBP    1.000,00 TL   ✗  (olması gereken 62.000,00)
+        # Sterlin alacak, değerinin %1,6'sı kadar görünüyordu — hem
+        # de "kim ne kadar borçlu" sorusuna cevap veren raporda.
+        #
+        # Yedek kurlar da koda gömülüydü: 45.07 (USD), 48.50 (EUR).
+        # Kapı bunun yerine kur arşivinden EN YAKIN TARİHLİ kuru
+        # buluyor, hiç bulamazsa tutarı koruyup UYARIYOR (E1a).
+        #
+        # Kapı (tutar, kur) ikilisi döner; burada yalnız tutar lazım.
+        def _try_tutar(tutar, doviz, kur, tarih=None):
+            return _try_karsilik(tutar, doviz, kur, tarih)[0]
 
-        def _try_karsilik(tutar, doviz, kur):
-            """Hareket dovizini TRY karsiligina cevir"""
-            if not tutar:
-                return 0
-            d = (doviz or 'TRY').upper()
-            if d == 'TRY':
-                return tutar
-            k = kur or (kur_usd if d == 'USD' else kur_eur if d == 'EUR' else 1)
-            return tutar * (k or 1)
+        # Yanıt gövdesi `kur_usd` / `kur_eur` alanlarını da döndürüyor
+        # (ekranda "bugünkü kur" olarak gösteriliyor). Silinen yerel
+        # atamaların yerine arşivden okunuyor — koda gömülü
+        # 45.07 / 48.50 yedeklerine artık düşmüyor.
+        kur_usd = (float(_kur_getir('USD') or 0)
+                   or float(_en_yakin_kur('USD') or 0))
+        kur_eur = (float(_kur_getir('EUR') or 0)
+                   or float(_en_yakin_kur('EUR') or 0))
 
         sonuc_cariler = []
         toplam_gruplar = {
@@ -11620,8 +12308,13 @@ def create_app():
             }
 
             for h in hareketler:
-                borc_try = _try_karsilik(h.borc or 0, h.doviz, h.kur_uygulanan)
-                alacak_try = _try_karsilik(h.alacak or 0, h.doviz, h.kur_uygulanan)
+                # KC1: hareketin KENDİ tarihindeki kur. `kur_uygulanan`
+                # doluysa kapı onu kullanıyor; boşsa koda gömülü bir
+                # sayıya değil, arşivdeki en yakın kura düşüyor.
+                borc_try = _try_tutar(h.borc or 0, h.doviz,
+                                      h.kur_uygulanan, h.hareket_tarihi)
+                alacak_try = _try_tutar(h.alacak or 0, h.doviz,
+                                        h.kur_uygulanan, h.hareket_tarihi)
 
                 # Vade tarihi yoksa veya henuz gelmedi -> vadesiz
                 if not h.vade_tarihi or h.vade_tarihi > baz_tarih:
@@ -12513,7 +13206,7 @@ def create_app():
                             'mesaj': f'{kasa.doviz} kuru alınamadı — farklı dövizli kasaya '
                                      f'transfer için kur gerekli. TCMB kurlarını güncelleyip tekrar dene.'}), 400
                     hedef_tutar = q2(try_kar / kasa_kur)
-                kasa.bakiye = q2((kasa.bakiye or 0) + hedef_tutar)
+                _kasa_bakiye_ekle(kasa, hedef_tutar)   # KB1: atomik
                 cevrim_notu = '' if kasa.doviz == doviz else f' ({islem_tutar:,.2f} {doviz} → {hedef_tutar:,.2f} {kasa.doviz})'
                 kh = KasaHareket(kasa_id=kasa.id, tip='giris', tutar=hedef_tutar,
                     tarih=date.today(),
@@ -12862,7 +13555,7 @@ def create_app():
                 kasa_notu_eksi = ' (DİKKAT: kasa bakiyesi eksiye düştü)'
             else:
                 kasa_notu_eksi = ''
-            e_kasa.bakiye = q2((e_kasa.bakiye or 0) + (k_tutar if giris_mi else -k_tutar))
+            _kasa_bakiye_ekle(e_kasa, (k_tutar if giris_mi else -k_tutar))   # KB1: atomik
             cevrim = '' if e_kasa.doviz == doviz else f' ({islem_tut:,.2f} {doviz} → {k_tutar:,.2f} {e_kasa.doviz})'
             _cari_unvan_k = getattr(hareket, 'cari_unvan', None) or (Cari.query.get(data['cari_id']).unvan if Cari.query.get(data['cari_id']) else data['cari_id'])
             kh = KasaHareket(
@@ -13241,8 +13934,8 @@ def create_app():
                     return jsonify({'ok': False, 'mesaj': _k_hata}), 400
                 _eski_k = q2(_kh.tutar or 0)
                 _fark = q2(_yeni_k - _eski_k)
-                _k.bakiye = q2((_k.bakiye or 0)
-                               + (_fark if _kh.tip == 'giris' else -_fark))
+                _kasa_bakiye_ekle(                      # KB1: atomik
+                    _k, (_fark if _kh.tip == 'giris' else -_fark))
                 _kh.tutar = _yeni_k
                 _notlar.append(f'{_k.ad} kasası {_eski_k:,.2f} → '
                                f'{_yeni_k:,.2f} {_k.doviz}')
@@ -13496,15 +14189,76 @@ def create_app():
             return None, True           # iki eşit aday
         return olculu[0][1], False
 
+    def _kasa_bakiye_ekle(kasa, delta):
+        """KB1 · Kasa bakiyesini ATOMİK olarak değiştirir.
+
+        ÖLÇÜLDÜ — gerçek PostgreSQL 16, READ COMMITTED, aynı kasaya
+        eşzamanlı para girişleri:
+
+            8 iş parçacığı × 10 × 100 $
+              hareket kaydı     80   (hepsi yazıldı)
+              bakiye beklenen   8.000,00 $
+              bakiye gerçek     1.700,00 $    ✗ 6.300 $ kayıp
+            3 iş parçacığı × 5 × 100 $    →   700 $ kayıp
+            2 iş parçacığı × 5 × 100 $    →   200 $ kayıp
+
+        SEBEP: `kasa.bakiye = q2((kasa.bakiye or 0) + tutar)` Python'da
+        OKU-DEĞİŞTİR-YAZ. İki istek aynı anda gelirse ikisi de ESKİ
+        değeri okur:
+
+            A: oku 1000 → 1000+500=1500 → yaz 1500
+            B: oku 1000 → 1000+300=1300 → yaz 1300
+            sonuç 1300.  500 $ buharlaştı.
+
+        PostgreSQL varsayılanı READ COMMITTED ve bu düzeyde kayıp
+        güncelleme ENGELLENMEZ. Hareketler kayıtlı kalır, yalnız
+        bakiye eksilir — kasa defteri ile bakiye birbirini tutmaz.
+        `kasa_mutabakat.py` bu sapmayı tarif ediyor ama sebep olarak
+        yalnız "bir yol güncellemeyi atlarsa / hareket elle silinirse"
+        diyor; yarış, adı konmamış üçüncü sebep.
+
+        YK3 kalkanı bunu ÇÖZMEZ: o AYNI isteğin iki kez gelmesini
+        engelliyor. Burada FARKLI iki istek var ve ikisi de meşru.
+
+        ÇÖZÜM: artırımı VERİTABANINA yaptır — okuma ve yazma tek
+        atomik ifadede olur, yarış penceresi kalmaz. Yuvarlama da SQL
+        tarafında, `q2` ile aynı 2 hane.
+        """
+        if kasa is None or not delta:
+            return
+        _id = getattr(kasa, 'id', None)
+        if _id is None:
+            return
+        # FARKI ÖNCE YUVARLA. Bakiye zaten 2 haneli; iki 2 haneli
+        # sayının toplamı da 2 hanelidir, yani SQL'de yuvarlama
+        # sorusu hiç doğmaz.
+        # ÖLÇÜLDÜ: SQL'de yuvarlayınca SQLite `ROUND(100.005, 2)` →
+        # 100,00 veriyordu, Python'un `q2` → 100,01. YV1'deki
+        # yuvarlama ayrışmasının aynısı, bu sefer öteki yönde.
+        delta = q2(delta)
+        if not delta:
+            return
+        Kasa.query.filter_by(id=_id).update(
+            {'bakiye': func.round(
+                db.cast(func.coalesce(Kasa.bakiye, 0) + float(delta),
+                        db.Numeric(18, 4)), 2)},
+            synchronize_session=False)
+        # Oturumdaki nesne artık ESKİ değeri taşıyor; sonraki okumalar
+        # tazelenmiş değeri görsün diye süresi doldurulüyor.
+        try:
+            db.session.expire(kasa, ['bakiye'])
+        except Exception:
+            pass
+
     def _kasa_bakiye_geri_al(kh):
         """Bir kasa hareketinin bakiye etkisini geri alır."""
         k = db.session.get(Kasa, kh.kasa_id)
         if not k:
             return None
         if (kh.tip or '') == 'giris':
-            k.bakiye = q2((k.bakiye or 0) - (kh.tutar or 0))
+            _kasa_bakiye_ekle(k, -(kh.tutar or 0))   # KB1: atomik
         else:
-            k.bakiye = q2((k.bakiye or 0) + (kh.tutar or 0))
+            _kasa_bakiye_ekle(k, (kh.tutar or 0))   # KB1: atomik
         return f'{k.ad}: {kh.tutar:,.2f} {k.doviz or ""}'
 
     def _hareket_kasa_geri_al(hareket):
@@ -13581,8 +14335,8 @@ def create_app():
             bk = Kasa.query.get(bkh.kasa_id)
             if bk:
                 t = q2(bkh.tutar or 0)
-                bk.bakiye = q2((bk.bakiye or 0)
-                               + (-t if bkh.tip == 'giris' else t))
+                _kasa_bakiye_ekle(                      # KB1: atomik
+                    bk, (-t if bkh.tip == 'giris' else t))
                 geri.append(f'{bk.ad} '
                             f'{"-" if bkh.tip == "giris" else "+"}'
                             f'{t:,.2f} {bk.doviz}')
@@ -13924,7 +14678,26 @@ def create_app():
             if not stok:
                 continue
             if stok.durum not in ('Serbest', 'Rezerve'):
-                continue  # Satilmış/Teslim Edilmiş stok atlanır
+                # RZ2 · BU DAL DA SESSİZDİ. Zaten satılmış/teslim
+                # edilmiş bir stok siparişe eklenmek istenince
+                # atlanıyor ve kullanıcı ekranda hiçbir şey
+                # görmüyordu — avladığımız sınıfın aynısı.
+                _rz2_atlandi(sid, f'stok artık müsait değil '
+                                  f'({stok.durum or "?"})')
+                continue
+
+            # ── RZ2 · KAPI, SATIRLARDAN ÖNCE ──
+            # Eskiden rezervasyon ve karşılama satırları yazılır,
+            # durum EN SONDA (33 satır sonra) değişirdi. İki istek o
+            # aralığa girince ikisi de geçiyordu: ölçümde 20/20 blok
+            # iki müşteriye söz verildi. Durum artık ATOMİK olarak
+            # burada alınıyor — geçmezse hiçbir satır yazılmıyor,
+            # sahipsiz rezervasyon kalmıyor.
+            if not _stok_durum_degistir(stok, hedef_stok_durum,
+                                        ('Serbest', 'Rezerve')):
+                _rz2_atlandi(sid, 'stok bu arada başka bir '
+                                  'siparişe ayrıldı')
+                continue
 
             rez = Rezervasyon(
                 id=_yeni_id('REZ'),
@@ -13956,7 +14729,7 @@ def create_app():
                 doviz=getattr(stok, 'doviz', None) or 'USD',
                 durum='Gerceklesti',
                 kullanici=session.get('kullanici', 'sistem')))
-            stok.durum = hedef_stok_durum
+            # (durum yukarıda ATOMİK olarak alındı — RZ2)
             olusturulan += 1
         return olusturulan
 
@@ -14102,6 +14875,30 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         import json as _json
         data = request.get_json(silent=True) or {}
+
+        # ── RZ2 · AYNI BLOK BAŞKA BİR TEKLİFTE Mİ? ──
+        # Kullanıcının kararı: teklif aşamasında blok serbest kalsın,
+        # ikinci teklife de işlenebilsin, AMA uyarıp onay alsın.
+        # Burada, HİÇBİR ŞEY YAZILMADAN ÖNCE soruyoruz: böylece
+        # numara da yanmıyor, geri alma da gerekmiyor.
+        if ((data.get('durum') or 'Teklif Asam.') == 'Teklif Asam.'
+                and not data.get('teklif_cakisma_onay')):
+            _cak = _teklif_cakismasi(data.get('kalemler', []))
+            if _cak:
+                _ilk = _cak[0]
+                _nerede = (_ilk.get('siparis_id')
+                           or _ilk.get('proforma_id') or '?')
+                _kim = _ilk.get('musteri') or '?'
+                _ek = (f' (+{len(_cak) - 1} stok daha)'
+                       if len(_cak) > 1 else '')
+                return jsonify({
+                    'ok': False, 'error': 'blok_baska_teklifte',
+                    'onay_alani': 'teklif_cakisma_onay',
+                    'onay_sorusu': 'Yeni teklife de bağlamak '
+                                   'istiyor musunuz?',
+                    'cakisanlar': _cak,
+                    'mesaj': f'{_ilk["stok_id"]} zaten {_nerede} '
+                             f'kaydına bağlı ({_kim}).{_ek}'}), 409
 
         # Parent sipariş
         sip = Siparis(
@@ -14449,7 +15246,7 @@ def create_app():
                             aciklama=f'Sıcak satış peşin tahsilat — {fatura.fatura_no}',
                             kaynak='sicak_satis', baglanti_tip='fatura', baglanti_id=fatura.id,
                             vade_tarihi=bugun, evrak_no=fatura.fatura_no)
-                        hs_kasa.bakiye = q2((hs_kasa.bakiye or 0) + k_tutar)
+                        _kasa_bakiye_ekle(hs_kasa, k_tutar)   # KB1: atomik
                         _cvr = '' if hs_kasa.doviz == doviz else f' ({satis_tutar:,.2f} {doviz} → {k_tutar:,.2f} {hs_kasa.doviz})'
                         hs_kh = KasaHareket(
                             kasa_id=hs_kasa.id, tarih=bugun, tip='giris', tutar=k_tutar,
@@ -19069,17 +19866,13 @@ def create_app():
             if baslangic: q = q.filter(Siparis.siparis_tarihi >= baslangic)
             if bitis: q = q.filter(Siparis.siparis_tarihi <= bitis)
 
-            # Kur tablosu (alım fiyatı çevrimi için)
-            _usd_k = DovizKur.query.filter_by(doviz='USD').order_by(DovizKur.tarih.desc()).first()
-            _eur_k = DovizKur.query.filter_by(doviz='EUR').order_by(DovizKur.tarih.desc()).first()
-            _ku = (_usd_k.alis if _usd_k else 0) or 0
-            _ke = (_eur_k.alis if _eur_k else 0) or 0
+            # KC1: çevrim tek kapıdan. Burası AÇIK siparişlerin
+            # TAHMİNİ kârlılığı — teslim edilmemiş siparişin belge
+            # günü kuru yok, tahmin bugünün kuruyla yapılır; tarih
+            # verilmiyor. Düzelen: bilinmeyen döviz artık USD
+            # sanılmıyor, kur arşivi boşsa tutar sıfırlanmıyor.
             def _ucevir(t, d):
-                if not t: return 0
-                if d == 'USD' or not d: return t
-                if d == 'EUR': return (t * _ke / _ku) if _ku else 0
-                if d == 'TRY': return (t / _ku) if _ku else 0
-                return t
+                return _usd_cevrim(t, d)
 
             for s in q.all():
                 rezler_s = Rezervasyon.query.filter_by(siparis_id=s.id, iptal_nedeni=None).all()
@@ -19646,6 +20439,33 @@ def create_app():
         if not vade:
             return jsonify({'ok': False, 'mesaj': 'Vade tarihi zorunlu'}), 400
 
+        # ── YK3 · AYNI ÇEK İKİ KEZ GİRİLMESİN ──
+        # Yineleme kalkanı 20 saniyelik pencereye bakıyor; bu ise
+        # GÜNLER sonra aynı çeki yeniden girmeyi yakalar. Fiziksel
+        # bir çek iki kez var olamaz: aynı BANKA + aynı NUMARA.
+        # Farklı bankalar aynı numarayı kullanabilir, o yüzden
+        # ölçüt ikisi birlikte.
+        # Kullanıcı ısrar ederse `yineleme_onay` ile geçebilir —
+        # hiçbir kayıt kalıcı olarak engellenmiyor.
+        # AYRI ONAY: `yineleme_onay` "az önce çift tıkladım" demek;
+        # bu denetim ise "bu çek zaten kayıtlı" diyor. Tek bayrak
+        # kullansaydım biri ötekini susturur, numara denetimi hiç
+        # çalışmazdı — ÖLÇÜLDÜ, testte tam bu oldu.
+        _cno = (d.get('cek_no') or '').strip()
+        _bnk = (d.get('banka_adi') or '').strip()
+        if _cno and not d.get('mukerrer_onay'):
+            _ayni = Cek.query.filter(
+                Cek.cek_no == _cno, Cek.yon == yon,
+                Cek.aktif.isnot(False)).all()
+            _ayni = [x for x in _ayni
+                     if (x.banka_adi or '').strip().lower() == _bnk.lower()]
+            if _ayni:
+                return jsonify({
+                    'ok': False, 'error': 'mukerrer_cek',
+                    'onay_alani': 'mukerrer_onay',
+                    'mesaj': f'{_bnk or "Bu banka"} · {_cno} numaralı çek '
+                             f'zaten kayıtlı ({_ayni[0].id}).'}), 409
+
         cari_id = (d.get('cari_id') or '').strip() or None
         cari_unvan = None
         if cari_id:
@@ -19909,9 +20729,9 @@ def create_app():
                     if not _kasa_obj:
                         raise ValueError(f'Kasa bulunamadı (id: {d["kasa_id"]})')
                     if tip == 'giris':
-                        _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) + q2(c.tutar))
+                        _kasa_bakiye_ekle(_kasa_obj, q2(c.tutar))   # KB1: atomik
                     else:
-                        _kasa_obj.bakiye = q2((_kasa_obj.bakiye or 0) - q2(c.tutar))
+                        _kasa_bakiye_ekle(_kasa_obj, -q2(c.tutar))   # KB1: atomik
                 except Exception as _ke:
                     # F13 — SESSIZ YUTMA KALDIRILDI.
                     # Eskiden `except: pass` vardi: kasa kaydi
@@ -19970,9 +20790,9 @@ def create_app():
                     if _k:
                         # Girişse bakiyeden düş, çıkışsa geri ekle (ters işlem)
                         if kh.tip == 'giris':
-                            _k.bakiye = q2((_k.bakiye or 0) - (kh.tutar or 0))
+                            _kasa_bakiye_ekle(_k, -(kh.tutar or 0))   # KB1: atomik
                         else:
-                            _k.bakiye = q2((_k.bakiye or 0) + (kh.tutar or 0))
+                            _kasa_bakiye_ekle(_k, (kh.tutar or 0))   # KB1: atomik
                     db.session.delete(kh)
                     c.kasa_hareket_id = None
                     geri_mesaj += ' Kasa hareketi geri alındı.'
@@ -20070,9 +20890,9 @@ def create_app():
                 _k = db.session.get(Kasa, kh.kasa_id)
                 if _k:
                     if kh.tip == 'giris':
-                        _k.bakiye = q2((_k.bakiye or 0) - (kh.tutar or 0))
+                        _kasa_bakiye_ekle(_k, -(kh.tutar or 0))   # KB1: atomik
                     else:
-                        _k.bakiye = q2((_k.bakiye or 0) + (kh.tutar or 0))
+                        _kasa_bakiye_ekle(_k, (kh.tutar or 0))   # KB1: atomik
                 db.session.delete(kh)
                 c.kasa_hareket_id = None
         # YAMA H3: DURUMU DA YAZ.
@@ -23641,6 +24461,21 @@ def create_app():
         cevap = {'ok': True, 'tarih': bugun.isoformat()}
 
         # ── 1) CİRO · KÂR · MARJ (satış kayıtlarından) ──
+        # ── OY1 · KÂR CİRONUN YANINDA KAÇAK GİDİYORDU ──
+        # Kâr ve marj ciroyla AYNI PAKETTEYDİ ve `satislar` yetkisi
+        # üçünü birlikte açıyordu. TARAYICIDA ÖLÇÜLDÜ:
+        # `satislar=okuma, karlilik=gizli` satışçının dashboard'unda
+        #   "YILLIK SATIŞ CİROSU · 5.000 $ · 2026 · kâr 3.800 $ · marj %76"
+        # yazıyordu — aynı kullanıcı `/api/karlilik`ten 403 alırken.
+        #
+        # Bunu kendi testim kaçırdı: `/api/dashboard/ozet`i TÜM
+        # MODÜLLERİ GİZLİ kullanıcıyla ölçüp (33 bayt, tertemiz) muaf
+        # saymıştım. `satislar` açıkken bölüm açılıyor ve kârı da
+        # beraberinde getiriyor.
+        #
+        # Kullanıcı kararı: ciro satış verisi, kâr ve marj kârlılık
+        # verisi. Ciro `satislar` ile gelmeye DEVAM eder; kâr ve marj
+        # YALNIZCA `karlilik` ile.
         if yetki('karlilik') or yetki('satislar'):
             def _satis_topla(bas, bit):
                 sorgu = SatisKaydi.query.filter(
@@ -23655,14 +24490,26 @@ def create_app():
             a_ciro, _a_mal, a_kar = _satis_topla(ay_bas, bugun)
             g_ciro, _g_mal, _g_kar = _satis_topla(gecen_yil_bas, gecen_yil_ayni)
             cevap['ciro'] = {
-                'yillik': y_ciro, 'yillik_kar': y_kar,
-                'yillik_marj': q_oran((y_kar / y_ciro * 100) if y_ciro else 0),
+                'yillik': y_ciro,
                 'gecen_yil_ayni_donem': g_ciro,
                 'gecen_yila_gore': (q_oran((y_ciro - g_ciro) / g_ciro * 100)
                                     if g_ciro else None),
-                'aylik': a_ciro, 'aylik_kar': a_kar,
+                'aylik': a_ciro,
                 'yil': bugun.year,
             }
+            # KÂR ve MARJ ayrı kapıda. Anahtar HİÇ GELMEZ — 0
+            # gelmez: BG1'in ilkesi "yetkisi olmayan bölüm cevapta
+            # HİÇ gelmemeli, rakam sızmaz". 0 göndermek de bilgi
+            # olurdu; ekran "kâr 0,00 $ · marj %0" yazar ve
+            # satışçıya şirketin sıfır kâr ettiğini söylerdi.
+            # dashboard.html alan yokken o parçayı hiç yazmıyor.
+            if yetki('karlilik'):
+                cevap['ciro'].update({
+                    'yillik_kar': y_kar,
+                    'yillik_marj': q_oran(
+                        (y_kar / y_ciro * 100) if y_ciro else 0),
+                    'aylik_kar': a_kar,
+                })
 
         # ── 2) SİPARİŞLER: yüklenen (bu yıl) + açık ──
         if yetki('siparis'):
@@ -24110,6 +24957,24 @@ def create_app():
     # ════════════════════════════════════════════════════════
     @app.route('/api/dashboard/satis_istatistik', methods=['GET'])
     def api_dashboard_satis():
+        # ── OY1 · MUAFİYETİN ALTINDAKİ TEK BOŞLUK ──
+        # `/api/dashboard` öneki OKUMA_MUAF_PATHS'te: okuma kapısı bu
+        # yolu HİÇ denetlemiyor. Kardeşleri bunu kendileri yapıyor
+        # (`/ozet` 4, `/detay` 2 yetki sorusu); bu uç SIFIR soruyordu.
+        #
+        # ÖLÇÜLDÜ: kâr_usd, en kârlı 5 MÜŞTERİ, en kârlı 5 CİNS ve
+        # ortalama marj, yalnızca oturum açmış herkese açıktı.
+        # dashboard.html ve raporlar.html bu bölümü `karlilik` VEYA
+        # `raporlar` ile gizliyor (raporlar.html satır 346) — kural
+        # ekranda vardı, sunucuda yoktu.
+        #
+        # Muafiyeti daraltmak yerine gövdeye denetim konuyor: `/ozet`
+        # bölüm bölüm kendi içinde süzüyor ve öneki haritaya bağlamak
+        # onun o mantığını baypas ederdi.
+        if not (_yetki_var_mi('karlilik', 'okuma')
+                or _yetki_var_mi('raporlar', 'okuma')):
+            return jsonify({'ok': False, 'error': 'yetki_yok',
+                            'mesaj': 'Kârlılık verisini görme yetkiniz yok.'}), 403
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
 
         bugun = date.today()
@@ -26601,8 +27466,19 @@ def create_app():
                         mevcut.siparis_kalem_id = sk.id
                         mevcut.rez_tip = 'Siparis'
                         stok = _stok_getir(sid, pk.urun_tip or 'PLAKA')
-                        if stok and stok.durum in ('Serbest', 'Rezerve'):
-                            stok.durum = 'Satildi' if sip.durum != 'Teklif Asam.' else 'Rezerve'
+                        if stok:
+                            # RZ2 · atomik kapı. Rezervasyon bu
+                            # proformaya ait olduğu için pencere dar,
+                            # ama düz atama yine yarışa açıktı.
+                            _rz2_hedef = ('Satildi'
+                                          if sip.durum != 'Teklif Asam.'
+                                          else 'Rezerve')
+                            if not _stok_durum_degistir(
+                                    stok, _rz2_hedef,
+                                    ('Serbest', 'Rezerve')):
+                                _rz2_atlandi(
+                                    sid, 'stok bu arada başka bir '
+                                         'siparişe ayrıldı')
                         # F8 · DUZELTME: rezervasyon TASINDIGINDA karsilama
                         # satiri hic olusmuyordu (yalnizca YENI rezervasyon
                         # yolunda olusuyor). Proformadan gelen siparislerin
@@ -28873,7 +29749,7 @@ def create_app():
                         kullanici=session.get('kullanici')
                     )
                     db.session.add(kh)
-                    kasa.bakiye = q2((kasa.bakiye or 0) + k_tutar)
+                    _kasa_bakiye_ekle(kasa, k_tutar)   # KB1: atomik
                     kasa_mesaj = f' Kasa: {kasa.ad} +{k_tutar:,.2f} {kasa.doviz} (bakiye {q2(kasa.bakiye):,.2f}){cevrim}'
             except Exception as e:
                 # F11 — KASA HATASI ISLEMI IPTAL EDER.
@@ -29275,7 +30151,7 @@ def create_app():
                 eski_bas = getattr(k, 'baslangic_bakiye', 0) or 0
                 fark = yeni_bas - eski_bas
                 k.baslangic_bakiye = q2(yeni_bas)
-                k.bakiye = q2((k.bakiye or 0) + fark)
+                _kasa_bakiye_ekle(k, fark)   # KB1: atomik
             except (ValueError, TypeError):
                 pass
 
@@ -29611,9 +30487,9 @@ def create_app():
 
             # Bakiye güncelle
             if tip == 'giris':
-                k.bakiye = q2((k.bakiye or 0) + tutar)
+                _kasa_bakiye_ekle(k, tutar)   # KB1: atomik
             else:
-                k.bakiye = q2((k.bakiye or 0) - tutar)
+                _kasa_bakiye_ekle(k, -tutar)   # KB1: atomik
 
             db.session.flush()
             _log_audit('EKLE', 'kasa_hareket', kh.id,
@@ -29687,7 +30563,7 @@ def create_app():
                 baglanti_tip='virman', baglanti_id=str(hedef.id),
                 kullanici=session.get('kullanici')
             )
-            kaynak.bakiye = q2((kaynak.bakiye or 0) - tutar)
+            _kasa_bakiye_ekle(kaynak, -tutar)   # KB1: atomik
             db.session.add(cikis)
 
             # 2) Hedefe GIRIS
@@ -29697,7 +30573,7 @@ def create_app():
                 baglanti_tip='virman', baglanti_id=str(kaynak.id),
                 kullanici=session.get('kullanici')
             )
-            hedef.bakiye = q2((hedef.bakiye or 0) + tutar)
+            _kasa_bakiye_ekle(hedef, tutar)   # KB1: atomik
             db.session.add(giris)
 
             # Denetim izi commit'ten ÖNCE — _log_audit kendi commit'ini yapmaz

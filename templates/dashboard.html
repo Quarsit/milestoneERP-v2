@@ -247,9 +247,16 @@ async function ozetYukle() {
   /* ── 1. KADEME: karar değiştiren dört kutu ── */
   if (d.ciro) {
     const c = d.ciro;
-    yazKutu('bYilCiro', parayaCevir(c.yillik),
-      `${c.yil} · kâr ${para(c.yillik_kar)} · marj %${(c.yillik_marj || 0).toLocaleString('tr-TR', {maximumFractionDigits: 1})}`,
-      (c.yillik_kar || 0) >= 0 ? 'iyi' : 'kotu');
+    /* OY1: kâr ve marj artık YALNIZCA `karlilik` yetkisiyle
+       geliyor; alan hiç gelmiyor olabilir. Koşulsuz yazmak
+       `para(undefined)` ile "kâr 0,00 $ · marj %0" ürettirirdi —
+       yani satışçıya şirketin sıfır kâr ettiğini söylerdi. Alan
+       yoksa o parça HİÇ yazılmıyor. */
+    const _karEk = (c.yillik_kar != null)
+      ? ` · kâr ${para(c.yillik_kar)} · marj %${(c.yillik_marj || 0).toLocaleString('tr-TR', {maximumFractionDigits: 1})}`
+      : '';
+    yazKutu('bYilCiro', parayaCevir(c.yillik), `${c.yil}${_karEk}`,
+      (c.yillik_kar == null || c.yillik_kar >= 0) ? 'iyi' : 'kotu');
     /* Geçen yılın aynı dönemiyle kıyas: tek rakam bir şey söylemiyor,
        kıyas söylüyor. Geçen yıl veri yoksa satır hiç yazılmaz. */
     if (c.gecen_yila_gore != null) {
@@ -257,7 +264,8 @@ async function ozetYukle() {
       const e = document.getElementById('bYilCiroEk');
       if (e) e.textContent += ` · geçen yıl ${y > 0 ? '↑' : '↓'}%${Math.abs(y).toLocaleString('tr-TR', {maximumFractionDigits: 0})}`;
     }
-    yazKutu('bAyCiro', parayaCevir(c.aylik), `bu ay · kâr ${para(c.aylik_kar)}`);
+    yazKutu('bAyCiro', parayaCevir(c.aylik),
+      c.aylik_kar != null ? `bu ay · kâr ${para(c.aylik_kar)}` : 'bu ay');
   } else {
     yazKutu('bYilCiro', '—', 'yetki yok');
     yazKutu('bAyCiro', '—', 'yetki yok');

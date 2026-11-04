@@ -492,7 +492,8 @@ function kdvHesapla() {
 
   const { tutar } = siparisToplamlari();
   const oran = parseFloat(document.getElementById('fKdvOran').value) || 0;
-  const kdv = tutar * oran / 100;
+  /* YV1: ortak kapı. */
+  const kdv = kdvHesapla(tutar, oran, false).kdv;
   document.getElementById('fKdvOran').dataset.tutar = kdv.toFixed(2);
 
   // Tevkifat: KDV'nin belirtilen kesri alıcı tarafından beyan edilir
@@ -1320,7 +1321,16 @@ async function siparisKaydet() {
         kalemler: KALEMLER
       })
     });
-    bildir(duzenleme ? 'Sipariş güncellendi · ' + DUZENLE_ID : 'Sipariş oluşturuldu · ' + (d.id || ''));
+    /* RZ2 · SUNUCUNUN MESAJI ÖNCELİKLİ.
+       Ekran kendi metnini kuruyordu ve `d.mesaj` hiç okunmuyordu:
+       kapı bir stoğu geçirmediğinde sunucu söylüyor ama ekranda
+       görünmüyordu. Kapıyı koyup susmak, avladığımız sessiz
+       kaybın aynısı olurdu. Atlama varsa uyarı rengiyle. */
+    const _rz2Atlanan = (d && d.atlanan_stoklar) || [];
+    bildir(d.mesaj || (duzenleme
+             ? 'Sipariş güncellendi · ' + DUZENLE_ID
+             : 'Sipariş oluşturuldu · ' + (d.id || '')),
+           _rz2Atlanan.length > 0);
     modalKapat(); await yukle();
   } catch (e) { /* api() mesajı gösterir (kalem kilitliyse sunucu söyler) */ }
   finally { btn.disabled = false; btn.textContent = eskiYazi; }

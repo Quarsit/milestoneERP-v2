@@ -839,7 +839,13 @@ const yukleyici = { genel: genelYukle, karlilik: karlilikYukle, stok: stokYukle,
    dışında (henüz sonuçlanmadılar). Ekran bunu YAZIYOR, çünkü
    açıklanmamış bir oran yanlış okunur. */
 async function donusumYukle() {
-  if (!gorunur('raporlar')) {
+  /* OY1: `proforma` da şart. Sunucu `/api/rapor/donusum` ucunda
+     `proforma` okuma yetkisi arıyor (teklif dönüşüm oranı proforma
+     verisidir). Burada yalnız `raporlar`a bakılıyordu; `raporlar`
+     yetkisi olup `proforma` yetkisi olmayan kullanıcıda bölüm
+     açılıp 403 ile kırılıyordu. Sunucuyu gevşetmek yerine ekranı
+     gerçeği söyleyecek hâle getirdim. */
+  if (!gorunur('raporlar') || !gorunur('proforma')) {
     document.getElementById('dnKpi').innerHTML = bos('Yetkin yok.');
     return;
   }

@@ -2428,9 +2428,10 @@ function kdvOnizle() {
   /* KF2: gosterecek bir sey yoksa kutu HIC gorunmesin. */
   if (!tutar || !oran) { kutu.textContent = ''; kutu.style.display = 'none'; return; }
   kutu.style.display = '';
-  let matrah, kdv, toplam;
-  if (dahil) { toplam = tutar; matrah = tutar / (1 + oran / 100); kdv = toplam - matrah; }
-  else { matrah = tutar; kdv = matrah * oran / 100; toplam = matrah + kdv; }
+  /* YV1: ortak kapı — eskisi hiç yuvarlamıyordu ve kutudaki
+     rakam kaydedilenden bir kuruş farklı çıkabiliyordu. */
+  const _h = kdvHesapla(tutar, oran, dahil);
+  const matrah = _h.matrah, kdv = _h.kdv, toplam = _h.toplam;
   kutu.innerHTML = `Matrah <b>${para2(matrah, dov)}</b><br>KDV <b>${para2(kdv, dov)}</b><br>` +
                    `Toplam <b style="color:var(--murekkep)">${para2(toplam, dov)}</b>`;
 }

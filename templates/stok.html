@@ -2233,7 +2233,9 @@ function onizlemeCiz() {
   const kdvDahil = document.getElementById('sKdvDahil').checked;
   /* Matrah (KDV hariç) — sunucu da böyle saklıyor; önizlemenin
      kayıtla aynı sayıyı göstermesi şart. */
-  const net = (kdvDahil && kdvOran > 0) ? fiyat / (1 + kdvOran / 100) : fiyat;
+  /* YV1: `_kdv_ayristir` ile AYNI — sunucu q2 ile yuvarlıyor,
+     burası yuvarlamıyordu ve yukarıdaki not boşa çıkıyordu. */
+  const net = kdvDahil ? kdvAyristir(fiyat, kdvOran) : q2(fiyat);
 
   const s2 = v => (Number(v) || 0).toLocaleString('tr-TR',
     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2309,8 +2311,9 @@ function hesapla() {
     miktarAd = fb === 'm2' ? 'm²' : 'sqft';
   }
   // KDV hariç matrah (backend de böyle saklıyor)
-  const netFiyat = kdvDahil && kdvOran > 0 ? fiyat / (1 + kdvOran / 100) : fiyat;
-  const toplam = netFiyat * miktar;
+  /* YV1: ortak kapı — sunucu `_kdv_ayristir` + `q2(fiyat*miktar)`. */
+  const netFiyat = kdvDahil ? kdvAyristir(fiyat, kdvOran) : q2(fiyat);
+  const toplam = q2(netFiyat * miktar);
 
   document.getElementById('ozMiktar').textContent = miktar ? miktar.toLocaleString('tr-TR', {maximumFractionDigits: 2}) + ' ' + miktarAd : '—';
   document.getElementById('ozBirim').textContent = netFiyat ? para2(netFiyat, dov) + ' /' + miktarAd : '—';
@@ -2805,12 +2808,14 @@ function topluOnizle() {
       const adet = tip === 'PLAKA' ? Math.max(1, Math.round(k.adet || 1)) : 1;
       miktar = (birim === 'sqft' ? m2 * 10.7639 : m2) * adet;
     }
-    const netFiyat = dahil && oran > 0 ? (k.fiyat || 0) / (1 + oran / 100) : (k.fiyat || 0);
+    /* YV1: sunucu her stok satırı için `matrah = q2(fiyat*miktar)`
+       yazıyor; toplam da yuvarlanmış satırların toplamı. */
+    const netFiyat = dahil ? kdvAyristir(k.fiyat || 0, oran) : q2(k.fiyat || 0);
     k._miktar = miktar;
     toplamMiktar += miktar;
-    toplamMatrah += netFiyat * miktar;
+    toplamMatrah += q2(netFiyat * miktar);
   });
-  const kdvTutar = oran > 0 ? toplamMatrah * oran / 100 : 0;
+  const kdvTutar = oran > 0 ? q2(toplamMatrah * oran / 100) : 0;
 
 
   /* ── TİP UYUŞMAZLIĞI UYARISI (TP1) ──

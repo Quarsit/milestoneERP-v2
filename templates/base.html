@@ -1304,6 +1304,42 @@ async function api(yol, secenek = {}) {
   if (c.status === 401) { location.replace('/giris'); throw new Error('Oturum yok'); }
   let d = null;
   try { d = await c.json(); } catch (e) { d = null; }
+  /* ═══ YK3 · YİNELENEN İSTEK ═══
+     Sunucu aynı gövdeyi kısa süre içinde ikinci kez görürse 409 +
+     `yineleme_suphesi` döner. Burada soruyoruz ve kullanıcı
+     onaylarsa `yineleme_onay` ile yeniden gönderiyoruz — yani
+     meşru hiçbir kayıt kaybolmuyor.
+
+     NEDEN BURADA, her ekranda değil: her yazma isteği bu
+     sarmalayıcıdan geçiyor. Ekran ekran yazsaydım biri unutulur
+     ve o ekran sessizce korumasız kalırdı — OY1'de ölçtüğümüz
+     hatanın aynısı. */
+  /* RZ2 · onay ALAN BAŞINA izleniyor, tek bayrakla değil.
+     Eskiden `_yinelemeOnaylandi` tek bir bayraktı: bir istek iki
+     ayrı onay isterse (önce teklif çakışması, sonra YK3 yineleme)
+     ikincisi sorulmadan SESSİZCE düşerdi. Artık hangi alanın
+     onaylandığı tutuluyor; aynı alan iki kez sorulmadığı için
+     döngü de oluşmuyor. */
+  if (c.status === 409 && d && d.onay_alani
+      && !(secenek._onaylanan || []).includes(d.onay_alani)) {
+    const onay = await onayla(
+      (d.mesaj || 'Bu kaydı az önce oluşturdunuz.') +
+      '\n\n' + (d.onay_sorusu || 'Yine de kaydedilsin mi?'));
+    if (!onay) {
+      const _h = new Error('yineleme_iptal');
+      _h.status = 409; _h.yanit = d; _h.sessiz = true;
+      throw _h;
+    }
+    let _govde = secenek.body;
+    try {
+      const _o = JSON.parse(_govde || '{}');
+      _o[d.onay_alani] = true;
+      _govde = JSON.stringify(_o);
+    } catch (e) { /* JSON değilse olduğu gibi gönder */ }
+    return api(yol, { ...secenek, body: _govde,
+                      _onaylanan: [...(secenek._onaylanan || []),
+                                   d.onay_alani] });
+  }
   if (c.status === 403) {
     bildir((d && d.mesaj) || 'Bu işlem için yetkiniz yok.', true);
     throw new Error('yetki_yok');
@@ -1326,6 +1362,69 @@ async function api(yol, secenek = {}) {
   if (String(yol).startsWith('/api/ayarlar/lookup') &&
       String(secenek.method || 'GET').toUpperCase() !== 'GET') lookupDegisti();
   return d;
+}
+
+/* ═══ YV1 · KDV: EKRAN İLE SUNUCU AYNI SAYIYI SÖYLESİN ═══
+   Sunucu tutarı ÖNCE iki haneye yuvarlıyor (`q2`), ekranlar
+   yuvarlamıyordu. Fatura formu kalem toplamını ham tutuyor
+   (`toplam_fiyat: miktar * fiyat`), yani 10,07 m² × 36,33 $ gibi
+   sıradan bir satır ara toplama fazladan ondalık taşıyor.
+
+   ÖLÇÜLDÜ — 200.000 sahte fatura, gerçekçi iki ondalıklı miktar ve
+   fiyatlarla:
+       KDV hariç   55.612 / 200.000 faturada ayrışma  (%27,8)
+       KDV dahil   45.967 / 200.000 faturada ayrışma  (%23,0)
+   Fark hep tam 0,01 — daha fazlası hiç çıkmadı. Saklanan rakam
+   yanlış değildi; ekran başka bir sayı gösteriyordu.
+
+   Aşağısı `_kdv_hesapla` / `_kdv_ayristir` / `q2`'nin BİREBİR
+   ikizi. 200.000 girdide sıfır ayrışmayla doğrulandı. */
+
+/** Sunucunun `q2`si: Decimal(str(v)).quantize(0.01, ROUND_HALF_UP) */
+function q2(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return 0;
+  const eksi = n < 0;
+  const a = Math.abs(n);
+  /* `String(a)` = EN KISA round-trip gösterim — Python'un `str()`
+     ile AYNI algoritma; sunucu da onu yuvarlıyor.
+     `Math.round(a*100)/100` İKİLİ gösterimden gider ve 0,145'i
+     AŞAĞI yuvarlar; sunucu "0.145" dizgesini YUKARI yuvarlıyor.
+     `toFixed(10)` de olmuyor: 15330,994999999999'u onuncu hanede
+     yukarı yuvarlayıp sahte bir eşitlik yaratıyor (200.000 girdide
+     316 ayrışma vermişti). */
+  let s = String(a);
+  if (s.indexOf('e') >= 0 || s.indexOf('E') >= 0) s = a.toFixed(20);
+  const nokta = s.indexOf('.');
+  if (nokta < 0) return n;
+  const kesir = s.slice(nokta + 1);
+  if (kesir.length <= 2) return n;
+  const tam = s.slice(0, nokta) + kesir.slice(0, 2).padEnd(2, '0');
+  let k = BigInt(tam);
+  if (kesir.charCodeAt(2) >= 53) k += 1n;      // '5' ve üstü: YUKARI
+  const sonuc = Number(k) / 100;
+  return eksi ? -sonuc : sonuc;
+}
+
+/** Sunucunun `_kdv_ayristir`i: KDV dahil tutardan matrahı çıkarır */
+function kdvAyristir(brut, oran) {
+  const o = Number(oran) || 0, t = Number(brut) || 0;
+  if (o <= 0) return q2(t);
+  return q2(t / (1 + o / 100));
+}
+
+/** Sunucunun `_kdv_hesapla`sı. Döner: {matrah, kdv, toplam}
+    TÜMLEYEN yuvarlama matrah + kdv === toplam'ı GARANTİ eder. */
+function kdvHesapla(toplamTutar, kdvOran, kdvDahilMi) {
+  const tutar = q2(toplamTutar);               // TABAN ÖNCE YUVARLANIR
+  const oran = Number(kdvOran) || 0;
+  if (oran <= 0) return { matrah: tutar, kdv: 0, toplam: tutar };
+  if (kdvDahilMi) {
+    const matrah = kdvAyristir(tutar, oran);
+    return { matrah: matrah, kdv: q2(tutar - matrah), toplam: tutar };
+  }
+  const kdv = q2(tutar * oran / 100);
+  return { matrah: tutar, kdv: kdv, toplam: q2(tutar + kdv) };
 }
 
 /** Para: 12345.6 → "12.346 $" (kuruşsuz, okunur) */
@@ -1619,7 +1718,11 @@ function bildir(mesaj, hata = false) {
   b.classList.toggle('hata', !!hata);
   b.classList.add('acik');
   clearTimeout(_bildirZaman);
-  _bildirZaman = setTimeout(() => b.classList.remove('acik'), hata ? 4200 : 2600);
+  /* YK3: süre uzatıldı (kullanıcı isteği) — 2,6 sn çok kısaydı,
+     bildirim okunmadan kayboluyordu. Hata bildirimi başarıdan uzun
+     kalmaya devam ediyor; eskiden de öyleydi (4,2 / 2,6) ve ikisini
+     birden 5'e eşitlemek hatayı görece kısaltırdı. */
+  _bildirZaman = setTimeout(() => b.classList.remove('acik'), hata ? 7000 : 5000);
 }
 
 /* ═══════════ KOMUT PALETİ ═══════════
@@ -2093,17 +2196,10 @@ function hsKalemCiz() {
   const kdv = parseFloat(document.getElementById('hsKdv').value) || 0;
   const dahilEl = document.getElementById('hsKdvDahil');
   const dahil = dahilEl ? dahilEl.value === '1' : false;
-  let matrah = ara, kdvTutar = 0, t = ara;
-  if (kdv > 0) {
-    if (dahil) {
-      matrah = Math.round((ara / (1 + kdv / 100)) * 100) / 100;
-      kdvTutar = Math.round((ara - matrah) * 100) / 100;
-      t = ara;
-    } else {
-      kdvTutar = Math.round(ara * kdv / 100 * 100) / 100;
-      t = Math.round((ara + kdvTutar) * 100) / 100;
-    }
-  }
+  /* YV1: elle yuvarlama yerine ortak kapı. Eskisi `ara`yı HİÇ
+     yuvarlamıyordu; sunucu yuvarlıyor ve iki sayı ayrışıyordu. */
+  const _h = kdvHesapla(ara, kdv, dahil);
+  const matrah = _h.matrah, kdvTutar = _h.kdv, t = _h.toplam;
   const g = document.getElementById('hsGenelToplam');
   if (g) g.textContent = para(t, dov) + (kdv > 0
     ? ` (matrah ${para(matrah, dov)} + KDV ${para(kdvTutar, dov)})`
