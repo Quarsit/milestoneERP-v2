@@ -3420,6 +3420,17 @@ async function stokSil(id, tip, no, maliIslem) {
        oysa bu bir hata değil, bir SORU. */
     const y = (e && e.yanit) || null;
     if (y && y.error === 'mali_islem_gerekli') maliAc(id, tip, no, y);
+    /* MK1 · KAPANMIŞ KDV DÖNEMİ.
+       base.html'deki api() 409'u sessiz geçiyor (çağıran özel ele
+       alsın diye). Bu dalı yazmasaydım kullanıcı "fatura
+       düzeltilsin" seçip HİÇBİR ŞEY görmezdi — kapı eklerken
+       avladığımız sessiz kaybın aynısını üretirdim.
+       Mesaj gösteriliyor ve seçim penceresi yeniden açılıyor ki
+       "Karşı kayıt" seçeneğine geçebilsin. */
+    else if (y && y.error === 'kdv_donemi_kapali') {
+      bildir(y.mesaj || 'Bu fatura kapanmış bir KDV dönemine ait.', true);
+      maliAc(id, tip, no, y);
+    }
   }
 }
 
