@@ -65,6 +65,54 @@ NODE = shutil.which('node') or shutil.which('nodejs')
 
 SCRIPT = re.compile(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', re.S | re.I)
 
+# ── BM1 · {% include %} ÇÖZÜMLEMESİ ───────────────────────────────────
+# Bu denetçi her şablonu TEK BAŞINA okuyordu. Projede include yoktu, o
+# yüzden gerek de yoktu. `_banka_modal.html` ile ilk include geldi ve
+# denetçi ANINDA YANLIŞ ALARM verdi:
+#
+#     ✗ ayarlar.html: bankaAc      ✗ kasa.html: bankaAc
+#
+# Oysa `bankaAc` tanımlı — parçanın içinde. Tarayıcı include'u yerine
+# koyup öyle çalıştırıyor; denetçi koymuyordu.
+#
+# Yanlış alarmı düzeltmek, doğru bulmak kadar önemli: kırmızıya
+# alışan göz gerçek kırmızıyı da görmez. Artık denetçi de tarayıcının
+# gördüğü metne bakıyor.
+ICERIK = re.compile(r'{%-?\s*include\s+["\']([^"\']+)["\'][^%]*-?%}')
+# Jinja YORUMLARI önce atılıyor: tarayıcı onları hiç görmüyor ve
+# `_banka_modal.html`in başlığındaki ÖRNEK include, gerçek include
+# sanılıp parçanın kendini include ettiği sonucuna götürüyordu.
+YORUM = re.compile(r'{#.*?#}', re.S)
+
+
+def sablon_oku(p, gorulen=None):
+    """Şablonu, {% include %} ettiklerini YERİNE KOYARAK okur.
+
+    Tarayıcı birleşmiş metni görüyor; denetim de onu görmeli.
+    `gorulen` döngü kalkanı: A, B'yi B de A'yı include ederse
+    sonsuz özyineleme olurdu."""
+    yol = Path(p)
+    gorulen = set(gorulen or ())
+    try:
+        metin = yol.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return ''
+    metin = YORUM.sub('', metin)
+    if yol.resolve() in gorulen:
+        return ''
+    gorulen.add(yol.resolve())
+
+    def yerlestir(m):
+        parca = SABLON / m.group(1)
+        if not parca.exists():
+            # Olmayan parçayı SESSİZCE boş geçmiyoruz: şablon
+            # çalışma anında TemplateNotFound ile patlar, denetim
+            # de bunu söylemeli.
+            return f'<!-- EKSIK ICERIK: {m.group(1)} -->'
+        return sablon_oku(parca, gorulen)
+
+    return ICERIK.sub(yerlestir, metin)
+
 
 def jinja_temizle(js):
     """Jinja ifadelerini JS ayrıştırıcısının kabul edeceği hale getirir.
@@ -137,7 +185,7 @@ print()
 
 bulgu, betikli = 0, 0
 for p in dosyalar:
-    metin = p.read_text(encoding='utf-8', errors='replace')
+    metin = sablon_oku(p)
     bloklar = SCRIPT.findall(metin)
     if not bloklar:
         continue
@@ -217,7 +265,7 @@ print(" J2 · ONCLICK'TE TANIMSIZ FONKSİYON   [SESSİZ ÖLÜ DÜĞME]")
 print("─" * 70)
 _j2 = 0
 for p2 in sorted(SABLON.glob('*.html')):
-    ham2 = p2.read_text(encoding='utf-8', errors='replace')
+    ham2 = sablon_oku(p2)
     js2 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham2, re.S))
     if not js2.strip():
         continue
@@ -254,7 +302,7 @@ print("─" * 70)
 _j3 = 0
 _ATLA3 = {'api', 'fetch', 'Promise', 'JSON', 'navigator', 'caches', 'import'}
 for p3 in sorted(SABLON.glob('*.html')):
-    ham3 = p3.read_text(encoding='utf-8', errors='replace')
+    ham3 = sablon_oku(p3)
     js3 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham3, re.S))
     if not js3.strip():
         continue
@@ -292,7 +340,7 @@ print(" J4 · TARAYICI PENCERESİ (confirm/prompt/alert)   [SESSİZ HAYIR]")
 print("─" * 70)
 _j4 = 0
 for p4 in sorted(SABLON.glob('*.html')):
-    ham4 = p4.read_text(encoding='utf-8', errors='replace')
+    ham4 = sablon_oku(p4)
     js4 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham4, re.S))
     js4 = re.sub(r'/\*.*?\*/', ' ', js4, flags=re.S)
     js4 = re.sub(r'(?m)//.*$', ' ', js4)
@@ -318,7 +366,7 @@ print("─" * 70)
 # burada sayıyoruz.
 _j5 = 0
 for p5 in sorted(SABLON.glob('*.html')):
-    ham5 = p5.read_text(encoding='utf-8', errors='replace')
+    ham5 = sablon_oku(p5)
     js5 = ''.join(re.findall(r'<script[^>]*>(.*?)</script>', ham5, re.S))
     js5 = re.sub(r'/\*.*?\*/', ' ', js5, flags=re.S)
     js5 = re.sub(r'(?m)//.*$', ' ', js5)
@@ -350,7 +398,7 @@ _j6 = 0
 for p6 in sorted(SABLON.glob('*.html')):
     if p6.name.endswith('_print.html') or p6.name in ('base.html', 'giris.html'):
         continue
-    ham6 = p6.read_text(encoding='utf-8', errors='replace')
+    ham6 = sablon_oku(p6)
     # Satir aciliminin HEMEN ardindaki ilk <td ...> gizli mi
     for m6 in re.finditer(r'<tr\b[^>]*>\s*(?:\$\{[^}]*\}\s*)?<td\b([^>]*)>', ham6):
         if 'display:none' in m6.group(1).replace(' ', ''):
@@ -379,7 +427,7 @@ print("─" * 70)
 # 30 yedek varken liste "Yükleniyor…"da kalıyordu.
 _j7 = 0
 for p7 in sorted(SABLON.glob('*.html')):
-    ham7 = p7.read_text(encoding='utf-8', errors='replace')
+    ham7 = sablon_oku(p7)
     gorulen, tekrar = set(), {}
     for m7 in re.finditer(r'\\sid="([^"]+)"', ham7):
         ad7 = m7.group(1)

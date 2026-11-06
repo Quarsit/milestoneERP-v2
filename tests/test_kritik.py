@@ -15587,3 +15587,545 @@ def test_mt1_kdvsiz_maliyet_engellenmiyor():
         f'KDV''siz maliyet engellendi — kapı fazla kapatıyor: '
         f'{r.get_data(as_text=True)[:220]}')
     assert _mt1_tarih(mid) == kapali
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  SZ1 · SIFIRLAMA BETİĞİ MODELİN GERİSİNDE KALMASIN
+# ══════════════════════════════════════════════════════════════════════
+#
+# NEDEN BU TESTLER VAR: YK3 `istek_izi` tablosunu ekledi, ben
+# `sifirla2.py`nin listelerini güncellemeyi UNUTTUM ve bu ancak
+# SIFIRLAMA GÜNÜ, üretimde ortaya çıktı. Betiğin kapsama denetimi
+# doğru davrandı — yarım sıfırlama yapmak yerine çalışmayı reddetti —
+# ama o denetim yalnızca betik çalıştırılınca konuşuyor; yılda bir
+# kez. Aynı eksik daha önce `bildirimler` (BL1) ve `kalem_karsilama`
+# (R4) ile de olmuştu. Üç kez olan şey tesadüf değil, EKSİK ÇİVİ.
+# Bu testler aynı şeyi her suite koşusunda söylüyor.
+#
+# NEDEN `import sifirla2` DEĞİL: betik içe aktarılırken veritabanına
+# bağlanıyor, rapor yazdırıyor ve kipine göre `sys.exit` ediyor.
+# Testin betiği ÇALIŞTIRMASI gerekmiyor, listelerini OKUMASI
+# gerekiyor — o yüzden kaynak `ast` ile ayrıştırılıyor: yorumlardaki
+# kesme işaretlerine takılmaz, hiçbir kod yürütmez.
+def _sz1_listeler():
+    """sifirla2.py'nin modül düzeyi sabitlerini çalıştırmadan oku."""
+    import ast
+    import io
+    yol = os.path.join(KOK, 'sifirla2.py')
+    agac = ast.parse(io.open(yol, encoding='utf-8').read())
+    d = {}
+    for dugum in agac.body:
+        if not isinstance(dugum, ast.Assign) or len(dugum.targets) != 1:
+            continue
+        hedef = dugum.targets[0]
+        if not isinstance(hedef, ast.Name):
+            continue
+        try:
+            d[hedef.id] = ast.literal_eval(dugum.value)
+        except (ValueError, TypeError, SyntaxError):
+            pass
+    return d
+
+
+def _sz1_tablolar():
+    return {t.name: t for t in db.metadata.sorted_tables}
+
+
+def test_sz1_sifirlama_betigi_her_tabloyu_siniflandiriyor():
+    """TABANDA DÜŞER — `istek_izi` ne korunuyor ne siliniyor.
+
+    Modeldeki her tablo `sifirla2.py`de ya KORUNAN ya SİLİNECEK
+    listesinde olmalı. Olmayan tablo, sıfırlama gününde betiği
+    durduruyor; o gün bunu öğrenmek en kötü zamanlama."""
+    L = _sz1_listeler()
+    sil = set(L['SILINECEK_TABLOLAR'])
+    kor = set(L['KORUNAN'])
+    # `alembic_version` bilerek MUAF: göç sürümü sıfırlanamaz.
+    eksik = sorted(set(_sz1_tablolar()) - sil - kor - {'alembic_version'})
+    assert not eksik, (
+        f'sifirla2.py bu tabloları sınıflandırmıyor: {eksik}\n'
+        f'Her biri SILINECEK_TABLOLAR ya da KORUNAN listesine '
+        f'girmeli — gerekçesiyle. Aksi hâlde sıfırlama betiği '
+        f'çalışmayı reddediyor.')
+
+
+def test_sz1_istek_izi_silinecek_korunan_degil():
+    """TABANDA DÜŞER — kararın kendisini çiviliyor.
+
+    `istek_izi` TANIM DEĞİL. YK3'ün 5 saniyelik istek parmak izi,
+    işaret ettiği belgeler sıfırlamada gidiyor. KORUNAN'a alınması
+    var olmayan kayıtların parmak izlerini bırakırdı; bir sonraki
+    el "kapsama denetimi geçsin" diye oraya yazmasın."""
+    L = _sz1_listeler()
+    assert 'istek_izi' in set(L['SILINECEK_TABLOLAR']), \
+        'istek_izi SILINECEK_TABLOLAR listesinde değil'
+    assert 'istek_izi' not in set(L['KORUNAN']), \
+        'istek_izi KORUNAN listesine girmiş — işlem verisi, tanım değil'
+
+
+def test_sz1_dizi_sifirlama_listesi_tam():
+    """TABANDA DÜŞER — OR1'in 4 ortaklık tablosu listede yoktu.
+
+    Tamamen boşalan, tamsayı birincil anahtarlı her tablonun dizisi
+    1'e çekilmeli. Çekilmezse veri BOZULMAZ ama "temiz başlangıç"ta
+    ilk kaydın kimliği 1 değil, eski sayacın kaldığı yerden devam
+    eder; betiğin sözü bu değil."""
+    L = _sz1_listeler()
+    tablolar = _sz1_tablolar()
+    tamsayi_pk = set()
+    for ad in L['SILINECEK_TABLOLAR']:
+        t = tablolar.get(ad)
+        if t is None:
+            continue
+        pk = list(t.primary_key.columns)
+        if len(pk) == 1 and str(pk[0].type).upper().startswith('INTEGER'):
+            tamsayi_pk.add(ad)
+    eksik = sorted(tamsayi_pk - set(L['DIZI_SIFIRLA']))
+    assert not eksik, (
+        f'DIZI_SIFIRLA eksik: {eksik}\nBu tablolar tamamen siliniyor '
+        f've tamsayı kimlik taşıyor; sayaçları 1e çekilmezse '
+        f'sıfırlama sonrası ilk kayıt 1den başlamaz.')
+    fazla = sorted(set(L['DIZI_SIFIRLA']) - set(L['SILINECEK_TABLOLAR']))
+    assert not fazla, (
+        f'DIZI_SIFIRLA silinmeyen tablo içeriyor: {fazla}\nSilinmeyen '
+        f'tablonun sayacını 1e çekmek MEVCUT kayıtlarla çakışan '
+        f'kimlik üretir (KB1 bunu bir kez yaşadı).')
+
+
+def test_sz1_gecici_tablo_tek_firma_kipini_kapatmiyor():
+    """TABANDA DÜŞER — GECICI_TABLOLAR kümesi yoktu.
+
+    Tek firma kipi, silinecek her tabloda `firma_id` arıyor; `istek_izi`de
+    yok. Kümesiz hâlde `istek_izi` eklenmesi ÇALIŞAN BİR KİPİ
+    kapatırdı ve ret mesajı yanlış yol gösterirdi ("firma_id ekleyin
+    ya da KORUNAN'a alın" — ikisi de bu tablo için yanlış).
+
+    Kümenin kendisi de denetleniyor: içine yalnızca SİLİNECEK ve
+    gerçekten `firma_id`siz tablo girebilir. Yoksa "betik çalışsın"
+    diye buraya yazılan tablo, denetimin engellemek için var olduğu
+    sessiz kalıntıyı üretir."""
+    L = _sz1_listeler()
+    gecici = set(L['GECICI_TABLOLAR'])
+    tablolar = _sz1_tablolar()
+    sutun = {ad: {c.name for c in t.c} for ad, t in tablolar.items()}
+
+    firmasiz = {ad for ad in L['SILINECEK_TABLOLAR']
+                if 'firma_id' not in sutun.get(ad, set())}
+    assert not (firmasiz - gecici), (
+        f'firma_idsiz silinecek tablo(lar) muafiyetsiz: '
+        f'{sorted(firmasiz - gecici)}\nTek firma kipi bu yüzden '
+        f'çalışmayı reddeder.')
+    assert gecici <= set(L['SILINECEK_TABLOLAR']), (
+        f'GECICI_TABLOLAR silinmeyen tablo içeriyor: '
+        f'{sorted(gecici - set(L["SILINECEK_TABLOLAR"]))}')
+    assert not (gecici - firmasiz), (
+        f'GECICI_TABLOLAR firma_idsi OLAN tablo içeriyor: '
+        f'{sorted(gecici - firmasiz)}\nSüzülebilen tablo muafiyete '
+        f'ihtiyaç duymaz; muaf tutmak o firmanın verisini bırakırdı.')
+
+
+def test_sz1_korunan_ve_silinecek_kesismiyor():
+    """TABANDA DA GEÇER — betiğin KENDİSİNİN denetlemediği sınır.
+
+    Kapsama denetimi iki listenin BİRLEŞİMİNE bakıyor; bir tablo
+    ikisinde de olsa denetim "kapsama tam" der ve tablo yine silinir.
+    Yani KORUNAN'a yazmak koruduğunu sanmana yol açar. Bu test o
+    çelişkiyi suite'te yakalıyor."""
+    L = _sz1_listeler()
+    ortak = sorted(set(L['SILINECEK_TABLOLAR']) & set(L['KORUNAN']))
+    assert not ortak, (
+        f'hem KORUNAN hem SİLİNECEK: {ortak}\nSİLİNECEK kazanır — '
+        f'tablo KORUNAN listesinde yazdığı hâlde silinir.')
+    tekrar = [t for t in set(L['SILINECEK_TABLOLAR'])
+              if L['SILINECEK_TABLOLAR'].count(t) > 1]
+    assert not tekrar, f'SILINECEK_TABLOLAR içinde yinelenen: {tekrar}'
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  BM1 · BANKA MODALI ORTAK PARÇA + KASA IZGARASI 6 SÜTUN
+# ══════════════════════════════════════════════════════════════════════
+#
+# Kullanıcı banka hesabı eklemek için Ayarlar'a gitmek zorunda
+# kalmasın diye modal `templates/_banka_modal.html`e taşındı; hem
+# Ayarlar hem Banka ve Kasa sayfası aynı parçayı kullanıyor.
+#
+# Projedeki İLK `{% include %}` bu. Bağlarken İKİ gerçek hata çıktı,
+# ikisi de ancak TARAYICIDA göründü — testler o ikisini çiviliyor.
+import re as _bm_re
+
+
+def _bm1_sablon(ad, yorumsuz=False):
+    import io
+    m = io.open(os.path.join(KOK, 'templates', ad), encoding='utf-8').read()
+    # Jinja yorumlarını atmak ŞART: `_banka_modal.html`in başlığında
+    # kullanımı anlatan ÖRNEK bir {% include %} var ve tarayıcı onu
+    # hiç görmüyor. Atmazsak parça kendini include ediyor sanılıyor —
+    # bu testi ilk yazdığımda tam o oldu.
+    return _bm_re.sub(r'{#.*?#}', '', m, flags=_bm_re.S) if yorumsuz else m
+
+
+def _bm1_betik(metin):
+    """Şablonun <script> bloklarını birleştirir (src'li olanlar hariç)."""
+    return '\n'.join(_bm_re.findall(
+        r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', metin, _bm_re.S))
+
+
+def _bm1_ust_duzey_adlar(js):
+    """Satır başındaki (girintisiz) let/const/var adlarını toplar.
+
+    Girintisizlik kaba ama bu evde yeterli: üst düzey bildirimler
+    sütun 0'da yazılıyor. `let A = [], B = null;` gibi çoklu
+    bildirimi de ayırıyor."""
+    adlar = set()
+    for satir in js.split('\n'):
+        m = _bm_re.match(r'(?:let|const|var)\s+(.+)$', satir)
+        if not m:
+            continue
+        for parca in m.group(1).split(','):
+            a = _bm_re.match(r'\s*([A-Za-z_$][\w$]*)', parca)
+            if a:
+                adlar.add(a.group(1))
+    return adlar
+
+
+def test_bm1_banka_modali_ortak_parcada():
+    """TABANDA DÜŞER — modal ayarlar.html'in içinde gömülüydü.
+
+    Kaydetme akışı (BK2 bağlı kasa sorusu dahil) ~110 satır. İki
+    şablona kopyalansaydı bir gün biri düzelir öbürü düzelmezdi;
+    hangi sayfadan eklediğine göre farklı davranan bir form,
+    bulunması en zor hata türü."""
+    parca = _bm1_sablon('_banka_modal.html')
+    assert 'function bankaKaydet' in parca
+    assert 'function bankaAc' in parca
+    for sayfa in ('ayarlar.html', 'kasa.html'):
+        assert '{% include "_banka_modal.html" %}' in _bm1_sablon(sayfa), \
+            f'{sayfa} ortak parçayı include etmiyor'
+    # Tanım TEK yerde kalsın; kopya geri sızmasın.
+    import glob
+    kopya = [os.path.basename(y) for y in
+             glob.glob(os.path.join(KOK, 'templates', '*.html'))
+             if 'function bankaKaydet' in _bm1_sablon(os.path.basename(y))]
+    assert kopya == ['_banka_modal.html'], \
+        f'bankaKaydet birden fazla şablonda tanımlı: {kopya}'
+
+
+def test_bm1_kasa_sayfasinda_banka_hesabi_dugmesi():
+    """TABANDA DÜŞER — düğme yalnızca Ayarlar'daydı.
+
+    İstenen buydu: kullanıcı yeni banka hesabı eklemek için ayarlar
+    sayfasına gitmek zorunda kalmasın."""
+    k = _bm1_sablon('kasa.html')
+    assert 'onclick="bankaAc()"' in k, 'kasa sayfasında banka ekleme düğmesi yok'
+    assert 'Yeni Banka Hesabı' in k
+    # Kaydetmeden sonra sayfa KENDİ tazelemesini bağlamalı; yoksa
+    # yeni kasa ekranda görünmez.
+    assert 'BANKA_SONRASI' in k, 'kasa.html tazeleme kancasını bağlamamış'
+
+
+def test_bm1_include_edilen_parca_ad_cakistirmiyor():
+    """TABANDA DA GEÇER (include yoktu) — ASIL ÇİVİ BU.
+
+    Parçayı ilk bağladığımda `let BANKALAR` hem parçada hem
+    kasa.html'de tanımlıydı. Tarayıcı bunu
+    "Identifier 'BANKALAR' has already been declared" diye
+    reddediyor ve bu hata SAYFANIN BÜTÜN BETİĞİNİ öldürüyor —
+    modal açılıyor ama kasa listesi hiç yüklenmiyor. Sunucu
+    tarafında hiçbir iz yok; yalnız tarayıcı konsolunda görünüyor.
+    Bu test onu suite'e taşıyor."""
+    import glob
+    for yol in sorted(glob.glob(os.path.join(KOK, 'templates', '*.html'))):
+        ad = os.path.basename(yol)
+        sayfa = _bm1_sablon(ad)
+        for parca_ad in _bm_re.findall(
+                r'{%-?\s*include\s+["\']([^"\']+)["\']',
+                _bm1_sablon(ad, yorumsuz=True)):
+            parca = _bm1_sablon(parca_ad)
+            ortak = (_bm1_ust_duzey_adlar(_bm1_betik(sayfa))
+                     & _bm1_ust_duzey_adlar(_bm1_betik(parca)))
+            assert not ortak, (
+                f'{ad} ile {parca_ad} AYNI üst düzey adı tanımlıyor: '
+                f'{sorted(ortak)}\nTarayıcı "already been declared" '
+                f'der ve sayfanın BÜTÜN betiği çöker.')
+
+
+def test_bm1_her_include_hedefi_var():
+    """TABANDA DA GEÇER — include yoksa boş geçer.
+
+    Olmayan bir parçayı include etmek sayfayı çalışma anında
+    TemplateNotFound ile patlatır; testte görmek yeğdir."""
+    import glob
+    for yol in sorted(glob.glob(os.path.join(KOK, 'templates', '*.html'))):
+        for parca in _bm_re.findall(
+                r'{%-?\s*include\s+["\']([^"\']+)["\']',
+                _bm1_sablon(os.path.basename(yol), yorumsuz=True)):
+            assert os.path.exists(os.path.join(KOK, 'templates', parca)), \
+                f'{os.path.basename(yol)} olmayan parçayı include ediyor: {parca}'
+
+
+def test_bm1_js_denetimi_include_cozuyor():
+    """TABANDA DÜŞER — `sablon_oku` yoktu.
+
+    `js_denetim.py` her şablonu TEK BAŞINA okuyordu ve parçayı
+    görmediği için `bankaAc`a "tanımsız" dedi — doğru kodda YANLIŞ
+    ALARM. Kırmızıya alışan göz gerçek kırmızıyı da görmez; o
+    yüzden denetçi artık tarayıcının gördüğü birleşik metne
+    bakıyor."""
+    import importlib.util
+    yol = os.path.join(KOK, 'js_denetim.py')
+    kaynak = open(yol, encoding='utf-8').read()
+    assert 'def sablon_oku' in kaynak, \
+        'js_denetim.py include çözmüyor — doğru kodda yanlış alarm verir'
+    # Fonksiyonu betiği çalıştırmadan al: dosya üst düzeyde denetim
+    # yapıp ekrana yazıyor, import etmek onu KOŞTURURDU.
+    import ast
+    agac = ast.parse(kaynak)
+    govde = [d for d in agac.body
+             if isinstance(d, ast.FunctionDef) and d.name == 'sablon_oku']
+    assert govde, 'sablon_oku bir fonksiyon değil'
+    kaynak_metni = ast.get_source_segment(kaynak, govde[0])
+    # Kum havuzunu BETİĞİN KENDİ üst düzey `X = re.compile(...)`
+    # atamalarından kuruyoruz. Elle yazsaydım betiğe eklenen her yeni
+    # sabit bu testi kırardı ve test, kodu değil kendini sınar hâle
+    # gelirdi.
+    alan = {'Path': __import__('pathlib').Path, 'OSError': OSError,
+            're': _bm_re,
+            'SABLON': __import__('pathlib').Path(
+                os.path.join(KOK, 'templates'))}
+    for d in agac.body:
+        if (isinstance(d, ast.Assign) and len(d.targets) == 1
+                and isinstance(d.targets[0], ast.Name)
+                and isinstance(d.value, ast.Call)
+                and ast.unparse(d.value).startswith('re.compile')):
+            alan[d.targets[0].id] = eval(ast.unparse(d.value), {'re': _bm_re})
+    exec(kaynak_metni, alan)
+    birlesik = alan['sablon_oku'](os.path.join(KOK, 'templates', 'kasa.html'))
+    assert 'function bankaKaydet' in birlesik, \
+        'sablon_oku parçayı yerine koymuyor'
+
+
+def test_bm1_kasa_izgarasi_alti_sutun():
+    """TABANDA DÜŞER — ızgara `auto-fill, minmax(240px,1fr)` idi.
+
+    `auto-fill` sütun sayısını PENCERE GENİŞLİĞİNE bırakıyor; aynı
+    ekranda 5, biraz dar bir pencerede 4 çıkıyordu. İstenen "6 kasa
+    yan yana" olduğu için sayı artık SABİT, ve dar ekranlar için
+    açık bir kademe var.
+
+    Ölçtüm (gerçek tarayıcı, 10 kasa, 1450px): 6 kart yan yana,
+    kart 209px, hiçbir kart içeriği taşmıyor. 1250px'te bile
+    (kart 176px) uzun banka adı üç satıra sarıyor ama taşmıyor."""
+    css = _bm1_sablon('kasa.html')
+    satir = [s for s in css.split('\n') if '.kasa-izgara{' in s]
+    assert satir, '.kasa-izgara tanımı bulunamadı'
+    assert 'repeat(6,' in satir[0], \
+        f'ızgara 6 sütun değil: {satir[0].strip()}'
+    assert 'auto-fill' not in satir[0], \
+        'auto-fill sütun sayısını pencereye bırakır; sayı sabit olmalı'
+    # Dar ekran kademesi: 6 → 1 arası boşluk kalmasın.
+    for n in (5, 4, 3, 2):
+        assert f'repeat({n},' in css, f'{n} sütunlu kademe yok'
+    assert '@media (max-width:520px)' in css, 'tek sütun kademesi yok'
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  AK1 · ANA KASA KARTLARI IZGARADAN KALKTI
+# ══════════════════════════════════════════════════════════════════════
+#
+# Ana kasa kartı, üstteki siyah konsolide kartla BİREBİR AYNI sayıyı
+# gösteriyordu — ikisi de "aynı dövizdeki alt kasaların toplamı".
+# Aynı tutar tek ekranda iki kez yazıyordu ve "KASALAR · 10" sayısı
+# da yanlıştı: o 10'un 3'ü kasa değil, özet kutusuydu.
+#
+# KAYIT DURUYOR, yalnız KART kalktı. Kasa Defteri'ndeki döviz bazlı
+# birleşik defter ve "ana kasaya doğrudan hareket girilemez" kuralı
+# aynen çalışıyor.
+def test_ak1_ana_kasa_izgarada_gosterilmiyor():
+    """TABANDA DÜŞER — ızgara bütün kasaları basıyordu.
+
+    Kart sayısı da süzülmüş listeden gelmeli: ana kasaları çizmeyip
+    sayıyı 10 olarak yazmak, ekranda görünenle söyleneni ayırırdı."""
+    k = _bm1_sablon('kasa.html')
+    bas = k.index('function kasaKartlariCiz()')
+    son = k.index('\n}', bas)
+    govde = k[bas:son]
+    assert "KASALAR.filter(k => !k.ana_kasa)" in govde, \
+        'kasaKartlariCiz ana kasaları süzmüyor'
+    assert 'KASALAR.length ? \'· \' + KASALAR.length' not in govde, \
+        'kart sayısı hâlâ ham KASALAR uzunluğundan geliyor'
+    assert "gorunen.length ? '· ' + gorunen.length" in govde, \
+        'kart sayısı süzülmüş listeden gelmiyor'
+
+
+def test_ak1_konsolide_kartta_hareketler_dugmesi():
+    """TABANDA DÜŞER — siyah kartta yalnız "Ekstre ↓" vardı.
+
+    Ana kasa kartının tek özgün içeriği "kapsadığı kasalar"dı. O
+    buraya taşındı; üstüne bugüne kadar HİÇBİR ekranda görünmeyen
+    birleşik hareket listesi eklendi (arka uç destekliyordu,
+    `kasaAc` ana kasa için hareket ucunu atlıyordu)."""
+    k = _bm1_sablon('kasa.html')
+    assert 'async function konsolideAc(' in k, 'konsolide çekmecesi yok'
+    assert "konsolideAc('${kacar(d)}')" in k, \
+        'siyah karttaki düğme konsolideAc çağırmıyor'
+    bas = k.index('async function konsolideAc(')
+    govde = k[bas:k.index('\n}', bas)]
+    assert 'Kapsadığı kasalar' in govde, 'kapsam listesi taşınmamış'
+    assert 'Birleşik hareketler' in govde, 'birleşik hareket listesi yok'
+    assert '/api/kasa/konsolide/' in govde, 'Excel indirme yok'
+
+
+def test_ak1_konsolide_ana_kasa_kaydina_bagli_degil():
+    """TABANDA DÜŞER — ASIL TASARIM KARARI BU.
+
+    Çekmece kasaları DÖVİZDEN süzüyor, ana kasa KAYDINI aramıyor.
+    Kayda bağlasaydım (örneğin ana kasanın id'siyle hareket ucunu
+    çağırsaydım) o kayıt bir gün silindiğinde düğme SESSİZCE
+    kaybolurdu — bu evde kapattığımız hata sınıfının tam kendisi."""
+    k = _bm1_sablon('kasa.html')
+    bas = k.index('async function konsolideAc(')
+    govde = k[bas:k.index('\n}', bas)]
+    assert "!k.ana_kasa && k.doviz === doviz" in govde, \
+        'konsolideAc dövizden süzmüyor'
+    assert 'ana_kasa && ' not in govde.replace('!k.ana_kasa && ', ''), \
+        'konsolideAc ana kasa KAYDINI arıyor — kayda bağlı olmamalı'
+
+
+def test_ak1_hareket_toplama_tek_kapi():
+    """TABANDA DÜŞER — toplama `sonHareketleriYukle` içinde gömülüydü.
+
+    İki ayrı yerde toplasaydım ekranda iki farklı "birleşik hareket"
+    olurdu ve hangisinin doğru olduğu belirsizleşirdi. Evin deseni
+    bu değil."""
+    k = _bm1_sablon('kasa.html')
+    assert k.count('async function hareketleriTopla(') == 1, \
+        'ortak toplayıcı tek kez tanımlı değil'
+    # İki çağıran da var mı
+    assert k.count('await hareketleriTopla(') >= 2, \
+        'ortak toplayıcıyı iki ekran da kullanmıyor'
+    # İkinci bir elle toplama sızmasın
+    assert k.count("api(`/api/kasa/${k.id}/hareket`)") == 1, \
+        'hareket toplama ikinci bir yerde tekrar yazılmış'
+
+
+def test_ak1_ana_kasa_kurallari_duruyor():
+    """TABANDA DA GEÇER — KALDIRILMAYANI çiviliyor.
+
+    Kaldırılan yalnızca KART. `ana_kasa` kaydının arka uçtaki iki
+    işi yerinde: bakiyesi alt kasaların canlı toplamı ve ona
+    doğrudan hareket/virman girilemiyor. Bu test, ileride "nasılsa
+    kart kalktı" diye kaydın da sökülmesini engelliyor."""
+    import io
+    fa = io.open(os.path.join(KOK, 'flask_app.py'),
+                 encoding='utf-8', newline='').read()
+    assert 'Ana kasaya doğrudan hareket girilemez' in fa, \
+        'ana kasaya hareket girişi kapısı kalkmış'
+    assert 'Ana kasaya dogrudan hareket girilemez' in fa, \
+        'virmanda ana kasa kapısı kalkmış'
+    kd = _bm1_sablon('kasa_defter.html')
+    assert 'ana_kasa' in kd, \
+        'Kasa Defteri ana kasayı artık tanımıyor'
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  IN1 · İNDİRME SEKMESİ ÇAKMASIN
+# ══════════════════════════════════════════════════════════════════════
+#
+# "Ekstre ↓"ye basınca bir pencere açılıp hemen kapanıyordu.
+# Ölçtüm: uç SAĞLAM — 200, `Content-Disposition: attachment`, dosya
+# Indirilenler'e düşüyor. Sorun `window.open(url,'_blank')`: tarayıcı
+# boş bir sekme açıyor, indirmeyi görüyor, sekmeyi kapatıyor. Dosya
+# iniyor ama kullanıcı "hiçbir şey olmadı" sanıyor.
+#
+# Gerçek tarayıcıda ölçüldü — aynı düğme, aynı uç:
+#     window.open  → açılan sekme 1,  dosya indi
+#     indir()      → açılan sekme 0,  dosya indi
+def _in1_sablonlar():
+    import glob
+    return sorted(glob.glob(os.path.join(KOK, 'templates', '*.html')))
+
+
+def _in1_cagrilar(metin, ad):
+    """`ad(` ile başlayan çağrının SATIR SONUNA kadarını döndürür.
+
+    İlk yazdığımda `([^)]*)` kullanmıştım ve desen `${kacar(d)}`
+    içindeki parantezde duruyordu: yakalanan metin `/excel`e hiç
+    ulaşmıyordu, yani test TABANDA DA GEÇERDİ. Yanlış negatif, en
+    kötü tür. Bu evdeki çağrılar tek satır; satır sonuna kadar
+    okumak hem basit hem de iç parantezlere takılmıyor.
+    `test_in1_desen_bilinen_bozugu_yakaliyor` bunu çiviliyor."""
+    out = []
+    for satir in metin.split('\n'):
+        i = satir.find(ad + '(')
+        while i != -1:
+            out.append(satir[i + len(ad) + 1:])
+            i = satir.find(ad + '(', i + 1)
+    return out
+
+
+# İNDİRME uçları: yanıtı `attachment` olanlar. Ölçerek ayırdım —
+# `/excel` xlsx attachment döndürüyor, `/html?mod=` ise text/html.
+_IN1_INDIRME = ('/excel', '/yedek/indir/')
+
+
+def test_in1_ortak_indirme_kapisi_var():
+    """TABANDA DÜŞER — her çağrı kendi window.open'ını yazıyordu."""
+    b = _bm1_sablon('base.html')
+    assert 'function indir(url)' in b, \
+        'base.html ortak indirme kapısını tanımlamıyor'
+    assert "a.download = ''" in b, \
+        'dosya adını sunucunun Content-Disposition başlığına bırakmıyor'
+
+
+def test_in1_indirme_ucu_window_open_kullanmiyor():
+    """TABANDA DÜŞER — asıl çivi.
+
+    Hangi şablonda olursa olsun, bir İNDİRME ucunu `window.open` ile
+    açmak sekme çakmasına yol açar. Bu test yeni eklenecek indirme
+    düğmelerini de yakalar; bugünkü dördünü düzeltip yarın beşincisi
+    aynı hatayla gelsin istemem."""
+    suclu = []
+    for yol in _in1_sablonlar():
+        metin = _bm1_sablon(os.path.basename(yol))
+        for cagri in _in1_cagrilar(metin, 'window.open'):
+            if any(u in cagri for u in _IN1_INDIRME):
+                suclu.append(f'{os.path.basename(yol)}: {cagri.strip()[:70]}')
+    assert not suclu, (
+        'İndirme ucu window.open ile açılıyor — boş sekme açılıp '
+        'kapanır:\n  ' + '\n  '.join(suclu) + '\n`indir(url)` kullan.')
+
+
+def test_in1_goruntuleme_baglantilari_window_open_kaliyor():
+    """TABANDA DA GEÇER — DÜZELTMENİN FAZLA UYGULANMAMASINI tutuyor.
+
+    Proforma/fatura `…/html?mod=…` bağlantıları GÖRÜNTÜLENECEK
+    sayfalar, indirme değil (ölçtüm: text/html, attachment yok).
+    Onları `indir()`e çevirmek sayfayı yeni sekmede açmak yerine
+    dosya olarak indirtirdi. `indir()` yalnız indirme uçları için."""
+    gorunen = 0
+    for yol in _in1_sablonlar():
+        metin = _bm1_sablon(os.path.basename(yol))
+        for cagri in _in1_cagrilar(metin, 'window.open'):
+            if '/html?mod=' in cagri:
+                gorunen += 1
+        for cagri in _in1_cagrilar(metin, 'indir'):
+            assert '/html?mod=' not in cagri, \
+                f'{os.path.basename(yol)}: görüntüleme bağlantısı indir() ile açılıyor'
+    assert gorunen >= 3, \
+        f'görüntüleme bağlantıları kaybolmuş (bulunan: {gorunen})'
+
+
+def test_in1_desen_bilinen_bozugu_yakaliyor():
+    """TABANDA DA GEÇER — TESTİN KENDİSİNİ sınıyor.
+
+    `_in1_cagrilar` bir tarama ve bu evdeki kural şu: her tarama
+    bilinen-bozuk bir vakaya karşı sınanmalı. İlk sürümü
+    `${kacar(d)}` içindeki parantezde duruyordu ve gerçek hatayı
+    GÖRMÜYORDU. Burada o tam satır veriliyor; desen yakalamazsa
+    test düşer ve sessiz bir yanlış negatifle yaşamayız."""
+    bozuk = ("""        <button onclick="window.open('/api/kasa/konsolide/"""
+             + """${kacar(d)}/excel','_blank')">Ekstre</button>""")
+    bulunan = _in1_cagrilar(bozuk, 'window.open')
+    assert bulunan, 'desen çağrıyı hiç bulamadı'
+    assert any(u in c for c in bulunan for u in _IN1_INDIRME), \
+        'desen iç parantezde duruyor — /excel görülmüyor (yanlış negatif)'

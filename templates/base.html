@@ -1465,6 +1465,28 @@ function gunFarkiZaman(damga) {
   if (isNaN(t.getTime())) return gunFarki(String(damga).slice(0, 10));
   return Math.max(0, Math.floor((Date.now() - t.getTime()) / 86400000));
 }
+/* IN1 · DOSYA İNDİRME — TEK KAPI.
+   İndirme uçlarında `window.open(url,'_blank')` BOŞ BİR SEKME açıp
+   hemen kapatıyordu. Dosya aslında iniyor — ölçtüm: uç 200 dönüyor,
+   `Content-Disposition: attachment` ve dosya adı geliyor — ama
+   ekranda bir şey "açılıp kapanıyor" gibi göründüğü için kullanıcı
+   işlem olmadı sanıyor. Gizli bir <a> ile sekme hiç açılmıyor.
+
+   YALNIZCA İNDİRME uçları için. Proforma/fatura `…/html?mod=…`
+   bağlantıları GÖRÜNTÜLENECEK sayfalar; onlar `window.open` ile
+   kalıyor — ölçerek ayırdım (biri attachment, öbürü text/html). */
+function indir(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  /* `download` BİLEREK boş: sunucu dosya adını zaten
+     Content-Disposition ile veriyor, burada ikinci bir ad yazmak
+     onu ezer ve iki yerde iki ad olurdu. */
+  a.download = '';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 0);
+}
 function kacar(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 /* ══ PLAKA KODU (B3) ══

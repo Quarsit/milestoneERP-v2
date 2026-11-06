@@ -572,42 +572,8 @@
 {% endif %}
 
 <!-- Banka modalı -->
-<div class="modal-ortu" id="bankaModal" onclick="if(event.target===this)bankaKapat()">
-  <div class="modal" style="width:620px" role="dialog" aria-label="Banka">
-    <div class="modal-bas">
-      <h3 id="bBaslik">Yeni Banka Hesabı</h3>
-      <p>Proforma ve faturalarda ödeme bilgisi olarak kullanılır.</p>
-    </div>
-    <div class="modal-gov">
-      <div class="form-satir f3">
-        <div class="form-alan"><label>Banka Adı <span style="color:var(--kirmizi)">*</span></label><input id="bAd" placeholder="İş Bankası"></div>
-        <div class="form-alan"><label>Şube</label><input id="bSube" placeholder="Denizli Merkez"></div>
-        <div class="form-alan"><label>Döviz</label>
-          <select id="bDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
-        </div>
-      </div>
-      <div class="form-satir f2">
-        <div class="form-alan"><label>Hesap No</label><input id="bHesap" placeholder="1234-5678901"></div>
-        <div class="form-alan"><label>SWIFT / BIC</label><input id="bSwift" placeholder="ISBKTRIS"></div>
-      </div>
-      <div class="form-alan" style="margin-bottom:12px">
-        <label>IBAN</label>
-        <input id="bIban" placeholder="TR00 0000 0000 0000 0000 0000 00" style="font-family:var(--mono)">
-      </div>
-      <div class="form-alan" style="margin-bottom:12px"><label>Açıklama</label><input id="bAciklama" placeholder="opsiyonel"></div>
-      <div style="display:flex;align-items:center;gap:8px;font-size:.85rem">
-        <input type="checkbox" id="bVarsayilan" style="width:auto">
-        <label for="bVarsayilan" style="margin:0;text-transform:none;letter-spacing:0;font-weight:500;color:var(--murekkep)">
-          Varsayılan hesap (belgelerde bu görünür)
-        </label>
-      </div>
-    </div>
-    <div class="modal-alt">
-      <button class="iptal-btn" onclick="bankaKapat()">Vazgeç</button>
-      <button class="btn-yeni" id="bKaydet" onclick="bankaKaydet()">Kaydet</button>
-    </div>
-  </div>
-</div>
+{# Banka modalı ortak parçada (BM1): kasa.html de aynısını kullanıyor #}
+{% include "_banka_modal.html" %}
 
 <!-- Kullanıcı modalı -->
 <div class="modal-ortu" id="modal" onclick="if(event.target===this)modalKapat()">
@@ -1684,13 +1650,18 @@ async function lookupSil(id, kategori) {
 /* ═══ BANKALAR ═══
    /api/banka (GET/POST) · /api/banka/<id> (PUT/DELETE)
    Alanlar: banka_adi, sube, hesap_no, iban, swift, doviz, aciklama, varsayilan */
-let BANKALAR = [], DUZ_BANKA = null;
+/* `BANKALAR` bu sayfanın kendi listesi (tabloyu o çiziyor).
+   Ortak parça (BM1) kendi adlarını kullanıyor; düzenleme kipi için
+   listeyi `bankaKayitlariVer` ile ona veriyoruz. */
+let BANKALAR = [];
 
 async function bankaYukle() {
   const g = document.getElementById('bankaGovde');
   try {
     const d = await api('/api/banka');
     BANKALAR = Array.isArray(d) ? d : (d.data || d.bankalar || []);
+    /* Düzenleme kipi için kayıtları ortak parçaya ver (BM1). */
+    bankaKayitlariVer(BANKALAR);
   } catch (e) {
     g.innerHTML = '<tr><td colspan="7" class="bos">Banka listesi alınamadı.</td></tr>';
     return;
@@ -1711,76 +1682,10 @@ async function bankaYukle() {
     </tr>`).join('') : '<tr><td colspan="7" class="bos">Banka hesabı tanımlı değil.</td></tr>';
 }
 
-function bankaAc(id) {
-  DUZ_BANKA = id ? BANKALAR.find(b => b.id === id) : null;
-  const b = DUZ_BANKA;
-  document.getElementById('bBaslik').textContent = b ? 'Banka Hesabını Düzenle' : 'Yeni Banka Hesabı';
-  document.getElementById('bAd').value = b ? (b.banka_adi || '') : '';
-  document.getElementById('bSube').value = b ? (b.sube || '') : '';
-  document.getElementById('bHesap').value = b ? (b.hesap_no || '') : '';
-  document.getElementById('bIban').value = b ? (b.iban || '') : '';
-  document.getElementById('bSwift').value = b ? (b.swift || '') : '';
-  document.getElementById('bDoviz').value = b ? (b.doviz || 'USD') : 'USD';
-  document.getElementById('bAciklama').value = b ? (b.aciklama || '') : '';
-  document.getElementById('bVarsayilan').checked = b ? !!b.varsayilan : false;
-  document.getElementById('bankaModal').classList.add('acik');
-}
-function bankaKapat() { document.getElementById('bankaModal').classList.remove('acik'); }
-
-async function bankaKaydet() {
-  const ad = document.getElementById('bAd').value.trim();
-  if (!ad) { bildir('Banka adı zorunlu.', true); return; }
-  const btn = document.getElementById('bKaydet');
-  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
-  const govde = {
-    banka_adi: ad,
-    sube: document.getElementById('bSube').value,
-    hesap_no: document.getElementById('bHesap').value,
-    iban: document.getElementById('bIban').value.replace(/\s+/g, ' ').trim(),
-    swift: document.getElementById('bSwift').value.toUpperCase(),
-    doviz: document.getElementById('bDoviz').value,
-    aciklama: document.getElementById('bAciklama').value,
-    varsayilan: document.getElementById('bVarsayilan').checked
-  };
-  try {
-    if (DUZ_BANKA) {
-      await api(`/api/banka/${DUZ_BANKA.id}`, { method: 'PUT', body: JSON.stringify(govde) });
-      bildir('Banka güncellendi · ' + ad);
-    } else {
-      const _yb = await api('/api/banka', { method: 'POST', body: JSON.stringify(govde) });
-      bildir('Banka eklendi · ' + ad);
-
-      /* BAĞLI KASA SORULUR (BK2).
-         Banka hesabı tek başına para hareketi taşıyamaz; tahsilat
-         ve ödemeler KASA üzerinden işleniyor. Banka eklenip kasası
-         açılmazsa hesap sistemde görünür ama kullanılamaz.
-
-         Otomatik açmıyoruz, SORUYORUZ: kullanıcı aynı banka için
-         birden çok hesap tanımlıyor olabilir ve hepsine kasa
-         istemeyebilir. */
-      const _bid = _yb && (_yb.id || (_yb.banka && _yb.banka.id));
-      if (_bid && await onayla(
-            `"${ad}" için bir kasa oluşturulsun mu?\n\n` +
-            `Tahsilat ve ödemeler kasa üzerinden işlenir; ` +
-            `kasası olmayan banka hesabı kullanılamaz.`)) {
-        try {
-          await api('/api/kasa', {
-            method: 'POST',
-            body: JSON.stringify({
-              ad: ad + (govde.sube ? ' · ' + govde.sube : ''),
-              doviz: govde.doviz || 'TRY',
-              banka_id: _bid, ana_kasa: false, aktif: true
-            })
-          });
-          bildir('Bağlı kasa oluşturuldu · ' + ad);
-        } catch (e) { /* api() zaten bildiriyor */ }
-      }
-    }
-    bankaKapat();
-    await bankaYukle();
-  } catch (e) { /* */ }
-  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
-}
+/* bankaAc / bankaKapat / bankaKaydet → _banka_modal.html (BM1).
+   Kaydetme bitince parça BANKA_SONRASI'yı çağırıyor; bu sayfanın
+   tazelemesi aşağıda bağlanıyor. */
+window.BANKA_SONRASI = bankaYukle;
 
 async function bankaSil(id, ad) {
   if (!await onayla(`"${ad}" banka hesabı silinsin mi?`, { tehlike: true })) return;
@@ -1853,7 +1758,7 @@ async function yedekAl() {
 
 function yedekIndir(dosya) {
   bildir('İndiriliyor…');
-  window.open('/api/yedek/indir/' + encodeURIComponent(dosya), '_blank');
+  indir('/api/yedek/indir/' + encodeURIComponent(dosya));
 }
 
 /* ══════════════════════════════════════════════════════════════════

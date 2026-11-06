@@ -7,6 +7,11 @@
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
   Yeni Kasa
 </button>
+<button class="disa-btn" onclick="bankaAc()" title="Yeni banka hesabı tanımla (ayarlara gitmeden)">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M3 21h18M4 10h16M5 10V7l7-4 7 4v3M7 10v8M12 10v8M17 10v8"/></svg>
+  Yeni Banka Hesabı
+</button>
 <button class="disa-btn" onclick="virmanAc()" title="Kasadan bankaya / bankadan kasaya transfer">
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <path d="M7 10h10M7 10l3-3M7 10l3 3M17 14H7M17 14l-3-3M17 14l-3 3"/></svg>
@@ -34,7 +39,16 @@
   .kons-kart label{font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA39F}
   .kons-kart .deger{font-family:var(--baslik);font-weight:800;font-size:1.6rem;letter-spacing:-.02em;margin-top:5px}
   .kons-kart .ek{font-size:.75rem;color:#9BA39F;margin-top:3px;font-family:var(--mono)}
-  .kons-ekstre{position:absolute;top:12px;right:14px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#D8DDD9;border-radius:999px;padding:4px 12px;font-family:var(--govde);font-size:.72rem;font-weight:700;cursor:pointer;transition:all .12s}
+  .kons-dugmeler{position:absolute;top:12px;right:14px;display:flex;gap:6px}
+  /* AK1: dar ekranda iki dugme "EUR TOPLAM" etiketinin UZERINE
+     biniyordu (olctum: 700px'te cakisiyor, 900px'te cakismiyor).
+     O genislikten sonra kart dikey akisa geciyor ve dugmeler
+     en alta iniyor. */
+  @media (max-width:960px){
+    .kons-kart{display:flex;flex-direction:column}
+    .kons-dugmeler{position:static;order:3;margin-top:10px}
+  }
+  .kons-ekstre{border:1px solid rgba(255,255,255,.25);background:transparent;color:#D8DDD9;border-radius:999px;padding:4px 12px;font-family:var(--govde);font-size:.72rem;font-weight:700;cursor:pointer;transition:all .12s}
   .kons-ekstre:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.5);color:#fff}
   .kasa-kart.ana{border-left-color:var(--kehribar);background:#FDFCF8}
   .hareket-satir{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--cizgi);font-size:.85rem}
@@ -45,7 +59,12 @@
   .hareket-satir .tut.cikis{color:var(--kirmizi)}
   .hsil{border:0;background:transparent;color:var(--cizgi-koyu);font-size:.85rem;cursor:pointer;padding:0 2px}
   .hsil:hover{color:var(--kirmizi)}
-  .kasa-izgara{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:22px}
+  .kasa-izgara{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:22px}
+  @media (max-width:1240px){ .kasa-izgara{grid-template-columns:repeat(5,minmax(0,1fr))} }
+  @media (max-width:1080px){ .kasa-izgara{grid-template-columns:repeat(4,minmax(0,1fr))} }
+  @media (max-width:900px) { .kasa-izgara{grid-template-columns:repeat(3,minmax(0,1fr))} }
+  @media (max-width:720px) { .kasa-izgara{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  @media (max-width:520px) { .kasa-izgara{grid-template-columns:1fr} }
   .kasa-kart{background:var(--yuzey);border:1px solid var(--cizgi);border-left:3px solid var(--verde);border-radius:var(--r);padding:14px 16px;cursor:pointer;transition:box-shadow .15s}
   .kasa-kart:hover{box-shadow:var(--golge)}
   .kasa-kart .ad{font-weight:600;font-size:.92rem;display:flex;align-items:center;gap:7px}
@@ -351,9 +370,28 @@
   </div>
 </div>
 
+{# Banka modalı ortak parçada (BM1): ayarlar.html de aynısını
+   kullanıyor. Kullanıcı banka hesabı eklemek için ayarlara
+   gitmek zorunda kalmasın diye buraya da kondu. #}
+{% include "_banka_modal.html" %}
+
 {% endblock %}
 
 {% block scripts %}
+<script>
+/* Banka modalı (BM1) kaydettikten sonra kasa listesini tazele.
+   BK2 akışı banka için bağlı kasa açmış olabilir; açmamışsa da
+   tazelemek zararsız. Parça hangi sayfada olduğunu bilmiyor,
+   tazelemeyi sayfa veriyor. */
+window.BANKA_SONRASI = async () => {
+  /* Bu sayfa banka listesini ÖNBELLEKLİYOR ("Yeni Kasa" modalındaki
+     açılır liste, `if (!BANKALAR.length)` ile bir kez yükleniyor).
+     Boşaltmazsak yeni eklenen banka o listede SAYFA YENİLENENE
+     KADAR görünmez — ölçtüm, görünmüyordu. */
+  BANKALAR = [];
+  await kasalariYukle();
+};
+</script>
 <script>
 /* ═══ KASALAR ═══
    /api/kasa                     → liste (ana kasa = alt kasaların canlı toplamı)
@@ -396,8 +434,12 @@ function konsolideCiz() {
   const ks = Object.keys(dv).sort();
   kok.innerHTML = ks.length ? ks.map(d => `
     <div class="kons-kart">
-      <button class="kons-ekstre" onclick="window.open('/api/kasa/konsolide/${kacar(d)}/excel','_blank')"
-              title="${kacar(d)} kasalarının birleşik hareket dökümü (Excel)">Ekstre ↓</button>
+      <div class="kons-dugmeler">
+        <button class="kons-ekstre" onclick="event.stopPropagation();konsolideAc('${kacar(d)}')"
+                title="${kacar(d)} toplamını hangi kasalar oluşturuyor + birleşik hareketler">Hareketler</button>
+        <button class="kons-ekstre" onclick="event.stopPropagation();indir('/api/kasa/konsolide/${kacar(d)}/excel')"
+                title="${kacar(d)} kasalarının birleşik hareket dökümü (Excel)">Ekstre ↓</button>
+      </div>
       <label>${kacar(d)} Toplam</label>
       <div class="deger">${para(dv[d].bakiye, d)}</div>
       <div class="ek">${dv[d].adet} kasa · ↑ ${para(dv[d].giris, d)} · ↓ ${para(dv[d].cikis, d)}</div>
@@ -424,19 +466,88 @@ function kasaKartlariCiz() {
      Eskiden yalnızca banka ADI yazıyordu; aynı bankada iki hesabı
      olan kullanıcı hangisinin hangisi olduğunu ayırt edemiyordu.
      Olmayan alanlar atlanır, boş ayraç bırakılmaz. */
+  /* AK1 · ANA KASALAR IZGARADA GÖSTERİLMİYOR.
+     Ana kasa kartı, üstteki siyah konsolide kartla BİREBİR AYNI
+     sayıyı gösteriyordu: ikisi de "aynı dövizdeki alt kasaların
+     toplamı". Aynı tutar tek ekranda iki kez yazıyordu ve ana kasa,
+     gerçek kasalarla aynı görünümde durduğu için "KASALAR · 10"
+     sayısı da yanlış sayıyordu — o 10'un 3'ü kasa değil, özet
+     kutusuydu.
+     KAYIT DURUYOR, yalnız KART kalktı: Kasa Defteri'ndeki döviz
+     bazlı birleşik defter ve "ana kasaya doğrudan hareket
+     girilemez" kuralı aynen çalışıyor. Ana kasanın tek özgün
+     içeriği (toplamı hangi kasalar oluşturuyor) siyah karttaki
+     "Hareketler" düğmesine taşındı — oraya bir de bugüne kadar
+     HİÇBİR ekranda görünmeyen birleşik hareket listesi eklendi. */
   const kok = document.getElementById('kasalar');
-  document.getElementById('kasaAdet').textContent = KASALAR.length ? '· ' + KASALAR.length : '';
-  kok.innerHTML = KASALAR.length ? KASALAR.map(k => `
-    <div class="kasa-kart ${k.ana_kasa ? 'ana' : ''}" onclick="kasaAc(${k.id})">
+  const gorunen = KASALAR.filter(k => !k.ana_kasa);
+  document.getElementById('kasaAdet').textContent = gorunen.length ? '· ' + gorunen.length : '';
+  kok.innerHTML = gorunen.length ? gorunen.map(k => `
+    <div class="kasa-kart" onclick="kasaAc(${k.id})">
       <div class="ad">${kacar(k.ad)}
-        ${k.ana_kasa ? '<span class="rozet rz-kehribar">Ana</span>' : ''}
         ${k.banka_adi ? '<span class="rozet rz-mavi">Banka</span>' : ''}</div>
       <div class="bak">${para(k.bakiye, k.doviz)}</div>
-      <div class="ek">${k.ana_kasa ? 'alt kasaların toplamı'
-        : (k.banka_adi ? bankaSatiri(k)
-           : '↑ ' + para(k.giris_toplam, k.doviz) + ' · ↓ ' + para(k.cikis_toplam, k.doviz))}</div>
+      <div class="ek">${k.banka_adi ? bankaSatiri(k)
+           : '↑ ' + para(k.giris_toplam, k.doviz) + ' · ↓ ' + para(k.cikis_toplam, k.doviz)}</div>
     </div>`).join('')
     : '<div class="kasa-kart"><div class="ad">Kasa tanımlı değil</div><div class="ek">"Yeni Kasa" ile başla</div></div>';
+}
+
+/* AK1 · HAREKET TOPLAMA — TEK KAPI.
+   Hem "Son hareketler" listesi hem de siyah karttaki konsolide
+   çekmecesi buradan geçiyor. İki ayrı yerde toplasaydım ekranda
+   iki farklı "birleşik hareket" olurdu ve hangisinin doğru olduğu
+   belirsizleşirdi; evin deseni bu değil. */
+async function hareketleriTopla(kasalar) {
+  const hepsi = [];
+  await Promise.all(kasalar.map(async k => {
+    try {
+      const h = await api(`/api/kasa/${k.id}/hareket`);
+      (h || []).forEach(x => hepsi.push({ ...x, _kasa: k.ad, _doviz: k.doviz }));
+    } catch (e) { /* */ }
+  }));
+  hepsi.sort((a, b) => String(b.tarih || '').localeCompare(String(a.tarih || '')));
+  return hepsi;
+}
+
+/* AK1 · KONSOLİDE ÇEKMECESİ — kaldırılan ana kasa kartının yerine.
+   Ana kasa kartı tıklanınca YALNIZCA "kapsadığı kasalar"ı
+   gösteriyordu; birleşik hareket listesi arka uçta vardı ama hiçbir
+   ekran onu çağırmıyordu (`kasaAc` ana kasa için hareket ucunu
+   atlıyordu). Burada ikisi birden var, yani kart kalkarken hiçbir
+   şey kaybolmadı — üstüne bir şey eklendi.
+
+   `ana_kasa` KAYDINA bağlı DEĞİL: kasaları doğrudan dövizden
+   süzüyor. Ana kasa kaydı bir gün silinse bu ekran çalışmaya devam
+   eder; kayda bağlasaydım düğme sessizce kaybolurdu. */
+async function konsolideAc(doviz) {
+  const alt = KASALAR.filter(k => !k.ana_kasa && k.doviz === doviz);
+  const toplam = alt.reduce((t, k) => t + (k.bakiye || 0), 0);
+  cekmeceAc(`${doviz} Toplam`, `${alt.length} kasa`,
+            '<div class="yukleniyor">Yükleniyor…</div>', '');
+  const hepsi = await hareketleriTopla(alt);
+  const govde = `
+    <div class="alan-grid">
+      <div class="alan"><label>Toplam Bakiye</label>
+        <div class="mono" style="font-weight:700;font-size:1.05rem">${para(toplam, doviz)}</div></div>
+      <div class="alan"><label>Döviz</label><div>${kacar(doviz)}</div></div>
+      <div class="alan" style="grid-column:1/-1"><label>Kapsadığı kasalar</label>
+        <div style="font-size:.85rem;line-height:1.7">${alt.length
+          ? alt.map(x => kacar(x.ad) + ' — <span class="mono">' + para(x.bakiye, x.doviz) + '</span>').join('<br>')
+          : 'Bu dövizde kasa yok'}</div></div>
+    </div>
+    <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">Birleşik hareketler</h4>
+    <div>${hepsi.length ? hepsi.slice(0, 20).map(h => `
+        <div class="hareket-satir">
+          <span class="t">${kacar(String(h.tarih || '').slice(5, 10))}</span>
+          <div><div>${h.tip === 'giris' ? 'Giriş' : 'Çıkış'} · <span style="color:var(--soluk)">${kacar(h._kasa)}</span></div>
+            ${h.aciklama ? '<div style="color:var(--soluk);font-size:.75rem">' + kacar(String(h.aciklama).slice(0, 40)) + '</div>' : ''}</div>
+          <span class="tut ${h.tip === 'giris' ? 'giris' : 'cikis'}">
+            ${h.tip === 'giris' ? '+' : '−'}${para(h.tutar, h._doviz)}</span>
+        </div>`).join('') : '<div class="bos" style="padding:12px">Hareket yok.</div>'}</div>`;
+  cekmeceAc(`${doviz} Toplam`, `${alt.length} kasa`, govde,
+    `<button class="blok-btn" onclick="indir('/api/kasa/konsolide/${kacar(doviz)}/excel')">Excel indir</button>`
+    + `<button class="blok-btn" onclick="cekmeceKapat()">Kapat</button>`);
 }
 
 /* Son hareketler — tüm alt kasalar (veya tek kasa) */
@@ -445,14 +556,7 @@ async function sonHareketleriYukle(kasaId) {
   const ozet = document.getElementById('hareketOzet');
   kok.innerHTML = '<div class="yukleniyor">Yükleniyor…</div>';
   const hedefler = kasaId ? KASALAR.filter(k => k.id === kasaId) : KASALAR.filter(k => !k.ana_kasa);
-  const hepsi = [];
-  await Promise.all(hedefler.map(async k => {
-    try {
-      const h = await api(`/api/kasa/${k.id}/hareket`);
-      (h || []).forEach(x => hepsi.push({ ...x, _kasa: k.ad, _doviz: k.doviz }));
-    } catch (e) { /* */ }
-  }));
-  hepsi.sort((a, b) => String(b.tarih || '').localeCompare(String(a.tarih || '')));
+  const hepsi = await hareketleriTopla(hedefler);
   ozet.textContent = kasaId
     ? '· ' + (hedefler[0] ? hedefler[0].ad : '')
     : (hepsi.length ? '· tüm kasalar' : '');
@@ -511,7 +615,7 @@ async function kasaAc(id) {
   const eylem = [];
   if (!k.ana_kasa) {
     eylem.push(`<button class="blok-btn birincil" onclick="cekmeceKapat();sonHareketleriYukle(${id})">Hareketlerini göster</button>`);
-    eylem.push(`<button class="blok-btn" onclick="window.open('/api/kasa/${id}/hareket/excel','_blank')">Excel indir</button>`);
+    eylem.push(`<button class="blok-btn" onclick="indir('/api/kasa/${id}/hareket/excel')">Excel indir</button>`);
   }
   if (yazabilir('kasa')) {
     /* EK1: `PUT /api/kasa/<id>` ucu yaziliydi ama hicbir ekran

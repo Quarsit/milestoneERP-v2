@@ -1,0 +1,181 @@
+{# ═══════════════════════════════════════════════════════════════════
+   BANKA HESABI MODALI — ORTAK PARÇA  (BM1)
+
+   KİM KULLANIYOR: `ayarlar.html` (Bankalar sekmesi) ve `kasa.html`
+   (Banka ve Kasa araç çubuğu). İkisinde de AYNI modal, AYNI kayıt
+   akışı.
+
+   NEDEN KOPYALAMADIM: markup + JS yaklaşık 110 satır. İki şablona
+   kopyalansaydı bir gün biri düzelir, öbürü düzelmezdi — ve hangi
+   sayfadan eklediğine göre farklı davranan bir form, bulunması en
+   zor hata türü. Evin deseni de bu: `_maliyet_sayilir`,
+   `_kasa_bakiye_ekle`, `_fatura_kilitle`… hepsi tek kapı.
+   Projede ilk `{% raw %}{% include %}{% endraw %}` bu; sebebi de bu.
+
+   NEDEN KENDİ STİLİNİ TAŞIYOR: `.form-satir` İKİ sayfada FARKLI
+   tanımlı — `ayarlar.html` onu boş bir ızgara yapıp sütunu `.f2` /
+   `.f3` ile veriyor, `kasa.html` ise SABİT `1fr 1fr` yazıyor. Modalı
+   olduğu gibi taşısaydım kasa sayfasında üç alanlı satır (Banka Adı
+   / Şube / Döviz) sessizce iki sütuna düşerdi. O yüzden parça kendi
+   `.bnk-*` sınıflarını getiriyor: hangi sayfaya konursa konsun aynı
+   görünüyor ve sayfanın kendi sınıflarıyla çakışmıyor.
+
+   SAYFA NE YAPMALI:
+     1. İçeriğin sonunda  {% raw %}{% include "_banka_modal.html" %}{% endraw %}
+     2. Bir düğmeden      onclick="bankaAc()"
+     3. scripts bloğunda  window.BANKA_SONRASI = <kendi tazelemen>;
+
+   `BANKA_SONRASI` kaydetmeden sonra çağrılıyor. Parça hangi sayfada
+   olduğunu BİLMİYOR — bilmemeli; ayarlar banka tablosunu, kasa
+   sayfası kasa listesini yeniliyor.
+═══════════════════════════════════════════════════════════════════ #}
+<style>
+  /* Yalnız bu modalın içini biçimlendiriyor. Sayfanın kendi
+     .form-satir / .form-alan tanımlarına DOKUNMUYOR ve onlardan
+     ETKİLENMİYOR — iki sayfada da aynı görünmesinin sebebi bu. */
+  .bnk-satir{display:grid;gap:12px;margin-bottom:12px}
+  .bnk-3{grid-template-columns:1fr 1fr 1fr}
+  .bnk-2{grid-template-columns:1fr 1fr}
+  .bnk-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
+  .bnk-alan input,.bnk-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey);color:var(--murekkep)}
+  .bnk-alan input:focus,.bnk-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  @media (max-width:620px){
+    .bnk-3,.bnk-2{grid-template-columns:1fr}
+  }
+</style>
+
+<div class="modal-ortu" id="bankaModal" onclick="if(event.target===this)bankaKapat()">
+  <div class="modal" style="width:620px" role="dialog" aria-label="Banka">
+    <div class="modal-bas">
+      <h3 id="bBaslik">Yeni Banka Hesabı</h3>
+      <p>Proforma ve faturalarda ödeme bilgisi olarak kullanılır.</p>
+    </div>
+    <div class="modal-gov">
+      <div class="bnk-satir bnk-3">
+        <div class="bnk-alan"><label>Banka Adı <span style="color:var(--kirmizi)">*</span></label><input id="bAd" placeholder="İş Bankası"></div>
+        <div class="bnk-alan"><label>Şube</label><input id="bSube" placeholder="Denizli Merkez"></div>
+        <div class="bnk-alan"><label>Döviz</label>
+          <select id="bDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
+        </div>
+      </div>
+      <div class="bnk-satir bnk-2">
+        <div class="bnk-alan"><label>Hesap No</label><input id="bHesap" placeholder="1234-5678901"></div>
+        <div class="bnk-alan"><label>SWIFT / BIC</label><input id="bSwift" placeholder="ISBKTRIS"></div>
+      </div>
+      <div class="bnk-alan" style="margin-bottom:12px">
+        <label>IBAN</label>
+        <input id="bIban" placeholder="TR00 0000 0000 0000 0000 0000 00" style="font-family:var(--mono)">
+      </div>
+      <div class="bnk-alan" style="margin-bottom:12px"><label>Açıklama</label><input id="bAciklama" placeholder="opsiyonel"></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:.85rem">
+        <input type="checkbox" id="bVarsayilan" style="width:auto">
+        <label for="bVarsayilan" style="margin:0;text-transform:none;letter-spacing:0;font-weight:500;color:var(--murekkep)">
+          Varsayılan hesap (belgelerde bu görünür)
+        </label>
+      </div>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="bankaKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="bKaydet" onclick="bankaKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── BANKA MODALI · ORTAK DAVRANIŞ (BM1) ──────────────────────────
+   Bu betik İÇERİK bloğunda, base.html'in yardımcılarından (api,
+   bildir, onayla) ÖNCE çalışıyor. Sorun değil: burada yalnız
+   TANIM var, çağrı yok. Fonksiyonlar tıklandığında çalışıyor, o
+   anda hepsi tanımlı. Üst düzeyde iş yapan tek satır yok —
+   bilerek. */
+
+/* KENDİ ADLARINI KULLANIYOR, `BANKALAR` DEĞİL.
+   `BANKALAR` adını sayfalar ZATEN kendi amaçlarıyla kullanıyor:
+   `kasa.html` "Yeni Kasa" modalındaki banka açılır listesi için,
+   `proforma.html` ödeme bilgisi için. Aynı adı `let` ile ikinci kez
+   tanımlamak "Identifier has already been declared" SyntaxError'u
+   veriyor ve bu hata SAYFANIN BÜTÜN BETİĞİNİ öldürüyor — modal
+   açılıyor ama kasa listesi hiç yüklenmiyor. Tahmin etmedim,
+   ekranda ölçtüm: parçayı ilk bağladığımda tam bu oldu. */
+let BNK_KAYITLAR = [], BNK_DUZENLENEN = null;
+
+/* Düzenleme kipi için kayıtları SAYFA veriyor (ayarlar, tabloyu
+   çizerken). Kasa sayfası yalnız YENİ kayıt açıyor; orada bu hiç
+   çağrılmıyor ve liste boş kalıyor — doğrusu da bu. */
+window.bankaKayitlariVer = (liste) => { BNK_KAYITLAR = liste || []; };
+
+/* Sayfa kendi tazelemesini buraya bağlıyor; varsayılan hiçbir şey
+   yapmıyor ki parça tek başına da çalışsın. */
+window.BANKA_SONRASI = window.BANKA_SONRASI || (async () => {});
+
+function bankaAc(id) {
+  BNK_DUZENLENEN = id ? BNK_KAYITLAR.find(b => b.id === id) : null;
+  const b = BNK_DUZENLENEN;
+  document.getElementById('bBaslik').textContent = b ? 'Banka Hesabını Düzenle' : 'Yeni Banka Hesabı';
+  document.getElementById('bAd').value = b ? (b.banka_adi || '') : '';
+  document.getElementById('bSube').value = b ? (b.sube || '') : '';
+  document.getElementById('bHesap').value = b ? (b.hesap_no || '') : '';
+  document.getElementById('bIban').value = b ? (b.iban || '') : '';
+  document.getElementById('bSwift').value = b ? (b.swift || '') : '';
+  document.getElementById('bDoviz').value = b ? (b.doviz || 'USD') : 'USD';
+  document.getElementById('bAciklama').value = b ? (b.aciklama || '') : '';
+  document.getElementById('bVarsayilan').checked = b ? !!b.varsayilan : false;
+  document.getElementById('bankaModal').classList.add('acik');
+}
+function bankaKapat() { document.getElementById('bankaModal').classList.remove('acik'); }
+
+async function bankaKaydet() {
+  const ad = document.getElementById('bAd').value.trim();
+  if (!ad) { bildir('Banka adı zorunlu.', true); return; }
+  const btn = document.getElementById('bKaydet');
+  btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+  const govde = {
+    banka_adi: ad,
+    sube: document.getElementById('bSube').value,
+    hesap_no: document.getElementById('bHesap').value,
+    iban: document.getElementById('bIban').value.replace(/\s+/g, ' ').trim(),
+    swift: document.getElementById('bSwift').value.toUpperCase(),
+    doviz: document.getElementById('bDoviz').value,
+    aciklama: document.getElementById('bAciklama').value,
+    varsayilan: document.getElementById('bVarsayilan').checked
+  };
+  try {
+    if (BNK_DUZENLENEN) {
+      await api(`/api/banka/${BNK_DUZENLENEN.id}`, { method: 'PUT', body: JSON.stringify(govde) });
+      bildir('Banka güncellendi · ' + ad);
+    } else {
+      const _yb = await api('/api/banka', { method: 'POST', body: JSON.stringify(govde) });
+      bildir('Banka eklendi · ' + ad);
+
+      /* BAĞLI KASA SORULUR (BK2).
+         Banka hesabı tek başına para hareketi taşıyamaz; tahsilat
+         ve ödemeler KASA üzerinden işleniyor. Banka eklenip kasası
+         açılmazsa hesap sistemde görünür ama kullanılamaz.
+
+         Otomatik açmıyoruz, SORUYORUZ: kullanıcı aynı banka için
+         birden çok hesap tanımlıyor olabilir ve hepsine kasa
+         istemeyebilir. */
+      const _bid = _yb && (_yb.id || (_yb.banka && _yb.banka.id));
+      if (_bid && await onayla(
+            `"${ad}" için bir kasa oluşturulsun mu?\n\n` +
+            `Tahsilat ve ödemeler kasa üzerinden işlenir; ` +
+            `kasası olmayan banka hesabı kullanılamaz.`)) {
+        try {
+          await api('/api/kasa', {
+            method: 'POST',
+            body: JSON.stringify({
+              ad: ad + (govde.sube ? ' · ' + govde.sube : ''),
+              doviz: govde.doviz || 'TRY',
+              banka_id: _bid, ana_kasa: false, aktif: true
+            })
+          });
+          bildir('Bağlı kasa oluşturuldu · ' + ad);
+        } catch (e) { /* api() zaten bildiriyor */ }
+      }
+    }
+    bankaKapat();
+    await window.BANKA_SONRASI();
+  } catch (e) { /* */ }
+  finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
+}
+</script>

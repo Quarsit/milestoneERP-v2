@@ -38,7 +38,14 @@
 #         firmada görünmez; sessiz veri kaybından beter olur,
 #         çünkü veri "var" görünür.
 #
-#  ══ KORUNUR (10 tablo) ══
+#  ══ KORUNUR ══
+#    SZ1: buradaki ve aşağıdaki başlıklarda TABLO SAYISI YAZIYORDU
+#    ("10 tablo", "27 tablo") ve İKİSİ DE ESKİMİŞTİ — gerçek sayılar
+#    11 ve 33. Sayıyı elle yazmak, model her büyüdüğünde yanlış
+#    olmaya mahkûm; betik doğru sayıyı zaten ÇALIŞIRKEN hesaplayıp
+#    yazdırıyor ("kapsama tam — N tablonun hepsi sınıflandırılmış").
+#    Yanlış bir sayı, bu betiğin tek sermayesi olan "raporu doğrudur"
+#    güvenini aşındırır; o yüzden sayıları kaldırdım.
 #    cariler       Cari firma kayıtları. Önbellek bakiye alanı YOK;
 #                  bakiye hareketlerden hesaplandığı için hareketleri
 #                  silmek bakiyeyi kendiliğinden sıfırlar.
@@ -54,11 +61,11 @@
 #                  LOGO, SMTP, KDV oranları
 #    doviz_kur     TCMB kur arşivi (yeniden çekmek uzun sürer)
 #
-#  ══ SİLİNİR (27 tablo) ══
+#  ══ SİLİNİR ══
 #    Tüm işlem verisi: stok, sipariş (kalem karşılama kırılımı dahil),
 #    proforma, fatura, sevkiyat, kesim, maliyet, çek, kasa hareketleri,
 #    cari hareketleri, KDV iade, konteyner, sabit gider, nakit planı,
-#    bildirimler, denetim izi.
+#    bildirimler, denetim izi, istek izi (YK3).
 #
 #  ══ TAM KAPSAMA DENETİMİ ══
 #    Her tablo ya KORUNAN ya SİLİNECEK listesinde olmalı. Biri ikisinde
@@ -147,6 +154,24 @@ if not VT_URL:
 SILINECEK_TABLOLAR = [
     # Denetim izi
     'audit_log',
+    # SZ1 · İSTEK İZİ (YK3) — yinelenen istek kalkanının parmak izi
+    # tablosu. Her POST/PUT/PATCH'in gövde özeti 5 saniyelik pencere
+    # için buraya yazılıyor, başarısız istekte siliniyor, kalanlar
+    # 6 saatte budanıyor.
+    #
+    # NEDEN SİLİNECEK, KORUNAN DEĞİL: tanım taşımıyor. Hangi isteğin
+    # ne zaman geldiğini söylüyor ve işaret ettiği belgeler
+    # sıfırlamada gidiyor. Kalsa, var olmayan kayıtların parmak
+    # izleri kalırdı.
+    #
+    # YK3'ü eklediğimde BU LİSTEYİ GÜNCELLEMEYİ UNUTTUM ve kapsama
+    # denetimi doğru davrandı: yarım sıfırlama yapmak yerine
+    # ÇALIŞMAYI REDDETTİ. Aynı şey `bildirimler` (BL1) ve
+    # `kalem_karsilama` (R4) ile de olmuştu — üç kez. Bu yüzden
+    # artık suite'te de bir çivi var:
+    # `test_sz1_sifirlama_betigi_her_tabloyu_siniflandiriyor`
+    # aynı eksiği SIFIRLAMA GÜNÜNÜ BEKLEMEDEN söylüyor.
+    'istek_izi',
     # Bildirimler (BL1) — 21.09'da eklendi; eksikken kapsama denetimi
     # betiği çalıştırmayı REDDEDİYORDU.
     'bildirimler',
@@ -263,9 +288,19 @@ KORUNAN = {
 # (asagidaki `dizileri_sifirla` cagrisina bak). Tek firma kipinde
 # tablo bosalmiyor; sayaci 1'e cekmek baska firmanin mevcut
 # id'leriyle cakisirdi.
+# SZ1: bu liste de ESKİMİŞTİ. Tamsayı birincil anahtarlı 13 tablo
+# tamamen siliniyor ama yalnızca 9'u burada yazılıydı; eksik 4'ü
+# OR1'in ortaklık tablolarıydı — eklendiklerinde bu liste
+# güncellenmemişti. Sayacı kalan yerden devam eden tablo veri
+# BOZMUYOR, ama "temiz başlangıç"ta ilk ortaklık kaydının kimliği
+# 1 değil 37 olurdu; betiğin sözü bu değil. Ölçtüm: artık 13'ün
+# 13'ü burada ve `test_sz1_dizi_sifirlama_listesi_tam` bunu
+# çiviliyor.
 DIZI_SIFIRLA = ['kasa_hareket', 'kesim_detay',
                 'cek_hareket', 'audit_log', 'konteyner', 'cari_aktivite',
-                'bildirimler', 'proforma_kalem', 'siparis_kalem']
+                'bildirimler', 'proforma_kalem', 'siparis_kalem',
+                'ortaklik_dagitim', 'ortaklik_sermaye', 'ortaklik_vergi',
+                'ortaklik_is', 'istek_izi']
 
 # ── SİLME SIRASI: modelin topolojik sırasından, TERS ──
 # metadata.sorted_tables ebeveynden çocuğa sıralı; silmek için
@@ -302,9 +337,42 @@ except Exception as _e:
     print("   taşır; çalışmayı reddediyorum.")
     sys.exit(1)
 
+# SZ1 · GEÇİCİ TABLOLAR
+#
+# `istek_izi` eklenince tek firma kipi çalışmayı reddetmeye başladı:
+# tabloda `firma_id` yok, kip de "silinecek her tabloda firma_id
+# OLMALI" diyor. O kuralın gerekçesi şuydu: süzülemeyen tabloyu
+# TÜMDEN silmek DİĞER firmaların verisini götürür, bırakmak da artık
+# kayıt bırakır.
+#
+# İSTEK İZİ İÇİN İKİSİ DE DOĞRU DEĞİL. Tablo hiçbir firmanın verisini
+# taşımıyor — 5 saniyelik bir istek parmak izi — ve bırakılan satırlar
+# 6 saatte kendiliğinden budanıyor; hiçbir belgeye atıf yapmıyor,
+# hiçbir ekranda görünmüyor.
+#
+# KARAR: tek firma kipinde bu tabloya DOKUNULMUYOR. Tümden silmek de
+# teknik olarak zararsızdı ama betiğin asıl sözünü ("DİĞER FİRMALARIN
+# VERİSİ ZERRE KADAR DEĞİŞMEZ") lafzen ve ruhen bozardı: başka
+# firmanın o anki kalkan kaydını silmek, o firmaya 5 saniyelik bir
+# koruma boşluğu açmak olurdu. Dokunmamak hiçbir şeyi bozmuyor.
+#
+# BU LİSTEYE YALNIZCA şu iki koşulu BİRLİKTE sağlayan tablo girer:
+#   1. hiçbir firmanın verisini taşımıyor, ve
+#   2. bırakıldığında kendi kendini temizliyor.
+# İkisinden biri sağlanmıyorsa tabloya `firma_id` eklenmeli ya da
+# tablo KORUNAN'a alınmalı. Yeni tablo eklerken buraya "geçsin de
+# betik çalışsın" diye yazmak, tam olarak bu denetimin engellemek
+# için var olduğu sessiz kalıntıyı üretir.
+#
+# Bu küme ÜÇ yerde kullanılıyor: tek firma kipi denetiminde (hemen
+# aşağıda), tek firma silme döngüsünde ve DOĞRULAMA'da — üçünün
+# gerekçesi de aynı özellik: tablo geçici ve kendi kendini doldurur.
+GECICI_TABLOLAR = {'istek_izi'}
+
 # Tek firma kipinde süzülemeyen tablo var mı?
 FIRMASIZ_SILINECEK = [t for t in SILINECEK_TABLOLAR
-                      if 'firma_id' not in MODEL_SUTUN.get(t, set())]
+                      if 'firma_id' not in MODEL_SUTUN.get(t, set())
+                      and t not in GECICI_TABLOLAR]
 
 motor = create_engine(VT_URL)
 denetci = inspect(motor)
@@ -771,10 +839,21 @@ with motor.begin() as b:
         for t in SIL_SIRASI:
             if t not in mevcut:
                 continue
+            # SZ1: GECICI_TABLOLAR'da `firma_id` YOK; buradaki sorgu
+            # onda UndefinedColumn atar ve PostgreSQL'de hatalı sorgu
+            # İŞLEMİ ZEHİRLER — o ana kadarki TÜM SİLMELER geri alınır,
+            # ekranda ise "silindi" yazar. `kasa_bakiye_sifirla` bunu
+            # bir kez yaşadı; try/except kurtarmaz, hatayı hiç
+            # doğurmamak gerekir. Atlama SESSİZ DEĞİL: aşağıda yazıyor.
+            if t in GECICI_TABLOLAR:
+                continue
             n = sayim.get(t, 0)
             b.execute(text(f'DELETE FROM "{t}" WHERE firma_id = :f'), {'f': fid})
             if n:
                 print(f"   {t:<16s} {tr(n):>7} kayıt silindi")
+        for t in sorted(GECICI_TABLOLAR & set(SIL_SIRASI) & mevcut):
+            print(f"   {t:<16s} {'—':>7} dokunulmadı (firmasız, "
+                  f"kendi kendini temizler)")
         # DİZİ SIFIRLAMA YOK: tablolar boşalmadı. Sayacı 1'e çekmek
         # diğer firmanın mevcut id'leriyle çakışan id üretirdi.
         _n = kasa_bakiye_sifirla(b, fid)
@@ -855,16 +934,38 @@ with motor.connect() as b:
             print(f"   ✓ {TEK_FIRMA['ad']} sıfırlandı")
     else:
         kalinti = 0
+        gecici_not = []
         for t in SIL_SIRASI:
             if t not in mevcut:
                 continue
             n = b.execute(text(f'SELECT COUNT(*) FROM "{t}"')).scalar() or 0
-            if n:
-                print(f"   ✗ {t:<16s} hâlâ {tr(n)} kayıt var")
-                kalinti += n
-                hatali = True
+            if not n:
+                continue
+            # SZ1 · GEÇİCİ TABLODA KALINTI HATA DEĞİL, NOTTUR.
+            # Sıfırlama servis AYAKTAYKEN çalıştırılıyor (kural:
+            # uygula → restart). `istek_izi`ye her POST/PUT/PATCH
+            # satır yazıyor — GİRİŞ isteği bile. Silme ile bu sayımın
+            # arasında tek bir istek geçse, doğrulama "hâlâ 1 kayıt
+            # var" deyip DOĞRULAMA BAŞARISIZ ve "yedekten dönmeyi
+            # değerlendirin" yazardı. Yanlış alarm, hiç uyarı
+            # vermemek kadar kötüdür: bir daha ciddiye alınmaz.
+            # Silme yine YAPILIYOR, yalnız kalanı hata saymıyoruz.
+            if t in GECICI_TABLOLAR:
+                print(f"   · {t:<16s} {tr(n):>7} kayıt — silmeden sonra "
+                      f"yeniden doldu (geçici tablo, hata değil)")
+                gecici_not.append(t)
+                continue
+            print(f"   ✗ {t:<16s} hâlâ {tr(n)} kayıt var")
+            kalinti += n
+            hatali = True
         if not kalinti:
-            print("   ✓ silinecek tabloların hepsi boş")
+            # "hepsi boş" cümlesi, iki satır yukarıda "3 kayıt"
+            # yazdığı hâlde çıkıyordu. Küçük bir çelişki ama bu
+            # betiğin tek sermayesi raporunun doğruluğu; kendini
+            # yalanlayan bir rapor bir daha okunmaz.
+            print("   ✓ silinecek tabloların hepsi boş"
+                  + (f" ({', '.join(gecici_not)} hariç — yukarıda)"
+                     if gecici_not else ""))
 
     # 2 · DOKUNULMAYAN FİRMALAR — tek firma kipinin asıl sözü
     if KIP == 'tek':
