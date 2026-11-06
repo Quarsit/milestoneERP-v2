@@ -75,3 +75,9 @@ instance/
 veri_disari/
 *.xlsx
 *.yedek_*
+
+# ── ARAÇLAR (~/milestone_yamalar içinde durur) ──
+yama_*.py
+tara_*.py
+temizlik_tara.py
+veri_sayimi.py
