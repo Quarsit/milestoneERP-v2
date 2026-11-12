@@ -109,6 +109,8 @@
   <div class="kpi"><label>Faturasız Stok</label><div class="deger" id="kFaturasiz">—</div><div class="ek" id="kFaturasizEk">maliyetlendirme bekliyor</div></div>
 </div>
 
+<!-- KV1 · eski 'KDV' tipli satırlar maliyete giriyor; uyarı + düzeltme -->
+<div id="kvUyari" style="display:none;background:var(--kehribar-bg);color:var(--kehribar);border-radius:var(--r-kucuk);padding:10px 14px;margin-bottom:12px;font-size:.84rem;line-height:1.45"></div>
 <div class="arac-cubugu">
   <button class="cip aktif" data-t="">Tümü</button>
   <button class="cip" data-t="Nakliye">Nakliye</button>
@@ -285,7 +287,7 @@ input.msuz[type=date]{max-width:150px}
             <option>Kesim / Fason / Üretim</option>
             <option>Gümrük/Liman Masrafı</option>
             <option>Komisyon</option>
-            <option>KDV</option>
+            <option value="Devreden KDV">KDV (indirilecek · maliyete girmez)</option>
             <option>Diğer Vergiler</option>
             <option>Diğer</option>
           </select>
@@ -341,7 +343,7 @@ input.msuz[type=date]{max-width:150px}
             <option>Gümrük/Liman Masrafı</option>
             <option>Kesim / Fason / Üretim</option>
             <option>Komisyon</option>
-            <option>KDV</option>
+            <option value="Devreden KDV">KDV (indirilecek · maliyete girmez)</option>
             <option>Diğer Vergiler</option>
             <option>Diğer</option>
           </select>
@@ -497,6 +499,37 @@ async function yukle() {
   }
   ciz();            // ML2: KPI'yı `ciz` çiziyor — süzgeçli liste onda
   faturasizSay();
+  kvUyariCiz();
+}
+
+/* ══════════════════════════════════════════════════════════════
+   KV1 · "KDV" TİPİ MALİYETE GİRİYORDU
+   Formdaki düz "KDV" seçeneği gider gibi işleniyor, stoğun
+   giydirilmiş maliyetine ekleniyordu. Yeni kayıtlar artık
+   'Devreden KDV' olarak yazılıyor; ESKİ satırlar burada sayılıp
+   tek düğmeyle çevriliyor (yalnız yönetici).
+   ══════════════════════════════════════════════════════════════ */
+function kvUyariCiz() {
+  const el = document.getElementById('kvUyari');
+  const eski = TUM.filter(m => String(m.maliyet_tip || '').trim().toUpperCase() === 'KDV' && m.aktif !== false);
+  if (!eski.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const usd = eski.reduce((t, m) => t + (Number(m.usd_karsilik) || 0), 0);
+  const stok = new Set(eski.map(m => m.baglanti_id)).size;
+  el.style.display = '';
+  el.innerHTML = `<b>${eski.length} satır "KDV" tipinde ve maliyete giriyor</b> — ${stok} stoğun maliyetinde toplam ${para(usd, 'USD')} fazlalık.
+    İndirilecek KDV maliyet değildir.`
+    + (window.ADMIN
+      ? ` <button class="blok-btn" style="margin-left:8px;border-color:var(--kehribar);color:var(--kehribar)" onclick="kvCevir(${eski.length})">"Devreden KDV"ye çevir</button>`
+      : ' Düzeltme için yöneticiye başvurun.');
+}
+
+async function kvCevir(n) {
+  if (!await onayla(`${n} satır "Devreden KDV" tipine çevrilsin mi?\n\nBu satırlar stok maliyetinden çıkar; kesilmiş blokların plaka maliyetleri ve satılmış ürünlerin kâr kayıtları yeniden hesaplanır. Satırlar silinmez, KDV olarak izlenmeye devam eder.`)) return;
+  try {
+    const d = await api('/api/maliyet/kdv_tipi_cevir', { method: 'POST', body: '{}' });
+    bildir(d.mesaj || 'Çevrildi.');
+    await yukle();
+  } catch (e) { /* api() gösterdi */ }
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1044,7 +1077,7 @@ function detayAc(id) {
    giriliyordu. Silme bağlı stoğun birim maliyetini yeniden hesaplıyor,
    ara adımda maliyet eksik görünüyordu. */
 const MALIYET_TIPLERI = ['Nakliye (Ocak-Fabrika)', 'Gümrük/Liman Masrafı',
-  'Kesim / Fason / Üretim', 'Komisyon', 'KDV', 'Diğer Vergiler', 'Diğer'];
+  'Kesim / Fason / Üretim', 'Komisyon', 'Devreden KDV', 'Diğer Vergiler', 'Diğer'];
 
 async function maliyetDuzenle(id) {
   const m = TUM.find(x => x.id === id);

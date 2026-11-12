@@ -19,6 +19,8 @@
   .fi-ozet b{font-family:var(--mono)}
   .fi-not{background:var(--kehribar-bg);color:var(--kehribar);border-radius:var(--r-kucuk);padding:8px 11px;font-size:.8rem;margin-top:10px}
   .fi-kaydir{overflow-x:auto}
+  .fi-duzenle{display:inline-block;margin-top:3px;font-size:.74rem;font-weight:600;color:var(--verde);text-decoration:none}
+  .fi-duzenle:hover{text-decoration:underline}
   .fi-altbas{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin:16px 0 4px}
   .fi-bagli{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--cizgi);font-size:.84rem}
   .fi-bagli:last-child{border-bottom:0}
@@ -83,7 +85,11 @@ async function hareketIcerik(hareketId) {
     return `<tr>
       <td>${k.tip ? `<span class="rozet rz-gri" style="font-size:.66rem">${kacar(k.tip)}</span> ` : ''}${kacar(k.ad || '—')}
         ${adAlt ? `<div class="alt">${kacar(adAlt)}</div>` : ''}
-        ${k.durum ? `<div class="alt">${kacar(k.durum)}</div>` : ''}</td>
+        ${k.durum ? `<div class="alt">${kacar(k.durum)}</div>` : ''}
+        ${/* HD1: alış tutarı stok kartından düzeltilir; kart buradan
+             düzenlemede açılır. */
+          (stok && k.stok_id && yazabilir('stok'))
+            ? `<a class="fi-duzenle" href="/stok?duzenle=${encodeURIComponent(k.stok_id)}&tip=${encodeURIComponent(k.tip)}">stok kartını düzenle ›</a>` : ''}</td>
       ${mal ? '' : `<td class="sag mono">${mik}</td><td class="sag mono">${bf}</td>`}
       <td class="sag mono">${(fiyatli && k.toplam != null)
         ? `<b>${fiSayi(k.toplam)}</b> ${kacar(k.doviz || dv)}`

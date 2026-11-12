@@ -4955,6 +4955,26 @@ def create_app():
     # ══════════════════════════════════════════════════════════════
     MALIYET_DISI_TIPLER = ('Devreden KDV', 'Iade KDV')
 
+    # ══════════════════════════════════════════════════════════
+    #  KV1 · "KDV" TİPİ MALİYET DEĞİLDİR
+    #
+    #  Maliyet formu düz "KDV" diye bir tip sunuyordu. Sistem yalnız
+    #  'Devreden KDV' ve 'Iade KDV' tiplerini maliyet dışı tutuyor;
+    #  düz 'KDV' GİDER gibi işleniyor, stoğun giydirilmiş maliyetine
+    #  giriyordu.
+    #
+    #  ÖLÇÜLDÜ (canlı): gümrük beyannamesindeki ithalat KDV'si
+    #  (137.749,82 TL) dört bloğa 'KDV' tipiyle dağıtılmış; ton
+    #  başına ~57,5 USD fazla maliyet. İthalatta ödenen KDV
+    #  indirilecek KDV'dir — kullanıcının kararı: maliyete GİRMESİN.
+    #
+    #  Tek kapı: tip hangi uçtan gelirse gelsin 'KDV' → 'Devreden
+    #  KDV'. Böylece ihracatta iadeye dönen KDV hattına da girer.
+    # ══════════════════════════════════════════════════════════
+    def _maliyet_tip_normal(tip):
+        _t = (tip or '').strip()
+        return 'Devreden KDV' if _t.upper() == 'KDV' else (_t or tip)
+
     # ══════════════════════════════════════════════════════════════
     #  IK2 · ALIŞ TİPLERİ — TEK KAYNAK, FAIL-CLOSED
     #
@@ -6952,6 +6972,12 @@ def create_app():
         if cins: query = query.filter_by(cins=cins)
         if uretici: query = query.filter_by(uretici=uretici)
         if ozellik: query = query.filter_by(ozellik=ozellik)
+        # HD1: tek kayit. Cari ekrani "stok kartini duzenlemede ac"
+        # derken stok ilk sayfada olmayabilir; ekran onu kimligiyle
+        # ister (/stok?duzenle=<id>).
+        _hd1_tek = (request.args.get('id') or '').strip()
+        if _hd1_tek:
+            query = query.filter_by(id=_hd1_tek)
         # Fatura durumu filtresi (faturasiz / mal_bekliyor / faturali)
         fatura_durumu = request.args.get('fatura_durumu', '')
         if fatura_durumu:
@@ -7489,6 +7515,20 @@ def create_app():
         if _mk2_kapali:
             return _kdv_donemi_giris_ret(_mk2_sebep)
 
+        # ── HD1 · BİR FATURANIN TEK TARİHİ OLUR ──
+        # Ölçüldü: aynı tedarikçiden AYNI fatura numarasıyla ama
+        # FARKLI alış tarihiyle girilen stok, sormadan aynı numarada
+        # İKİNCİ bir borç satırı açıyordu (gruplama anahtarı cari +
+        # numara + TARİH). Tarih taşıma, fatura içeriği ve Gelen
+        # Faturalar "bir fatura = bir borç" sayıyor; iki borç olunca
+        # biri geride kalıyordu. Kullanıcının kararı: REDDET.
+        if _fatura_durumu != 'faturasiz' and not _uretim:
+            _hd1_c = _stok_fatura_tarih_cakismasi(
+                (data.get('uretici') or '').strip(), data.get('cari_id'),
+                data.get('fatura_no'), _alis_tarihi)
+            if _hd1_c is not None:
+                return _hd1_tarih_cakisma_ret(_hd1_c, data.get('fatura_no'))
+
         # ── IK2 · TANINMAYAN ALIŞ TİPİ REDDEDİLİR ──
         # Tek kapı: üç ürün dalı da (BLOK/PLAKA/EBATLI) buradan
         # geçiyor. Dallara ayrı ayrı yazsaydım dördüncüsü eklendiğinde
@@ -7899,6 +7939,14 @@ def create_app():
         if _mk2_kapali:
             return _kdv_donemi_giris_ret(_mk2_sebep)
 
+        # HD1: faturalandırırken de aynı kural — numara bu
+        # tedarikçide başka bir tarihle kayıtlıysa ikinci borç açma.
+        _hd1_c = _stok_fatura_tarih_cakismasi(
+            stok.uretici, getattr(stok, 'cari_id', None),
+            fatura_no or stok.fatura_no, alis_tarihi)
+        if _hd1_c is not None:
+            return _hd1_tarih_cakisma_ret(_hd1_c, fatura_no or stok.fatura_no)
+
         # Stoğu güncelle
         stok.fatura_no = fatura_no or stok.fatura_no
         stok.alis_tarihi = alis_tarihi
@@ -8193,6 +8241,10 @@ def create_app():
                         stok.blok_no = _no
                     elif hasattr(stok, 'kasa_no'):
                         stok.kasa_no = _no
+                # HD1: fiyat GERÇEKTEN değişti mi? Form fiyatı her
+                # kayıtta gönderiyor; "alan geldi" değişti demek değil.
+                _hd1_fiyat_once = (float(stok.alis_fiyati or 0),
+                                   (stok.alis_fiyat_birim or ''))
                 if 'alis_fiyati' in data:
                     try: stok.alis_fiyati = float(data['alis_fiyati']) if data['alis_fiyati'] not in (None,'') else None
                     except (ValueError, TypeError): pass
@@ -8397,6 +8449,34 @@ def create_app():
                 # hesaplari tazelemek gerekmez.
                 _temel_degisti = olcu_degisti or any(
                     k in data for k in ('alis_fiyati', 'fiyat_birim', 'doviz'))
+                # ── HD1 · ALIŞ BEDELİ VE BORÇ BİRLİKTE ──
+                # Fiyat ya da ölçü değiştiyse matrah, KDV, tedarikçi
+                # borcu ve alışın KDV satırı da yeniden kurulur.
+                # Satış kârlılığından ÖNCE: o hesap matrahı okuyor.
+                #
+                # YALNIZ fiyat/birim/ölçü GERÇEKTEN değiştiyse. Konum
+                # gibi alakasız bir düzeltme, eskiden kalma bir farkı
+                # sessizce "iyileştirip" tedarikçi borcunu oynatmamalı;
+                # o farkları tutarlılık taraması ayrıca gösterir.
+                _hd1_bedel_uyari = None
+                _hd1_bedel_degisti = olcu_degisti or (
+                    (float(stok.alis_fiyati or 0),
+                     (stok.alis_fiyat_birim or '')) != _hd1_fiyat_once)
+                if _hd1_bedel_degisti:
+                    db.session.flush()
+                    _hd1_bedel_uyari, _hd1_bedel_sebep = (
+                        _stok_alis_bedeli_yenile(stok))
+                    if _hd1_bedel_sebep:
+                        db.session.rollback()
+                        return jsonify({
+                            'ok': False, 'error': 'kdv_donemi_kapali',
+                            'baglam': 'alis_tarihi',
+                            'mesaj': f'{_hd1_bedel_sebep} Bu alışın KDV\'si '
+                                     f'değişeceği için fiyat/ölçü '
+                                     f'düzeltilemedi. Düzeltme, açık bir '
+                                     f'dönemde fiyat farkı faturası olarak '
+                                     f'girilmeli; mali müşavirinize '
+                                     f'danışın.'}), 409
                 _tazelenen = 0
                 if _temel_degisti:
                     db.session.flush()
@@ -8505,7 +8585,8 @@ def create_app():
                 # (ya da carisi olmadigi icin TASINMADIGINI) hicbir
                 # yerde gormezdi.
                 _uyarilar = [u for u in (_doviz_uyari, _dagitim_uyari,
-                                         _td_uyari, _at1_uyari) if u]
+                                         _td_uyari, _at1_uyari,
+                                         _hd1_bedel_uyari) if u]
                 _mesaj = 'Stok güncellendi'
                 if _kesim_bilgi:
                     _mesaj += (f', {_kesim_bilgi["kesim_id"]} kesiminin '
@@ -14742,7 +14823,8 @@ def create_app():
                              '"borc" ya da "alacak" adıyla gönderin.'}), 400
 
         # BILINMEYEN ALAN ARTIK SESSIZCE YUTULMUYOR.
-        _taninan = set(GUNCELLENEBILIR) | set(TUTAR_ALANLARI) | {'onay'}
+        _taninan = (set(GUNCELLENEBILIR) | set(TUTAR_ALANLARI)
+                    | {'onay', 'birlestir'})
         reddedilen = [k for k in data if k not in _taninan]
         if reddedilen:
             return jsonify({
@@ -14751,6 +14833,150 @@ def create_app():
                          f"{', '.join(sorted(reddedilen))}. "
                          f"Değiştirilebilir: "
                          f"{', '.join(GUNCELLENEBILIR + TUTAR_ALANLARI)}."}), 400
+
+        # ══════════════════════════════════════════════════════
+        #  HD1 · OTOMATİK BORÇ TEK BAŞINA DÜZELTİLEMEZ
+        #
+        #  Stoğun ya da maliyetin yazdığı tedarikçi borcu bu formdan
+        #  değiştirilince YALNIZ borç değişiyordu (ölçümler yukarıda,
+        #  kapıların başında). Artık:
+        #    TARİH     → stok / maliyet kapısından; hepsi birlikte
+        #    FATURA NO → fatura no kapısından; hepsi birlikte
+        #    TUTAR     → stok alışında REDDEDİLİR ve stok kartı
+        #                düzenlemede açılır (kullanıcının kararı):
+        #                alış tutarı stok kartlarından gelir.
+        #                Maliyet borcunda DZ5'in mevcut yolu işler.
+        #
+        #  Form tutarı HER kayıtta gönderir; "değişti" demek rakamın
+        #  ya da dövizin gerçekten farklı olması demek.
+        # ══════════════════════════════════════════════════════
+        _hd1_not = []
+        _hd1_alis = _hd1_alis_borcu_mu(hareket)
+        _hd1_mal = None
+        if (not _hd1_alis and (hareket.baglanti_tip or '') == 'maliyet'
+                and hareket.baglanti_id and (hareket.alacak or 0) > 0):
+            _hd1_mal = Maliyet.query.get(hareket.baglanti_id)
+        if _hd1_alis or _hd1_mal is not None:
+            _hd1_t = None
+            if 'alacak' in data:
+                try:
+                    _hd1_t = q2(float(str(data['alacak']).replace(',', '.')))
+                except (TypeError, ValueError):
+                    _hd1_t = None
+            _hd1_tutar_degisti = bool(
+                (_hd1_t is not None
+                 and abs(float(_hd1_t) - float(hareket.alacak or 0)) > 0.005)
+                or ('doviz' in data
+                    and (data.get('doviz') or hareket.doviz)
+                    != hareket.doviz))
+            if _hd1_alis and _hd1_tutar_degisti:
+                _sl = _hd1_alis_stoklari(hareket)
+                return jsonify({
+                    'ok': False, 'error': 'stok_alis_tutari',
+                    'hareket_id': hareket.id,
+                    'stoklar': [{
+                        'id': s.id,
+                        'tip': ('BLOK' if isinstance(s, BlokStok) else
+                                'PLAKA' if isinstance(s, PlakaStok)
+                                else 'EBATLI'),
+                        'tanim': _stok_tanim(s)} for s in _sl],
+                    'mesaj': 'Bu borç bir stok alış faturasının karşılığı; '
+                             'tutarı stok kartlarından gelir. Alış fiyatını '
+                             'stok kartında düzeltin — tedarikçi borcu '
+                             'birlikte düzelir.'}), 400
+
+            _hd1_yt = (_parse_date(data.get('hareket_tarihi'))
+                       if data.get('hareket_tarihi') else None)
+            if _hd1_yt and _hd1_yt != hareket.hareket_tarihi:
+                if _hd1_yt > date.today():
+                    return jsonify({'ok': False, 'mesaj':
+                                    'İleri tarihli fatura yazılamaz.'}), 400
+                _hd1_sebep = None
+                if _hd1_alis:
+                    _sl = _hd1_alis_stoklari(hareket)
+                    if _sl:
+                        _o, _hd1_sebep, _k, _ts = _stok_alis_tarih_tasi(
+                            _sl[0], _hd1_yt)
+                        if not _hd1_sebep:
+                            _hd1_not.append(
+                                f'{len(_ts)} stok kartının alış tarihi de '
+                                f'{_hd1_yt.strftime("%d.%m.%Y")} oldu')
+                            db.session.flush()
+                            _maliyet_etkilenen_stoklari_tazele(
+                                [s.id for s in _ts])
+                else:
+                    _o, _hd1_sebep, _k = _maliyet_tarih_tasi(
+                        _hd1_mal, _hd1_yt)
+                    if not _hd1_sebep:
+                        _hd1_not.append(
+                            f'maliyet kaydının tarihi de '
+                            f'{_hd1_yt.strftime("%d.%m.%Y")} oldu')
+                if _hd1_sebep:
+                    db.session.rollback()
+                    return jsonify({
+                        'ok': False, 'error': 'kdv_donemi_kapali',
+                        'mesaj': f'{_hd1_sebep} Tarih değiştirilmedi. '
+                                 f'Yönetici, Depo → Maliyetler sayfasındaki '
+                                 f'toplu tarih aracıyla kapalı dönemi '
+                                 f'aşabilir.'}), 409
+                # Kapı borcu da taşıdıysa alttaki genel yol tarihe
+                # bir daha dokunmasın.
+                if hareket.hareket_tarihi == _hd1_yt:
+                    data.pop('hareket_tarihi', None)
+
+            if 'evrak_no' in data:
+                _hd1_ye = (data.get('evrak_no') or '').strip()
+                _hd1_ee = (hareket.evrak_no or '').strip()
+                if _hd1_ye != _hd1_ee:
+                    if _hd1_alis:
+                        if (not _hd1_ye or _hd1_ye.lower().startswith(
+                                'beklenen fatura')):
+                            db.session.rollback()
+                            return jsonify({'ok': False, 'mesaj':
+                                'Alış faturasının numarası boş ya da yer '
+                                'tutucu olamaz; gerçek numarayı yazın.'}), 400
+                        _d, _v = _stok_fatura_no_degistir(
+                            hareket, _hd1_ye,
+                            birlestir=bool(data.get('birlestir')
+                                           or request.args.get('birlestir')))
+                        if _d == 'soru':
+                            db.session.rollback()
+                            return _hd1_birlestir_sorusu(_v, _hd1_ye)
+                        if _d == 'ret':
+                            db.session.rollback()
+                            return jsonify({'ok': False, 'mesaj': _v}), 400
+                        _hd1_not.append(
+                            f'{_v["stok"]} stok kartının fatura numarası da '
+                            f'{_hd1_ye} oldu')
+                        if _v['birlesti']:
+                            # Bu hareket artık YOK: var olan faturaya
+                            # katıldı. Kalan alanları yazacak satır
+                            # kalmadığı için burada bitiyor.
+                            ok, hata = _safe_commit(
+                                f'Cari hareket birlestirme: {hareket_id}')
+                            if not ok:
+                                return jsonify({'ok': False,
+                                                'mesaj': f'Hata: {hata}'}), 500
+                            return jsonify({
+                                'ok': True, 'birlesti': True,
+                                'hareket_id': _v['hedef'],
+                                'mesaj': f'{_hd1_ye} faturasıyla '
+                                         f'birleştirildi; tek borç kaldı. '
+                                         + ' · '.join(_hd1_not)})
+                        data.pop('evrak_no', None)
+                    else:
+                        for _m in (_maliyet_grubu(_hd1_mal) or [_hd1_mal]):
+                            _m.fatura_no = _hd1_ye
+                        _hd1_not.append(
+                            'maliyet kaydının fatura numarası da güncellendi')
+
+            # Rakam değişmediyse tutar yolu HİÇ açılmasın: form tutarı
+            # her kayıtta gönderiyor ve o yol tarih bahanesiyle
+            # gereksiz bir onay sorusu çıkarıyordu.
+            if (not _hd1_tutar_degisti and 'hareket_tarihi' not in data
+                    and 'kur_uygulanan' not in data):
+                for _k2 in ('borc', 'alacak', 'doviz'):
+                    data.pop(_k2, None)
 
         # ── TUTAR: DOGRULA, KAPSAMI SOR, SONRA UYGULA ──
         # Hicbir sey bu asamada DEGISMIYOR; plan kuruluyor.
@@ -14890,6 +15116,18 @@ def create_app():
                 setattr(hareket, key, val)
 
         if not _eski and not _plan:
+            if _hd1_not:
+                # HD1: borcun kendi alanlarında yazacak bir şey
+                # kalmadı ama kapılar stok/maliyet tarafını taşıdı.
+                _log_audit('GUNCELLE', 'cari_hareket', hareket_id,
+                           eski={}, yeni={'hd1': _hd1_not})
+                ok, hata = _safe_commit(f'Cari hareket duzeltme: {hareket_id}')
+                if not ok:
+                    return jsonify({'ok': False,
+                                    'mesaj': f'Hata: {hata}'}), 500
+                return jsonify({'ok': True, 'hareket_id': hareket_id,
+                                'mesaj': 'Hareket güncellendi · '
+                                         + ' · '.join(_hd1_not)})
             return jsonify({'ok': True, 'mesaj': 'Değişiklik yok'})
 
         # ══════════════════════════════════════════════════════════
@@ -15113,6 +15351,8 @@ def create_app():
         if _notlar:
             # Notlar NOTR yazildi; sonucta "oldu" diye kapatiliyor.
             _mesaj += '. Birlikte: ' + '; '.join(_notlar)
+        if _hd1_not:
+            _mesaj += ' · ' + ' · '.join(_hd1_not)
         return jsonify({'ok': True, 'guncellenen': sorted(_eski),
                         'mesaj': _mesaj})
 
@@ -18942,7 +19182,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         data = request.get_json(silent=True) or {}
         doviz       = data.get('doviz', 'USD')
-        maliyet_tip = data.get('maliyet_tip')
+        maliyet_tip = _maliyet_tip_normal(data.get('maliyet_tip'))   # KV1
         # Bağlantı tipini küçük harfe normalleştir — bazı ekranlar 'Stok',
         # bazıları 'stok' gönderiyordu; sorgular kaçırıyordu.
         baglanti_tip = (data.get('baglanti_tip') or '').strip().lower() or None
@@ -18968,7 +19208,10 @@ def create_app():
         # orada. Kur da ARTIK O TARIHTEN okunuyor; eskiden bugunun
         # kuruyla ceviriliyordu ve ekim faturasi kasim kuruyla
         # yaziliyordu.
-        _mt2_tarih, _mt2_ret = _maliyet_giris_tarihi(data, kdv_tutar > 0)
+        # KV1: satırın KENDİSİ KDV ise (ithalat KDV'si gibi) o da
+        # kapanmış döneme sokulamaz; eskiden yalnız orana bakılıyordu.
+        _mt2_tarih, _mt2_ret = _maliyet_giris_tarihi(
+            data, kdv_tutar > 0 or maliyet_tip in MALIYET_DISI_TIPLER)
         if _mt2_ret is not None:
             return _mt2_ret
 
@@ -20286,7 +20529,7 @@ def create_app():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
         data = request.get_json(silent=True) or {}
         hedefler = [str(h).strip() for h in (data.get('hedefler') or []) if str(h).strip()]
-        maliyet_tip = data.get('maliyet_tip')
+        maliyet_tip = _maliyet_tip_normal(data.get('maliyet_tip'))   # KV1
         baglanti_tip = (data.get('baglanti_tip') or 'stok').strip().lower()
         doviz = data.get('doviz', 'USD')
         dagitim = 'esit' if (data.get('dagitim') == 'esit') else 'oransal'
@@ -20319,7 +20562,8 @@ def create_app():
             tutar_ham, kdv_oran, kdv_dahil_mi)
         # MT2: tarih tek kapidan — bicim + kapanmis donem denetimi.
         # Kur da artik fatura gununden okunuyor (bkz. POST /api/maliyet).
-        _mt2_tarih, _mt2_ret = _maliyet_giris_tarihi(data, toplam_kdv > 0)
+        _mt2_tarih, _mt2_ret = _maliyet_giris_tarihi(
+            data, toplam_kdv > 0 or maliyet_tip in MALIYET_DISI_TIPLER)   # KV1
         if _mt2_ret is not None:
             return _mt2_ret
 
@@ -20685,6 +20929,47 @@ def create_app():
     #  listeyi elle ayıklamaya zorlardı. Yanıt neyin taşındığını ve
     #  neyin neden taşınmadığını kayıt kayıt söylüyor.
     # ══════════════════════════════════════════════════════════════
+    # KV1 · eski 'KDV' tipli satırları 'Devreden KDV'ye çevir.
+    # Tek seferlik düzeltme ama UÇ olarak duruyor: aynı tipte bir
+    # kayıt başka bir yoldan (içe aktarma, eski yedek) gelirse
+    # Maliyetler sayfası yine uyarır ve aynı düğme yine çalışır.
+    @app.route('/api/maliyet/kdv_tipi_cevir', methods=['POST'])
+    def api_maliyet_kdv_tipi_cevir():
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if str(session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj':
+                            'Bu düzeltmeyi yalnız yönetici yapabilir.'}), 403
+        satirlar = Maliyet.query.filter(
+            db.func.upper(db.func.trim(Maliyet.maliyet_tip)) == 'KDV').all()
+        if not satirlar:
+            return jsonify({'ok': True, 'cevrilen': 0, 'stoklar': [],
+                            'mesaj': "Çevrilecek 'KDV' tipli satır yok."})
+        _stoklar, _usd = [], 0.0
+        for m in satirlar:
+            _log_audit('GUNCELLE', 'maliyet', m.id,
+                       eski={'maliyet_tip': m.maliyet_tip},
+                       yeni={'maliyet_tip': 'Devreden KDV', 'kv1': True})
+            m.maliyet_tip = 'Devreden KDV'
+            if m.aktif:
+                _usd += float(m.usd_karsilik or 0)
+            if (m.baglanti_tip or '').lower() == 'stok' and m.baglanti_id:
+                _stoklar.append(m.baglanti_id)
+        db.session.flush()
+        _stoklar = list(dict.fromkeys(_stoklar))
+        # Kesilmiş blokların plaka maliyetleri ve satılmış ürünlerin
+        # kâr kayıtları da bu rakamdan türüyor.
+        _maliyet_etkilenen_stoklari_tazele(_stoklar)
+        ok, hata = _safe_commit('KV1 KDV tipi cevirme')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({
+            'ok': True, 'cevrilen': len(satirlar), 'stoklar': _stoklar,
+            'maliyetten_cikan_usd': q2(_usd),
+            'mesaj': f"{len(satirlar)} satır 'Devreden KDV'ye çevrildi; "
+                     f"{len(_stoklar)} stoğun maliyetinden toplam "
+                     f"{_usd:,.2f} USD çıktı."})
+
     @app.route('/api/maliyet/toplu_tarih', methods=['POST'])
     def api_maliyet_toplu_tarih():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -20842,7 +21127,8 @@ def create_app():
         m = Maliyet.query.get(maliyet_id)
         if not m: return jsonify({'ok': False, 'mesaj': 'Bulunamadı'}), 404
         data = request.get_json(silent=True) or {}
-        if 'maliyet_tip' in data: m.maliyet_tip = data['maliyet_tip']
+        if 'maliyet_tip' in data:
+            m.maliyet_tip = _maliyet_tip_normal(data['maliyet_tip'])   # KV1
         if 'tutar' in data:
             # MD1: tutar SAYIYA cevrilir. Ekrandan metin gelirse
             # ('1.250,00') carpma islemleri patlardi.
@@ -21077,7 +21363,7 @@ def create_app():
         data = request.get_json(silent=True) or {}
         urun_tipi   = data.get('urun_tipi')
         blok_no     = data.get('blok_no')
-        maliyet_tip = data.get('maliyet_tip')
+        maliyet_tip = _maliyet_tip_normal(data.get('maliyet_tip'))   # KV1
         doviz       = data.get('doviz', 'USD')
         hedef       = data.get('hedef', 'hepsi')
         fatura_no   = (data.get('fatura_no') or '').strip()
@@ -21099,7 +21385,8 @@ def create_app():
             tutar_ham, kdv_oran, kdv_dahil_mi)
         # MT2: tarih tek kapidan — bicim + kapanmis donem denetimi.
         # Kur da artik fatura gununden okunuyor (bkz. POST /api/maliyet).
-        _mt2_tarih, _mt2_ret = _maliyet_giris_tarihi(data, toplam_kdv > 0)
+        _mt2_tarih, _mt2_ret = _maliyet_giris_tarihi(
+            data, toplam_kdv > 0 or maliyet_tip in MALIYET_DISI_TIPLER)   # KV1
         if _mt2_ret is not None:
             return _mt2_ret
 
@@ -25587,6 +25874,292 @@ def create_app():
         return jsonify(cevap)
 
     # ══════════════════════════════════════════════════════════
+    #  HD1 · STOK ALIŞ FATURASI: TEK BORÇ, TEK TARİH, TEK NUMARA
+    #
+    #  Bir alış faturası DÖRT yerde duruyor: tedarikçi borcu, o
+    #  faturadaki stok kartları, alışın KDV satırları ve faturaya
+    #  bağlanmış ödemeler. Cari ekranındaki "hareketi düzenle" formu
+    #  bunlardan yalnız BORCU değiştirebiliyordu:
+    #
+    #    ÖLÇÜLDÜ                        borç          stok kartı
+    #    tarih 03.11 → 09.11            09.11         03.11  ✗
+    #    fatura no INV-K → INV-K-YENI   INV-K-YENI    INV-K  ✗
+    #    tutar 1.200 → 1.500            1.500         1.000  ✗
+    #
+    #  Canlıdaki Batı Ege (stok 06.11 / borç 24.10) ve Pınar Gümrük
+    #  (maliyet 06.11 / borç 14.09) uyumsuzlukları böyle doğmuştu.
+    #  Aşağıdaki kapılar hem o formdan hem fatura no ucundan
+    #  kullanılıyor: nereden düzeltilirse düzeltilsin dört yer
+    #  BİRLİKTE gidiyor.
+    # ══════════════════════════════════════════════════════════
+    def _stok_alis_bedeli_yenile(stok):
+        """HD1 — stok kartında fiyat/ölçü değişince ALIŞ BEDELİNİ ve
+        ona bağlı her şeyi yeniden kurar.
+
+        ÖLÇÜLDÜ: stok kartında alış fiyatı 100 → 150 yapıldı;
+        kart 150 gösteriyor ama matrah 1.000'de, tedarikçi borcu
+        1.000'de kaldı (doğrusu 1.500). Düzenleme ucu satış
+        kârlılığını tazeliyor, alışın KENDİ rakamlarına dokunmuyordu.
+        Fatura yanlış girildiyse düzeltmenin yolu yoktu: stok kartı
+        borcu değiştirmiyor, cari ekranı stok kartını değiştirmiyordu.
+
+        Birlikte giden dört şey:
+          stok.matrah, stok.kdv_tutar       (giriş kuralının aynısı)
+          tedarikçi borcu                   (fark kadar, ATOMİK)
+          alışın Devreden KDV satırı        (tutar + dolar karşılığı)
+
+        Döner (uyari, sebep): `sebep` doluysa HİÇBİR ŞEY değişmedi
+        (kapanmış KDV dönemi). Üretilen / kesimden gelen malda alış
+        yok; dokunulmaz.
+        """
+        if (getattr(stok, 'kaynak', None) or 'satinalma') in ('uretim', 'kesim'):
+            return (None, None)
+        _f = float(stok.alis_fiyati or 0)
+        _fb = (stok.alis_fiyat_birim or '').strip()
+        if isinstance(stok, BlokStok):
+            _mik = float((stok.tonaj if _fb == 'ton' else stok.hacim_m3) or 0)
+        else:
+            _m2 = float(getattr(stok, 'metraj_m2', 0) or 0)
+            _mik = _m2 if _fb in ('', 'm2') else float(q2(_m2 * M2_TO_SQFT))
+        _eski_m = float(stok.matrah or 0)
+        _eski_k = float(stok.kdv_tutar or 0)
+        _yeni_m = float(q2(_f * _mik))
+        _oran = float(stok.kdv_oran or 0)
+        _yeni_k = float(q2(_yeni_m * _oran / 100)) if _oran > 0 else 0.0
+        if abs(_yeni_m - _eski_m) < 0.005 and abs(_yeni_k - _eski_k) < 0.005:
+            return (None, None)
+        _faturali = (getattr(stok, 'fatura_durumu', None)
+                     or 'faturali') != 'faturasiz'
+        # MK2: beyan edilmiş dönemin indirilecek KDV'si değişmez.
+        if _faturali and abs(_yeni_k - _eski_k) >= 0.005:
+            _kapali, _sebep = _kdv_donemi_kapali(
+                getattr(stok, 'alis_tarihi', None) or date.today())
+            if _kapali:
+                return (None, _sebep)
+        stok.matrah = q2(_yeni_m)
+        stok.kdv_tutar = q2(_yeni_k)
+        _not = (f'Alış bedeli {_eski_m + _eski_k:,.2f} → '
+                f'{_yeni_m + _yeni_k:,.2f} {stok.doviz or ""}')
+        if not _faturali:
+            return (_not, None)
+        _grup, _fno, _aday = _stok_alis_grubu(stok)
+        if _grup is not None:
+            _toplam, _ = _ch_grup_degistir(
+                _grup,
+                tutar_delta=q2((_yeni_m + _yeni_k) - (_eski_m + _eski_k)),
+                kdv_delta=q2(_yeni_k - _eski_k),
+                matrah_delta=q2(_yeni_m - _eski_m))
+            _try_val, _kur = _try_karsilik(_toplam, _grup.doviz,
+                                           tarih=_grup.hareket_tarihi)
+            _grup.alacak_try = _try_val
+            _grup.kur_uygulanan = _kur
+            _not += ' · tedarikçi borcu birlikte düzeldi'
+            if _grup.kapatildi:
+                _not += (' (bu borç bir ödemeyle kapatılmıştı; cari '
+                         'ekranından eşleşmeyi kontrol edin)')
+        else:
+            _not += (' · tedarikçi borcu BULUNAMADI, cari ekranından '
+                     'kontrol edin')
+        # Alışın KDV satırı (grupsuz, bu stoğa bağlı).
+        #
+        # KV1 · YALNIZ ALIŞIN KENDİ KDV SATIRI: fatura numarası stoğun
+        # alış faturasıyla aynı olan. HD1'de bu süzgeç yoktu; stoğa
+        # bağlı İLK grupsuz 'Devreden KDV' satırını alıyordu. İthalat
+        # KDV'si de artık aynı tipte durduğu için, KDV'siz alınmış
+        # bir blokta fiyat düzeltilince o satır İPTAL edilirdi.
+        _kdv_satir = None
+        if _eski_k > 0 or _yeni_k > 0:
+            _kdv_satir = Maliyet.query.filter(
+                Maliyet.baglanti_id == stok.id,
+                Maliyet.maliyet_tip == 'Devreden KDV',
+                Maliyet.grup_id.is_(None),
+                Maliyet.fatura_no == getattr(stok, 'fatura_no', None),
+                Maliyet.aktif == True).first()  # noqa: E712
+        if _eski_k <= 0 and _yeni_k <= 0:
+            pass
+        elif _kdv_satir is not None:
+            if _yeni_k > 0:
+                _kdv_satir.tutar = q2(_yeni_k)
+                _kdv_satir.usd_karsilik = _usd_cevrim(
+                    _yeni_k, _kdv_satir.doviz or stok.doviz,
+                    tarih=_kdv_satir.maliyet_tarihi)
+            else:
+                _kdv_satir.aktif = False
+        elif _yeni_k > 0:
+            _devreden_kdv_kalemi_olustur(
+                stok.id, q2(_yeni_k), stok.doviz,
+                aciklama=f'Alış düzeltmesi - {stok.cins or ""}',
+                fatura_no=getattr(stok, 'fatura_no', None),
+                tarih=getattr(stok, 'alis_tarihi', None))
+        _log_audit('GUNCELLE', 'stok_alis_bedeli', stok.id,
+                   eski={'matrah': _eski_m, 'kdv': _eski_k},
+                   yeni={'matrah': _yeni_m, 'kdv': _yeni_k,
+                         'borc': _grup.id if _grup is not None else None})
+        return (_not, None)
+
+    def _hd1_alis_borcu_mu(h):
+        """Hareket bir stok alış faturasının KENDİ borcu mu?
+        (Aynı bağı taşıyan ödeme ve karşı kayıt DEĞİL.)"""
+        return bool((h.baglanti_tip or '') == 'stok_fatura'
+                    and (h.kaynak or '') == 'stok'
+                    and (h.alacak or 0) > 0 and h.baglanti_id)
+
+    def _hd1_alis_stoklari(h, fatura_no=None):
+        """Faturanın stokları — YALNIZ bu carinin (SF2)."""
+        _ur = (h.cari_unvan or '').strip().upper()
+        return [s for s in _stok_fatura_grubu_stoklari(
+                    fatura_no or h.baglanti_id)
+                if (getattr(s, 'cari_id', None) == h.cari_id
+                    or (not getattr(s, 'cari_id', None)
+                        and (s.uretici or '').strip().upper() == _ur))]
+
+    def _stok_fatura_tarih_cakismasi(uretici, cari_id, fatura_no, tarih):
+        """Bu tedarikçide bu fatura numarası BAŞKA bir tarihle
+        kayıtlıysa o borç satırını döndürür; yoksa None.
+        Yer tutucular ("Beklenen Fatura N") kapsam dışı."""
+        _fno = (fatura_no or '').strip()
+        if not _fno or _fno.lower().startswith('beklenen fatura') or not tarih:
+            return None
+        _cid = (cari_id or '').strip() or None
+        if not _cid and uretici:
+            _c = (Cari.query.filter_by(unvan=uretici).first()
+                  or _cari_bul(uretici))
+            _cid = _c.id if _c else None
+        if not _cid:
+            return None
+        return CariHareket.query.filter(
+            CariHareket.cari_id == _cid,
+            CariHareket.baglanti_tip == 'stok_fatura',
+            CariHareket.baglanti_id == _fno,
+            CariHareket.kaynak == 'stok',
+            CariHareket.alacak > 0,
+            CariHareket.hareket_tarihi != tarih).first()
+
+    def _hd1_tarih_cakisma_ret(h, fatura_no):
+        _t = h.hareket_tarihi.strftime('%d.%m.%Y') if h.hareket_tarihi else '?'
+        return jsonify({
+            'ok': False, 'error': 'fatura_tarih_cakismasi',
+            'kayitli_tarih': (h.hareket_tarihi.isoformat()
+                              if h.hareket_tarihi else None),
+            'mesaj': f'{(fatura_no or "").strip()} numaralı fatura bu '
+                     f'tedarikçide {_t} tarihiyle kayıtlı. Bir faturanın '
+                     f'tek tarihi olur: alış tarihini {_t} yapın ya da '
+                     f'fatura numarasını düzeltin.'}), 400
+
+    def _stok_fatura_no_degistir(h, yeni, birlestir=False):
+        """Alış faturasının numarasını değiştirir; dört yer birlikte.
+
+        Döner (durum, veri):
+          ('tamam', {'stok': n, 'birlesti': bool, 'hedef': id|None})
+          ('soru',  hedef_hareket)   — numara bu caride ZATEN var
+          ('ret',   mesaj)
+
+        BİRLEŞTİRME (kullanıcının kararı: sorarak): yeni numara bu
+        tedarikçide zaten bir alış faturasıysa iki alış TEK faturada
+        toplanır — tek borç, tek tarih (var olan faturanınki). Gerçek
+        hayatta tek fatura, ayrı günlerde girilmiş blokları kapsar
+        ("Beklenen Fatura 1" ve "2" tek fatura çıkabilir).
+        """
+        eski = (h.baglanti_id or h.evrak_no or '').strip()
+        if yeni == eski:
+            return ('tamam', {'stok': 0, 'birlesti': False, 'hedef': None})
+        hedef = CariHareket.query.filter(
+            CariHareket.cari_id == h.cari_id,
+            CariHareket.baglanti_tip == 'stok_fatura',
+            CariHareket.baglanti_id == yeni,
+            CariHareket.kaynak == 'stok',
+            CariHareket.alacak > 0,
+            CariHareket.id != h.id).first()
+        stoklar = _hd1_alis_stoklari(h, eski)
+        if hedef is not None:
+            if not birlestir:
+                return ('soru', hedef)
+            if (h.doviz or 'TRY') != (hedef.doviz or 'TRY'):
+                return ('ret', f'İki alışın dövizi farklı ({h.doviz} / '
+                               f'{hedef.doviz}); tek faturada '
+                               f'birleştirilemez.')
+            if h.kapatildi or hedef.kapatildi:
+                return ('ret', 'Alışlardan biri bir ödemeyle kapatılmış; '
+                               'birleştirmeden önce o eşleşmeyi çözün.')
+            # Tarih: var olan faturanınki. Stok kapısından geçer —
+            # stok kartları, KDV satırları ve bu borç birlikte taşınır,
+            # kapalı KDV dönemi kuralı da orada işler.
+            if stoklar and h.hareket_tarihi != hedef.hareket_tarihi:
+                _ok, _sebep, _kdv, _sl = _stok_alis_tarih_tasi(
+                    stoklar[0], hedef.hareket_tarihi)
+                if _sebep:
+                    return ('ret', _sebep)
+
+        h.evrak_no = yeni
+        h.baglanti_id = yeni
+        _temel = (h.aciklama or '').split('  ·  ')[0]
+        if eski and eski in _temel:
+            _temel = _temel.replace(eski, yeni)
+        _ks = getattr(h, 'kalem_sayisi', None)
+        h.aciklama = f'{_temel}  ·  {_ks} kalem' if _ks else _temel
+        for s in stoklar:
+            s.fatura_no = yeni
+        # Faturaya bağlı öbür hareketler (ödeme, karşı kayıt) ve
+        # alışın grupsuz KDV satırları da yeni numaraya geçer.
+        for _x in CariHareket.query.filter(
+                CariHareket.baglanti_tip == 'stok_fatura',
+                CariHareket.baglanti_id == eski,
+                CariHareket.cari_id == h.cari_id,
+                CariHareket.id != h.id).all():
+            _x.baglanti_id = yeni
+            if (_x.evrak_no or '').strip() == eski:
+                _x.evrak_no = yeni
+        _sid = [s.id for s in stoklar]
+        if _sid and eski:
+            for _m in Maliyet.query.filter(
+                    Maliyet.baglanti_id.in_(_sid),
+                    Maliyet.fatura_no == eski,
+                    Maliyet.grup_id.is_(None)).all():
+                _m.fatura_no = yeni
+        if hedef is None:
+            return ('tamam', {'stok': len(stoklar), 'birlesti': False,
+                              'hedef': None})
+
+        # ── TEK BORCA TOPLA ──
+        db.session.flush()
+        _yeni_toplam, _ = _ch_grup_degistir(
+            hedef, tutar_delta=(h.alacak or 0),
+            kdv_delta=(h.kdv_tutar or 0),
+            matrah_delta=(h.matrah or 0),
+            kalem_delta=int(h.kalem_sayisi or len(stoklar) or 1))
+        _try_val, _kur = _try_karsilik(_yeni_toplam, hedef.doviz,
+                                       tarih=hedef.hareket_tarihi)
+        hedef.alacak_try = _try_val
+        hedef.kur_uygulanan = _kur
+        if (h.kdv_oran or 0) and not (hedef.kdv_oran or 0):
+            hedef.kdv_oran = h.kdv_oran
+        _ht = (hedef.aciklama or '').split('  ·  ')[0]
+        hedef.aciklama = f'{_ht}  ·  {hedef.kalem_sayisi} kalem'
+        _log_audit('SIL', 'cari_hareket', h.id,
+                   eski={'evrak_no': eski, 'alacak': str(h.alacak),
+                         'tarih': str(h.hareket_tarihi)},
+                   yeni={'birlestirildi': hedef.id, 'fatura_no': yeni})
+        db.session.delete(h)
+        return ('tamam', {'stok': len(stoklar), 'birlesti': True,
+                          'hedef': hedef.id})
+
+    def _hd1_birlestir_sorusu(hedef, yeni):
+        _t = (hedef.hareket_tarihi.strftime('%d.%m.%Y')
+              if hedef.hareket_tarihi else '?')
+        return jsonify({
+            'ok': False, 'error': 'fatura_birlestir',
+            'hedef': {'id': hedef.id,
+                      'tarih': (hedef.hareket_tarihi.isoformat()
+                                if hedef.hareket_tarihi else None),
+                      'tutar': q2(hedef.alacak or 0), 'doviz': hedef.doviz,
+                      'kalem': int(hedef.kalem_sayisi or 0)},
+            'mesaj': f'{yeni} numaralı fatura bu tedarikçide zaten kayıtlı '
+                     f'({_t} · {q2(hedef.alacak or 0):,.2f} {hedef.doviz} · '
+                     f'{int(hedef.kalem_sayisi or 0)} kalem).\n\n'
+                     f'Bu alış o faturayla BİRLEŞTİRİLSİN mi? Tek borç '
+                     f'kalır; stokların alış tarihi {_t} olur.'}), 409
+
+    # ══════════════════════════════════════════════════════════
     #  GF1 · GELEN FATURALAR — tedarikçiden gelen her fatura, tek liste
     #
     #  Gelen fatura sistemde ÜÇ ayrı yerde duruyor ve hiçbir ekran
@@ -25729,7 +26302,41 @@ def create_app():
                             'Yer tutucu yerine GERCEK fatura numarasi girin.'}), 400
 
         eski = (h.evrak_no or '').strip()
-        # Ayni cari + ayni tarihte bu numara zaten kullaniliyor mu?
+
+        # ── HD1 · ALIŞ FATURASI KAPIDAN GEÇER ──
+        # Numara bu caride zaten varsa: aynı gün REDDEDİLİYOR, başka
+        # gün İKİNCİ borç oluşuyordu. Artık ikisinde de soruluyor ve
+        # onaylanırsa iki alış tek faturada birleşiyor.
+        if _hd1_alis_borcu_mu(h):
+            _durum, _veri = _stok_fatura_no_degistir(
+                h, yeni, birlestir=bool(data.get('birlestir')))
+            if _durum == 'soru':
+                db.session.rollback()
+                return _hd1_birlestir_sorusu(_veri, yeni)
+            if _durum == 'ret':
+                db.session.rollback()
+                return jsonify({'ok': False, 'mesaj': _veri}), 400
+            guncellenen = _veri['stok']
+            _log_audit('GUNCELLE', 'cari_hareket', hareket_id,
+                       eski={'evrak_no': eski},
+                       yeni={'evrak_no': yeni, 'stok': guncellenen,
+                             'birlesti': _veri['hedef']})
+            ok, hata = _safe_commit(f'Fatura no guncelleme: {hareket_id}')
+            if not ok:
+                return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+            _ek = (f' ({guncellenen} stok da guncellendi)'
+                   if guncellenen else '')
+            if _veri['birlesti']:
+                _ek += ' · var olan faturayla BİRLEŞTİRİLDİ, tek borç kaldı'
+            return jsonify({'ok': True, 'fatura_no': yeni,
+                            'guncellenen_stok': guncellenen,
+                            'birlesti': _veri['birlesti'],
+                            'hareket_id': _veri['hedef'] or hareket_id,
+                            'mesaj': f'Fatura numarasi {yeni} olarak '
+                                     f'guncellendi' + _ek})
+
+        # Alış faturası DIŞINDAKİ hareketler (elle girilen fiş vb.):
+        # yalnız hareketin kendi evrak numarası değişir.
         cakisan = CariHareket.query.filter(
             CariHareket.cari_id == h.cari_id,
             CariHareket.evrak_no == yeni,
@@ -25739,70 +26346,19 @@ def create_app():
             return jsonify({'ok': False, 'mesaj':
                             f'{yeni} numarasi bu tarihte zaten kullaniliyor '
                             f'({cakisan.id}). Once o kaydi kontrol edin.'}), 400
-
         h.evrak_no = yeni
-        if (h.baglanti_tip or '') == 'stok_fatura':
-            h.baglanti_id = yeni
         _temel = (h.aciklama or '').split('  ·  ')[0]
         if eski and eski in _temel:
-            _temel = _temel.replace(eski, yeni)
-        _ks = getattr(h, 'kalem_sayisi', None)
-        h.aciklama = f'{_temel}  ·  {_ks} kalem' if _ks else _temel
-
-        # Bagli stoklarin fatura numarasini da guncelle
-        #
-        # GF1 · YALNIZ BU CARININ STOKLARI.
-        # Eskiden numarayi tasiyan BUTUN stoklar yeniden
-        # adlandiriliyordu. "Beklenen Fatura 1" yer tutucusu her
-        # caride ayri ayri var: bir tedarikcinin gercek numarasi
-        # girilince OBUR tedarikcilerin stoklari da o numaraya
-        # geciyor, kendi borclarindan kopuyordu (canli veride ayni
-        # yer tutucuyu uc tedarikci paylasiyor: 9 + 3 + 1 stok).
-        #
-        # Yalniz ALIS FATURASININ kendisi (stok_fatura) stoklara
-        # dokunur; elle girilmis bir cari fisinin numarasini
-        # degistirmek stoklari etkilemez.
-        guncellenen = 0
-        if (h.baglanti_tip or '') == 'stok_fatura' and eski:
-            _ur = (h.cari_unvan or '').strip().upper()
-            _gf1_stoklar = [
-                s for s in _stok_fatura_grubu_stoklari(eski)
-                if (getattr(s, 'cari_id', None) == h.cari_id
-                    or (not getattr(s, 'cari_id', None)
-                        and (s.uretici or '').strip().upper() == _ur))]
-            for s in _gf1_stoklar:
-                s.fatura_no = yeni
-                guncellenen += 1
-            # Ayni faturaya bagli OBUR hareketler (odeme, karsi kayit)
-            # ve alisin grupsuz KDV satirlari da yeni numaraya gecer;
-            # yoksa fatura icerigi ve tarih kapisi onlari bulamaz.
-            for _x in CariHareket.query.filter(
-                    CariHareket.baglanti_tip == 'stok_fatura',
-                    CariHareket.baglanti_id == eski,
-                    CariHareket.cari_id == h.cari_id,
-                    CariHareket.id != h.id).all():
-                _x.baglanti_id = yeni
-                if (_x.evrak_no or '').strip() == eski:
-                    _x.evrak_no = yeni
-            _gf1_sid = [s.id for s in _gf1_stoklar]
-            if _gf1_sid:
-                for _m in Maliyet.query.filter(
-                        Maliyet.baglanti_id.in_(_gf1_sid),
-                        Maliyet.fatura_no == eski,
-                        Maliyet.grup_id.is_(None)).all():
-                    _m.fatura_no = yeni
-
+            h.aciklama = _temel.replace(eski, yeni)
         _log_audit('GUNCELLE', 'cari_hareket', hareket_id,
-                   eski={'evrak_no': eski}, yeni={'evrak_no': yeni,
-                                                  'stok': guncellenen})
+                   eski={'evrak_no': eski}, yeni={'evrak_no': yeni})
         ok, hata = _safe_commit(f'Fatura no guncelleme: {hareket_id}')
         if not ok:
             return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
         return jsonify({'ok': True, 'fatura_no': yeni,
-                        'guncellenen_stok': guncellenen,
-                        'mesaj': f'Fatura numarasi {yeni} olarak guncellendi'
-                                 + (f' ({guncellenen} stok da guncellendi)'
-                                    if guncellenen else '')})
+                        'guncellenen_stok': 0, 'birlesti': False,
+                        'hareket_id': hareket_id,
+                        'mesaj': f'Fatura numarasi {yeni} olarak guncellendi'})
 
     @app.route('/api/cari/<cari_id>/ekstre_pdf')
     def api_ekstre_pdf(cari_id):

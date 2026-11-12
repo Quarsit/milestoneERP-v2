@@ -22,6 +22,7 @@ tek tek listeler.
       C2  alışın KDV satırının tarihi = alış tarihi
       C3  borcun tutarı = stokların matrah + KDV toplamı
       C4  borçtaki kalem sayısı = stok sayısı
+      C6  stok kartındaki fiyat × ölçü = kayıtlı matrah
   D · TL KARŞILIĞI VE KUR
       D1  TL karşılığı = tutar × yazılan kur
       D2  yazılan kur, o günün (ya da bir önceki günün) arşiv
@@ -111,8 +112,11 @@ with motor.connect() as b:
     stok = []
     for tablo, ad in (('blok_stok', 'BLOK'), ('plaka_stok', 'PLAKA'),
                       ('ebatli_stok', 'EBATLI')):
+        _olcu = ("tonaj, hacim_m3, 0 AS metraj_m2" if ad == 'BLOK'
+                 else "0 AS tonaj, 0 AS hacim_m3, metraj_m2")
         for r in oku(b, f"SELECT id, uretici, cari_id, fatura_no, alis_tarihi, "
-                        f"matrah, kdv_tutar, doviz, durum FROM {tablo}"):
+                        f"matrah, kdv_tutar, doviz, durum, kaynak, alis_fiyati, "
+                        f"alis_fiyat_birim, {_olcu} FROM {tablo}"):
             r['tip'] = ad
             stok.append(r)
     kurlar = oku(b, "SELECT tarih, doviz, alis, satis, efektif FROM doviz_kur")
@@ -296,6 +300,25 @@ sonuc('C3', 'borcun tutarı = stokların matrah + KDV toplamı', c3,
 sonuc('C4', 'borçtaki kalem sayısı = stok sayısı', c4)
 sonuc('C5', 'alış borcunun stoğu duruyor', c0,
       'Stoklar silinmiş ya da fatura numarası değişmiş; borç açıkta.')
+c6 = []
+for r in stok:
+    if (r.get('kaynak') or 'satinalma') in ('uretim', 'kesim'):
+        continue
+    fy, fb = f(r['alis_fiyati']), (r['alis_fiyat_birim'] or '')
+    if r['tip'] == 'BLOK':
+        mik = f(r['tonaj']) if fb == 'ton' else f(r['hacim_m3'])
+    else:
+        mik = f(r['metraj_m2']) * (1 if fb in ('', 'm2') else 10.7639)
+    beklenen = round(fy * mik, 2)
+    if not fy or not mik or not f(r['matrah']):
+        continue
+    if abs(beklenen - f(r['matrah'])) > max(0.05, 0.0005 * beklenen):
+        c6.append(f'{s(r["id"], 24)} kartta {fy:g} × {mik:g} = '
+                  f'{para(beklenen, r["doviz"])} · kayıtlı matrah '
+                  f'{para(r["matrah"], r["doviz"])}')
+sonuc('C6', 'stok kartındaki fiyat × ölçü = kayıtlı matrah', c6,
+      'Fiyat ya da ölçü sonradan değişmiş ama alış bedeli ve '
+      'tedarikçi borcu eski rakamda kalmış olabilir (HD1 öncesi).')
 
 # ══ D ═════════════════════════════════════════════════════════════
 bolum('D · TL KARŞILIĞI VE KUR (maliyet ve stok alış borçları)')

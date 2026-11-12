@@ -1226,7 +1226,11 @@ async function detayAc(id) {
      Siparişe dönüşmüş / faturalanmış proformada düğme YOK: orada
      iptal siparişi ve stokları da etkiler, sipariş üzerinden
      yürümeli. */
-  if (yazabilir('proforma') && p.aktif_surum !== false &&
+  /* HD1: SİPARİŞE BAĞLI proformada düğme yok. Sunucu o durumda
+     bağlı siparişi de iptal ediyor ve onay sorusu bunu söylemiyordu
+     (PS1'de "siparişli proformada düğme yok" demiş, koşula
+     yazmamıştım). İptal sipariş üzerinden yürür. */
+  if (yazabilir('proforma') && p.aktif_surum !== false && !p.siparis_id &&
       ['Taslak','Ic Onay','Onaylandi','Gonderildi','Kaybedildi'].includes(p.durum))
     eylem.push(`<button class="blok-btn" style="border-color:var(--kirmizi);color:var(--kirmizi)" onclick="proformaIptal('${kacar(id)}', ${p.durum === 'Kaybedildi'})">İptal et</button>`);
   // Sil: yalnızca Taslak ve İptal durumunda (onaylanmış belgeler denetim izi için korunur)

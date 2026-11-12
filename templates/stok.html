@@ -3712,6 +3712,30 @@ async function maliyetKaydet() {
 }
 
 kpiYukle();
-listeyiCiz();
+/* HD1 · DERİN BAĞ: /stok?duzenle=<id>&tip=BLOK
+   Cari ekranı "bu borcun tutarı stok kartından düzeltilir" derken
+   kartı da AÇAR. Stok ilk sayfada olmayabilir (liste sayfalı);
+   bulunamazsa sunucudan kimliğiyle tek başına istenir. */
+(async function stokDerinBag() {
+  const p = new URLSearchParams(location.search);
+  const id = p.get('duzenle');
+  if (!id) { listeyiCiz(); return; }
+  const tip = (p.get('tip') || 'BLOK').toUpperCase();
+  if (['BLOK', 'PLAKA', 'EBATLI'].includes(tip)) {
+    TIP = tip;
+    document.querySelectorAll('#tipSecim button').forEach(x =>
+      x.classList.toggle('aktif', x.dataset.tip === tip));
+  }
+  await listeyiCiz();
+  if (!(SON.data || []).some(x => x.id === id)) {
+    try {
+      const tek = await api(`/api/stok?tip=${encodeURIComponent(TIP)}&id=${encodeURIComponent(id)}`);
+      if ((tek.data || []).length) SON.data = (SON.data || []).concat(tek.data);
+    } catch (e) { /* aşağıda bildirilir */ }
+  }
+  history.replaceState(null, '', location.pathname);
+  if ((SON.data || []).some(x => x.id === id)) duzenleAc(id);
+  else bildir('Stok kartı bulunamadı: ' + id, true);
+})();
 </script>
 {% endblock %}

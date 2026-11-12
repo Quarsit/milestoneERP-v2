@@ -273,9 +273,20 @@ async function gfNoKaydet() {
   const btn = document.getElementById('gfNoKaydetBtn');
   btn.disabled = true;
   try {
-    const r = await api(`/api/cari/hareket/${encodeURIComponent(GF_NO_HAREKET)}/fatura_no`, {
-      method: 'PUT', body: JSON.stringify({ fatura_no: no })
-    });
+    const yol = `/api/cari/hareket/${encodeURIComponent(GF_NO_HAREKET)}/fatura_no`;
+    let r;
+    try {
+      r = await api(yol, { method: 'PUT', body: JSON.stringify({ fatura_no: no }) });
+    } catch (e) {
+      /* HD1 · numara bu tedarikçide ZATEN bir alış faturası: sunucu
+         sormadan ikinci borç açmıyor, birleştirmeyi soruyor. */
+      const y = (e && e.yanit) || {};
+      if (e && e.status === 409 && y.error === 'fatura_birlestir') {
+        if (!await onayla(y.mesaj, { tehlike: true })) return;
+        r = await api(yol, { method: 'PUT',
+                             body: JSON.stringify({ fatura_no: no, birlestir: true }) });
+      } else { throw e; }
+    }
     bildir(r.mesaj || 'Fatura numarası güncellendi.');
     gfNoKapat();
     await gfYukle();

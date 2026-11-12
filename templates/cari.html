@@ -2862,11 +2862,40 @@ async function hareketDuzenleKaydet() {
          gun degisince TRY karsiligi, kasa tutari ve kur farki da
          degisiyor. Yalnizca evrak no, vade ya da aciklama
          degistiyse soru HIC cikmiyor. */
-      if (e && e.status === 409 && e.yanit && e.yanit.error === 'onay_gerekli') {
-        if (!await onayla(e.yanit.mesaj, { tehlike: true })) return;
+      const y = (e && e.yanit) || {};
+      if (e && e.status === 409 && y.error === 'onay_gerekli') {
+        if (!await onayla(y.mesaj, { tehlike: true })) return;
         d = await api(yol + '?onay=1',
                       { method: 'PUT', body: JSON.stringify(govde) });
-      } else { throw e; }
+      }
+      /* HD1 · STOK ALIŞ BORCUNUN TUTARI buradan değişmez; tutar stok
+         kartlarından gelir. Yalnız "olmaz" demek yetmez: kullanıcının
+         gideceği yer AÇILIR. Tek stoksa o kart düzenlemede açılır;
+         birden çoksa fatura içeriği açılır, her kalemin yanında
+         "düzenle" bağı durur. (api() mesajı zaten gösterdi.) */
+      else if (y.error === 'stok_alis_tutari') {
+        const sl = y.stoklar || [];
+        hareketDuzenleKapat();
+        if (sl.length === 1) {
+          location.href = `/stok?duzenle=${encodeURIComponent(sl[0].id)}&tip=${encodeURIComponent(sl[0].tip)}`;
+        } else if (sl.length > 1) {
+          hareketIcerik(y.hareket_id || HD_ID);
+        }
+        return;
+      }
+      /* HD1 · numara bu tedarikçide zaten var: sorarak birleştir. */
+      else if (e && e.status === 409 && y.error === 'fatura_birlestir') {
+        if (!await onayla(y.mesaj, { tehlike: true })) return;
+        d = await api(yol, { method: 'PUT',
+                             body: JSON.stringify({ ...govde, birlestir: true }) });
+      }
+      /* api() 409'da uyarı basmıyor; bu dal olmasa pencere açık
+         kalır, kullanıcı hiçbir şey görmezdi. */
+      else if (e && e.status === 409 && y.error === 'kdv_donemi_kapali') {
+        bildir(y.mesaj || 'Bu tarih kapanmış bir KDV dönemine ait.', true);
+        return;
+      }
+      else { throw e; }
     }
     bildir(d.mesaj || 'Hareket güncellendi');
     hareketDuzenleKapat();
