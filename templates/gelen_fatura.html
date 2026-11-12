@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Gelen Faturalar{% endblock %}
+{% block title %}{% if beklenen %}Beklenen Faturalar{% else %}Gelen Faturalar{% endif %}{% endblock %}
 
 {# ══════════════════════════════════════════════════════════════
    GF1 · GELEN FATURALAR
@@ -56,8 +56,16 @@
 {% endblock %}
 
 {% block content %}
+{# BK1 · AYNI SAYFA, İKİ KAPI: /beklenen-fatura bu şablonu yalnız
+   faturası beklenen alışlarla açar. Liste, süzgeçler ve "Numara
+   gir" tek yerde durur. #}
+{% if beklenen %}
+<h1 class="g-baslik">Beklenen Faturalar</h1>
+<p class="g-alt">Malı girilmiş ama faturası henüz gelmemiş alışlar; en uzun bekleyen en üstte. Fatura gelince "Numara gir" ile gerçek numarayı yazın. Tüm faturalar için <a href="/gelen-fatura">Gelen Faturalar</a>.</p>
+{% else %}
 <h1 class="g-baslik">Gelen Faturalar</h1>
 <p class="g-alt">Tedarikçilerden gelen her fatura tek listede: stok alışları, maliyet faturaları, alış faturaları. Satıra tıklayınca içeriği açılır.</p>
+{% endif %}
 <svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
   <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
   <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
@@ -67,10 +75,10 @@
   <div class="kpi"><label>Fatura</label><div class="deger" id="kSayi">—</div><div class="ek" id="kSayiEk">—</div></div>
   <div class="kpi"><label>Toplam (TL karşılığı)</label><div class="deger" id="kToplam">—</div><div class="ek">işlem günü kurlarıyla</div></div>
   <div class="kpi"><label>KDV</label><div class="deger" id="kKdv">—</div><div class="ek" id="kKdvEk">—</div></div>
-  <div class="kpi"><label>Faturası Beklenen</label><div class="deger" id="kBek">—</div><div class="ek" id="kBekEk">—</div></div>
+  <div class="kpi"><label>{% if beklenen %}En Uzun Bekleyen{% else %}Faturası Beklenen{% endif %}</label><div class="deger" id="kBek">—</div><div class="ek" id="kBekEk">—</div></div>
 </div>
 
-<div class="arac-cubugu" id="gfCipler">
+<div class="arac-cubugu" id="gfCipler"{% if beklenen %} style="display:none"{% endif %}>
   <button class="cip aktif" data-t="">Tümü <small id="cs-"></small></button>
   <button class="cip" data-t="stok">Stok alışı <small id="cs-stok"></small></button>
   <button class="cip" data-t="maliyet">Maliyet <small id="cs-maliyet"></small></button>
@@ -114,9 +122,16 @@
       <div class="form-alan"><label for="gfNoGiris">Gerçek fatura numarası</label>
         <input id="gfNoGiris" autocomplete="off" spellcheck="false"
                onkeydown="if(event.key==='Enter')gfNoKaydet()"></div>
+      {# FT1 · mal faturadan önce gelebiliyor; faturanın KENDİ tarihi
+         numarayla birlikte girilir. #}
+      <div class="form-alan" style="margin-top:12px"><label for="gfNoTarih">Fatura tarihi</label>
+        <input id="gfNoTarih" type="date"
+               onkeydown="if(event.key==='Enter')gfNoKaydet()"></div>
       <p style="font-size:.78rem;color:var(--soluk);margin-top:10px;line-height:1.45">
-        Yalnız bu tedarikçinin bu alışındaki stoklar ve borcu yeni numaraya geçer.
-        Aynı yer tutucuyu kullanan öbür tedarikçilere dokunulmaz.</p>
+        Yalnız bu tedarikçinin bu alışındaki stoklar ve cari kaydı güncellenir.</p>
+      <p id="gfNoTarihNot" style="font-size:.78rem;color:var(--soluk);margin-top:6px;line-height:1.45">
+        Borcun tarihi, TL karşılığı (o günün kuru) ve KDV dönemi fatura tarihine göre
+        yeniden hesaplanır. Stok kartındaki giriş tarihi değişmez.</p>
     </div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="gfNoKapat()">Vazgeç</button>
@@ -128,7 +143,12 @@
 
 {% block scripts %}
 <script>
-let GF = [], GF_YAZ = false, GF_TUR = '', GF_NO_HAREKET = null;
+/* BK1 · "Beklenen Faturalar" kapısından açıldıysa tür süzgeci
+   'bekleyen'e KİLİTLİ: çipler gizli, "Süzgeçleri temizle" de onu
+   kaldırmaz. */
+const GF_BEKLENEN = {{ (beklenen|default(false))|tojson }};
+const GF_GEC_GUN = 30;      /* bundan uzun bekleyen kırmızı işaretlenir */
+let GF = [], GF_YAZ = false, GF_TUR = GF_BEKLENEN ? 'bekleyen' : '', GF_NO_HAREKET = null;
 
 function gfTarih(t) { return t ? String(t).slice(0, 10).split('-').reverse().join('.') : '—'; }
 function gfSayi(v) {
@@ -194,7 +214,9 @@ function gfSecenekleriDoldur() {
 function gfCiz() {
   gfSecenekleriDoldur();
   const liste = gfGecenler();
-  const aktifSuzgec = GF_TUR || ['gfCari', 'gfDoviz', 'gfKdv', 'gfBas', 'gfBit', 'gfAra']
+  /* BK1 · bekleyenlerde EN ESKİ üstte: en çok o kovalanmalı. */
+  if (GF_BEKLENEN) liste.sort((a, b) => (a.tarih || '').localeCompare(b.tarih || ''));
+  const aktifSuzgec = (GF_TUR && !GF_BEKLENEN) || ['gfCari', 'gfDoviz', 'gfKdv', 'gfBas', 'gfBit', 'gfAra']
     .some(id => document.getElementById(id).value);
   document.getElementById('gfTemizle').style.display = aktifSuzgec ? '' : 'none';
 
@@ -217,14 +239,23 @@ function gfCiz() {
   document.getElementById('kKdv').textContent = para(kdvTl, 'TRY');
   document.getElementById('kKdvEk').textContent =
     liste.filter(f => (Number(f.kdv) || 0) > 0.005).length + " KDV'li fatura";
-  document.getElementById('kBek').textContent = bek.length;
-  document.getElementById('kBekEk').textContent = bek.length
-    ? new Set(bek.map(f => f.cari_id)).size + ' tedarikçiden' : 'hepsinin faturası gelmiş';
+  if (GF_BEKLENEN) {
+    const enEski = bek.reduce((m, f) => (!m || (Number(f.bekleme_gun) || 0) > (Number(m.bekleme_gun) || 0)) ? f : m, null);
+    document.getElementById('kBek').textContent = enEski ? (Number(enEski.bekleme_gun) || 0) + ' gün' : '—';
+    document.getElementById('kBekEk').textContent = enEski
+      ? (enEski.cari_unvan || '') : 'bekleyen fatura yok';
+  } else {
+    document.getElementById('kBek').textContent = bek.length;
+    document.getElementById('kBekEk').textContent = bek.length
+      ? new Set(bek.map(f => f.cari_id)).size + ' tedarikçiden' : 'hepsinin faturası gelmiş';
+  }
 
   const govde = document.getElementById('gfGovde');
   if (!liste.length) {
     govde.innerHTML = `<tr><td colspan="7" class="bos">${GF.length
-      ? 'Bu süzgeçlere uyan fatura yok.' : 'Henüz gelen fatura yok.'}</td></tr>`;
+      ? (GF_BEKLENEN && !aktifSuzgec ? 'Faturası beklenen alış yok; hepsinin faturası gelmiş.'
+                                      : 'Bu süzgeçlere uyan fatura yok.')
+      : 'Henüz gelen fatura yok.'}</td></tr>`;
     return;
   }
   const turRozet = { stok: 'rz-mavi', maliyet: 'rz-gri', fatura: 'rz-yesil', fis: 'rz-gri' };
@@ -233,7 +264,8 @@ function gfCiz() {
       <td class="mono" style="white-space:nowrap">${kacar(gfTarih(f.tarih))}</td>
       <td>${kacar(f.cari_unvan || '—')}</td>
       <td><span class="gf-no">${kacar(f.fatura_no || '—')}</span>${
-        f.bekleyen ? ` <span class="rozet rz-kehribar" style="font-size:.66rem">bekleniyor</span>` : ''}${
+        f.bekleyen ? ` <span class="rozet ${gfGecikti(f) ? 'rz-kirmizi' : 'rz-kehribar'}" style="font-size:.66rem"${
+          gfGecikti(f) ? ` title="${GF_GEC_GUN} günden uzun süredir bekleniyor"` : ''}>${kacar(gfBeklemeYazi(f))}</span>` : ''}${
         (f.bekleyen && GF_YAZ && f.tur === 'stok')
           ? `<button class="gf-mini" onclick="event.stopPropagation();gfNoAc('${kacar(f.hareket_id)}')">Numara gir</button>` : ''}
         ${f.alt ? `<div class="gf-alt">${kacar(f.alt)}</div>` : ''}</td>
@@ -247,8 +279,17 @@ function gfCiz() {
       <td class="sag mono">${gfSayi(dovizler[dv])} ${kacar(dv)}</td></tr>`).join('');
 }
 
+/* BK1 · bekleme süresi: gün sayısını SUNUCU verir (alış gününden
+   bugüne); 30 günü geçen kırmızı. */
+function gfGecikti(f) { return (Number(f.bekleme_gun) || 0) > GF_GEC_GUN; }
+function gfBeklemeYazi(f) {
+  const g = f.bekleme_gun;
+  if (g === null || g === undefined) return 'bekleniyor';
+  return Number(g) <= 0 ? 'bugünden beri bekleniyor' : g + ' gündür bekleniyor';
+}
+
 function gfTemizle() {
-  GF_TUR = '';
+  GF_TUR = GF_BEKLENEN ? 'bekleyen' : '';
   ['gfCari', 'gfDoviz', 'gfKdv', 'gfBas', 'gfBit', 'gfAra'].forEach(id => { document.getElementById(id).value = ''; });
   document.querySelectorAll('#gfCipler .cip').forEach(c => c.classList.toggle('aktif', c.dataset.t === ''));
   gfCiz();
@@ -263,6 +304,11 @@ function gfNoAc(hareketId) {
     [f.cari_unvan, f.fatura_no, gfSayi(f.tutar) + ' ' + (f.doviz || ''), f.alt].filter(Boolean).join(' · ');
   const g = document.getElementById('gfNoGiris');
   g.value = '';
+  /* FT1 · tarih kayıtlı alış tarihiyle DOLU gelir; fatura başka
+     günlüyse burada düzeltilir. İleri tarih seçilemez. */
+  const t = document.getElementById('gfNoTarih');
+  t.value = (f.tarih || '').slice(0, 10);
+  t.max = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   document.getElementById('gfNoModal').classList.add('acik');
   setTimeout(() => g.focus(), 50);
 }
@@ -270,13 +316,15 @@ function gfNoKapat() { document.getElementById('gfNoModal').classList.remove('ac
 async function gfNoKaydet() {
   const no = document.getElementById('gfNoGiris').value.trim();
   if (!no) { bildir('Fatura numarası boş olamaz.', true); return; }
+  const tarih = document.getElementById('gfNoTarih').value;
+  if (!tarih) { bildir('Fatura tarihi boş olamaz.', true); return; }
   const btn = document.getElementById('gfNoKaydetBtn');
   btn.disabled = true;
   try {
     const yol = `/api/cari/hareket/${encodeURIComponent(GF_NO_HAREKET)}/fatura_no`;
     let r;
     try {
-      r = await api(yol, { method: 'PUT', body: JSON.stringify({ fatura_no: no }) });
+      r = await api(yol, { method: 'PUT', body: JSON.stringify({ fatura_no: no, fatura_tarihi: tarih }) });
     } catch (e) {
       /* HD1 · numara bu tedarikçide ZATEN bir alış faturası: sunucu
          sormadan ikinci borç açmıyor, birleştirmeyi soruyor. */
@@ -284,12 +332,19 @@ async function gfNoKaydet() {
       if (e && e.status === 409 && y.error === 'fatura_birlestir') {
         if (!await onayla(y.mesaj, { tehlike: true })) return;
         r = await api(yol, { method: 'PUT',
-                             body: JSON.stringify({ fatura_no: no, birlestir: true }) });
-      } else { throw e; }
+                             body: JSON.stringify({ fatura_no: no, fatura_tarihi: tarih, birlestir: true }) });
+      } else {
+        /* FT1 · kapalı KDV dönemi 409 döner; api() 409'u kendisi
+           göstermiyor. */
+        if (e && e.status === 409 && y.mesaj) bildir(y.mesaj, true);
+        throw e;
+      }
     }
     bildir(r.mesaj || 'Fatura numarası güncellendi.');
     gfNoKapat();
     await gfYukle();
+    /* BK1 · menüdeki sayaç da düşsün. */
+    if (typeof bkSayiYukle === 'function') bkSayiYukle();
   } catch (e) { /* api() uyarıyı gösterdi */ }
   finally { btn.disabled = false; }
 }

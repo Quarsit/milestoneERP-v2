@@ -6797,6 +6797,19 @@ def create_app():
             return redirect(url_for('dashboard'))
         return render_template('gelen_fatura.html')
 
+    # BK1 · Finans > Beklenen Faturalar
+    #
+    # AYRI BİR LİSTE DEĞİL: Gelen Faturalar sayfasının yalnız
+    # "faturası beklenen" alışları gösteren hâli. Aynı şablon, aynı
+    # uç, aynı yetki; iki liste olsaydı ilk düzeltmede ayrışırdı
+    # (fatura içeriği penceresinde bunu bir kez yaşadık — GF1).
+    @app.route('/beklenen-fatura')
+    def beklenen_fatura_sayfa():
+        if _auth_required(): return _auth_required()
+        if not _yetki_var_mi('fatura', 'okuma'):
+            return redirect(url_for('dashboard'))
+        return render_template('gelen_fatura.html', beklenen=True)
+
     @app.route('/kdv-iade')
     def kdv_iade_sayfa():
         if _auth_required(): return _auth_required()
@@ -26181,6 +26194,24 @@ def create_app():
     #
     #  SALT OKUMA. Gizli carilerin satırları dönmez.
     # ══════════════════════════════════════════════════════════
+    # BK1 · menüdeki "Beklenen Faturalar (N)" sayacı. Her sayfada
+    # çağrıldığı için listenin tamamını kurmaz; yalnız sayar. Kural
+    # listedeki `bekleyen` ile AYNI: yer tutucu numara taşıyan stok
+    # alış borcu, kullanıcının görebildiği carilerde.
+    @app.route('/api/gelen_faturalar/bekleyen_sayi', methods=['GET'])
+    def api_gelen_faturalar_bekleyen_sayi():
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if not _yetki_var_mi('fatura', 'okuma'):
+            return jsonify({'ok': False, 'mesaj': 'Yetkiniz yok'}), 403
+        q = CariHareket.query.filter(
+            CariHareket.alacak > 0,
+            CariHareket.baglanti_tip == 'stok_fatura',
+            CariHareket.kaynak == 'stok',
+            db.func.lower(CariHareket.baglanti_id).like('beklenen fatura%'))
+        q = _cari_suz(q, CariHareket.cari_id)
+        return jsonify({'ok': True, 'sayi': q.count()})
+
     @app.route('/api/gelen_faturalar', methods=['GET'])
     def api_gelen_faturalar():
         if _auth_required():
@@ -26271,6 +26302,10 @@ def create_app():
                 'matrah': q2(_matrah), 'kdv': q2(_kdv),
                 'tutar_try': q2(h.alacak_try or 0),
                 'bekleyen': _no.lower().startswith('beklenen fatura'),
+                # BK1 · kaç gündür bekleniyor (alış gününden bugüne).
+                'bekleme_gun': (max(0, (date.today() - h.hareket_tarihi).days)
+                                if (h.hareket_tarihi and _no.lower().startswith(
+                                    'beklenen fatura')) else None),
                 'icerik': _icerik})
         return jsonify({'ok': True, 'data': satirlar,
                         'yazabilir': bool(_yetki_var_mi('cari', 'yazma'))})
@@ -26308,6 +26343,67 @@ def create_app():
         # gün İKİNCİ borç oluşuyordu. Artık ikisinde de soruluyor ve
         # onaylanırsa iki alış tek faturada birleşiyor.
         if _hd1_alis_borcu_mu(h):
+            # ── FT1 · FATURA TARİHİ NUMARAYLA BİRLİKTE ──
+            # Mal faturasından ÖNCE gelebiliyor: stok girilirken
+            # yazılan alış tarihi çoğu zaman malın geldiği gündür,
+            # faturanın tarihi değil. Numara girilirken tarih
+            # sorulmuyordu; borç, kur ve KDV dönemi yanlış günde
+            # kalıyor, düzeltmek için ayrıca stok kartına gitmek
+            # gerekiyordu.
+            #
+            # Tarih, numaradan ÖNCE ve stok kapısından taşınır
+            # (`_stok_alis_tarih_tasi`): stok kartlarının alış tarihi,
+            # borcun tarihi + TL karşılığı (o günün kuru) ve alışın
+            # KDV satırı BİRLİKTE gider; kapalı KDV dönemi kuralı da
+            # orada işler. Stoğun GİRİŞ tarihi (malın geldiği gün)
+            # değişmez.
+            _ft1_not = ''
+            _ft1_ham = (data.get('fatura_tarihi') or '').strip() \
+                if isinstance(data.get('fatura_tarihi'), str) else ''
+            if _ft1_ham:
+                _ft1_t = _parse_date(_ft1_ham)
+                if _ft1_t is None:
+                    return jsonify({'ok': False, 'mesaj':
+                                    'Fatura tarihi okunamadı.'}), 400
+                if _ft1_t > date.today():
+                    return jsonify({'ok': False, 'mesaj':
+                                    'İleri tarihli fatura yazılamaz.'}), 400
+                # Numara bu tedarikçide BAŞKA tarihle kayıtlıysa iki
+                # tarih birden doğru olamaz; birleştirme sorusundan
+                # önce söylenir.
+                _ft1_c = _stok_fatura_tarih_cakismasi(
+                    None, h.cari_id, yeni, _ft1_t)
+                if _ft1_c is not None and _ft1_c.id != h.id:
+                    return _hd1_tarih_cakisma_ret(_ft1_c, yeni)
+                if _ft1_t != h.hareket_tarihi:
+                    _ft1_sl = _hd1_alis_stoklari(h)
+                    if _ft1_sl:
+                        _o, _ft1_sebep, _k, _ft1_ts = _stok_alis_tarih_tasi(
+                            _ft1_sl[0], _ft1_t)
+                        if _ft1_sebep:
+                            db.session.rollback()
+                            return jsonify({
+                                'ok': False, 'error': 'kdv_donemi_kapali',
+                                'mesaj': f'{_ft1_sebep} Numara ve tarih '
+                                         f'değiştirilmedi. Yönetici, Depo → '
+                                         f'Maliyetler sayfasındaki toplu '
+                                         f'tarih aracıyla kapalı dönemi '
+                                         f'aşabilir.'}), 409
+                        db.session.flush()
+                        _maliyet_etkilenen_stoklari_tazele(
+                            [s.id for s in _ft1_ts])
+                    if h.hareket_tarihi != _ft1_t:
+                        # Stok kartı bulunamayan eski kayıt: en azından
+                        # borç doğru güne ve o günün kuruna geçsin.
+                        h.hareket_tarihi = _ft1_t
+                        _tv, _kr = _try_karsilik(h.alacak or 0,
+                                                 h.doviz or 'TRY',
+                                                 tarih=_ft1_t)
+                        h.alacak_try = _tv
+                        h.kur_uygulanan = _kr
+                    _ft1_not = (f' · fatura tarihi '
+                                f'{_ft1_t.strftime("%d.%m.%Y")} oldu, borç o '
+                                f'günün kuruyla yeniden hesaplandı')
             _durum, _veri = _stok_fatura_no_degistir(
                 h, yeni, birlestir=bool(data.get('birlestir')))
             if _durum == 'soru':
@@ -26328,6 +26424,7 @@ def create_app():
                    if guncellenen else '')
             if _veri['birlesti']:
                 _ek += ' · var olan faturayla BİRLEŞTİRİLDİ, tek borç kaldı'
+            _ek += _ft1_not
             return jsonify({'ok': True, 'fatura_no': yeni,
                             'guncellenen_stok': guncellenen,
                             'birlesti': _veri['birlesti'],

@@ -278,6 +278,9 @@ a{color:inherit;text-decoration:none}
   border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s}
 .alt-sekme:hover{color:var(--murekkep)}
 .alt-sekme.aktif{color:var(--verde);border-bottom-color:var(--verde);font-weight:600}
+/* BK1: menüdeki "Beklenen Faturalar" sayacı. Sıfırken hiç görünmez. */
+.bk-sayi{display:inline-block;min-width:18px;padding:1px 6px;margin-left:6px;border-radius:10px;background:var(--kehribar);color:#fff;font-size:.68rem;font-weight:700;line-height:1.45;text-align:center;vertical-align:1px}
+.bk-sayi[hidden]{display:none}
 
 /* ─── İçerik ─── */
 /* Tam genişlik: sabit max-width sağda ölü alan bırakıyordu.
@@ -757,15 +760,15 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
       {% endif %}
       {% if alan_var(a_kasa)|trim %}
       <div class="ray-oge">
-      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') or yol.startswith('/fatura') or yol.startswith('/gelen-fatura') or yol.startswith('/kdv-iade') %}aktif{% endif %}">
+      <a href="/kasa" class="ray-btn {% if yol.startswith('/kasa') or yol.startswith('/cari') or yol.startswith('/cek') or yol.startswith('/nakit') or yol.startswith('/sabit-gider') or yol.startswith('/kasa-defteri') or yol.startswith('/fatura') or yol.startswith('/gelen-fatura') or yol.startswith('/beklenen-fatura') or yol.startswith('/kdv-iade') %}aktif{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 11h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/></svg>
         <span>Finans</span>
       </a>
       <div class="ray-ucan"><div class="ray-ucan-ic">
         <div class="ray-ucan-bas">Finans</div>
-        {% for hedef, ad, modul in [('/kasa','Banka ve Kasa','kasa'), ('/cari','Cari Hesaplar','cari'), ('/fatura','Faturalar','fatura'), ('/gelen-fatura','Gelen Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/cek','Çek / Senet','kasa'), ('/kasa-defteri','Kasa Defteri','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
+        {% for hedef, ad, modul in [('/kasa','Banka ve Kasa','kasa'), ('/cari','Cari Hesaplar','cari'), ('/fatura','Faturalar','fatura'), ('/gelen-fatura','Gelen Faturalar','fatura'), ('/beklenen-fatura','Beklenen Faturalar','fatura'), ('/kdv-iade','KDV İade','fatura'), ('/cek','Çek / Senet','kasa'), ('/kasa-defteri','Kasa Defteri','kasa'), ('/nakit','Nakit Akışı','kasa'), ('/sabit-gider','Sabit Giderler','kasa')] %}
           {% if admin or y.get(modul,'gizli') != 'gizli' %}
-          <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}</a>
+          <a href="{{ hedef }}" class="{% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}"><span class="nokta"></span>{{ ad }}{% if hedef == '/beklenen-fatura' %}<span class="bk-sayi" hidden></span>{% endif %}</a>
           {% endif %}
         {% endfor %}
       </div></div>
@@ -957,10 +960,12 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
             or yol.startswith('/nakit') or yol.startswith('/sabit-gider')
             or yol.startswith('/kasa-defteri') or yol.startswith('/fatura')
             or yol.startswith('/gelen-fatura')
+            or yol.startswith('/beklenen-fatura')
             or yol.startswith('/kdv-iade') %}
       {% set alan_sekmeleri = [('/kasa','Banka ve Kasa','kasa'), ('/cari','Cari Hesaplar','cari'),
                                ('/fatura','Faturalar','fatura'),
                                ('/gelen-fatura','Gelen Faturalar','fatura'),
+                               ('/beklenen-fatura','Beklenen Faturalar','fatura'),
                                ('/kdv-iade','KDV İade','fatura'),
                                ('/cek','Çek / Senet','kasa'),
                                ('/kasa-defteri','Kasa Defteri','kasa'),
@@ -976,7 +981,7 @@ td .ikincil{font-size:.76rem;color:var(--soluk);margin-top:1px}
     <nav class="alt-sekmeler" aria-label="Modüller">
       {% for hedef, ad, modul in alan_sekmeleri %}
         {% if admin or y.get(modul, 'gizli') != 'gizli' %}
-        <a href="{{ hedef }}" class="alt-sekme {% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}">{{ ad }}</a>
+        <a href="{{ hedef }}" class="alt-sekme {% if yol == hedef or yol.startswith(hedef ~ '/') %}aktif{% endif %}">{{ ad }}{% if hedef == '/beklenen-fatura' %}<span class="bk-sayi" hidden></span>{% endif %}</a>
         {% endif %}
       {% endfor %}
     </nav>
@@ -1246,6 +1251,27 @@ document.addEventListener('click', e => {
 });
 
 window.addEventListener('DOMContentLoaded', bildirimYukle);
+
+/* ══ BEKLENEN FATURA SAYACI (BK1) ══
+   Menüdeki "Beklenen Faturalar" bağının yanındaki sayı. Bağ yalnız
+   fatura modülünü görebilen kullanıcıda basılıyor; bağ yoksa istek
+   de atılmaz. Hata sessiz geçilir: sayaç bilgi amaçlı, sayfayı
+   uyarıyla bölmeye değmez. */
+async function bkSayiYukle() {
+  const hedefler = document.querySelectorAll('.bk-sayi');
+  if (!hedefler.length) return;
+  let n = 0;
+  try {
+    const r = await fetch('/api/gelen_faturalar/bekleyen_sayi', { credentials: 'same-origin' });
+    if (r.ok) n = Number((await r.json()).sayi) || 0;
+  } catch (e) { n = 0; }
+  hedefler.forEach(el => {
+    el.textContent = n;
+    el.hidden = !(n > 0);
+    el.title = n > 0 ? n + ' alışın faturası bekleniyor' : '';
+  });
+}
+window.addEventListener('DOMContentLoaded', bkSayiYukle);
 /* BL2: çan açık sayfada da güncel kalsın. Eskiden yalnızca sayfa
    yüklenirken bakılıyordu; gün boyu açık kalan ekranda yeni onay
    bekleyen proforma görünmüyordu. 60 sn'de bir, SESSİZ (api()
@@ -1758,6 +1784,7 @@ const P_SAYFA = [
   { g:'Sayfalar', ad:'Proforma',     ek:'teklif belgesi',    ik:'▤', yol:'/proforma',  m:'proforma' },
   { g:'Sayfalar', ad:'Faturalar',    ek:'kes · tahsil et',   ik:'▤', yol:'/fatura',    m:'fatura' },
   { g:'Sayfalar', ad:'Gelen Faturalar', ek:'tedarikçi faturaları', ik:'▤', yol:'/gelen-fatura', m:'fatura' },
+  { g:'Sayfalar', ad:'Beklenen Faturalar', ek:'faturası gelmemiş alışlar', ik:'▤', yol:'/beklenen-fatura', m:'fatura' },
   { g:'Sayfalar', ad:'Sevkiyat',     ek:'konteyner takibi',  ik:'⇢', yol:'/sevkiyat',  m:'sevkiyat' },
   { g:'Sayfalar', ad:'Satışlar',     ek:'satış kayıtları',   ik:'▤', yol:'/satislar',  m:'satislar' },
   { g:'Sayfalar', ad:'Stok',         ek:'blok · plaka · ebatlı', ik:'▦', yol:'/stok',  m:'stok' },

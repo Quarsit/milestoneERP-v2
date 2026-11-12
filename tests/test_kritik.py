@@ -10952,6 +10952,11 @@ _GA1_MUAF = {
     ('/api/fatura/<fatura_id>', 'maliyet_kalemleri'),
     # Cari harekette fatura tarihi verilmezse hareket tarihi kullanılıyor.
     ('/api/cari/hareket', 'fatura_tarihi'),
+    # FT1 · bekçinin ÖNEK eşlemesi bu ucu `/api/cari/hareket` çağıran
+    # cari.html'e bağlıyor; ucu gerçekte çağıran gelen_fatura.html ve
+    # alanı GÖNDERİYOR (`test_ft1_pencere` bunu ayrıca doğruluyor).
+    # Alan verilmezse tarih olduğu gibi kalır — eski davranış.
+    ('/api/cari/hareket/<hareket_id>/fatura_no', 'fatura_tarihi'),
 }
 
 
@@ -19370,3 +19375,254 @@ def test_kv1_formda_kdv_secenegi_devreden_kdv_yaziyor():
     for parca in ('id="kvUyari"', 'function kvUyariCiz(',
                   "api('/api/maliyet/kdv_tipi_cevir'"):
         assert parca in sayfa, f'{parca} sayfada yok'
+
+
+# ══════════════════════════════════════════════════════════════════
+#  BK1 · BEKLENEN FATURALAR — AYNI LİSTE, AYRI KAPI
+#
+#  Faturası gelmemiş alışlar Gelen Faturalar'da bir süzgecin
+#  arkasındaydı; kullanıcı gidip seçmedikçe görmüyordu. Finans'a
+#  "Beklenen Faturalar" sekmesi geldi. İKİNCİ BİR LİSTE DEĞİL: aynı
+#  şablon, aynı uç. Menüde sayaç, satırda bekleme süresi.
+# ══════════════════════════════════════════════════════════════════
+def _bk1_faturasiz_blok(c, blok_no):
+    r = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'BLOK', 'uretici': 'FL1 BLOK TEDARIKCISI', 'cins': 'BK1 CINS',
+        'blok_no': blok_no, 'boy': 300, 'yukseklik': 150, 'en': 120,
+        'tonaj': 10, 'fiyat': 100, 'fiyat_birim': 'ton', 'doviz': 'USD',
+        'kdv_oran': 0, 'alis_tipi': 'yurtici_kdvsiz',
+        'alis_tarihi': FL1_GUN.isoformat(),
+        'fatura_durumu': 'faturali', 'mense': 'TURKIYE'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    return r.get_json()['id']
+
+
+def _bk1_sayi(c):
+    r = c.get('/api/gelen_faturalar/bekleyen_sayi', headers=H)
+    assert r.status_code == 200, (r.status_code, r.get_data(as_text=True)[:200])
+    return r.get_json()['sayi']
+
+
+def test_bk1_sayac_listeyle_ayni_ve_bekleme_gunu():
+    """Menüdeki sayı, listedeki "bekleyen" satır sayısıyla AYNI olmalı
+    (iki ayrı kural ilk gün ayrışır). Bekleme süresi alış gününden
+    bugüne; faturası gelmiş satırda yok. Numara girilince ikisi de
+    düşer."""
+    from datetime import timedelta
+    c = _fl1_hazirlik()
+    sid = _bk1_faturasiz_blok(c, 'BK1-A1')
+    with fa.app.app_context():
+        fno = BlokStok.query.get(sid).fatura_no
+        assert fno.lower().startswith('beklenen fatura'), fno
+        h = CariHareket.query.filter_by(baglanti_tip='stok_fatura',
+                                        baglanti_id=fno, cari_id='FLT',
+                                        kaynak='stok').first()
+        hid = h.id
+        h.hareket_tarihi = date.today() - timedelta(days=45)
+        db.session.commit()
+    liste = _gf1_liste(c)
+    bek = [f for f in liste if f['bekleyen']]
+    assert _bk1_sayi(c) == len(bek) >= 1, (_bk1_sayi(c), len(bek))
+    satir = {f['hareket_id']: f for f in liste}[hid]
+    assert satir['bekleme_gun'] == 45, satir
+    assert all(f['bekleme_gun'] is None for f in liste if not f['bekleyen'])
+    assert all(isinstance(f['bekleme_gun'], int) and f['bekleme_gun'] >= 0
+               for f in bek), bek
+    once = _bk1_sayi(c)
+    r = c.put(f'/api/cari/hareket/{hid}/fatura_no', headers=H,
+              json={'fatura_no': 'BK1-GERCEK-1'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert _bk1_sayi(c) == once - 1
+    satir = {f['hareket_id']: f for f in _gf1_liste(c)}[hid]
+    assert not satir['bekleyen'] and satir['bekleme_gun'] is None, satir
+
+
+def test_bk1_sayfa_ayni_sablon_ayri_kapi():
+    """/beklenen-fatura Gelen Faturalar şablonunu "yalnız bekleyenler"
+    kipinde açar; Finans menüsünde sayaç yuvasıyla durur. Fatura
+    yetkisi olmayan ne sayfayı ne sayacı görür."""
+    import io as _io
+    c = istemci('admin', 'ADMIN')
+    r = c.get('/beklenen-fatura')
+    assert r.status_code == 200, r.status_code
+    g = r.get_data(as_text=True)
+    assert '<h1 class="g-baslik">Beklenen Faturalar</h1>' in g
+    assert 'const GF_BEKLENEN = true;' in g
+    assert 'id="gfCipler" style="display:none"' in g, 'çipler gizlenmemiş'
+    assert g.count('id="fiModal"') == 1
+    # Menü: uçan liste + alt sekme, ikisinde de sayaç yuvası; alt
+    # sekmede YALNIZ bu sayfa aktif (Gelen Faturalar değil).
+    assert g.count('<span class="bk-sayi" hidden></span>') == 2, (
+        g.count('<span class="bk-sayi" hidden></span>'))
+    assert ('<a href="/beklenen-fatura" class="alt-sekme aktif">'
+            'Beklenen Faturalar') in g
+    assert '<a href="/gelen-fatura" class="alt-sekme ">Gelen Faturalar' in g
+    assert 'async function bkSayiYukle(' in g
+    # Öbür kapı eskisi gibi: bütün liste, çipler açık.
+    g2 = c.get('/gelen-fatura').get_data(as_text=True)
+    assert '<h1 class="g-baslik">Gelen Faturalar</h1>' in g2
+    assert 'const GF_BEKLENEN = false;' in g2
+    assert 'id="gfCipler">' in g2
+    assert '<a href="/beklenen-fatura" class="alt-sekme ">Beklenen Faturalar' in g2
+    # TEK ŞABLON: ikinci bir liste sayfası yazılmadı.
+    assert not os.path.exists(os.path.join(KOK, 'templates',
+                                           'beklenen_fatura.html'))
+    sayfa = _io.open(os.path.join(KOK, 'templates', 'gelen_fatura.html'),
+                     encoding='utf-8').read()
+    for parca in ('function gfGecikti(', 'function gfBeklemeYazi(',
+                  'const GF_GEC_GUN = 30;', "GF_TUR = GF_BEKLENEN ? 'bekleyen' : '';",
+                  "typeof bkSayiYukle === 'function'"):
+        assert parca in sayfa, f'{parca} sayfada yok'
+    # Fatura yetkisi olmayan: sayfa yok, sayaç ucu kapalı, menüde bağ yok.
+    c2 = _oy1_kullanici('bk1sayfa', {'stok': 'okuma'})
+    assert c2.get('/beklenen-fatura').status_code in (302, 303)
+    assert c2.get('/api/gelen_faturalar/bekleyen_sayi',
+                  headers=H).status_code == 403
+    g3 = c2.get('/stok').get_data(as_text=True)
+    assert 'href="/beklenen-fatura"' not in g3
+    assert 'class="bk-sayi"' not in g3
+
+
+# ══════════════════════════════════════════════════════════════════
+#  FT1 · FATURA NUMARASI GİRİLİRKEN FATURA TARİHİ DE GİRİLİR
+#
+#  Mal faturadan önce gelebiliyor: stok girilirken yazılan alış
+#  tarihi malın geldiği gün, faturanın tarihi değil. "Numara gir"
+#  tarihi sormuyordu; borç, kur ve KDV dönemi yanlış günde kalıyordu.
+# ══════════════════════════════════════════════════════════════════
+def _ft1_blok(c, blok_no, kdv=0, fatura_no=None):
+    govde = {
+        'tip': 'BLOK', 'uretici': 'FL1 BLOK TEDARIKCISI', 'cins': 'FT1 CINS',
+        'blok_no': blok_no, 'boy': 300, 'yukseklik': 150, 'en': 120,
+        'tonaj': 10, 'fiyat': 100, 'fiyat_birim': 'ton', 'doviz': 'USD',
+        'kdv_dahil_mi': False, 'kdv_oran': kdv,
+        'alis_tipi': 'yurtici_kdvli' if kdv else 'yurtici_kdvsiz',
+        'alis_tarihi': FL1_GUN.isoformat(),
+        'fatura_durumu': 'faturali', 'mense': 'TURKIYE'}
+    if fatura_no:
+        govde['fatura_no'] = fatura_no
+    r = c.post('/api/stok/ekle', headers=H, json=govde)
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    sid = r.get_json()['id']
+    with fa.app.app_context():
+        fno = BlokStok.query.get(sid).fatura_no
+        h = CariHareket.query.filter_by(baglanti_tip='stok_fatura',
+                                        baglanti_id=fno, cari_id='FLT',
+                                        kaynak='stok').first()
+        return sid, h.id, fno
+
+
+def test_ft1_numara_ile_fatura_tarihi_birlikte_gidiyor():
+    """Numara girilirken verilen fatura tarihi stok kartının alış
+    tarihini, borcun tarihini ve TL karşılığını (O GÜNÜN kuruyla)
+    birlikte taşır; stoğun giriş tarihi yerinde kalır. Tabanda tarih
+    yok sayılıyordu."""
+    from datetime import timedelta
+    from models import DovizKur
+    c = _fl1_hazirlik()
+    gun = date.today() - timedelta(days=9)
+    with fa.app.app_context():
+        if not DovizKur.query.filter_by(doviz='USD', tarih=gun).first():
+            db.session.add(DovizKur(doviz='USD', tarih=gun, alis=31,
+                                    satis=31, efektif=31))
+            db.session.commit()
+    sid, hid, fno = _ft1_blok(c, 'FT1-A1')
+    assert fno.lower().startswith('beklenen fatura'), fno
+    with fa.app.app_context():
+        h = CariHareket.query.get(hid)
+        kur_once = float(h.kur_uygulanan or 0)
+        giris_once = BlokStok.query.get(sid).giris_tarihi
+        assert h.hareket_tarihi == FL1_GUN
+    r = c.put(f'/api/cari/hareket/{hid}/fatura_no', headers=H,
+              json={'fatura_no': 'FT1-GERCEK-A', 'fatura_tarihi': gun.isoformat()})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert 'fatura tarihi' in r.get_json()['mesaj'], r.get_json()
+    with fa.app.app_context():
+        s = BlokStok.query.get(sid)
+        h = CariHareket.query.get(hid)
+        assert s.fatura_no == 'FT1-GERCEK-A' and h.baglanti_id == 'FT1-GERCEK-A'
+        assert s.alis_tarihi == gun, s.alis_tarihi
+        assert s.giris_tarihi == giris_once, 'giriş tarihi de oynadı'
+        assert h.hareket_tarihi == gun, h.hareket_tarihi
+        kur = float(h.kur_uygulanan or 0)
+        assert abs(kur - 31.0) < 0.01 and abs(kur - kur_once) > 0.5, (
+            kur, kur_once)
+        assert abs(float(h.alacak_try) - float(h.alacak) * kur) < 0.01
+    # Tarih AYNI gönderilirse yalnız numara değişir (eski davranış).
+    sid2, hid2, _ = _ft1_blok(c, 'FT1-A2')
+    r = c.put(f'/api/cari/hareket/{hid2}/fatura_no', headers=H,
+              json={'fatura_no': 'FT1-GERCEK-A2',
+                    'fatura_tarihi': FL1_GUN.isoformat()})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert 'fatura tarihi' not in r.get_json()['mesaj']
+    with fa.app.app_context():
+        assert CariHareket.query.get(hid2).hareket_tarihi == FL1_GUN
+
+
+def test_ft1_yanlis_tarih_hicbir_seyi_degistirmiyor():
+    """İleri tarih, kapanmış KDV dönemi ve "aynı numara başka tarih"
+    reddedilir; reddedilince NUMARA DA değişmez (yarım iş kalmaz).
+    Aynı tarihle gelen, var olan faturayla sorarak birleşir."""
+    from datetime import timedelta
+    c = _fl1_hazirlik()
+    sid, hid, fno = _ft1_blok(c, 'FT1-B1', kdv=20)
+
+    def degismedi():
+        with fa.app.app_context():
+            s, h = BlokStok.query.get(sid), CariHareket.query.get(hid)
+            assert s.fatura_no == fno and h.baglanti_id == fno, (
+                s.fatura_no, h.baglanti_id)
+            assert s.alis_tarihi == FL1_GUN and h.hareket_tarihi == FL1_GUN
+
+    yol = f'/api/cari/hareket/{hid}/fatura_no'
+    r = c.put(yol, headers=H, json={
+        'fatura_no': 'FT1-B-1', 'fatura_tarihi':
+        (date.today() + timedelta(days=3)).isoformat()})
+    assert r.status_code == 400, (r.status_code, r.get_json())
+    degismedi()
+    r = c.put(yol, headers=H, json={'fatura_no': 'FT1-B-2',
+                                    'fatura_tarihi': 'dun'})
+    assert r.status_code == 400, (r.status_code, r.get_json())
+    degismedi()
+    # KDV'li alış kapanmış döneme taşınamaz.
+    r = c.put(yol, headers=H, json={'fatura_no': 'FT1-B-3',
+                                    'fatura_tarihi': FL1_ESKI.isoformat()})
+    assert r.status_code == 409, (r.status_code, r.get_json())
+    assert r.get_json()['error'] == 'kdv_donemi_kapali', r.get_json()
+    degismedi()
+    # Numara bu tedarikçide BAŞKA tarihle kayıtlı.
+    _ft1_blok(c, 'FT1-B9', kdv=20, fatura_no='FT1-VAR')
+    r = c.put(yol, headers=H, json={
+        'fatura_no': 'FT1-VAR', 'fatura_tarihi':
+        (date.today() - timedelta(days=2)).isoformat()})
+    assert r.status_code == 400, (r.status_code, r.get_json())
+    assert r.get_json()['error'] == 'fatura_tarih_cakismasi', r.get_json()
+    degismedi()
+    # Aynı tarihle: birleştirme sorulur, onayla tek borç kalır.
+    r = c.put(yol, headers=H, json={'fatura_no': 'FT1-VAR',
+                                    'fatura_tarihi': FL1_GUN.isoformat()})
+    assert r.status_code == 409, (r.status_code, r.get_json())
+    assert r.get_json()['error'] == 'fatura_birlestir', r.get_json()
+    degismedi()
+    r = c.put(yol, headers=H, json={'fatura_no': 'FT1-VAR', 'birlestir': True,
+                                    'fatura_tarihi': FL1_GUN.isoformat()})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert r.get_json()['birlesti'] is True
+    with fa.app.app_context():
+        assert BlokStok.query.get(sid).fatura_no == 'FT1-VAR'
+        assert CariHareket.query.filter_by(
+            baglanti_tip='stok_fatura', baglanti_id='FT1-VAR',
+            cari_id='FLT', kaynak='stok').count() == 1
+
+
+def test_ft1_pencere():
+    import io as _io
+    sayfa = _io.open(os.path.join(KOK, 'templates', 'gelen_fatura.html'),
+                     encoding='utf-8').read()
+    for parca in ('id="gfNoTarih" type="date"', 'fatura_tarihi: tarih })',
+                  'fatura_tarihi: tarih, birlestir: true',
+                  'Yalnız bu tedarikçinin bu alışındaki stoklar ve cari '
+                  'kaydı güncellenir.',
+                  "t.value = (f.tarih || '').slice(0, 10);"):
+        assert parca in sayfa, f'{parca} sayfada yok'
+    assert 'öbür tedarikçilere dokunulmaz' not in sayfa
