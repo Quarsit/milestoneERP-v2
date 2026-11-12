@@ -929,6 +929,12 @@ async function durumGecir(id, yeni) {
     bildir(d.mesaj || (AD[yeni] + ' yapıldı'));
     cekmeceKapat();
     await yukle();
+    /* SH1: teslim borç yazmıyor — sunucu faturalanacak bir teslim
+       olduğunu söylerse soruyu base.html'deki ortak yardımcı
+       soruyor. Liste YENİLENDİKTEN SONRA soruluyor: kullanıcı
+       "Şimdi faturalandır" derse sayfa değişiyor, arkada yarım
+       kalmış bir yükleme bırakmamak için. */
+    if (d && d.faturasiz_teslim) await teslimFaturaSor(d.faturasiz_teslim);
     return;
   } catch (e) {
     /* 409 + karar: sunucu neyin kararını beklediğini söyledi.

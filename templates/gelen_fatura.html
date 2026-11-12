@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}Gelen Faturalar{% endblock %}
+
+{# ══════════════════════════════════════════════════════════════
+   GF1 · GELEN FATURALAR
+
+   Tedarikçiden gelen her fatura tek listede. Fatura sistemde üç
+   ayrı yerde duruyor (stok kartları, maliyet satırları, fatura
+   kaydı) ve hiçbir ekran üçünü birlikte göstermiyordu.
+
+   ORTAK PAYDA cari harekettir: liste tedarikçiye yazılmış ALACAK
+   satırlarından kurulur. Satıra tıklayınca cari ekranındakiyle
+   AYNI içerik penceresi açılır (_fatura_icerik.html).
+
+   SALT OKUNUR — tek eylem: faturası beklenen alışa gerçek fatura
+   numarasını yazmak (mevcut uç, PUT …/fatura_no).
+
+   ÖDEME DURUMU YOK (kullanıcının kararı): ödemeler çoğu zaman
+   faturaya değil cariye girilir; fatura bazında "ödendi/kaldı"
+   uydurmuyoruz.
+   ══════════════════════════════════════════════════════════════ #}
+
+{% block head %}
+<style>
+  .arac-cubugu{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .cip{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:20px;padding:6px 13px;font-size:.8rem;font-weight:500;color:var(--soluk);cursor:pointer}
+  .cip.aktif{border-color:var(--verde);background:var(--verde-acik);color:var(--verde);font-weight:600}
+  .cip.bek{border-color:var(--kehribar);color:var(--kehribar)}
+  .cip.bek.aktif{background:var(--kehribar-bg);color:var(--kehribar)}
+  .cip small{font-weight:600;opacity:.75;margin-left:3px}
+  .gf-suz{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  .gf-suz select,.gf-suz input{border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:7px 10px;font-family:var(--govde);font-size:.85rem;background:var(--yuzey);color:var(--murekkep);min-width:0}
+  .gf-suz select{max-width:260px}
+  .gf-suz input[type=search]{flex:1 1 220px}
+  .gf-suz input:focus,.gf-suz select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  .gf-suz .ayrac{color:var(--soluk);font-size:.8rem}
+  .gf-temizle{border:0;background:none;color:var(--verde);font-size:.8rem;font-weight:600;cursor:pointer;padding:6px 4px}
+  tbody tr.gf-tik{cursor:pointer}
+  .gf-alt{color:var(--soluk);font-size:.75rem;margin-top:2px}
+  .gf-no{font-family:var(--mono);font-size:.82rem}
+  .gf-mini{border:1px solid var(--kehribar);background:none;color:var(--kehribar);border-radius:var(--r-kucuk);padding:3px 8px;font-size:.72rem;font-weight:600;cursor:pointer;margin-left:6px;white-space:nowrap}
+  .gf-mini:hover{background:var(--kehribar-bg)}
+  .gf-toplam td{font-weight:700;border-top:2px solid var(--cizgi-koyu);background:var(--taban)}
+  .tablo-kutu{overflow-x:auto}
+  .modal-gov{padding:18px 22px;overflow-y:auto;flex:1 1 auto;min-height:0}
+  .modal-alt{padding:14px 22px 20px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--cizgi);background:var(--yuzey);border-radius:0 0 14px 14px;flex:0 0 auto}
+  .iptal-btn{border:1px solid var(--cizgi-koyu);background:var(--yuzey);border-radius:var(--r-kucuk);padding:10px 18px;font-weight:600}
+  .form-alan label{display:block;font-size:.76rem;font-weight:600;color:var(--soluk);margin-bottom:4px}
+  .form-alan input{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:8px 10px;font-family:var(--govde);font-size:.88rem;background:var(--yuzey);color:var(--murekkep)}
+  @media(max-width:700px){
+    .gf-suz select{max-width:none;flex:1 1 46%}
+    .gf-suz input[type=date]{flex:1 1 46%}
+    .gf-suz .ayrac{display:none}
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="g-baslik">Gelen Faturalar</h1>
+<p class="g-alt">Tedarikçilerden gelen her fatura tek listede: stok alışları, maliyet faturaları, alış faturaları. Satıra tıklayınca içeriği açılır.</p>
+<svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
+  <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
+  <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
+</svg>
+
+<div class="kpiler" style="grid-template-columns:repeat(4,1fr)">
+  <div class="kpi"><label>Fatura</label><div class="deger" id="kSayi">—</div><div class="ek" id="kSayiEk">—</div></div>
+  <div class="kpi"><label>Toplam (TL karşılığı)</label><div class="deger" id="kToplam">—</div><div class="ek">işlem günü kurlarıyla</div></div>
+  <div class="kpi"><label>KDV</label><div class="deger" id="kKdv">—</div><div class="ek" id="kKdvEk">—</div></div>
+  <div class="kpi"><label>Faturası Beklenen</label><div class="deger" id="kBek">—</div><div class="ek" id="kBekEk">—</div></div>
+</div>
+
+<div class="arac-cubugu" id="gfCipler">
+  <button class="cip aktif" data-t="">Tümü <small id="cs-"></small></button>
+  <button class="cip" data-t="stok">Stok alışı <small id="cs-stok"></small></button>
+  <button class="cip" data-t="maliyet">Maliyet <small id="cs-maliyet"></small></button>
+  <button class="cip" data-t="fatura">Alış faturası <small id="cs-fatura"></small></button>
+  <button class="cip" data-t="fis">Cari fişi <small id="cs-fis"></small></button>
+  <button class="cip bek" data-t="bekleyen">Faturası beklenen <small id="cs-bekleyen"></small></button>
+</div>
+
+<div class="gf-suz">
+  <select id="gfCari" aria-label="Tedarikçi"><option value="">Tüm tedarikçiler</option></select>
+  <select id="gfDoviz" aria-label="Döviz"><option value="">Tüm dövizler</option></select>
+  <select id="gfKdv" aria-label="KDV">
+    <option value="">KDV: hepsi</option><option value="1">KDV'li</option><option value="0">KDV'siz</option>
+  </select>
+  <input id="gfBas" type="date" aria-label="Başlangıç tarihi">
+  <span class="ayrac">–</span>
+  <input id="gfBit" type="date" aria-label="Bitiş tarihi">
+  <input id="gfAra" type="search" placeholder="Tedarikçi, fatura no ara…" autocomplete="off" spellcheck="false">
+  <button class="gf-temizle" id="gfTemizle" onclick="gfTemizle()" style="display:none">Süzgeçleri temizle</button>
+</div>
+
+<div class="tablo-kutu">
+  <table>
+    <thead><tr><th>Tarih</th><th>Tedarikçi</th><th>Fatura</th><th>Tür</th>
+      <th class="sag">Matrah</th><th class="sag">KDV</th><th class="sag">Toplam</th></tr></thead>
+    <tbody id="gfGovde"><tr><td colspan="7" class="yukleniyor">Yükleniyor…</td></tr></tbody>
+  </table>
+</div>
+
+{# Fatura içeriği penceresi — cari ekranıyla ORTAK parça #}
+{% include '_fatura_icerik.html' %}
+
+<!-- Faturası beklenen alışa gerçek numarayı yaz -->
+<div class="modal-ortu" id="gfNoModal" onclick="if(event.target===this)gfNoKapat()">
+  <div class="modal" style="width:440px;max-width:100%" role="dialog" aria-label="Fatura numarası gir">
+    <div class="modal-bas">
+      <h3>Fatura numarası gir</h3>
+      <p id="gfNoAlt">—</p>
+    </div>
+    <div class="modal-gov">
+      <div class="form-alan"><label for="gfNoGiris">Gerçek fatura numarası</label>
+        <input id="gfNoGiris" autocomplete="off" spellcheck="false"
+               onkeydown="if(event.key==='Enter')gfNoKaydet()"></div>
+      <p style="font-size:.78rem;color:var(--soluk);margin-top:10px;line-height:1.45">
+        Yalnız bu tedarikçinin bu alışındaki stoklar ve borcu yeni numaraya geçer.
+        Aynı yer tutucuyu kullanan öbür tedarikçilere dokunulmaz.</p>
+    </div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="gfNoKapat()">Vazgeç</button>
+      <button class="btn-yeni" id="gfNoKaydetBtn" onclick="gfNoKaydet()">Kaydet</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let GF = [], GF_YAZ = false, GF_TUR = '', GF_NO_HAREKET = null;
+
+function gfTarih(t) { return t ? String(t).slice(0, 10).split('-').reverse().join('.') : '—'; }
+function gfSayi(v) {
+  return (Number(v) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/* TEK YÜKLEM TABLOSU. Liste, KPI, çip sayıları ve açılır kutuların
+   seçenekleri AYNI kapıdan geçer; `haric` verilen süzgeç atlanır
+   (bir kutunun seçenekleri kendi seçimiyle daralmasın diye). */
+function gfSuzgecler() {
+  const cari = document.getElementById('gfCari').value;
+  const doviz = document.getElementById('gfDoviz').value;
+  const kdv = document.getElementById('gfKdv').value;
+  const bas = document.getElementById('gfBas').value;
+  const bit = document.getElementById('gfBit').value;
+  const ara = document.getElementById('gfAra').value.trim().toLocaleLowerCase('tr-TR');
+  return {
+    tur:   f => !GF_TUR || (GF_TUR === 'bekleyen' ? f.bekleyen : f.tur === GF_TUR),
+    cari:  f => !cari || (f.cari_id || '') === cari,
+    doviz: f => !doviz || (f.doviz || '') === doviz,
+    kdv:   f => !kdv || ((Number(f.kdv) || 0) > 0.005) === (kdv === '1'),
+    tarih: f => (!bas || (f.tarih || '') >= bas) && (!bit || (f.tarih || '') <= bit),
+    ara:   f => !ara || [f.cari_unvan, f.fatura_no, f.alt, f.tur_ad].join(' ')
+                          .toLocaleLowerCase('tr-TR').includes(ara),
+  };
+}
+function gfGecenler(haric) {
+  const s = gfSuzgecler();
+  const kapilar = Object.keys(s).filter(k => k !== haric).map(k => s[k]);
+  return GF.filter(f => kapilar.every(k => k(f)));
+}
+
+function gfSecenekleriDoldur() {
+  const doldur = (id, haric, anahtar, etiket, bosEtiket) => {
+    const el = document.getElementById(id), secili = el.value;
+    const say = new Map();
+    gfGecenler(haric).forEach(f => {
+      const k = anahtar(f); if (!k) return;
+      const o = say.get(k) || { ad: etiket(f), n: 0 }; o.n++; say.set(k, o);
+    });
+    /* Seçili değer öbür süzgeçler yüzünden sıfıra düşse de kutuda
+       kalmalı; yoksa seçim sessizce kaybolur. */
+    if (secili && !say.has(secili)) {
+      const f = GF.find(x => anahtar(x) === secili);
+      say.set(secili, { ad: f ? etiket(f) : secili, n: 0 });
+    }
+    const sirali = [...say.entries()].sort((a, b) => a[1].ad.localeCompare(b[1].ad, 'tr'));
+    el.innerHTML = `<option value="">${bosEtiket}</option>` + sirali.map(([k, o]) =>
+      `<option value="${kacar(k)}">${kacar(o.ad)} (${o.n})</option>`).join('');
+    el.value = secili;
+  };
+  doldur('gfCari', 'cari', f => f.cari_id || '', f => f.cari_unvan || f.cari_id, 'Tüm tedarikçiler');
+  doldur('gfDoviz', 'doviz', f => f.doviz || '', f => f.doviz, 'Tüm dövizler');
+  /* Çip sayıları: tür süzgeci HARİÇ öbürlerinden geçenler. */
+  const t = gfGecenler('tur');
+  const say = k => k === '' ? t.length
+    : k === 'bekleyen' ? t.filter(f => f.bekleyen).length : t.filter(f => f.tur === k).length;
+  ['', 'stok', 'maliyet', 'fatura', 'fis', 'bekleyen'].forEach(k => {
+    const el = document.getElementById('cs-' + k); if (el) el.textContent = say(k);
+  });
+}
+
+function gfCiz() {
+  gfSecenekleriDoldur();
+  const liste = gfGecenler();
+  const aktifSuzgec = GF_TUR || ['gfCari', 'gfDoviz', 'gfKdv', 'gfBas', 'gfBit', 'gfAra']
+    .some(id => document.getElementById(id).value);
+  document.getElementById('gfTemizle').style.display = aktifSuzgec ? '' : 'none';
+
+  /* KPI — süzülmüş listeden. */
+  const dovizler = {};
+  let tl = 0, kdvTl = 0;
+  liste.forEach(f => {
+    dovizler[f.doviz] = (dovizler[f.doviz] || 0) + (Number(f.tutar) || 0);
+    const t = Number(f.tutar) || 0, ttl = Number(f.tutar_try) || 0;
+    tl += ttl;
+    /* KDV'nin TL karşılığı: faturanın kendi kuruyla. */
+    if (t > 0) kdvTl += (Number(f.kdv) || 0) * (ttl / t);
+  });
+  const bek = liste.filter(f => f.bekleyen);
+  document.getElementById('kSayi').textContent = liste.length;
+  document.getElementById('kSayiEk').textContent =
+    new Set(liste.map(f => f.cari_id)).size + ' tedarikçi'
+    + (liste.length !== GF.length ? ' · ' + GF.length + ' kayıttan' : '');
+  document.getElementById('kToplam').textContent = para(tl, 'TRY');
+  document.getElementById('kKdv').textContent = para(kdvTl, 'TRY');
+  document.getElementById('kKdvEk').textContent =
+    liste.filter(f => (Number(f.kdv) || 0) > 0.005).length + " KDV'li fatura";
+  document.getElementById('kBek').textContent = bek.length;
+  document.getElementById('kBekEk').textContent = bek.length
+    ? new Set(bek.map(f => f.cari_id)).size + ' tedarikçiden' : 'hepsinin faturası gelmiş';
+
+  const govde = document.getElementById('gfGovde');
+  if (!liste.length) {
+    govde.innerHTML = `<tr><td colspan="7" class="bos">${GF.length
+      ? 'Bu süzgeçlere uyan fatura yok.' : 'Henüz gelen fatura yok.'}</td></tr>`;
+    return;
+  }
+  const turRozet = { stok: 'rz-mavi', maliyet: 'rz-gri', fatura: 'rz-yesil', fis: 'rz-gri' };
+  govde.innerHTML = liste.map(f => `
+    <tr ${f.icerik ? `class="gf-tik" tabindex="0" title="Fatura içeriğini göster" onclick="hareketIcerik('${kacar(f.hareket_id)}')" onkeydown="if(event.key==='Enter'){hareketIcerik('${kacar(f.hareket_id)}')}"` : ''}>
+      <td class="mono" style="white-space:nowrap">${kacar(gfTarih(f.tarih))}</td>
+      <td>${kacar(f.cari_unvan || '—')}</td>
+      <td><span class="gf-no">${kacar(f.fatura_no || '—')}</span>${
+        f.bekleyen ? ` <span class="rozet rz-kehribar" style="font-size:.66rem">bekleniyor</span>` : ''}${
+        (f.bekleyen && GF_YAZ && f.tur === 'stok')
+          ? `<button class="gf-mini" onclick="event.stopPropagation();gfNoAc('${kacar(f.hareket_id)}')">Numara gir</button>` : ''}
+        ${f.alt ? `<div class="gf-alt">${kacar(f.alt)}</div>` : ''}</td>
+      <td><span class="rozet ${turRozet[f.tur] || 'rz-gri'}">${kacar(f.tur_ad)}</span></td>
+      <td class="sag mono">${gfSayi(f.matrah)}</td>
+      <td class="sag mono">${(Number(f.kdv) || 0) > 0.005 ? gfSayi(f.kdv) : '<span style="color:var(--soluk)">—</span>'}</td>
+      <td class="sag mono"><b>${gfSayi(f.tutar)}</b> ${kacar(f.doviz || '')}</td>
+    </tr>`).join('')
+    + Object.keys(dovizler).sort().map((dv, i) => `
+    <tr class="gf-toplam"><td colspan="6" class="sag">${i === 0 ? liste.length + ' fatura · ' : ''}Toplam ${kacar(dv)}</td>
+      <td class="sag mono">${gfSayi(dovizler[dv])} ${kacar(dv)}</td></tr>`).join('');
+}
+
+function gfTemizle() {
+  GF_TUR = '';
+  ['gfCari', 'gfDoviz', 'gfKdv', 'gfBas', 'gfBit', 'gfAra'].forEach(id => { document.getElementById(id).value = ''; });
+  document.querySelectorAll('#gfCipler .cip').forEach(c => c.classList.toggle('aktif', c.dataset.t === ''));
+  gfCiz();
+}
+
+/* ── Faturası beklenen alışa gerçek numara ── */
+function gfNoAc(hareketId) {
+  const f = GF.find(x => x.hareket_id === hareketId);
+  if (!f) return;
+  GF_NO_HAREKET = hareketId;
+  document.getElementById('gfNoAlt').textContent =
+    [f.cari_unvan, f.fatura_no, gfSayi(f.tutar) + ' ' + (f.doviz || ''), f.alt].filter(Boolean).join(' · ');
+  const g = document.getElementById('gfNoGiris');
+  g.value = '';
+  document.getElementById('gfNoModal').classList.add('acik');
+  setTimeout(() => g.focus(), 50);
+}
+function gfNoKapat() { document.getElementById('gfNoModal').classList.remove('acik'); GF_NO_HAREKET = null; }
+async function gfNoKaydet() {
+  const no = document.getElementById('gfNoGiris').value.trim();
+  if (!no) { bildir('Fatura numarası boş olamaz.', true); return; }
+  const btn = document.getElementById('gfNoKaydetBtn');
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/cari/hareket/${encodeURIComponent(GF_NO_HAREKET)}/fatura_no`, {
+      method: 'PUT', body: JSON.stringify({ fatura_no: no })
+    });
+    bildir(r.mesaj || 'Fatura numarası güncellendi.');
+    gfNoKapat();
+    await gfYukle();
+  } catch (e) { /* api() uyarıyı gösterdi */ }
+  finally { btn.disabled = false; }
+}
+
+async function gfYukle() {
+  try {
+    const d = await api('/api/gelen_faturalar');
+    GF = d.data || [];
+    GF_YAZ = !!d.yazabilir;
+  } catch (e) {
+    document.getElementById('gfGovde').innerHTML =
+      '<tr><td colspan="7" class="bos">Liste yüklenemedi.</td></tr>';
+    return;
+  }
+  gfCiz();
+}
+
+document.querySelectorAll('#gfCipler .cip').forEach(c => c.addEventListener('click', () => {
+  GF_TUR = c.dataset.t;
+  document.querySelectorAll('#gfCipler .cip').forEach(x => x.classList.toggle('aktif', x === c));
+  gfCiz();
+}));
+['gfCari', 'gfDoviz', 'gfKdv', 'gfBas', 'gfBit'].forEach(id =>
+  document.getElementById(id).addEventListener('change', gfCiz));
+document.getElementById('gfAra').addEventListener('input', gfCiz);
+gfYukle();
+</script>
+{% endblock %}

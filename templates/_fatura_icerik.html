@@ -1,0 +1,122 @@
+{# ══════════════════════════════════════════════════════════════
+   FATURA İÇERİĞİ PENCERESİ — ortak parça (FI1 → GF1)
+
+   Cari çekmecesi ve Gelen Faturalar sayfası AYNI pencereyi kullanır.
+   FI1'de cari.html'in içindeydi; ikinci sayfa gelince kopyalamak
+   yerine buraya taşındı — iki kopya ilk düzeltmede ayrışırdı.
+
+   Çağrı:  hareketIcerik('<cari hareket id>')
+   Uç:     GET /api/cari/hareket/<id>/icerik   (salt okunur)
+   Gerekenler (base.html): api, kacar, para, bildir
+   ══════════════════════════════════════════════════════════════ #}
+<style>
+  .fi-tablo{width:100%;border-collapse:collapse;font-size:.84rem}
+  .fi-tablo th{font-size:.68rem;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);text-align:left;font-weight:700;padding:0 8px 6px 0;border-bottom:1px solid var(--cizgi-koyu)}
+  .fi-tablo td{padding:8px 8px 8px 0;border-bottom:1px solid var(--cizgi);vertical-align:top}
+  .fi-tablo .sag{text-align:right;white-space:nowrap;padding-right:0}
+  .fi-tablo .alt{color:var(--soluk);font-size:.75rem;margin-top:1px}
+  .fi-ozet{display:flex;justify-content:flex-end;gap:22px;flex-wrap:wrap;margin:12px 0 4px;font-size:.84rem}
+  .fi-ozet b{font-family:var(--mono)}
+  .fi-not{background:var(--kehribar-bg);color:var(--kehribar);border-radius:var(--r-kucuk);padding:8px 11px;font-size:.8rem;margin-top:10px}
+  .fi-kaydir{overflow-x:auto}
+  .fi-altbas{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin:16px 0 4px}
+  .fi-bagli{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--cizgi);font-size:.84rem}
+  .fi-bagli:last-child{border-bottom:0}
+  .fi-bagli .t{font-family:var(--mono);font-size:.74rem;color:var(--soluk);width:80px;flex:none}
+  .fi-bagli .tut{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
+  .fi-bagli .tut.borc{color:var(--kirmizi)}
+  .fi-bagli .tut.alacak{color:var(--verde)}
+</style>
+<div class="modal-ortu" id="fiModal" onclick="if(event.target===this)fiKapat()">
+  <div class="modal" style="width:720px;max-width:100%" role="dialog" aria-label="Fatura içeriği">
+    <div class="modal-bas">
+      <h3 id="fiBaslik">Fatura içeriği</h3>
+      <p id="fiAlt">—</p>
+    </div>
+    <div class="modal-gov" id="fiGovde" style="max-height:66vh;overflow:auto"></div>
+    <div class="modal-alt">
+      <button class="iptal-btn" onclick="fiKapat()">Kapat</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Sayfa kendi çevirisini tanımladıysa (cari: islemEtiket) onu kullan. */
+function fiIslem(t) { return (typeof islemEtiket === 'function') ? islemEtiket(t) : (t || ''); }
+function fiKapat() { document.getElementById('fiModal').classList.remove('acik'); }
+function fiTarih(t) { return t ? String(t).slice(0, 10).split('-').reverse().join('.') : '—'; }
+function fiSayi(v, n) {
+  return (Number(v) || 0).toLocaleString('tr-TR', { minimumFractionDigits: n == null ? 2 : n, maximumFractionDigits: n == null ? 2 : n });
+}
+
+async function hareketIcerik(hareketId) {
+  const govde = document.getElementById('fiGovde');
+  document.getElementById('fiBaslik').textContent = 'Fatura içeriği';
+  document.getElementById('fiAlt').textContent = '—';
+  govde.innerHTML = '<div class="yukleniyor">Yükleniyor…</div>';
+  document.getElementById('fiModal').classList.add('acik');
+  let d;
+  try { d = await api(`/api/cari/hareket/${encodeURIComponent(hareketId)}/icerik`); }
+  catch (e) { fiKapat(); return; }
+  const b = d.baslik, o = d.ozet || {}, hr = d.hareket || {};
+  if (!b) {
+    document.getElementById('fiAlt').textContent = d.cari_unvan || '';
+    govde.innerHTML = `<div class="bos" style="padding:14px">Bu harekete bağlı bir belge yok.</div>`
+      + (d.notlar || []).map(n => `<div class="fi-not">${kacar(n)}</div>`).join('');
+    return;
+  }
+  document.getElementById('fiBaslik').textContent =
+    b.ad + (b.no ? ' · ' + b.no : '');
+  document.getElementById('fiAlt').textContent =
+    [d.cari_unvan, fiTarih(b.tarih), b.durum, b.vade ? 'vade ' + fiTarih(b.vade) : '',
+     (b.siparisler || []).length ? 'sipariş ' + b.siparisler.join(', ') : '']
+      .filter(Boolean).join(' · ');
+  const dv = o.doviz || hr.doviz || '';
+  const fiyatli = !d.fiyat_gizli;
+  const stok = d.tur === 'stok_alis', mal = d.tur === 'maliyet';
+  const satir = k => {
+    const adAlt = [k.no, k.ek, k.olcu ? k.olcu + ' cm' : ''].filter(Boolean).join(' · ');
+    const mik = (k.miktar || k.miktar === 0) && k.birim
+      ? fiSayi(k.miktar, 3).replace(/,?0+$/, '') + ' ' + kacar(k.birim) : '';
+    const bf = (fiyatli && k.birim_fiyat != null && !mal)
+      ? fiSayi(k.birim_fiyat) + (k.fiyat_birim ? ' /' + kacar(k.fiyat_birim) : '') : '';
+    return `<tr>
+      <td>${k.tip ? `<span class="rozet rz-gri" style="font-size:.66rem">${kacar(k.tip)}</span> ` : ''}${kacar(k.ad || '—')}
+        ${adAlt ? `<div class="alt">${kacar(adAlt)}</div>` : ''}
+        ${k.durum ? `<div class="alt">${kacar(k.durum)}</div>` : ''}</td>
+      ${mal ? '' : `<td class="sag mono">${mik}</td><td class="sag mono">${bf}</td>`}
+      <td class="sag mono">${(fiyatli && k.toplam != null)
+        ? `<b>${fiSayi(k.toplam)}</b> ${kacar(k.doviz || dv)}`
+          + (stok && k.kdv ? `<div class="alt">KDV ${fiSayi(k.kdv)}</div>` : '')
+        : '<span style="color:var(--soluk)">—</span>'}</td>
+    </tr>`;
+  };
+  const kl = d.kalemler || [];
+  let html = '';
+  if (b.bekleyen)
+    html += `<div class="fi-not" style="margin:0 0 10px">Faturası henüz gelmemiş alış — numara yer tutucu.</div>`;
+  html += kl.length ? `<div class="fi-kaydir"><table class="fi-tablo">
+      <thead><tr><th>${mal ? 'Kalem' : 'Ürün'}</th>${mal ? '' : '<th class="sag">Miktar</th><th class="sag">Birim fiyat</th>'}<th class="sag">Tutar</th></tr></thead>
+      <tbody>${kl.map(satir).join('')}</tbody></table></div>`
+    : `<div class="bos" style="padding:14px">Kalem bulunamadı.</div>`;
+  html += `<div class="fi-ozet">
+      <span>${o.kalem_sayisi || kl.length} kalem</span>
+      ${o.matrah != null ? `<span>Matrah <b>${fiSayi(o.matrah)}</b></span>` : ''}
+      ${o.kdv ? `<span>KDV <b>${fiSayi(o.kdv)}</b></span>` : ''}
+      <span>Toplam <b>${fiSayi(o.toplam)} ${kacar(dv)}</b></span></div>`;
+  if (d.fiyat_gizli)
+    html += `<div class="fi-not">Kalem fiyatları maliyet yetkisi gerektirir; yalnız fatura toplamı gösteriliyor.</div>`;
+  html += (d.notlar || []).map(n => `<div class="fi-not">${kacar(n)}</div>`).join('');
+  const bg = d.baglilar || [];
+  if (bg.length) {
+    html += `<h4 class="fi-altbas">Bu faturaya bağlı hareketler · ${bg.length}</h4>
+      <div>${bg.map(x => `<div class="fi-bagli">
+        <span class="t">${kacar(fiTarih(x.tarih))}</span>
+        <div><div>${kacar(fiIslem(x.islem_tip))}</div>
+          ${x.aciklama && x.aciklama !== x.islem_tip ? `<div style="color:var(--soluk);font-size:.75rem">${kacar(String(x.aciklama).slice(0, 60))}</div>` : ''}</div>
+        <span class="tut ${(x.borc || 0) > 0 ? 'borc' : 'alacak'}">${(x.borc || 0) > 0 ? '+' + para(x.borc, x.doviz) : '−' + para(x.alacak, x.doviz)}</span>
+      </div>`).join('')}</div>`;
+  }
+  govde.innerHTML = html;
+}
+</script>

@@ -550,8 +550,10 @@ async function sevkiyatSil(id, ad) {
 async function durumGecir(id, yeni, siparisUyari) {
   if (yeni === 'Iptal' && !await onayla('Sevkiyat iptal edilsin mi?')) return;
   if (siparisUyari && !await onayla((yeni === 'Sevk Edildi'
-      ? 'Mal sevk edilecek (yüklemede teslim). Bağlı sipariş "Teslim Edildi" olacak ve satış kaydı oluşacak. Onaylıyor musun?'
-      : 'Sevkiyat teslim edilecek. Bağlı sipariş de otomatik "Teslim Edildi" olacak. Onaylıyor musun?'))) return;
+      /* SH1: metinler artık "cariye borç işlenecek" demiyor —
+         işlenmiyor. Faturalandırma ayrıca soruluyor. */
+      ? 'Mal sevk edilecek (yüklemede teslim). Bağlı sipariş "Teslim Edildi" olacak ve satış kaydı oluşacak. Ardından faturalandırmak isteyip istemediğin sorulacak. Onaylıyor musun?'
+      : 'Sevkiyat teslim edilecek. Bağlı sipariş de otomatik "Teslim Edildi" olacak. Ardından faturalandırmak isteyip istemediğin sorulacak. Onaylıyor musun?'))) return;
   try {
     const d = await api(`/api/sevkiyat/${encodeURIComponent(id)}/durum`, {
       method: 'POST', body: JSON.stringify({ durum: yeni })
@@ -559,6 +561,10 @@ async function durumGecir(id, yeni, siparisUyari) {
     bildir(d.mesaj || (AD[yeni] + ' yapıldı'));
     cekmeceKapat();
     await yukle();
+    /* SH1: FOB'da "Sevk Edildi", iki aşamalı akışta "Teslim Edildi"
+       bağlı siparişi teslim ediyor. İkisi de aynı yanıt alanını
+       taşıyor, o yüzden tek dal yeterli. */
+    if (d && d.faturasiz_teslim) await teslimFaturaSor(d.faturasiz_teslim);
   } catch (e) { /* api() bildirdi */ }
 }
 

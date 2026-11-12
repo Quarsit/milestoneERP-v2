@@ -187,6 +187,10 @@ SILINECEK_TABLOLAR = [
     'kalem_karsilama',
     'siparis_kalem',
     'faturalar',
+    # BF1: faturanin kapsadigi siparisler. Isaret ettigi her iki
+    # belge de siliniyor, bag da silinmek zorunda — yoksa yeni
+    # faturalara eski siparis kimlikleri bagli gorunurdu.
+    'fatura_siparis',
     'konteyner',
     'sevkiyat_kayit',
     'siparis_kayit',

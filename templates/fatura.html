@@ -87,6 +87,14 @@
   <button class="cip" data-d="Kesildi">Kesildi</button>
   <button class="cip" data-d="Kismi Tahsil">Kısmi Tahsil</button>
   <button class="cip" data-d="Tahsil Edildi">Tahsil Edildi</button>
+  <!-- SH1 · Teslim artık cariye borç yazmıyor; mal çıktı ama fatura
+       yok durumunun görüldüğü yer burası. `data-d` DEĞİL `data-bek`:
+       öbür çipler fatura durumuna süzüyor, bu çip BAŞKA BİR LİSTEYE
+       geçiyor (faturası olmayan teslimler — henüz fatura değiller). -->
+  <button class="cip" id="cipBekleyen" data-bek="1"
+          style="border-color:var(--kehribar);color:var(--kehribar)">
+    Faturası Beklenen Teslimler <span id="bekSayi"></span>
+  </button>
   <div class="suz"><input id="ara" placeholder="Müşteri, fatura no veya ETTN ara…" autocomplete="off" spellcheck="false"></div>
 </div>
 
@@ -100,9 +108,33 @@
 
 <div class="tablo-kutu">
   <table>
-    <thead><tr><th>Fatura</th><th>Müşteri</th><th>Durum</th><th class="sag">Tutar</th><th class="sag">Tahsilat</th><th class="sag">Vade</th></tr></thead>
+    <!-- SH1: başlık iki liste arasında DEĞİŞİYOR. Bekleyen
+         teslimler listesinde bu sütunlar "Tahsilat" ve "Vade"
+         DEĞİL; başlık sabit kalsa kullanıcı teslim tarihini vade
+         sanırdı. -->
+    <thead id="tabloBaslik"><tr><th>Fatura</th><th>Müşteri</th><th>Durum</th><th class="sag">Tutar</th><th class="sag">Tahsilat</th><th class="sag">Vade</th></tr></thead>
     <tbody id="govde"><tr><td colspan="6" class="yukleniyor">Yükleniyor…</td></tr></tbody>
   </table>
+</div>
+
+<!-- BF1 · BİRLEŞTİRME ÇUBUĞU
+     Yalnız bekleyen teslimler listesinde ve en az bir seçim varken
+     görünüyor. Aynı cariye ait birkaç teslimat tek faturada
+     birleşebiliyor; seçim karışıksa düğme kapanıyor ve SEBEBİ
+     yazılıyor — kapalı bir düğme sebepsiz bırakılırsa kullanıcı
+     neyin yanlış olduğunu bilemez. -->
+<div id="bfCubuk" style="display:none;position:sticky;bottom:0;
+     margin-top:10px;padding:11px 14px;border:1px solid var(--cizgi);
+     border-radius:10px;background:var(--yuzey);box-shadow:var(--golge-yukari);z-index:20;display:none;
+     align-items:center;gap:12px;flex-wrap:wrap">
+  <span id="bfOzet" style="font-size:.86rem;font-weight:600"></span>
+  <span id="bfSebep" style="font-size:.8rem;color:var(--kirmizi)"></span>
+  <span style="flex:1"></span>
+  <button class="blok-btn" onclick="bfSecimTemizle()"
+          style="padding:5px 11px;font-size:.8rem">Seçimi bırak</button>
+  <button class="btn-yeni" id="bfBirlestir" onclick="bfBirlestir()"
+          style="padding:6px 14px;font-size:.84rem">
+    Seçilenleri Tek Faturada Birleştir</button>
 </div>
 
 <!-- Fatura no / kes modalı -->
@@ -381,6 +413,8 @@ let YF_KALEMLER = [];
 
 async function yeniFaturaAc() {
   YF_KALEMLER = [];
+  YF_SIPARIS = null;      /* SH1: elle açılan fatura siparişsizdir */
+  YF_SIPARISLER = null;   /* BF1 */
   document.getElementById('yfModal').classList.add('acik');
   const bugun = new Date().toISOString().slice(0, 10);
   document.getElementById('yfTarih').value = bugun;
@@ -500,10 +534,22 @@ async function yeniFaturaKaydet() {
         kdv_oran: parseFloat(document.getElementById('yfKdv').value) || 0,
         tevkifat_oran: document.getElementById('yfTevkifat').value || '',
         odeme_sekli: document.getElementById('yfOdeme').value.trim() || null,
+        /* SH1: siparişten dolduruldu ise fatura o siparişe BAĞLANIR.
+           Bağlanmazsa teslim "faturası bekliyor" sayılmaya devam
+           eder ve aynı teslim iki kez faturalanabilirdi. */
+        siparis_id: YF_SIPARIS || null,
+        /* BF1: birleşik faturada kapsamın TAMAMI gidiyor. Yalnız
+           `siparis_id` gönderilse fatura ilk teslime bağlanır,
+           ötekiler "faturası bekliyor" kalır ve İKİNCİ KEZ
+           faturalanabilirdi. */
+        siparis_idler: YF_SIPARISLER || null,
         kalemler: YF_KALEMLER,
       })
     });
     bildir(d.mesaj || 'Fatura taslak olarak oluşturuldu');
+    YF_SIPARIS = null;      /* SH1: bir sonraki fatura temiz başlasın */
+    YF_SIPARISLER = null;   /* BF1 */
+    BF_SECIM.clear();
     yeniFaturaKapat();
     // NOT: Bu sayfada listeyi yükleyen fonksiyonun adı yukle() —
     // diğer modüllerdeki listeyiCiz() değil. Yanlış ad sessizce
@@ -529,6 +575,9 @@ const RENK = { 'Taslak':'--cizgi-koyu', 'Kesildi':'--kehribar', 'Kismi Tahsil':'
                'Tahsil Edildi':'--verde', 'Iptal':'--kirmizi' };
 
 let TUM = [], DURUM = '', ARA = '', KASALAR = [], SECILI = null, TAHSILAT = {};
+/* SH1 */
+let BEKLEYEN_KIP = false, YF_SIPARIS = null;
+let YF_SIPARISLER = null;      /* BF1 · birleşik faturanın kapsamı */
 
 async function yukle() {
   try {
@@ -546,7 +595,20 @@ async function yukle() {
       f._kalan = t.kalan != null ? t.kalan : (f.toplam || 0);
     } catch (e) { f._tahsil = 0; f._kalan = f.toplam || 0; }
   }));
-  kpiCiz(); ciz();
+  await bekleyenYukle(true);          /* SH1 · çipteki sayı */
+  kpiCiz();
+  if (BEKLEYEN_KIP) bekleyenCiz(); else ciz();
+
+  /* SH1 · TESLİMDEN GELEN YÖNLENDİRME
+     Teslimden sonra "Şimdi Faturalandır" denince buraya
+     `?siparis=...` ile geliniyor ve panel siparişten doluyor.
+     Adres çubuğu TEMİZLENİYOR: kullanıcı sayfayı yenilerse panel
+     ikinci kez açılmasın. */
+  const _sp = new URLSearchParams(location.search).get('siparis');
+  if (_sp) {
+    history.replaceState(null, '', location.pathname);
+    await bekleyenFaturala(_sp);
+  }
 }
 
 function kpiCiz() {
@@ -562,6 +624,10 @@ function kpiCiz() {
 }
 
 function ciz() {
+  tabloBasligiCiz();        /* SH1 · başlık fatura sütunlarına döner */
+  /* BF1: fatura listesinde birleştirme çubuğu anlamsız. */
+  const _bfc = document.getElementById('bfCubuk');
+  if (_bfc) _bfc.style.display = 'none';
   const s = ARA.toLocaleLowerCase('tr');
   let liste = TUM.filter(f =>
     (!DURUM || f.durum === DURUM) &&
@@ -622,7 +688,9 @@ async function detayAc(id) {
       ${alan('Tip', kacar({ stoklu: 'Stoklu', transit: 'Transit', teklif: 'Teklif' }[f.fatura_tipi] || 'Stoklu'))}
       ${alan('Kur Farkı', kacar(f.kur_farki_modu === 'cari' ? 'Cari modu' : 'Gider modu'))}
       ${alan('Proforma', f.proforma_id ? kacar(f.proforma_id) : '—', true)}
-      ${alan('Sipariş', f.siparis_id ? kacar(f.siparis_id) : '—', true)}
+      ${alan('Sipariş', (f.siparis_idler && f.siparis_idler.length > 1)
+          ? kacar(f.siparis_idler.join(' · ')) + ` (${f.siparis_idler.length} teslim)`
+          : (f.siparis_id ? kacar(f.siparis_id) : '—'), true)}
       ${alan('Senaryo', kacar(f.efatura_senaryo || '—'))}
       ${alan('GİB Durumu', f.efatura_durum
           ? `<span class="rozet ${f.efatura_durum === 'Kabul' ? 'rz-yesil' : f.efatura_durum === 'Red' ? 'rz-kirmizi' : 'rz-gri'}">${kacar(f.efatura_durum)}</span>`
@@ -1140,8 +1208,236 @@ async function tahsilatKaydet() {
 /* Filtreler */
 document.querySelectorAll('.cip').forEach(b => b.onclick = () => {
   document.querySelectorAll('.cip').forEach(x => x.classList.remove('aktif'));
-  b.classList.add('aktif'); DURUM = b.dataset.d; ciz();
+  b.classList.add('aktif');
+  /* SH1: bekleyen teslimler çipi bir SÜZGEÇ değil, ayrı bir liste.
+     `dataset.d` undefined geliyor ve "Tümü" ile karışmasın diye
+     ayrı bir bayrak tutuluyor. */
+  BEKLEYEN_KIP = (b.dataset.bek === '1');
+  DURUM = b.dataset.d || '';
+  if (BEKLEYEN_KIP) bekleyenCiz(); else ciz();
 });
+/* ══════════════════════════════════════════════════════════════
+   SH1 · FATURASI BEKLENEN TESLİMLER
+
+   Teslim artık cariye borç yazmıyor. Sebebi: teslimde yazılan
+   otomatik borç, fatura SONRADAN kesilince kaldırılmıyordu ve
+   müşteri iki kez borçlanıyordu (ölçüldü: 5.000 USD satış cariye
+   10.000 düşüyordu, iki istek de 200 dönüyordu).
+
+   Bu, bilerek bir boşluk bırakıyor: teslim edilmiş ama
+   faturalanmamış satış cari ekstresinde görünmüyor. Bu liste o
+   boşluğun karşılığı — unutulmasın diye.
+
+   TUTARLAR DÖVİZ BAZINDA AYRI gösteriliyor. Farklı para
+   birimlerini tek rakamda toplamak, bu ekranda yanlış bir "toplam
+   alacak" üretirdi.
+   ══════════════════════════════════════════════════════════════ */
+let BEKLEYEN = [];
+
+async function bekleyenYukle(sessiz) {
+  try {
+    const d = await api('/api/teslim/faturasi_bekleyen');
+    BEKLEYEN = d.data || [];
+  } catch (e) { if (!sessiz) BEKLEYEN = []; return; }
+  const et = document.getElementById('bekSayi');
+  if (et) et.textContent = BEKLEYEN.length ? `(${BEKLEYEN.length})` : '';
+}
+
+/* Başlığı listeye göre yazar. İki liste aynı tabloyu
+   kullanıyor; başlık da onunla birlikte değişmek zorunda. */
+function tabloBasligiCiz() {
+  const h = document.getElementById('tabloBaslik');
+  if (!h) return;
+  h.innerHTML = BEKLEYEN_KIP
+    ? `<tr><th>Sipariş</th><th>Müşteri</th><th>Durum</th>
+       <th class="sag">Tutar</th><th class="sag">Teslim</th><th></th></tr>`
+    : `<tr><th>Fatura</th><th>Müşteri</th><th>Durum</th>
+       <th class="sag">Tutar</th><th class="sag">Tahsilat</th>
+       <th class="sag">Vade</th></tr>`;
+}
+
+function bekleyenCiz() {
+  tabloBasligiCiz();
+  /* Listeden düşen teslimin seçimi de düşmeli — yoksa çubuk
+     olmayan bir teslimi sayardı. */
+  const varOlan = new Set(BEKLEYEN.map(b => b.siparis_id));
+  [...BF_SECIM].forEach(s => { if (!varOlan.has(s)) BF_SECIM.delete(s); });
+  const g = document.getElementById('govde');
+  if (!BEKLEYEN.length) {
+    g.innerHTML = '<tr><td colspan="6" class="bos">'
+      + 'Faturası beklenen teslim yok — teslim edilen her satışın '
+      + 'faturası var.</td></tr>';
+    return;
+  }
+  /* Aynı cari ÜST ÜSTE: birkaç teslimatı tek faturada birleştirme
+     bir sonraki adım, ama kullanıcı şimdiden hangi teslimlerin
+     aynı müşteriye ait olduğunu görmeli. */
+  let oncekiMusteri = null;
+  g.innerHTML = BEKLEYEN.map(b => {
+    const yeniCari = (b.musteri !== oncekiMusteri);
+    oncekiMusteri = b.musteri;
+    const tutar = (Number(b.tutar) || 0).toLocaleString('tr-TR',
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    /* BF1: kutu AYRI SÜTUN DEĞİL, ilk hücrenin içinde. Yedinci bir
+       sütun eklemek başlığı ve boş-durum `colspan`ını da
+       değiştirmek demekti; kazanç yok. */
+    return `<tr${yeniCari ? ' style="border-top:2px solid var(--cizgi)"' : ''}>
+      <td><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+            <input type="checkbox" class="bfSec" style="margin-top:3px"
+                   data-sip="${kacar(b.siparis_id || '')}"
+                   onchange="bfSecimDegisti()"
+                   ${BF_SECIM.has(b.siparis_id) ? 'checked' : ''}>
+            <span><strong>${kacar(b.siparis_id || '')}</strong><br>
+              <small style="color:var(--soluk)">${kacar(b.cins || '')}</small></span>
+          </label></td>
+      <td>${kacar(b.musteri || '')}</td>
+      <td><span class="rozet rz-kehribar">Bekliyor</span></td>
+      <td class="sag"><strong>${tutar}</strong> ${kacar(b.doviz || '')}<br>
+          <small style="color:var(--soluk)">${b.kalem_sayisi || 0} kalem</small></td>
+      <td class="sag">${kacar(b.teslim_tarihi || '—')}</td>
+      <td class="sag">
+        <button class="blok-btn" style="padding:4px 10px;font-size:.78rem"
+          onclick="bekleyenFaturala('${kacar(b.siparis_id || '')}')">
+          Fatura Kes</button></td>
+    </tr>`;
+  }).join('');
+  bfCubukCiz();      /* BF1 */
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BF1 · BİRKAÇ TESLİMATI TEK FATURADA BİRLEŞTİRME
+
+   Fatura tek bir müşteriye ve tek bir para biriminde kesilir, o
+   yüzden seçim karışıksa düğme kapalı kalıyor ve sebebi yazılıyor.
+   AYNI DENETİM SUNUCUDA DA VAR: ön yüz tek savunma hattı değil,
+   aynı gövde elle de gönderilebilir.
+
+   Farklı AYLARDAKİ teslimler birleşebiliyor (kullanıcı kararı) ama
+   sistem uyarıyor — faturanın tarihi KDV dönemini belirliyor.
+   ══════════════════════════════════════════════════════════════ */
+const BF_SECIM = new Set();
+
+function bfSecimDegisti() {
+  document.querySelectorAll('input.bfSec').forEach(k => {
+    if (k.checked) BF_SECIM.add(k.dataset.sip);
+    else BF_SECIM.delete(k.dataset.sip);
+  });
+  bfCubukCiz();
+}
+
+function bfSecimTemizle() {
+  BF_SECIM.clear();
+  document.querySelectorAll('input.bfSec').forEach(k => { k.checked = false; });
+  bfCubukCiz();
+}
+
+function bfCubukCiz() {
+  const c = document.getElementById('bfCubuk');
+  if (!c) return;
+  const secili = BEKLEYEN.filter(b => BF_SECIM.has(b.siparis_id));
+  if (!secili.length) { c.style.display = 'none'; return; }
+  c.style.display = 'flex';
+  const cariler = new Set(secili.map(b => b.cari_id || b.musteri));
+  const dovizler = new Set(secili.map(b => b.doviz));
+  const toplam = secili.reduce((a, b) => a + (Number(b.tutar) || 0), 0);
+  const aylar = new Set(secili.map(b => (b.teslim_tarihi || '').slice(0, 7))
+                              .filter(Boolean));
+  let sebep = '';
+  if (cariler.size > 1) sebep = 'Seçilenler farklı müşterilere ait — bir fatura tek müşteriye kesilir.';
+  else if (dovizler.size > 1) sebep = 'Seçilenler farklı para birimlerinde — tek faturada birleştirilemez.';
+  document.getElementById('bfSebep').textContent = sebep;
+  document.getElementById('bfBirlestir').disabled = !!sebep;
+  const para = toplam.toLocaleString('tr-TR',
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  document.getElementById('bfOzet').textContent =
+    `${secili.length} teslim seçili · ${para} `
+    + `${dovizler.size === 1 ? [...dovizler][0] : '(karışık)'}`
+    + (aylar.size > 1 ? ` · ${aylar.size} ayrı ay` : '');
+}
+
+async function bfBirlestir() {
+  const idler = BEKLEYEN.filter(b => BF_SECIM.has(b.siparis_id))
+                        .map(b => b.siparis_id);
+  if (!idler.length) return;
+  if (idler.length === 1) { await bekleyenFaturala(idler[0]); return; }
+  const dugme = document.getElementById('bfBirlestir');
+  dugme.disabled = true;
+  let h;
+  try {
+    h = await api('/api/teslim/birlesik_onhazirlik?siparisler='
+                  + encodeURIComponent(idler.join(',')));
+  } catch (e) {
+    /* 409 = içlerinden birinin faturası var. api() 409'da bildirim
+       GÖSTERMEZ; söylemezsem düğme hiçbir şey yapmamış görünür. */
+    if (e && (e.status === 409 || e.status === 400) && e.yanit) {
+      bildir(e.yanit.mesaj || 'Birleştirilemedi.', true);
+      await bekleyenYukle(true); bekleyenCiz();
+    }
+    dugme.disabled = false;
+    return;
+  }
+  dugme.disabled = false;
+  /* FARKLI AY UYARISI — kullanıcı kararı: engellemiyoruz, soruyoruz. */
+  if (h.uyari) {
+    const devam = await onayla((h.uyarilar || []).join('\n\n'),
+      { baslik: 'Farklı dönemler', tamam: 'Devam et', iptal: 'Vazgeç' });
+    if (!devam) return;
+  }
+  await yeniFaturaAc();
+  const ata = (id, d) => {
+    const el = document.getElementById(id);
+    if (el && d != null) el.value = d;
+  };
+  ata('yfMusteri', h.musteri);
+  ata('yfDoviz', h.doviz);
+  ata('yfSatisTipi', h.satis_tipi);
+  YF_SIPARIS = null;                 /* tek sipariş yolu DEĞİL */
+  YF_SIPARISLER = h.siparis_idler;   /* kapsamın tamamı */
+  YF_KALEMLER = (h.kalemler || []).slice();
+  yfKalemCiz();
+  bildir(`${idler.length} teslim birleştirildi · ${h.kalemler.length} kalem `
+         + `— fatura no girip kesebilirsiniz.`);
+}
+
+/* Fatura panelini SİPARİŞTEN doldurur. Faturayı oluşturan yol
+   değişmiyor — mevcut `POST /api/fatura` (yeniFaturaKaydet).
+   İkinci bir fatura oluşturma yolu yazmadım: biri düzeltilip
+   öbürü kalırdı. */
+async function bekleyenFaturala(siparisId) {
+  if (!siparisId) return;
+  let h;
+  try {
+    h = await api(`/api/siparis/${encodeURIComponent(siparisId)}/fatura_onhazirlik`);
+  } catch (e) {
+    /* 409 = faturası zaten var. api() 409'da bildirim GÖSTERMEZ,
+       o yüzden burada söylemek zorundayız — yoksa düğme hiçbir şey
+       yapmamış gibi görünür. */
+    if (e && e.status === 409 && e.yanit) {
+      bildir(e.yanit.mesaj || 'Bu siparişin faturası zaten var.', true);
+      await bekleyenYukle(true); bekleyenCiz();
+    }
+    return;
+  }
+  await yeniFaturaAc();
+  const ata = (id, deger) => {
+    const el = document.getElementById(id);
+    if (el && deger != null) el.value = deger;
+  };
+  ata('yfMusteri', h.musteri);
+  ata('yfDoviz', h.doviz);
+  ata('yfSatisTipi', h.satis_tipi);
+  YF_SIPARIS = h.siparis_id;        /* kaydederken gönderilecek */
+  /* ÇEVİRİ YOK: sunucu kalemleri panelin beklediği şekilde
+     döndürüyor (`cins`, `miktar`, `birim`, `birim_fiyat`,
+     `toplam_fiyat`). İlk hâlinde burada alan adı çeviriyordum ve
+     `toplam_fiyat` düşüyordu — panel yarı dolu kalıp konsola hata
+     bırakıyordu. Tarayıcıda ölçünce çıktı. */
+  YF_KALEMLER = (h.kalemler || []).slice();
+  yfKalemCiz();
+  bildir(`${h.kalemler.length} kalem siparişten dolduruldu — `
+         + `fatura no girip kesebilirsiniz.`);
+}
+
 /* ═══ EK1 · ETTN TERS ARAMA ═══
    Sunucudaki kuralin aynisi: tireli ya da tiresiz, 32 hane
    onaltilik (`_ettn_normalize`). Ayni kurali iki yerde yazmak

@@ -152,6 +152,9 @@ FIRMASIZ_BEKLENEN = {
     'doviz_kur': 'TCMB kur arşivi — herkes için aynı',
     'kullanicilar': 'kullanıcılar tüm firmalarda aynı kişiler',
     'alembic_version': 'şema sürüm damgası',
+    # FD1: YK3'ün çift tıklama kalkanı. İş verisi değil; anahtar
+    # kullanıcı + uç + gövde özeti, saniyeler içinde eskir.
+    'istek_izi': 'yinelenen istek kalkanının geçici parmak izi (YK3)',
 }
 print()
 print("─" * 70)

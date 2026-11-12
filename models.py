@@ -1192,6 +1192,37 @@ class ProformaKalem(FirmaKapsamli, db.Model):
     plan_maliyet    = db.Column(Para)             # planlanan BİRİM maliyet
     plan_notu       = db.Column(db.String(200))   # tedarikçi, blok, kesim notu
 
+# ── FATURA ↔ SİPARİŞ BAĞI (BF1) ────────────────────────────────────────
+class FaturaSiparis(FirmaKapsamli, db.Model):
+    """Bir faturanın KAPSADIĞI siparişler.
+
+    `Fatura.siparis_id` TEK bir alan. Birkaç teslimatı tek faturada
+    birleştirmek istendiğinde o alan yetmiyor: bir fatura birden çok
+    siparişi kapsayabiliyor.
+
+    ALAN KALDIRILMADI. Dokuz ayrı yer ona bakıyor ve göçten önce
+    açılmış faturaların bağı yalnızca orada. Artık "ilk/birincil
+    sipariş" anlamında duruyor; KAPSAMIN tamamı bu tabloda. Göç eski
+    faturaları buraya KOPYALIYOR, yani bu tablo tek başına da
+    yeterli — eski alan geriye uyum için tutuluyor.
+
+    FİRMA KAPSAMLI. İlk hâlinde mixin'i YAZMAMIŞTIM — "saf bir bağ
+    tablosu, iki ucu da kapsamlı, buraya onların üzerinden varılıyor"
+    diye düşünmüştüm. SZ1 denetim testi yakaladı ve haklıydı:
+    sıfırlamanın TEK FİRMA kipi sildiği her tabloda `firma_id`
+    arıyor. Kapsamsız bir SİLİNECEK tablo o kipi tümüyle
+    çalışmaz hâle getiriyordu — üstelik ret mesajı yanlış yol
+    gösterirdi.
+
+    `firma_id`yi `_firma_damgasi` kancası kendiliğinden basıyor.
+    `sifirla2.py` sınıflandırmasına da eklendi (SİLİNECEK —
+    işaret ettiği belgeler sıfırlamada gidiyor).
+    """
+    __tablename__ = 'fatura_siparis'
+    fatura_id  = db.Column(db.String(20), primary_key=True, index=True)
+    siparis_id = db.Column(db.String(20), primary_key=True, index=True)
+
+
 # ── SATIŞ KAYDI ────────────────────────────────────────────────────────
 # FAZ 16: siparis_kalem_id eklendi
 class SatisKaydi(FirmaKapsamli, db.Model):
@@ -1800,8 +1831,49 @@ def stok_cari_id_otomatik_doldur(mapper, connection, hedef):
         pass
 
 
+def stok_cari_id_tedarikci_degisince(mapper, connection, hedef):
+    """TD1 — stoğun ÜRETİCİSİ değiştiyse `cari_id` de değişmeli.
+
+    Stok dinleyicileri YALNIZCA `before_insert` idi. ÖLÇÜLDÜ: bir
+    bloğun üreticisi TEDARIKCI A → TEDARIKCI B yapıldığında ekranda
+    B yazıyor, `cari_id` A'da kalıyordu.
+
+    Bunun sinsi tarafı: stok silme yolu (SK1) kimlik bağını ADIN
+    ÜSTÜNDE tutuyor — doğru olan da bu, ad değişince bağ kopmasın
+    diye. Ama bağ ESKİ tedarikçiyi gösterdiği için kullanıcı B
+    görürken karşı kayıt A'nın hesabına düşüyordu. Ekranda hiçbir
+    belirti yok.
+
+    YALNIZ `uretici` DEĞİŞTİĞİNDE dokunulur (sipariş durum
+    damgasındaki kalıbın aynısı). "cari_id boşsa doldur" demek cazip
+    ama yanlış olurdu: adı hiçbir cariyle eşleşmeyen eski bir stok,
+    başka bir alanı düzeltildiğinde sessizce bir cariye bağlanırdı.
+
+    EŞLEŞME YOKSA BOŞALTILIR. Ad değiştiyse eski kimlik tanım gereği
+    yanlıştır; eski cariye bağlı KALMASI, bağsız kalmasından kötüdür
+    (SF2 — yanlış cariye yazmaktansa hiç yazmamak).
+    """
+    try:
+        gecmis = _inspect(hedef).attrs.uretici.history
+    except Exception:
+        return
+    if not gecmis.has_changes():
+        return
+    ad = (getattr(hedef, 'uretici', '') or '').strip()
+    if not ad:
+        return              # ad silinmedi (PUT boş adı yazmıyor) — dokunma
+    try:
+        satir = connection.execute(
+            db.text('SELECT id FROM cariler WHERE UPPER(unvan) = :u LIMIT 1'),
+            {'u': ad.upper()}).fetchone()
+    except Exception:
+        return              # bağlantı çözülmezse kayıt YİNE DE yazılır
+    hedef.cari_id = satir[0] if satir else None
+
+
 for _model in (BlokStok, PlakaStok, EbatliStok):
     _event.listen(_model, 'before_insert', stok_cari_id_otomatik_doldur)
+    _event.listen(_model, 'before_update', stok_cari_id_tedarikci_degisince)
 
 
 def siparis_durum_damgasi(mapper, connection, hedef):

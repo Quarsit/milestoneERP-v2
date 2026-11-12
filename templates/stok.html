@@ -445,6 +445,17 @@
           <select id="duzDoviz"><option>USD</option><option>EUR</option><option>TRY</option></select>
         </div>
       </div>
+      <!-- AT1 · TARİHLER. Formda tarih alanı yoktu; yanlış girilmiş
+           alış tarihi ekrandan düzeltilemiyordu. Alış tarihi
+           FATURANIN tarihidir: aynı faturadaki öbür stoklar, tedarikçi
+           borcu ve alışın KDV satırı birlikte taşınır. -->
+      <div class="form-satir f2">
+        <div class="form-alan"><label>Giriş Tarihi</label>
+          <input id="duzGirisTarih" type="date"></div>
+        <div class="form-alan" id="duzAlisTarihAlan"><label>Alış / Fatura Tarihi</label>
+          <input id="duzAlisTarih" type="date">
+          <div style="font-size:.72rem;color:var(--soluk);margin-top:3px;line-height:1.35">Aynı faturadaki öbür stoklar ve tedarikçi borcu da bu tarihe alınır.</div></div>
+      </div>
       <div class="form-alan"><label>Açıklama</label>
         <textarea id="duzAciklama" rows="2" placeholder="Stoğa ait notlar" style="width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;resize:vertical"></textarea>
       </div>
@@ -595,10 +606,16 @@
         </div>
         <div class="form-satir f3" id="tFaturaSatir">
           <div class="form-alan"><label>Alış Tipi</label>
+            <!-- IK2: seçenekler sunucudaki ALIS_TIPLERI ile AYNI
+                 olmak zorunda; bir çivi testi ikisini karşılaştırıyor.
+                 Sunucu tanınmayan tipi reddediyor, yani buradaki bir
+                 sapma sessiz kalmaz — ama kullanıcıya hata olarak
+                 çıkar, o yüzden çivi. -->
             <select id="tAlisTipi" onchange="topluKdvDurum()">
               <option value="yurtici_kdvli">Yurt içi — KDV'li</option>
               <option value="yurtici_kdvsiz">Yurt içi — KDV'siz</option>
               <option value="ithalat">İthalat</option>
+              <option value="ihrac_kayitli">İhraç Kayıtlı (KDV tahsil edilmez)</option>
               <option value="istisna">İstisna / Muaf</option>
             </select>
           </div>
@@ -773,10 +790,17 @@
           </select>
         </div>
         <div class="form-alan" id="sAlisTipiAlan"><label>Alış Tipi</label>
+          <!-- IK2 · İKİ FORM AYRIŞMIŞTI. Toplu aktarma formunda
+               "İstisna / Muaf" VARDI, tekil formda YOKTU: aynı malı
+               hangi formdan girdiğine göre seçenek listesi
+               değişiyordu. İkisi birleştirildi ve İhraç Kayıtlı
+               ikisine birden eklendi. -->
           <select id="sAlisTipi" onchange="alisTipiDegisti()">
             <option value="yurtici_kdvli">Yurt içi (KDV'li)</option>
             <option value="yurtici_kdvsiz">Yurt içi (KDV'siz)</option>
             <option value="ithalat">İthalat</option>
+            <option value="ihrac_kayitli">İhraç Kayıtlı (KDV tahsil edilmez)</option>
+            <option value="istisna">İstisna / Muaf</option>
           </select>
         </div>
         <!-- US2: ÜRETİLEN MALIN "ALIŞ FİYATI" OLMAZ.
@@ -940,8 +964,8 @@
 <!-- MALİ KARAR (SF1): stok düzeltmesi ≠ mali düzeltme -->
 <div class="modal-ortu" id="maliModal" onclick="if(event.target===this)maliKapat()">
   <div class="modal" style="width:520px" role="dialog" aria-label="Mali karar">
-    <div class="modal-bas"><h3>Faturaya Ne Yapılsın?</h3>
-      <p>Stok düzeltmesi ile mali düzeltme aynı şey değildir</p></div>
+    <div class="modal-bas"><h3 id="maliBaslik">Faturaya Ne Yapılsın?</h3>
+      <p id="maliAlt2">Stok düzeltmesi ile mali düzeltme aynı şey değildir</p></div>
     <div class="modal-gov" id="maliGovde"></div>
     <div class="modal-alt">
       <button class="iptal-btn" onclick="maliKapat()">Vazgeç</button>
@@ -3236,6 +3260,15 @@ function duzenleAc(id) {
   document.getElementById('duzFiyatBirim').value = s.fiyat_birim || (s.tip === 'BLOK' ? 'ton' : 'm2');
   document.getElementById('duzDoviz').value = (s.doviz || 'USD').toUpperCase();
   document.getElementById('duzAciklama').value = s.aciklama || '';
+  /* AT1: tarihler. Üretilen / kesimden gelen malda ALIŞ yok;
+     alanı gizliyoruz (sunucu da yok sayıyor). */
+  const _bugun = new Date().toISOString().slice(0, 10);
+  const _gt = document.getElementById('duzGirisTarih');
+  const _at = document.getElementById('duzAlisTarih');
+  _gt.value = (s.giris_tarihi || '').slice(0, 10); _gt.max = _bugun;
+  _at.value = (s.alis_tarihi || '').slice(0, 10);  _at.max = _bugun;
+  document.getElementById('duzAlisTarihAlan').style.display =
+    (s.kaynak === 'uretim' || s.kaynak === 'kesim') ? 'none' : '';
   document.getElementById('duzNoLabel').textContent = s.tip === 'EBATLI' ? 'Kasa No' : 'Blok No';
   const dOz = document.getElementById('duzOzellikAlan');
   if (dOz) dOz.style.display = (s.tip === 'BLOK') ? 'none' : '';
@@ -3333,7 +3366,11 @@ function olcuGovde() {
   return g;
 }
 
-async function duzenleKaydet() {
+/* TD1 · `maliIslem` ikinci cagrida geliyor.
+   Tedarikci degistirildiginde sunucu 409 ile SORUYOR (bu bir hata
+   degil, bir soru); kullanici secimini yapinca ayni govde
+   `mali_islem` ile yeniden gonderiliyor. */
+async function duzenleKaydet(maliIslem) {
   const btn = document.getElementById('duzKaydet');
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';
   try {
@@ -3341,6 +3378,7 @@ async function duzenleKaydet() {
       method: 'PUT',
       body: JSON.stringify({
         tip: DUZ_STOK.tip,
+        ...(maliIslem ? { mali_islem: maliIslem } : {}),
         cins: document.getElementById('duzCins').value,
         ozellik: document.getElementById('duzOzellik').value,
         mense: (document.getElementById('duzMense').value || '').trim().toUpperCase() || 'TURKIYE',
@@ -3356,13 +3394,50 @@ async function duzenleKaydet() {
            sunucu bos degeri atliyor, boylece "temizlemek"
            istemeden sifirlamak mumkun degil. */
         ...olcuGovde(),
+        /* AT1: giriş tarihi yalnız DEĞİŞTİYSE gider. Alış tarihi
+           dolu ve görünürse HER kayıtta gider: sunucu her şey zaten
+           o tarihteyse dokunmaz, stok kartı ile borç ayrı
+           günlerdeyse borcu eşitler ve mesajda söyler. */
+        ...(() => {
+          const g = {};
+          const gt = document.getElementById('duzGirisTarih').value;
+          if (gt && gt !== (DUZ_STOK.giris_tarihi || '').slice(0, 10)) g.giris_tarihi = gt;
+          const at = document.getElementById('duzAlisTarih').value;
+          if (at && document.getElementById('duzAlisTarihAlan').style.display !== 'none')
+            g.alis_tarihi = at;
+          return g;
+        })(),
         aciklama: document.getElementById('duzAciklama').value
       })
     });
     bildir(d.mesaj || 'Stok güncellendi');
+    maliKapat();
     duzenleKapat();
     await Promise.all([listeyiCiz(), kpiYukle()]);
-  } catch (e) { /* */ }
+  } catch (e) {
+    /* ── TD1 · TEDARİKÇİ DEĞİŞİMİNDE MALİ KARAR ──
+       Tedarikçi değiştiğinde alış borcu da taşınmak zorunda ama
+       NASIL taşınacağı kullanıcının kararı (silme yolundaki SF1
+       kuralının aynısı). Sunucu 409 dönüyor; base.html'deki api()
+       409'u "çağıran özel ele alacak" sayıp uyarı BASMIYOR, bu yüzden
+       bu dalı yazmasam kullanıcı HİÇBİR ŞEY görmezdi: pencere açık
+       kalır, kaydet çalışmamış görünür. */
+    const y = (e && e.yanit) || null;
+    if (y && y.error === 'mali_islem_gerekli') maliAc(null, null, null, y, 'duzenle');
+    /* MK1 · kapanmış KDV dönemi: "taşınsın" seçilemez, karşı kayda
+       yönlendiriliyor. Mesaj gösterilip pencere yeniden açılıyor ki
+       öteki seçeneğe geçebilsin. */
+    /* AT1 · alış tarihi kapanmış bir KDV dönemine giriyor/çıkıyor.
+       api() 409'da uyarı BASMIYOR; bu dal olmasa pencere açık kalır,
+       kullanıcı hiçbir şey görmezdi. */
+    else if (y && y.error === 'kdv_donemi_kapali' && y.baglam === 'alis_tarihi') {
+      bildir(y.mesaj || 'Bu tarih kapanmış bir KDV dönemine ait.', true);
+    }
+    else if (y && y.error === 'kdv_donemi_kapali' && y.baglam === 'tedarikci') {
+      bildir(y.mesaj || 'Bu fatura kapanmış bir KDV dönemine ait.', true);
+      maliAc(null, null, null, y, 'duzenle');
+    }
+  }
   finally { btn.disabled = false; btn.textContent = 'Kaydet'; }
 }
 
@@ -3496,25 +3571,47 @@ async function topluMaliSec(secim) {
    olurdu. */
 let MALI_HEDEF = null;
 
-function maliAc(id, tip, no, y) {
-  MALI_HEDEF = { id, tip, no };
+/* TD1: `nereden` ('sil' | 'duzenle') hangi işlemin devam edeceğini
+   söylüyor. İki ayrı pencere yazmadım — soru aynı soru, yalnız
+   bağlamı farklı; iki kopya zamanla birbirinden ayrılırdı. */
+function maliAc(id, tip, no, y, nereden) {
+  MALI_HEDEF = { id, tip, no, nereden: nereden || 'sil' };
   const kutu = document.getElementById('maliGovde');
+  const tedarikci = (y.baglam === 'tedarikci');
   const para = (Number(y.pay) || 0).toLocaleString('tr-TR',
     { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (y.doviz || '');
+  document.getElementById('maliBaslik').textContent =
+    tedarikci ? 'Borç Ne Olsun?' : 'Faturaya Ne Yapılsın?';
+  document.getElementById('maliAlt2').textContent = tedarikci
+    ? 'Tedarikçi değişiyor — borcun hangi hesapta duracağını seçin'
+    : 'Stok düzeltmesi ile mali düzeltme aynı şey değildir';
+  const giris = tedarikci
+    ? `Bu stok <strong>${kacar(y.fatura_no || '')}</strong> numaralı alış
+       faturasına bağlı (<strong>${para}</strong> pay) ve borç
+       <strong>${kacar(y.eski_tedarikci || '')}</strong> hesabında.
+       Tedarikçiyi <strong>${kacar(y.yeni_tedarikci || '')}</strong> yaparken
+       borca ne yapılacağını seçin.`
+    : `Bu stok <strong>${kacar(y.fatura_no || '')}</strong> numaralı alış faturasına
+       bağlı (<strong>${para}</strong> pay). Faturaya ne yapılacağını seçin.`;
+  const aciklama = tedarikci
+    ? `<strong>Tedarikçi yanlış yazılmışsa</strong> borç taşınmalı — "Taşınsın".<br>
+       <strong>Mal gerçekten yeni tedarikçiden geldiyse</strong> ama eski
+       faturası da gerçekse — "Karşı kayıt".<br>
+       <strong>Yalnız stok kartı yanlışsa</strong> borca dokunulmasın —
+       "Sadece stok kartı".`
+    : `<strong>Stok yanlış girildiyse</strong> fatura doğrudur — "Sadece stok".<br>
+       <strong>İade / hurda / konsinye</strong> ise fatura korunmalı — "Karşı kayıt".<br>
+       <strong>Fatura da yanlışsa</strong> — "Fatura bedeli düzeltilsin".`;
   kutu.innerHTML = `
-    <p style="font-size:.88rem;line-height:1.6;margin-bottom:12px">
-      Bu stok <strong>${kacar(y.fatura_no || '')}</strong> numaralı alış faturasına
-      bağlı (<strong>${para}</strong> pay). Faturaya ne yapılacağını seçin.
-    </p>
+    <p style="font-size:.88rem;line-height:1.6;margin-bottom:12px">${giris}</p>
     <div style="font-size:.8rem;color:var(--soluk);line-height:1.55;
          padding:10px 12px;background:var(--notr-bg);border-radius:8px;margin-bottom:14px">
-      <strong>Stok yanlış girildiyse</strong> fatura doğrudur — "Sadece stok".<br>
-      <strong>İade / hurda / konsinye</strong> ise fatura korunmalı — "Karşı kayıt".<br>
-      <strong>Fatura da yanlışsa</strong> — "Fatura bedeli düzeltilsin".
+      ${aciklama}
     </div>
     ${Object.entries(y.secenekler || {}).map(([k, ad]) => `
       <button class="blok-btn" style="display:block;width:100%;text-align:left;
-              margin-bottom:8px;padding:11px 13px"
+              margin-bottom:8px;padding:11px 13px;
+              white-space:normal;line-height:1.45"
               onclick="maliSec('${k}')">${kacar(ad)}</button>`).join('')}`;
   document.getElementById('maliModal').classList.add('acik');
 }
@@ -3528,6 +3625,8 @@ function maliKapat() {
 function maliSec(secim) {
   if (!MALI_HEDEF) return;
   const h = MALI_HEDEF;
+  /* TD1: ayni pencere iki isi bitiriyor. */
+  if (h.nereden === 'duzenle') { duzenleKaydet(secim); return; }
   stokSil(h.id, h.tip, h.no, secim);
 }
 

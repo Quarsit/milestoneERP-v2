@@ -32,6 +32,10 @@
   .suz input:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
   tbody tr{cursor:pointer}
   .ekstre-satir{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--cizgi);font-size:.84rem}
+  /* FI1 · belgesi olan hareket tıklanır */
+  .ekstre-satir .fi-ac{cursor:pointer;border-radius:6px;margin:-3px -6px;padding:3px 6px;min-width:0}
+  .ekstre-satir .fi-ac:hover,.ekstre-satir .fi-ac:focus-visible{background:var(--verde-acik);outline:none}
+  .fi-ipucu{color:var(--verde);font-size:.72rem;font-weight:600;white-space:nowrap}
   .ekstre-satir:last-child{border-bottom:0}
   .ekstre-satir .t{font-family:var(--mono);font-size:.74rem;color:var(--soluk);width:74px;flex:none}
   .ekstre-satir .tut{margin-left:auto;font-family:var(--mono);font-weight:600;white-space:nowrap}
@@ -391,6 +395,9 @@
     </div>
   </div>
 </div>
+
+{# FI1/GF1 · fatura içeriği penceresi — Gelen Faturalar sayfasıyla ORTAK parça #}
+{% include '_fatura_icerik.html' %}
 
 <!-- Cari hareket modalı -->
 <div class="modal-ortu" id="harModal" onclick="if(event.target===this)hareketKapat()">
@@ -1189,6 +1196,9 @@ let HAR_ACIK_FATURALAR = [];
    satiri ID ile buradan okuyor; onclick'e JSON gomseydik tek bir
    kacis hatasi o satirin butonunu bozardi. */
 let HAR_SON = [];
+let HAR_TUM = [];     // FI1: carinin BÜTÜN hareketleri (açık fatura kartı kendi hareketini burada arar)
+let HAR_HEPSI = false; // FI1: "tümünü göster"
+let FI_LISTE_CARI = null;
 
 async function hFaturalariYukle() {
   const alan = document.getElementById('hFaturaAlan');
@@ -1570,6 +1580,27 @@ function bakiyeKutulari(bakiye, c) {
   return h;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   FI1 · FATURA İÇERİĞİ
+   GET /api/cari/hareket/<id>/icerik — salt okunur.
+
+   Hareket satırı faturayı TEK SATIR gösteriyordu; içinde hangi
+   blokların / hangi masraf kalemlerinin olduğu görülemiyordu.
+   Belgesi olan satır artık tıklanıyor. Belge üç yerde durabiliyor
+   (stok kartları, maliyet satırları, fatura kaydı); hangisi olduğunu
+   sunucu çözüyor, burası yalnız çiziyor.
+   ══════════════════════════════════════════════════════════════ */
+const FI_BAGLAR = ['stok_fatura', 'maliyet', 'fatura', 'fatura_kesim'];
+function fiVarMi(h) { return !!(h && h.baglanti_id && FI_BAGLAR.includes(h.baglanti_tip)); }
+/* Açık fatura kartından: o faturanın KENDİ hareketini bul. */
+function fiFaturadanAc(faturaId) {
+  const h = (HAR_TUM || []).find(x => x.baglanti_id === faturaId &&
+      (x.baglanti_tip === 'fatura' || x.baglanti_tip === 'fatura_kesim') && (x.borc || 0) > 0)
+    || (HAR_TUM || []).find(x => x.baglanti_id === faturaId || x.id === faturaId);
+  if (h) hareketIcerik(h.id);
+  else bildir('Bu faturanın cari hareketi bulunamadı.', true);
+}
+
 async function detayAc(id) {
   const c = TUM.find(x => x.id === id);
   if (!c) return;
@@ -1584,7 +1615,12 @@ async function detayAc(id) {
       api(`/api/cari/${encodeURIComponent(id)}/hareketler`),
       api(`/api/cari/${encodeURIComponent(id)}/bakiye`)
     ]);
-    hareketler = (h.data || []).slice().reverse().slice(0, 15);
+    /* FI1: eski faturalar ilk 15'in dışında kalıyor ve içerikleri
+       açılamıyordu; "tümünü göster" ile liste uzuyor. Cari değişince
+       kısa listeye dönülür. */
+    if (FI_LISTE_CARI !== id) { HAR_HEPSI = false; FI_LISTE_CARI = id; }
+    HAR_TUM = (h.data || []).slice().reverse();
+    hareketler = HAR_HEPSI ? HAR_TUM : HAR_TUM.slice(0, 15);
     HAR_SON = hareketler;        // DZ5
     bakiye = b || {};
   } catch (e) { /* */ }
@@ -1619,13 +1655,14 @@ async function detayAc(id) {
           : ''}
     </div>
     <h4 style="font-size:.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--soluk);margin-bottom:6px">
-      Son hareketler ${hareketler.length ? '· ' + hareketler.length : ''}</h4>
+      ${HAR_HEPSI ? 'Hareketler' : 'Son hareketler'} ${hareketler.length ? '· ' + hareketler.length : ''}${
+        HAR_TUM.length > 15 ? ` <button class="crm-mini" style="margin-left:6px;text-transform:none;letter-spacing:0" onclick="HAR_HEPSI=!HAR_HEPSI;detayAc('${kacar(id)}')">${HAR_HEPSI ? 'Son 15' : 'Tümünü göster (' + HAR_TUM.length + ')'}</button>` : ''}</h4>
     <div>
       ${hareketler.length ? hareketler.map(h => `
         <div class="ekstre-satir">
           <span class="t">${kacar((h.hareket_tarihi || '').slice(5))}</span>
-          <div>
-            <div>${kacar(islemEtiket(h.islem_tip))}</div>
+          <div ${fiVarMi(h) ? `class="fi-ac" role="button" tabindex="0" title="Fatura içeriğini göster" onclick="hareketIcerik('${kacar(h.id)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();hareketIcerik('${kacar(h.id)}')}"` : ''}>
+            <div>${kacar(islemEtiket(h.islem_tip))}${fiVarMi(h) ? ' <span class="fi-ipucu">içerik ›</span>' : ''}</div>
             ${h.aciklama && h.aciklama !== h.islem_tip ? '<div style="color:var(--soluk);font-size:.75rem">' + kacar(h.aciklama.slice(0, 42)) + '</div>' : ''}
             ${/* KU1: KUR AÇIKÇA GÖRÜNSÜN.
                   1.000 USD'lik hareketin hangi kurla çevrildiği
@@ -1719,7 +1756,8 @@ async function acikFaturaYukle(id) {
       ${AF_LISTE.map(f => `
         <label class="af-satir" style="${yz ? 'cursor:pointer' : ''}">
           ${yz ? `<input type="checkbox" class="af-sec" value="${kacar(f.id)}" onchange="afSecimDegisti()">` : '<span></span>'}
-          <div><div>${kacar(f.fatura_no)} <span style="color:var(--soluk);font-size:.78rem">· ${kacar(f.tarih || '')}</span></div>
+          <div><div>${kacar(f.fatura_no)} <span style="color:var(--soluk);font-size:.78rem">· ${kacar(f.tarih || '')}</span>
+              <button type="button" class="crm-mini" style="margin-left:6px" onclick="event.preventDefault();event.stopPropagation();fiFaturadanAc('${kacar(f.id)}')">içerik</button></div>
             <div class="alt">${f.vade_tarihi
               ? (f.gecikme_gun > 0 ? `<span class="gec">vade ${tr(f.vade_tarihi)} · ${f.gecikme_gun} gün geçti</span>`
                                    : `vade ${tr(f.vade_tarihi)}`)

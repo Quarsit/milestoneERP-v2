@@ -621,11 +621,13 @@
           Görünenlerin tümünü seç
         </label>
         <span id="stSayac" style="font-size:.82rem;color:var(--soluk)">0 seçili</span>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.84rem;margin-left:auto"
-               title="İşaretlenirse seçilen stoklar bu müşteri adına rezerve edilir ve başka teklife bağlanamaz.">
-          <input type="checkbox" id="stRezerve" style="width:15px;height:15px">
-          Seçilenleri rezerve et
-        </label>
+        <!-- PRF1 · "Seçilenleri rezerve et" KUTUSU KALDIRILDI.
+             Gözden kaçıyordu: işaretlenmeyince kalemler
+             `rezerve_et: false` ile kaydediliyor ve stoklar serbest
+             kalıyordu — kullanıcı rezerve olduğunu sanıyordu. Sessiz
+             varsayılan yerine KAYDEDERKEN AÇIKÇA soruluyor
+             (Rezerve Et / Serbest Kalsın). Serbest bırakılanlar
+             sonradan bu proforma için rezerve edilebiliyor. -->
       </div>
 
       <div id="stListe" class="tablo-kutu" style="max-height:380px;overflow:auto">
@@ -1205,9 +1207,31 @@ async function detayAc(id) {
     else
       eylem.push(`<button class="blok-btn" disabled title="Faturaya dönüştürmek için önce Düzenle'den bir sipariş seçin" style="opacity:.45;cursor:not-allowed">Faturaya dönüştür</button>`);
   }
+  /* PRF1 · STOKLARI SONRADAN REZERVE ET.
+     Kaydederken "Serbest Kalsın" denen ürünler burada rezerve
+     edilebiliyor — kullanıcının açık isteği. Siparişe bağlı
+     proformada anlamsız (stoklar zaten Satıldı), o yüzden
+     gösterilmiyor; uç da aynı koşulu kendi denetliyor. */
+  if (yazabilir('proforma') && !p.siparis_id &&
+      p.durum !== 'Faturalandi' && p.durum !== 'Iptal' &&
+      p.durum !== 'Kaybedildi' && p.durum !== 'Revize' &&
+      p.aktif_surum !== false)
+    eylem.push(`<button class="blok-btn" onclick="proformaRezerve('${kacar(id)}')" title="Bu proformadaki serbest stokları müşteri adına rezerve et">Stokları rezerve et</button>`);
+  /* PS1 · İPTAL ET.
+     Sunucu bu geçişi hep kabul ediyordu ama ÇAĞIRAN DÜĞME YOKTU:
+     Taslak'tan çıkmış hiçbir proforma İptal'e alınamıyor, İptal'e
+     alınamadığı için de SİLİNEMİYORDU ("Silmek için önce İptal
+     durumuna alın" diyen bir kural, iptal düğmesi olmayan bir
+     ekran). Koşul sunucudaki geçiş tablosuyla aynı çizgide.
+     Siparişe dönüşmüş / faturalanmış proformada düğme YOK: orada
+     iptal siparişi ve stokları da etkiler, sipariş üzerinden
+     yürümeli. */
+  if (yazabilir('proforma') && p.aktif_surum !== false &&
+      ['Taslak','Ic Onay','Onaylandi','Gonderildi','Kaybedildi'].includes(p.durum))
+    eylem.push(`<button class="blok-btn" style="border-color:var(--kirmizi);color:var(--kirmizi)" onclick="proformaIptal('${kacar(id)}', ${p.durum === 'Kaybedildi'})">İptal et</button>`);
   // Sil: yalnızca Taslak ve İptal durumunda (onaylanmış belgeler denetim izi için korunur)
   if (yazabilir('proforma') && (p.durum === 'Taslak' || p.durum === 'Iptal'))
-    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="proformaSil('${kacar(id)}')">Sil</button>`);
+    eylem.push(`<button class="blok-btn" style="color:var(--kirmizi)" onclick="proformaSil('${kacar(id)}', ${Number(p.surum_sayisi) || 1})">Sil</button>`);
 
   cekmeceAc(kacar(p.musteri || id), `${p.id} · ${AD[p.durum] || p.durum}`, govde, eylem.join(''));
   // K7: çekmece DOM'a girdikten SONRA konteyner kutusunu doldur.
@@ -1431,9 +1455,24 @@ async function surumleriGoster(id) {
   } catch (e) { /* */ }
 }
 
+/* PS1 · POST /api/proforma/<id>/durum {durum:'Iptal'} */
+async function proformaIptal(id, kayip) {
+  const metin = kayip
+    ? `${id} iptal edilsin mi?\n\nKayıp kaydı İPTAL'e çevrilir: teklif dönüşüm oranı raporunda artık "kaybedilen" sayılmaz. İptal edilen proforma silinebilir.`
+    : `${id} iptal edilsin mi?\n\nBağlı stok rezervasyonları serbest bırakılır. İptal edilen proforma yeniden Taslak'a alınabilir ya da silinebilir.`;
+  if (!await onayla(metin, { tehlike: true })) return;
+  return durumGecir(id, 'Iptal');
+}
+
 /* DELETE /api/proforma/<id> */
-async function proformaSil(id) {
-  if (!await onayla(`${id} silinsin mi? Bağlı rezervasyonlar serbest bırakılır.`, { tehlike: true })) return;
+async function proformaSil(id, surumSayisi) {
+  /* PS1: revize zinciri birlikte silinir — kaç eski sürümün de
+     gideceği SORUDA yazıyor, sonradan öğrenilmiyor. */
+  const eski = Math.max(0, (Number(surumSayisi) || 1) - 1);
+  const ek = eski > 0
+    ? `\n\nBu proformanın ${eski} eski sürümü (revize arşivi) de birlikte silinir.`
+    : '';
+  if (!await onayla(`${id} silinsin mi? Bağlı rezervasyonlar serbest bırakılır.${ek}`, { tehlike: true })) return;
   try {
     const d = await api(`/api/proforma/${encodeURIComponent(id)}`, { method: 'DELETE' });
     bildir(d.mesaj || 'Proforma silindi');
@@ -1776,7 +1815,6 @@ async function stokSecAc() {
   document.getElementById('stokModal').classList.add('acik');
   ST_SECILI.clear();
   document.getElementById('stAra').value = '';
-  document.getElementById('stRezerve').checked = false;
   document.getElementById('stTumu').checked = false;
   await stokSecYukle();
 }
@@ -1896,24 +1934,15 @@ function stokSecSayacGuncelle() {
 async function stokSecEkle() {
   if (!ST_SECILI.size) return;
   const tip = document.getElementById('stTip').value;
-  const rezerveEt = document.getElementById('stRezerve').checked;
   const secilenler = ST_VERI.filter(x => ST_SECILI.has(x.id));
 
-  /* YAMA F1 — Rezervasyon ARTIK BURADA YAPILMIYOR.
-     Eskiden stok secilir seçilmez /api/rezervasyon cagriliyordu. Sorun:
-       • Rezervasyon kaydi hicbir belgeye baglanmiyordu (proforma_id yoktu),
-       • Kullanici modali IPTAL ederse stoklar sahipsiz "Rezerve" kilitli kaliyordu.
-     Yeni davranis: niyet kalemde tasinir, proforma KAYDEDILINCE sunucu
-     tarafinda proforma_id ile birlikte rezervasyon olusur. */
-  if (rezerveEt) {
-    const musteri = document.getElementById('fMusteri').value;
-    if (!musteri) {
-      bildir('Rezervasyon için önce müşteri seçmelisiniz.', true);
-      return;
-    }
-    if (!await onayla(`${secilenler.length} stok, proforma KAYDEDİLDİĞİNDE "${musteri}" adına rezerve edilecek ve başka tekliflere kapanacak.\n\nDevam edilsin mi?`)) return;
-  }
-
+  /* YAMA F1 + PRF1 — Rezervasyon BURADA YAPILMIYOR, SORULMUYOR da.
+     Eskiden önce stok seçilir seçilmez /api/rezervasyon çağrılıyordu;
+     kayıt hiçbir belgeye bağlanmıyor ve modal iptal edilirse stoklar
+     sahipsiz kilitli kalıyordu (F1 bunu kaldırdı). F1'den sonra bir
+     işaret kutusu vardı; o da gözden kaçıyordu (PRF1 kaldırdı).
+     Niyet artık KAYDEDERKEN soruluyor; rezervasyon sunucu tarafında
+     proforma_id ile birlikte oluşuyor. */
   // ── Stok kayıtlarını proforma kalemine dönüştür ──
   const dov = document.getElementById('fDoviz').value || 'USD';
   secilenler.forEach(x => {
@@ -1925,7 +1954,11 @@ async function stokSecEkle() {
       mense: x.mense || 'TURKIYE',   // MS1
       boy: parseFloat(x.boy) || 0,
       yukseklik: parseFloat(x.yukseklik) || 0,
-      kalinlik: parseFloat(x.kalinlik) || (tip === 'BLOK' ? 0 : 2),
+      /* PRF1: BLOK'ta 3. boyut EN. `kalinlik` 0 bırakılınca hacim
+         hesabı sıfır veriyor ve düzenleme formu boş geliyordu;
+         ikisini aynı değerle dolduruyoruz. */
+      kalinlik: (tip === 'BLOK' ? (parseFloat(x.en) || 0)
+                                : (parseFloat(x.kalinlik) || 2)),
       en: parseFloat(x.en) || 0,
       adet: 1,
       kasa_ici_adet: parseInt(x.kasa_ici_adet) || 1,
@@ -1944,7 +1977,6 @@ async function stokSecEkle() {
       tonaj: tip === 'BLOK' ? (parseFloat(x.tonaj) || 0) : null,
       _stoktan: true,
       _stok_id: x.id,
-      _rezerveEt: rezerveEt,   // YAMA F2 — kayitta sunucuya bildirilir
     };
     if (tip === 'BLOK') k.miktar = parseFloat(x.tonaj) || 0;
     kalemDegerleriHesapla(k);
@@ -2174,6 +2206,17 @@ function kalemEkle() {
     boy: parseFloat(document.getElementById('kBoy').value) || null,
     yukseklik: parseFloat(document.getElementById('kYuk').value) || null,
     kalinlik: parseFloat(document.getElementById('kKal').value) || null,
+    /* PRF1 · BLOK'ta `kKal` kutusunun ETİKETİ "En (cm)" ama nesne
+       yalnız `kalinlik` yazıyordu. Stoktan gelen blokta gerçek
+       genişlik `k.en`de taşınıyor ve veritabanına da `en` olarak
+       kaydediliyor — fakat bu nesne `en` alanını HİÇ kurmadığı için
+       kalemi düzenleyip kaydedince kayıtlı genişlik SİLİNİYORDU.
+       Görüntü hatası değil, veri kaybıydı. İkisini birlikte
+       yazıyorum: hacim hesabı `kalinlik`i okumaya devam ediyor,
+       kayıt `en`i kullanıyor, ikisi artık ayrışamıyor. */
+    en: (document.getElementById('kTip').value === 'BLOK'
+         ? (parseFloat(document.getElementById('kKal').value) || null)
+         : (eski ? (eski.en || null) : null)),
     adet: parseInt(document.getElementById('kAdet').value) || 1,
     kasa_ici_adet: parseInt(document.getElementById('kKasaIci').value) || 1,
     slab_baslangic: document.getElementById('kSlabBas').value || (eski ? eski.slab_baslangic : '') || '',
@@ -2201,6 +2244,22 @@ function kalemEkle() {
   }
   bundleHesapla(); kalemListeCiz();
   kalemFormTemizle();
+}
+
+/* PRF1 — kayıtlı proformanın serbest stoklarını rezerve et. */
+async function proformaRezerve(id) {
+  if (!await onayla(
+        'Bu proformadaki serbest stoklar müşteri adına rezerve ' +
+        'edilecek ve başka tekliflere kapanacak.\n\nDevam edilsin mi?',
+        {baslik: 'Stokları rezerve et', tamam: 'Rezerve Et'})) return;
+  try {
+    const y = await api(`/api/proforma/${encodeURIComponent(id)}/rezerve`,
+                        {method: 'POST'});
+    /* Uç 0 rezerve ettiğinde SEBEBİNİ döndürüyor; sessiz "tamam"
+       yerine onu gösteriyoruz. */
+    bildir(y.mesaj || 'Rezerve edildi', !y.adet);
+    await detayAc(id);           // çekmeceyi tazele
+  } catch (e) { /* api() bildiriyor */ }
 }
 
 /* Kalem formunu temizle ve ekleme moduna dön */
@@ -2232,7 +2291,13 @@ function kalemDuzenle(i) {
   document.getElementById('kPlanNot').value = k.plan_notu || '';
   document.getElementById('kBoy').value = k.boy || '';
   document.getElementById('kYuk').value = k.yukseklik || '';
-  document.getElementById('kKal').value = (k.kalinlik != null ? k.kalinlik : '');
+  /* PRF1: BLOK'ta bu kutu "En (cm)". Önce `en` okunuyor; eski
+     kayıtlarda genişlik `kalinlik`te durduğu için ona geri
+     düşüyoruz. Eskiden yalnız `kalinlik` okunuyordu ve stoktan
+     gelen blokta o alan 0 olduğu için alan BOŞ geliyordu. */
+  const _pEn = (k.urun_tip === 'BLOK') ? (k.en != null ? k.en : k.kalinlik)
+                                       : k.kalinlik;
+  document.getElementById('kKal').value = (_pEn != null ? _pEn : '');
   document.getElementById('kAdet').value = k.adet || 1;
   document.getElementById('kKasaIci').value = k.kasa_ici_adet || 1;
   document.getElementById('kBirim').value = k.birim || 'm2';
@@ -2299,19 +2364,39 @@ async function tumKalemlereFiyat() {
   const f = parseFloat(document.getElementById('tfFiyat').value);
   if (!f || f <= 0) { bildir('Geçerli bir birim fiyat girin', true); return; }
   if (!KALEMLER.length) { bildir('Önce kalem ekleyin', true); return; }
-  const bosOlanlar = KALEMLER.filter(k => !parseFloat(k.birim_fiyat)).length;
-  const hepsi = bosOlanlar === 0
-    ? await onayla(`Tüm kalemlerin fiyatı dolu.\n\n${KALEMLER.length} kalemin hepsi ` +
-              `${f} olarak DEĞİŞTİRİLSİN mi?`)
-    : true;
-  if (!hepsi) return;
-  KALEMLER.forEach(k => {
+  /* PRF1 · DOLU FİYATLAR ARTIK EZİLMİYOR.
+     Eski davranış: onay YALNIZCA hiç boş kalem yokken soruluyordu
+     (`bosOlanlar === 0`), sonra fiyat KALEMLER'in TAMAMINA
+     yazılıyordu. Yani karışık durum — bazısı dolu bazısı boş —
+     tam da onayın atlandığı ve dolu fiyatların SESSİZCE ezildiği
+     durumdu: 100'le girilmiş 5 kalem, boş 3 kalem için 50 yazılınca
+     50'ye dönüyordu. Yanındaki "3 kalemin fiyatı boş" uyarısı da
+     "boşları dolduracak" izlenimi veriyordu.
+
+     Yeni davranış, etiketin ve uyarının söylediği şey:
+       · boş kalem VARSA  → yalnız BOŞ olanlar doldurulur
+       · hepsi boşsa      → hepsi doldurulur (aynı şey)
+       · hiç boş yoksa    → "hepsini değiştir" onayı sorulur
+     Hiçbir durumda sessiz değil; kaç kalemin değiştiği ve kaçının
+     korunduğu bildiriliyor. */
+  const bosOlanlar = KALEMLER.filter(k => !parseFloat(k.birim_fiyat));
+  let hedef = bosOlanlar;
+  if (!bosOlanlar.length) {
+    if (!await onayla(
+          `Tüm kalemlerin fiyatı dolu.\n\n${KALEMLER.length} kalemin ` +
+          `hepsi ${f} olarak DEĞİŞTİRİLSİN mi?`,
+          {baslik: 'Fiyatları değiştir', tamam: 'Hepsini değiştir'})) return;
+    hedef = KALEMLER.slice();
+  }
+  hedef.forEach(k => {
     k.birim_fiyat = f;
     k.toplam_fiyat = q2((parseFloat(k.miktar) || 0) * f);
     k.net_fiyat = k.toplam_fiyat;
   });
   kalemListeCiz();
-  bildir(`${KALEMLER.length} kaleme ${f} birim fiyat uygulandı`);
+  const korunan = KALEMLER.length - hedef.length;
+  bildir(`${hedef.length} kaleme ${f} birim fiyat uygulandı`
+         + (korunan ? ` · ${korunan} kalemin fiyatı korundu` : ''));
 }
 
 /* ── Finansal zincir: kalem − iskonto → +KDV → genel; avans bilgi ── */
@@ -2367,6 +2452,26 @@ async function proformaKaydet() {
   if (tipi === 'satis' && !sid) {
     if (!await onayla('SATIŞ proforması siparişe bağlı olmalı. Siparişsiz (teklif gibi) kaydedilsin mi?')) return;
   }
+  /* PRF1 · REZERVASYONU KAYDEDERKEN SOR.
+     Stoktan gelen kalem varsa iki seçenekli açık bir soru soruluyor:
+     "Rezerve Et" / "Serbest Kalsın". Eskiden bu bir işaret kutusuydu
+     ve gözden kaçtığı için stoklar sessizce serbest kalıyordu.
+
+     Pencere kapatılırsa (Esc) SERBEST tarafa düşüyor — bilerek:
+     serbest bırakmak geri alınabilir (aşağıdaki "Stokları rezerve
+     et" düğmesiyle sonradan rezerve edilebiliyor), oysa yanlışlıkla
+     kilitlemek başka teklifleri engeller. */
+  let _rezIste = false;
+  const _stokKalem = KALEMLER.filter(k => k._stok_id).length;
+  if (_stokKalem) {
+    _rezIste = await onayla(
+      `${_stokKalem} kalem stoktan geliyor.\n\n` +
+      `Bu ürünler "${musteri}" adına rezerve edilsin mi?\n` +
+      `Serbest kalırsa başka tekliflere de konabilir; ` +
+      `daha sonra bu proforma için rezerve edebilirsin.`,
+      {baslik: 'Rezervasyon', tamam: 'Rezerve Et', iptal: 'Serbest Kalsın'});
+  }
+
   const t = toplamlar();
   const btn = document.getElementById('fKaydet');
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';
@@ -2399,7 +2504,7 @@ async function proformaKaydet() {
     genel_bundle_sayisi: parseInt(document.getElementById('fBundle').value) || 10,
     karma_bundle: document.getElementById('fKarma').checked,
     toplam: t.genel,
-    rezerve_et: KALEMLER.some(k => k._rezerveEt),   // YAMA F3
+    rezerve_et: _rezIste,   // YAMA F3 + PRF1: kutu değil, kaydederken sorulan cevap
     kalemler: KALEMLER.map(k => ({
       urun_tip: k.urun_tip, cins: k.cins, ozellik: k.ozellik, blok_no: k.blok_no || null,
       mense: k.mense || null,   // MS1
