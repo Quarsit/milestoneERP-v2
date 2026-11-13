@@ -83,6 +83,8 @@
   .form-alan label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soluk);margin-bottom:5px}
   .form-alan input,.form-alan select{width:100%;border:1px solid var(--cizgi-koyu);border-radius:var(--r-kucuk);padding:9px 11px;font-family:var(--govde);font-size:.9rem;background:var(--yuzey)}
   .form-alan input:focus,.form-alan select:focus{outline:none;border-color:var(--verde);box-shadow:0 0 0 3px var(--verde-acik)}
+  /* IT1: ithalatta tarih alanının altındaki yönlendirme notu */
+  .it1-not{font-size:.72rem;color:var(--kehribar);margin-top:3px;line-height:1.35}
   .form-alan input[readonly]{background:var(--notr-bg);font-family:var(--mono);font-weight:600}
   .onay{display:flex;align-items:center;gap:8px;font-size:.85rem;margin-bottom:12px}
   .onay input{width:auto}
@@ -452,8 +454,9 @@
       <div class="form-satir f2">
         <div class="form-alan"><label>Giriş Tarihi</label>
           <input id="duzGirisTarih" type="date"></div>
-        <div class="form-alan" id="duzAlisTarihAlan"><label>Alış / Fatura Tarihi</label>
+        <div class="form-alan" id="duzAlisTarihAlan"><label id="duzAlisTarihEtiket">Alış / Fatura Tarihi</label>
           <input id="duzAlisTarih" type="date">
+          <div id="duzAlisTarihNot" class="it1-not" style="display:none">İthalatta beyannamenin tescil tarihini girin: borç ve maliyet kuru bu güne göre hesaplanır.</div>
           <div style="font-size:.72rem;color:var(--soluk);margin-top:3px;line-height:1.35">Aynı faturadaki öbür stoklar ve tedarikçi borcu da bu tarihe alınır.</div></div>
       </div>
       <div class="form-alan"><label>Açıklama</label>
@@ -660,7 +663,8 @@
           <div class="form-alan"><label>Giriş Tarihi</label>
             <input id="tGirisTarih" type="date" data-buyuk-harf="hayir"></div>
           <div class="form-alan"><label id="tAlisTarihEtiket">Alış / Fatura Tarihi</label>
-            <input id="tAlisTarih" type="date" data-buyuk-harf="hayir"></div>
+            <input id="tAlisTarih" type="date" data-buyuk-harf="hayir">
+            <div id="tAlisTarihNot" class="it1-not" style="display:none">İthalatta beyannamenin tescil tarihini girin: borç ve maliyet kuru bu güne göre hesaplanır.</div></div>
           <div class="form-alan" id="tBaslangicAlan">
             <label>Başlangıç Plaka No</label>
             <input id="tBaslangicNo" type="number" min="0" step="1" data-buyuk-harf="hayir"
@@ -900,7 +904,8 @@
              oldu. Ama ÜRETİM stoğunun faturası yok — o durumda
              "Üretim Tarihi" yazıyor (toplu aktarma formunda da
              böyle). Yanlış ada sabitlemektense tipe göre söylüyoruz. -->
-        <div class="form-alan"><label id="sAlisTarihEtiket">Fatura Tarihi</label><input id="sAlisTarih" type="date"></div>
+        <div class="form-alan"><label id="sAlisTarihEtiket">Fatura Tarihi</label><input id="sAlisTarih" type="date">
+          <div id="sAlisTarihNot" class="it1-not" style="display:none">İthalatta beyannamenin tescil tarihini girin: borç ve maliyet kuru bu güne göre hesaplanır.</div></div>
         <!-- US1: KDV oranı kendi satırındaydı; fatura satırının
              dördüncü sütununa geldi. Gizlenme kuralı aynı: yalnız
              yurt içi KDV'li alışta görünür. -->
@@ -2164,6 +2169,8 @@ function kaynakDegisti() {
   /* US1: üretimde fatura yok — tarih etiketi onu söylesin. */
   const _te = document.getElementById('sAlisTarihEtiket');
   if (_te) _te.textContent = uretim ? 'Üretim Tarihi' : 'Fatura Tarihi';
+  if (!uretim) ithalatTarihYonlendir('s', 'Fatura Tarihi');
+  else ithalatTarihYonlendir('s', 'Üretim Tarihi', false);
   /* US2: fiyat alanı da öyle. Satın almadığın malın "alış fiyatı"
      olmaz; girilen rakam senin kendi masrafın ve cariye borç
      yazılmıyor. Alanın KENDİSİ duruyor — boş bırakılırsa o stoğun
@@ -2227,7 +2234,28 @@ function kdvAlanlariGoster(goster) {
   if (d) d.style.display = goster ? '' : 'none';
 }
 
+/* ══════════════════════════════════════════════════════════════
+   IT1 · İTHALATTA TARİH = BEYANNAME TESCİL TARİHİ
+   Sistemde "alış tarihi" borcun tarihini ve maliyetin kur gününü
+   belirliyor. İthalatta bu gün satıcı faturasının değil, gümrük
+   beyannamesinin tescil tarihi (kullanıcının kararı, 12.11). Davranış
+   aynı; alan yalnız doğru tarihi istiyor. Üç formda da aynı kural:
+   önek 's' tekil giriş, 't' toplu aktarma, 'duz' düzenleme.
+   `ithalat` verilmezse o formun alış tipi kutusundan okunur.
+   ══════════════════════════════════════════════════════════════ */
+function ithalatTarihYonlendir(onek, varsayilan, ithalat) {
+  if (ithalat === undefined) {
+    const sec = document.getElementById(onek + 'AlisTipi');
+    ithalat = !!sec && sec.value === 'ithalat';
+  }
+  const et = document.getElementById(onek + 'AlisTarihEtiket');
+  if (et) et.textContent = ithalat ? 'Beyanname Tescil Tarihi' : varsayilan;
+  const not = document.getElementById(onek + 'AlisTarihNot');
+  if (not) not.style.display = ithalat ? '' : 'none';
+}
+
 function alisTipiDegisti() {
+  ithalatTarihYonlendir('s', 'Fatura Tarihi');
   const kdvli = document.getElementById('sAlisTipi').value === 'yurtici_kdvli';
   kdvAlanlariGoster(kdvli);
   if (!kdvli) { document.getElementById('sKdv').value = 0; document.getElementById('sKdvDahil').checked = false; }
@@ -2592,6 +2620,8 @@ function topluKaynakDegisti() {
   }
   const at_ = document.getElementById('tAlisTarihEtiket');
   if (at_) at_.textContent = uretim ? 'Üretim Tarihi' : 'Alış / Fatura Tarihi';
+  if (!uretim) ithalatTarihYonlendir('t', 'Alış / Fatura Tarihi');
+  else ithalatTarihYonlendir('t', 'Üretim Tarihi', false);
   const ne_ = document.getElementById('tNakliyeEtiket');
   if (ne_) ne_.textContent = uretim
     ? 'Maliyete nakliye dahil' : 'Alış fiyatına nakliye dahil';
@@ -2603,6 +2633,8 @@ function topluKaynakDegisti() {
 }
 
 function topluKdvDurum() {
+  if (document.getElementById('tKaynak').value !== 'uretim')
+    ithalatTarihYonlendir('t', 'Alış / Fatura Tarihi');
   const kdvli = document.getElementById('tAlisTipi').value === 'yurtici_kdvli';
   document.getElementById('tKdv').disabled = !kdvli;
   document.getElementById('tKdvDahil').disabled = !kdvli;
@@ -3269,6 +3301,8 @@ function duzenleAc(id) {
   _at.value = (s.alis_tarihi || '').slice(0, 10);  _at.max = _bugun;
   document.getElementById('duzAlisTarihAlan').style.display =
     (s.kaynak === 'uretim' || s.kaynak === 'kesim') ? 'none' : '';
+  /* IT1: ithalatla alınmış stokta alan beyanname tescil tarihini ister. */
+  ithalatTarihYonlendir('duz', 'Alış / Fatura Tarihi', s.alis_tipi === 'ithalat');
   document.getElementById('duzNoLabel').textContent = s.tip === 'EBATLI' ? 'Kasa No' : 'Blok No';
   const dOz = document.getElementById('duzOzellikAlan');
   if (dOz) dOz.style.display = (s.tip === 'BLOK') ? 'none' : '';
@@ -3370,7 +3404,10 @@ function olcuGovde() {
    Tedarikci degistirildiginde sunucu 409 ile SORUYOR (bu bir hata
    degil, bir soru); kullanici secimini yapinca ayni govde
    `mali_islem` ile yeniden gonderiliyor. */
-async function duzenleKaydet(maliIslem) {
+/* GD1 · `dovizOnay` da ikinci çağrıda geliyor: alışın dövizi
+   değişiyor ve aynı faturada başka stoklar varsa sunucu 409 ile
+   "faturanın tamamı değişsin mi?" diye SORUYOR. */
+async function duzenleKaydet(maliIslem, dovizOnay) {
   const btn = document.getElementById('duzKaydet');
   btn.disabled = true; btn.textContent = 'Kaydediliyor…';
   try {
@@ -3379,6 +3416,7 @@ async function duzenleKaydet(maliIslem) {
       body: JSON.stringify({
         tip: DUZ_STOK.tip,
         ...(maliIslem ? { mali_islem: maliIslem } : {}),
+        ...(dovizOnay ? { doviz_fatura_onay: true } : {}),
         cins: document.getElementById('duzCins').value,
         ozellik: document.getElementById('duzOzellik').value,
         mense: (document.getElementById('duzMense').value || '').trim().toUpperCase() || 'TURKIYE',
@@ -3424,6 +3462,13 @@ async function duzenleKaydet(maliIslem) {
        kalır, kaydet çalışmamış görünür. */
     const y = (e && e.yanit) || null;
     if (y && y.error === 'mali_islem_gerekli') maliAc(null, null, null, y, 'duzenle');
+    /* GD1 · fatura dövizi sorusu. Onaylanırsa aynı gövde onayla
+       yeniden gider; `finally` düğmeyi açtığı için yeniden çağrı
+       bir sonraki turda yapılıyor. */
+    else if (y && y.error === 'fatura_doviz') {
+      if (await onayla(y.mesaj, { tamam: 'Faturanın tamamını değiştir', tehlike: true }))
+        setTimeout(() => duzenleKaydet(maliIslem, true), 0);
+    }
     /* MK1 · kapanmış KDV dönemi: "taşınsın" seçilemez, karşı kayda
        yönlendiriliyor. Mesaj gösterilip pencere yeniden açılıyor ki
        öteki seçeneğe geçebilsin. */

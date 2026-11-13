@@ -12,6 +12,7 @@ tek tek listeler.
       A1  aynı faturanın (grubun) satırları aynı tarihte mi
       A2  dolar karşılığı var mı; USD satırda tutara eşit mi
       A3  bağlandığı stok / sipariş gerçekten var mı
+      A4  faturanın satırları aynı dövizde ve aynı numarada mı
   B · MALİYET ↔ CARİ BORÇ
       B1  borcun tarihi = maliyetin tarihi
       B2  borcun tutarı = faturanın satır toplamı (gider + KDV)
@@ -23,6 +24,7 @@ tek tek listeler.
       C3  borcun tutarı = stokların matrah + KDV toplamı
       C4  borçtaki kalem sayısı = stok sayısı
       C6  stok kartındaki fiyat × ölçü = kayıtlı matrah
+      C7  stok kartının dövizi = borcun dövizi
   D · TL KARŞILIĞI VE KUR
       D1  TL karşılığı = tutar × yazılan kur
       D2  yazılan kur, o günün (ya da bir önceki günün) arşiv
@@ -30,7 +32,13 @@ tek tek listeler.
   E · PROFORMA / REZERVASYON
       E1  güncel sürümü kalmamış revize arşivi
       E2  kaybedilmiş / iptal tekliflere bağlı AÇIK rezervasyon
-  F · BİLGİ: 06.11.2026 tarihinde kalan kayıtlar
+  F · ÇEK ↔ CARİ HAREKET
+      F1  çekin tutarı ve dövizi = carideki çek hareketi
+  BİLGİ (sorun sayılmaz, gönderimi durdurmaz)
+      faturası beklenen alışlar · kesilmiş ama kesim maliyeti
+      girilmemiş bloklar
+
+ÇIKIŞ KODU: bakılacak satır varsa 1, yoksa 0 (gonder.sh buna bakar).
 
 NE YAPMAZ: HİÇBİR ŞEY YAZMAZ, SİLMEZ, DEĞİŞTİRMEZ. Yalnız okur.
 "⚠" bir HATA KANITI değil, bakılması gereken satırdır; açıklaması
@@ -61,7 +69,7 @@ except Exception:
 
 URL = os.environ.get('DATABASE_URL')
 if not URL:
-    print('✗ DATABASE_URL okunamadı.')
+    print('HATA: DATABASE_URL okunamadı.')
     print('  Bu betik .env dosyasını KENDİ BULUNDUĞU klasörde arıyor;')
     print('  proje dizinine kopyalayıp oradan çalıştır.')
     sys.exit(1)
@@ -73,7 +81,6 @@ except ImportError:
 
 motor = create_engine(URL)
 KDV_TIPLERI = ('Devreden KDV', 'Iade KDV')
-ESKI_GUN = '2026-11-06'
 KURUS = 0.05          # yuvarlama payı
 
 
@@ -125,6 +132,11 @@ with motor.connect() as b:
                   "FROM proforma")
     rez = oku(b, "SELECT id, proforma_id, stok_id, stok_tip, iptal_nedeni "
                  "FROM rezervasyon")
+    cekler = oku(b, "SELECT id, cek_no, tutar, doviz, cari_id, cari_unvan, "
+                    "durum, fatura_id FROM cek")
+    kesimler = oku(b, "SELECT id, kaynak_tip, kaynak_id, kaynak_ids_json, "
+                      "kesim_tarihi FROM kesim")
+    kesim_detay = oku(b, "SELECT kesim_id, hedef_stok_id FROM kesim_detay")
 
 stok_id = {r['id']: r for r in stok}
 mal_id = {m['id']: m for m in mal}
@@ -240,6 +252,21 @@ sonuc('B4', 'her maliyet borcu bir maliyete bağlı',
       'Maliyet düzeltmeleri bunlara yansımaz.')
 
 # ══ C ═════════════════════════════════════════════════════════════
+a4 = []
+for gid, satirlar in grup.items():
+    if len(satirlar) < 2:
+        continue
+    dv = sorted({(m['doviz'] or '') for m in satirlar})
+    no = sorted({(m['fatura_no'] or '') for m in satirlar})
+    if len(dv) > 1:
+        a4.append(f'{s(fatura_adi(satirlar), 30)} satırlar farklı dövizde: '
+                  f'{", ".join(dv)}')
+    if len(no) > 1:
+        a4.append(f'{s(fatura_adi(satirlar), 30)} satırlar farklı numarada: '
+                  f'{", ".join(x or "(boş)" for x in no)}')
+sonuc('A4', 'faturanın satırları aynı dövizde ve aynı numarada', a4,
+      'Bir faturanın gider ve KDV satırları tek döviz, tek numara taşır.')
+
 bolum('C · STOK ALIŞ FATURASI')
 sf = defaultdict(list)             # (fatura_no, cari_id) → hareketler
 for h in har:
@@ -320,6 +347,20 @@ sonuc('C6', 'stok kartındaki fiyat × ölçü = kayıtlı matrah', c6,
       'Fiyat ya da ölçü sonradan değişmiş ama alış bedeli ve '
       'tedarikçi borcu eski rakamda kalmış olabilir (HD1 öncesi).')
 
+c7 = []
+for h in har:
+    if not (h['baglanti_tip'] == 'stok_fatura' and (h['kaynak'] or '') == 'stok'
+            and f(h['alacak']) > 0 and h['baglanti_id']):
+        continue
+    for r in stok:
+        if (r['fatura_no'] == h['baglanti_id'] and r['cari_id'] == h['cari_id']
+                and (r['doviz'] or '') != (h['doviz'] or '')):
+            c7.append(f'{s(r["id"], 24)} stok {r["doviz"] or "—"} · borç '
+                      f'{h["doviz"] or "—"} · {s(h["baglanti_id"], 20)} '
+                      f'{s(h["cari_unvan"], 26)}')
+sonuc('C7', 'stok kartının dövizi = borcun dövizi', c7,
+      'Stok kartında döviz değiştirilmiş, borç eski dövizde kalmış.')
+
 # ══ D ═════════════════════════════════════════════════════════════
 bolum('D · TL KARŞILIĞI VE KUR (maliyet ve stok alış borçları)')
 kur_gunleri = defaultdict(dict)    # doviz → {gun: (alis, satis, efektif)}
@@ -398,23 +439,80 @@ sonuc('E2', 'kaybedilmiş / iptal teklif stok tutmuyor', e2,
       'Teklif sonuçlanmış ama rezervasyonu açık; stok satılamaz görünür.')
 
 # ══ F ═════════════════════════════════════════════════════════════
-bolum(f'F · BİLGİ: {ESKI_GUN} TARİHİNDE KALANLAR')
-fm = [m for m in mal if gun(m['maliyet_tarihi']) == ESKI_GUN]
-fs = [r for r in stok if gun(r['alis_tarihi']) == ESKI_GUN]
-fh = [h for h in har if gun(h['hareket_tarihi']) == ESKI_GUN
-      and h['baglanti_tip'] in ('maliyet', 'stok_fatura')]
-print(f'  maliyet satırı: {len(fm)} · alış tarihi o gün olan stok: {len(fs)} '
-      f'· tedarikçi borcu: {len(fh)}')
-for m in fm[:20]:
-    print(f'       · maliyet {s(m["maliyet_tip"], 24)} '
-          f'{s(m["fatura_no"] or "—", 18)} {para(m["tutar"], m["doviz"])}')
-for (fno, cid) in sorted({(r['fatura_no'], r['cari_id']) for r in fs},
-                         key=lambda x: str(x)):
-    n = sum(1 for r in fs if (r['fatura_no'], r['cari_id']) == (fno, cid))
-    ur = next(r['uretici'] for r in fs
-              if (r['fatura_no'], r['cari_id']) == (fno, cid))
-    print(f'       · stok alışı {s(fno or "(faturasız)", 20)} {s(ur, 30)} '
-          f'{n} stok')
+bolum('F · ÇEK ↔ CARİ HAREKET')
+f1 = []
+_cek_har = defaultdict(list)
+for h in har:
+    if h['baglanti_tip'] == 'cek' and h['baglanti_id']:
+        _cek_har[h['baglanti_id']].append(h)
+for ck in cekler:
+    hs = _cek_har.get(ck['id']) or []
+    if len(hs) != 1 or (ck['durum'] or '') not in ('Portfoyde', 'Verildi'):
+        continue          # işlem görmüş çekte hareketler çoğalır
+    h = hs[0]
+    ht = f(h['borc']) or f(h['alacak'])
+    if abs(ht - f(ck['tutar'])) > KURUS or (h['doviz'] or '') != (ck['doviz'] or ''):
+        f1.append(f'{s(ck["cek_no"] or ck["id"], 18)} {s(ck["cari_unvan"], 26)} '
+                  f'çek {para(ck["tutar"], ck["doviz"])} · cari hareket '
+                  f'{para(ht, h["doviz"])}')
+sonuc('F1', 'çekin tutarı ve dövizi = carideki çek hareketi', f1,
+      'Çek düzenlenmiş, carideki hareketi eski rakamda kalmış.')
+
+# ══ BİLGİ ═════════════════════════════════════════════════════════
+# Buradakiler SORUN SAYILMAZ: beklenen ara durumlar. Çıkış kodunu
+# etkilemez, gönderimi durdurmaz.
+bolum('BİLGİ · FATURASI BEKLENEN ALIŞLAR')
+bek = [h for h in har if h['baglanti_tip'] == 'stok_fatura'
+       and (h['kaynak'] or '') == 'stok' and f(h['alacak']) > 0
+       and str(h['baglanti_id'] or '').lower().startswith('beklenen fatura')]
+if not bek:
+    print('  hepsinin faturası gelmiş')
+else:
+    import datetime as _dt
+    _bugun = _dt.date.today()
+    for h in sorted(bek, key=lambda x: gun(x['hareket_tarihi'])):
+        try:
+            _g = (_bugun - _dt.date.fromisoformat(gun(h['hareket_tarihi']))).days
+        except ValueError:
+            _g = '?'
+        print(f'       · {s(h["cari_unvan"], 34)} {s(h["baglanti_id"], 20)} '
+              f'{para(h["alacak"], h["doviz"]):>16} · {_g} gündür')
+
+bolum('BİLGİ · KESİLMİŞ AMA KESİM MALİYETİ GİRİLMEMİŞ BLOKLAR')
+import json as _json
+_hedef = defaultdict(set)
+for d in kesim_detay:
+    if d['hedef_stok_id']:
+        _hedef[d['kesim_id']].add(d['hedef_stok_id'])
+_blok = defaultdict(lambda: {'hedef': set(), 'tarih': ''})
+for ks in kesimler:
+    if (ks['kaynak_tip'] or '').upper() != 'BLOK':
+        continue
+    idler = [ks['kaynak_id']]
+    try:
+        idler += [x for x in (_json.loads(ks['kaynak_ids_json'])
+                              if ks['kaynak_ids_json'] else []) if x]
+    except (ValueError, TypeError):
+        pass
+    for bid in dict.fromkeys(idler):
+        _blok[bid]['hedef'] |= _hedef.get(ks['id'], set())
+        _blok[bid]['tarih'] = max(_blok[bid]['tarih'], gun(ks['kesim_tarihi']))
+_kesimli = {m['baglanti_id'] for m in mal
+            if (m['baglanti_tip'] or '').lower() == 'stok'
+            and (m['maliyet_tip'] or '').startswith('Kesim')}
+_eksik = [(bid, v) for bid, v in _blok.items()
+          if bid in stok_id and bid not in _kesimli
+          and not (v['hedef'] & _kesimli)]
+if not _eksik:
+    print('  kesilmiş her bloğun kesim maliyeti girilmiş')
+else:
+    print('  Bu blokların maliyeti EKSİK; ürünlerinin kârı olduğundan yüksek')
+    print('  görünür. Fason faturası gelince o bloğa "Kesim / Fason / Üretim"')
+    print('  olarak girin.')
+    for bid, v in sorted(_eksik, key=lambda x: (x[1]['tarih'], x[0])):
+        r = stok_id[bid]
+        print(f'       · {s(bid, 24)} {s(r["uretici"], 30)} '
+              f'{f(r["tonaj"]):.2f} ton · kesim {v["tarih"] or "?"}')
 
 print('\n' + '=' * 78)
 if sorun:
@@ -423,3 +521,4 @@ else:
     print('  ✓ Bütün denetimler tuttu.')
 print('  Hiçbir şey değiştirilmedi.')
 print('=' * 78)
+sys.exit(1 if sorun else 0)

@@ -97,7 +97,9 @@
 
 {% block content %}
 <h1 class="g-baslik">Maliyetler</h1>
-<p class="g-alt">Nakliye, gümrük, kesim, komisyon — stoğa veya sevkiyata bağlanan ek maliyetler. Her kayıt stok maliyetine yansır.</p>
+<p class="g-alt">Nakliye, gümrük, kesim, komisyon — stoğa veya sevkiyata bağlanan ek maliyetler. Her kayıt stok maliyetine yansır.{% if menu_admin %}
+  <button class="blok-btn" style="margin-left:8px" onclick="gdYenidenHesapla()"
+          title="Kesilmiş blokların ürün maliyetlerini ve satış kârlarını güncel kuralla yeniden hesaplar. Önce ne değişeceğini gösterir.">Maliyetleri yeniden hesapla</button>{% endif %}</p>
 <svg class="damar" viewBox="0 0 190 10" aria-hidden="true">
   <path d="M0 6 C 25 2, 45 9, 70 5 S 120 1, 150 6 S 180 8, 190 4"/>
   <path class="d2" d="M0 8 C 30 5, 60 10, 95 6 S 160 3, 190 7"/>
@@ -111,6 +113,8 @@
 
 <!-- KV1 · eski 'KDV' tipli satırlar maliyete giriyor; uyarı + düzeltme -->
 <div id="kvUyari" style="display:none;background:var(--kehribar-bg);color:var(--kehribar);border-radius:var(--r-kucuk);padding:10px 14px;margin-bottom:12px;font-size:.84rem;line-height:1.45"></div>
+<!-- GD1 · kesilmiş ama kesim/fason maliyeti girilmemiş bloklar -->
+<div id="gdUyari" style="display:none;background:var(--kehribar-bg);color:var(--kehribar);border-radius:var(--r-kucuk);padding:10px 14px;margin-bottom:12px;font-size:.84rem;line-height:1.5"></div>
 <div class="arac-cubugu">
   <button class="cip aktif" data-t="">Tümü</button>
   <button class="cip" data-t="Nakliye">Nakliye</button>
@@ -500,6 +504,70 @@ async function yukle() {
   ciz();            // ML2: KPI'yı `ciz` çiziyor — süzgeçli liste onda
   faturasizSay();
   kvUyariCiz();
+  gdUyariYukle();
+}
+
+/* ══════════════════════════════════════════════════════════════
+   GD1 · KESİLMİŞ AMA KESİM MALİYETİ YOK
+   Fason kesim faturası çoğu zaman bloktan sonra gelir. O güne kadar
+   blok eksik maliyetle, ondan çıkan ürünler olduğundan yüksek kârla
+   görünür. Liste sunucudan gelir (kural orada); burada yalnız
+   gösterilir. Blok numarasına tıklayınca liste o bloğa süzülür.
+   ══════════════════════════════════════════════════════════════ */
+async function gdUyariYukle() {
+  const el = document.getElementById('gdUyari');
+  let liste = [];
+  try {
+    const r = await fetch('/api/maliyet/uyarilar', { credentials: 'same-origin' });
+    if (r.ok) liste = ((await r.json()).kesim_eksik) || [];
+  } catch (e) { liste = []; }
+  if (!liste.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const ton = liste.reduce((t, b) => t + (Number(b.tonaj) || 0), 0);
+  el.style.display = '';
+  el.innerHTML = `<b>${liste.length} blok kesilmiş ama kesim/fason maliyeti girilmemiş</b>`
+    + ` — maliyetleri eksik, bu bloklardan çıkan ürünlerin kârı olduğundan yüksek görünür`
+    + (ton ? ` (${ton.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} ton)` : '') + '. '
+    + `Fason faturası gelince "Kesim / Fason / Üretim" olarak o bloğa girin.`
+    + `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">`
+    + liste.map(b => `<button class="blok-btn" style="border-color:var(--kehribar);color:var(--kehribar)"
+        title="${kacar([b.cins, b.uretici, b.kesim_tarihi ? 'kesim ' + String(b.kesim_tarihi).split('-').reverse().join('.') : ''].filter(Boolean).join(' · '))}"
+        onclick="gdBlokAra('${kacar(b.blok_no || b.id)}')">${kacar(b.blok_no || b.id)}</button>`).join('')
+    + `</div>`;
+}
+function gdBlokAra(no) {
+  const a = document.getElementById('ara');
+  if (!a) return;
+  a.value = no;
+  a.dispatchEvent(new Event('input', { bubbles: true }));
+  a.scrollIntoView({ block: 'center' });
+}
+
+/* GD1 · TÜRETİLMİŞ MALİYETLERİ YENİDEN HESAPLA (yalnız yönetici)
+   Önce önizleme: sunucu hesaplar, farkı döker, GERİ ALIR. Kullanıcı
+   özeti görüp onaylarsa aynı uç bu kez yazar. */
+async function gdYenidenHesapla() {
+  /* `an`: çift tıklama bekçisi aynı gövdeyi kısa sürede ikinci kez
+     görünce soru soruyor; önizleme bilerek tekrarlanabilir. */
+  let o;
+  try {
+    o = await api('/api/maliyet/yeniden_hesapla', { method: 'POST', body: JSON.stringify({ onizleme: true, an: Date.now() }) });
+  } catch (e) { return; }
+  const z = o.ozet || {};
+  if (!z.satis_sayisi && !z.urun_sayisi) { bildir(o.mesaj || 'Değişecek kayıt yok.'); return; }
+  const usd = v => para(Number(v) || 0, 'USD');
+  const ornek = (o.satislar || []).slice(0, 6).map(s =>
+    `• ${s.no || s.stok_id} · ${s.musteri || '—'}: maliyet ${usd(s.eski_maliyet)} → ${usd(s.yeni_maliyet)}, kâr ${usd(s.eski_kar)} → ${usd(s.yeni_kar)}`).join('\n');
+  const metin = `${z.urun_sayisi} ürünün birim maliyeti ve ${z.satis_sayisi} satış kaydı yeniden hesaplanacak.\n\n`
+    + `Satışların toplam maliyeti ${Number(z.maliyet_farki_usd) >= 0 ? '+' : ''}${usd(z.maliyet_farki_usd)}, `
+    + `toplam kârı ${Number(z.kar_farki_usd) >= 0 ? '+' : ''}${usd(z.kar_farki_usd)} değişir.`
+    + (ornek ? `\n\n${ornek}` + ((o.satislar || []).length > 6 ? `\n… ve ${(o.satislar || []).length - 6} kayıt daha` : '') : '')
+    + `\n\nGeçmiş kâr rakamları değişir. Devam edilsin mi?`;
+  if (!await onayla(metin, { tamam: 'Yeniden hesapla', tehlike: true })) return;
+  try {
+    const d = await api('/api/maliyet/yeniden_hesapla', { method: 'POST', body: JSON.stringify({ onizleme: false, an: Date.now() }) });
+    bildir(d.mesaj || 'Yeniden hesaplandı.');
+    await yukle();
+  } catch (e) { /* api() gösterdi */ }
 }
 
 /* ══════════════════════════════════════════════════════════════

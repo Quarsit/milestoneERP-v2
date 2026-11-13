@@ -4263,7 +4263,10 @@ def create_app():
                 'ton' if r.stok_tip == 'BLOK' else 'm2')
             stok_doviz = getattr(stok, 'doviz', None) or 'USD'
             alis_olcu = _stok_olcu(stok, stok_alis_birim)
-            alim_maliyet_usd = _usd_cevir(stok_alis_birim_fiyat * alis_olcu, stok_doviz)
+            # GD1: maliyet stoğun ALIŞ gününün kuruyla; satış günüyle
+            # çevirmek aynı bloğa her satışta başka maliyet verirdi.
+            alim_maliyet_usd = _stok_alis_usd_cevir(
+                stok_alis_birim_fiyat * alis_olcu, stok, stok_doviz)
 
             # TOPLAM MALİYET = stoğun alım maliyeti + paya düşen ek maliyet
             _pay_ek_usd, _pay_ek_try = _ek_maliyet_payi(r.id)
@@ -4915,7 +4918,10 @@ def create_app():
                     f'{blok.id}: {blok.doviz} kuru yok ({_kt}) — plaka '
                     f'maliyetleri yenilenmedi')
                 continue
-            matrah = _usd_cevrim(matrah_ham, blok.doviz or 'USD', _kt)
+            # GD1: bloğun ALIŞ gününün kuruyla (yoksa kesim günü).
+            matrah = (_stok_alis_usd_cevir(matrah_ham, blok)
+                      if _stok_alis_gunu(blok) else
+                      _usd_cevrim(matrah_ham, blok.doviz or 'USD', _kt))
             yeni_toplam = (matrah or 0) + ek_top
             detaylar = KesimDetay.query.filter_by(kesim_id=kesim.id, hedef_tip='PLAKA').all()
             plakalar, toplam_m2 = [], 0
@@ -5035,6 +5041,62 @@ def create_app():
                 db.or_(Maliyet.maliyet_tip.is_(None),
                        ~Maliyet.maliyet_tip.in_(MALIYET_DISI_TIPLER)))
 
+    # ══════════════════════════════════════════════════════════
+    #  GD1 · ALIŞ BEDELİ FATURA GÜNÜNÜN KURUYLA DOLARA ÇEVRİLİR
+    #
+    #  Alış bedelini dolara çeviren YEDİ ayrı yer vardı ve dördü
+    #  farklı gün kullanıyordu:
+    #
+    #    stok listesi / maliyet dökümü      BUGÜNÜN kuru
+    #    kesimde plakaya aktarılan maliyet  KESİM gününün kuru
+    #    teslim ve fatura kârlılığı         SATIŞ gününün kuru
+    #    stok değeri raporları              bugünün kuru
+    #
+    #  Yani EUR ile alınmış bir bloğun "maliyeti" ekrandan ekrana
+    #  farklıydı ve stok listesindeki rakam kur oynadıkça her gün
+    #  değişiyordu. Ek maliyetler ise (nakliye, gümrük…) zaten kendi
+    #  fatura günlerinin kuruyla SABİT (`usd_karsilik`).
+    #
+    #  KULLANICININ KARARI: alış bedeli de FATURA TARİHİNDEKİ kurla
+    #  sabitlenir. Sistemde faturanın tarihi stok kartındaki ALIŞ
+    #  tarihidir (borç, kur ve KDV dönemi ona bakar); o yoksa giriş
+    #  tarihi, o da yoksa bugün.
+    #
+    #  TEK KAPI: yedi yerin hepsi buradan çeviriyor. USD alışta
+    #  hiçbir şey değişmez.
+    # ══════════════════════════════════════════════════════════
+    def _stok_alis_gunu(stok):
+        """Alış bedelinin kur günü: alış (fatura) tarihi → giriş
+        tarihi → None (= bugünün kuru)."""
+        _t = (getattr(stok, 'alis_tarihi', None)
+              or getattr(stok, 'giris_tarihi', None))
+        if hasattr(_t, 'date'):
+            _t = _t.date()
+        return _t
+
+    def _stok_alis_usd_cevir(tutar, stok, doviz=None):
+        """Stoğun KENDİ dövizindeki bir tutarı, alış gününün kuruyla
+        USD'ye çevirir. Oran istek boyunca önbellekte tutulur: liste
+        ve rapor uçları yüzlerce stok için aynı (döviz, gün) çiftini
+        sorar."""
+        _t = float(tutar or 0)
+        _dv = (doviz or getattr(stok, 'doviz', None) or 'USD').upper()
+        if not _t or _dv == 'USD':
+            return _t
+        _gun = _stok_alis_gunu(stok)
+        _onb = None
+        if has_request_context():
+            _onb = getattr(g, '_gd1_alis_kur', None)
+            if _onb is None:
+                _onb = g._gd1_alis_kur = {}
+        _anahtar = (_dv, _gun)
+        if _onb is not None and _anahtar in _onb:
+            return _t * _onb[_anahtar]
+        _oran = _usd_cevrim(1.0, _dv, _gun)
+        if _onb is not None:
+            _onb[_anahtar] = _oran
+        return _t * _oran
+
     def _stok_alim_usd(stok, stok_tip=None):
         """Stoğun KENDİ alış bedeli, USD. Ek maliyetler hariç.
 
@@ -5067,7 +5129,8 @@ def create_app():
             ham = float(alis_fiyat or 0) * float(alis_olcu or 0)
         # KC1: çevrim tek kapıdan. Stoğun ALIM maliyeti — kur
         # bulunamazsa 0 dönmek maliyeti yok ederdi (UN1 kararı).
-        return _usd_cevrim(ham, stok_doviz)
+        # GD1: ALIŞ gününün kuruyla (eskiden bugünün).
+        return _stok_alis_usd_cevir(ham, stok, stok_doviz)
 
     def _stok_maliyet_kalemleri(stok_id, haric=False):
         """Stoğa işlenmiş maliyet kalemleri.
@@ -5285,7 +5348,9 @@ def create_app():
                     'ton' if rz.stok_tip == 'BLOK' else 'm2')
                 alis_olcu = _stok_olcu(stok, alis_birim)
                 stok_doviz = getattr(stok, 'doviz', 'USD') or 'USD'
-                alim_usd = _usd(alis_fiyat * alis_olcu, stok_doviz)
+                # GD1: stoğun ALIŞ gününün kuruyla (eskiden fatura günü).
+                alim_usd = _stok_alis_usd_cevir(
+                    alis_fiyat * alis_olcu, stok, stok_doviz)
                 # Ek maliyet ve gelir payi: stogun DEGERI oraninda (F2)
                 _oran = _pay_orani(rz.id)
                 pay_ek = ek_maliyet_usd * _oran
@@ -7044,15 +7109,9 @@ def create_app():
                 for bid, tutar in kdv_sonuc:
                     hedef_map[bid] = tutar or 0
 
-        # USD kuru (alim fiyati USD'ye cevrimi icin)
-        def _alim_usd(fiyat, dvz):
-            """Alim fiyatini USD'ye cevir — KC1: tek kapıdan.
-
-            Listeleme ucu; tarih verilmiyor, bugünün kuru. Değişen
-            tek şey: bilinmeyen döviz artık USD sanılmıyor ve kur
-            arşivi boşsa fiyat sıfırlanmıyor.
-            """
-            return _usd_cevrim(fiyat, dvz)
+        # GD1: alış bedeli `_stok_alis_usd_cevir` kapısından çevriliyor
+        # (alış gününün kuru). Buradaki yerel "bugünün kuru" yardımcısı
+        # kaldırıldı.
 
         items = []
         for s in paginated.items:
@@ -7089,7 +7148,8 @@ def create_app():
             # TOPLAM ALIM MALİYETİ (USD):
             #   alim fiyati kendi biriminde -> o birimin ölçüsüyle çarp -> USD'ye çevir
             alim_olcu = _stok_olcu(s, alis_birim)  # alış biriminin karşılığı ölçü
-            alim_toplam_usd = _alim_usd(alis_fiyat * alim_olcu, s.doviz or 'USD')
+            # GD1: alış gününün kuruyla — rakam kur oynadıkça değişmez.
+            alim_toplam_usd = _stok_alis_usd_cevir(alis_fiyat * alim_olcu, s)
 
             # EK MALİYET (Maliyet tablosundan, zaten USD toplam)
             ek_maliyet_toplam = ek_maliyet_map.get(s.id, 0)
@@ -7217,8 +7277,7 @@ def create_app():
                     _fb = (getattr(_r, 'alis_fiyat_birim', None)
                            or ('ton' if tip == 'BLOK' else 'm2'))
                     _ob = float(_stok_olcu(_r, _fb) or 0)
-                    _satir_deger += _alim_usd(
-                        _af * _ob, getattr(_r, 'doviz', 'USD') or 'USD')
+                    _satir_deger += _stok_alis_usd_cevir(_af * _ob, _r)
                 _ozet['deger_usd'] += _satir_deger
                 if _on:
                     _ozet[_on + 'deger_usd'] += _satir_deger
@@ -8278,38 +8337,44 @@ def create_app():
                     _dv = str(data['doviz']).strip().upper()
                     if _dv in ('USD', 'EUR', 'TRY') and _dv != (stok.doviz or ''):
                         _eski_dv = stok.doviz
+                        # ── GD1 · FATURA BÜTÜN DEĞİŞİR ──
+                        # Eskiden burada yalnız UYARI vardı ("borca
+                        # dokunulmadı, cariden düzeltin") ve stok EUR,
+                        # borç USD kalıyordu. Artık alışın faturası
+                        # (bütün stokları, borcu, KDV satırı) birlikte
+                        # geçiyor; başka stok varsa önce soruluyor.
+                        _gd1_d, _gd1_v, _gd1_sl = _stok_fatura_doviz_degistir(
+                            stok, _dv,
+                            onay=bool(data.get('doviz_fatura_onay')))
+                        if _gd1_d == 'soru':
+                            db.session.rollback()
+                            return jsonify(_gd1_v), 409
+                        if _gd1_d == 'ret':
+                            db.session.rollback()
+                            return jsonify({'ok': False,
+                                            'error': 'fatura_doviz_ret',
+                                            'mesaj': _gd1_v}), 400
                         stok.doviz = _dv
-                        # ── TD1 · UYARI GRUPLU KAYITTA ÇIKMIYORDU ──
-                        # Arama YALNIZCA `baglanti_tip='stok'` ile
-                        # yapılıyordu. O şema C1 ÖNCESİNE ait: alış
-                        # borcu o zaman stoğa 1-1 bağlıydı. C1'den
-                        # beri borç `baglanti_tip='stok_fatura'` +
-                        # fatura numarası ile duruyor.
-                        #
-                        # ÖLÇÜLDÜ: gerçek uçlarla kurulmuş bir stokta
-                        # `baglanti_tip='stok'` satırı HİÇ yok, yani
-                        # `_ch` None dönüyor ve uyarı üretilmiyordu.
-                        # Kullanıcı USD stoğu EUR yapıyor, tedarikçi
-                        # borcu USD kalıyor, ekranda hiçbir şey
-                        # yazmıyordu.
-                        #
-                        # ESKİ ARAMA KALDIRILMADI: göçten gelen
-                        # ağaçta C1 öncesi satırlar hâlâ var (silme
-                        # yolu onları ayrıca temizliyor) ve o
-                        # kayıtlarda uyarı ÇALIŞIYORDU. Önce grup,
-                        # bulunamazsa eski kayıt.
-                        _ch, _, _ = _stok_alis_grubu(stok)
-                        if _ch is None:
+                        if _gd1_d == 'tamam':
+                            _doviz_uyari = _gd1_v
+                            _gd1_obur = [s.id for s in _gd1_sl
+                                         if s.id != stok.id]
+                            if _gd1_obur:
+                                db.session.flush()
+                                _maliyet_etkilenen_stoklari_tazele(_gd1_obur)
+                        else:
+                            # C1 ÖNCESİ kayıt (borç stoğa 1-1 bağlı):
+                            # göçten gelen ağaçta hâlâ var. Onlarda
+                            # eski davranış — uyar, dokunma.
                             _ch = CariHareket.query.filter_by(
                                 baglanti_tip='stok',
                                 baglanti_id=stok_id).first()
-                        if _ch and (_ch.doviz or '') != _dv:
-                            _doviz_uyari = (
-                                f'Stok dövizi {_eski_dv or "—"} → {_dv} yapıldı. '
-                                f'Bu stoğun tedarikçi borcu hâlâ '
-                                f'{_ch.doviz}: aynı faturadaki başka stoklar '
-                                f'da olabileceği için borca dokunulmadı. '
-                                f'Gerekiyorsa Finans → Cari’den düzeltin.')
+                            if _ch and (_ch.doviz or '') != _dv:
+                                _doviz_uyari = (
+                                    f'Stok dövizi {_eski_dv or "—"} → {_dv} '
+                                    f'yapıldı. Bu stoğun tedarikçi borcu '
+                                    f'hâlâ {_ch.doviz}; Finans → Cari’den '
+                                    f'düzeltin.')
                 if 'mense' in data and hasattr(stok, 'mense'):   # MS1
                     stok.mense = _mense_normal(data.get('mense'))
                 if 'aciklama' in data: stok.aciklama = data['aciklama']
@@ -11886,7 +11951,7 @@ def create_app():
                 kayitlar.append({
                     'tip': 'BLOK', 'cins': s.cins or '?', 'uretici': s.uretici or '?',
                     'durum': s.durum, 'miktar': miktar, 'birim': 'ton',
-                    'deger_usd': _usd(deger, s.doviz)
+                    'deger_usd': _stok_alis_usd_cevir(deger, s)   # GD1
                 })
 
         # PLAKA
@@ -11900,7 +11965,7 @@ def create_app():
                 kayitlar.append({
                     'tip': 'PLAKA', 'cins': s.cins or '?', 'uretici': s.uretici or '?',
                     'durum': s.durum, 'miktar': miktar, 'birim': 'm²',
-                    'deger_usd': _usd(deger, s.doviz)
+                    'deger_usd': _stok_alis_usd_cevir(deger, s)   # GD1
                 })
 
         # EBATLI
@@ -11917,7 +11982,7 @@ def create_app():
                 kayitlar.append({
                     'tip': 'EBATLI', 'cins': s.cins or '?', 'uretici': s.uretici or '?',
                     'durum': s.durum, 'miktar': miktar, 'birim': 'm²',
-                    'deger_usd': _usd(deger, s.doviz)
+                    'deger_usd': _stok_alis_usd_cevir(deger, s)   # GD1
                 })
 
         # Durum bazında özet
@@ -12521,8 +12586,13 @@ def create_app():
                 # UN1: matrah STOGUN KENDI dovizinde. Ek maliyetler
                 # `usd_karsilik` ile USD. Ikisini toplamadan ONCE
                 # matrah USD'ye cevriliyor — yukaridaki olcumler.
-                maliyet = _usd_cevrim(maliyet, k.doviz or 'USD',
-                                      _kesim_tarih)
+                # GD1: kaynağın ALIŞ gününün kuruyla; bloğun maliyeti
+                # kesildiği gün değişmez. Alış günü bilinmiyorsa
+                # kesim günü (eski davranış).
+                maliyet = (_stok_alis_usd_cevir(maliyet, k)
+                           if _stok_alis_gunu(k) else
+                           _usd_cevrim(maliyet, k.doviz or 'USD',
+                                       _kesim_tarih))
                 # Ek maliyetler zaten USD.
                 maliyet += ek_maliyet_map.get(k.id, 0)
                 kaynak_toplam_maliyet += maliyet
@@ -14253,6 +14323,25 @@ def create_app():
                              if (e.kasa_no or '').startswith(_pref)]
                 else:
                     _grup = [_hedef_stok]
+                # ── GD1 · STOK EKRANINDAKİ İKİ KAPI BURADA DA ──
+                # Faturalandırmanın iki yolu var (stok ekranı, cari
+                # ekranı) ve denetimler yalnız birincideydi. ÖLÇÜLDÜ:
+                # buradan aynı numara başka tarihle girilince İKİNCİ
+                # borç açıldı; KDV'li alış kapanmış KDV dönemine
+                # yazılabildi (MK2 ve HD1 kuralları atlanıyordu).
+                _gd1_kapali, _gd1_sebep = _kdv_girisi_kapali(
+                    _fatura_tarihi,
+                    any((getattr(_x, 'kdv_tutar', 0) or 0) > 0
+                        for _x in _grup))
+                if _gd1_kapali:
+                    return _kdv_donemi_giris_ret(_gd1_sebep)
+                _gd1_no = evrak_no or _hedef_stok.fatura_no
+                _gd1_c = _stok_fatura_tarih_cakismasi(
+                    getattr(_hedef_stok, 'uretici', None),
+                    getattr(_hedef_stok, 'cari_id', None),
+                    _gd1_no, _fatura_tarihi)
+                if _gd1_c is not None:
+                    return _hd1_tarih_cakisma_ret(_gd1_c, _gd1_no)
                 _toplam_borc = 0
                 for _st in _grup:
                     _st.fatura_no = evrak_no or _st.fatura_no
@@ -19136,7 +19225,12 @@ def create_app():
                     'cari_unvan': bilgi.get('uretici') or '',
                     'baglanti_no': bilgi['no'],
                     'tutar': q2(bilgi['matrah']), 'doviz': bilgi['doviz'],
-                    'usd_karsilik': q2(bilgi['matrah']) if bilgi['doviz'] == 'USD' else None,
+                    # GD1: dolar karşılığı HER dövizde, alış gününün
+                    # kuruyla (eskiden yalnız USD alışta doluydu).
+                    'usd_karsilik': q2(_usd_cevrim(
+                        bilgi['matrah'], bilgi['doviz'] or 'USD',
+                        bilgi['tarih'].date() if hasattr(bilgi['tarih'], 'date')
+                        else bilgi['tarih'])),
                     'fatura_no': bilgi['fatura_no'],
                     'aciklama': f"{bilgi['tip']} alış bedeli — {bilgi['cins'] or ''}".strip(),
                     'kur': None,
@@ -20983,6 +21077,169 @@ def create_app():
                      f"{len(_stoklar)} stoğun maliyetinden toplam "
                      f"{_usd:,.2f} USD çıktı."})
 
+    # ══════════════════════════════════════════════════════════
+    #  GD1 · KESİLMİŞ AMA KESİM MALİYETİ GİRİLMEMİŞ BLOKLAR
+    #
+    #  Kesim fasonda yapılıyor ve faturası çoğu zaman bloktan sonra
+    #  geliyor. O güne kadar blok EKSİK maliyetle görünür, ondan
+    #  çıkan ürünlerin kârı olduğundan YÜKSEK çıkar ve bunu hiçbir
+    #  ekran söylemiyordu (canlıda K6464).
+    #
+    #  "Kesim maliyeti var" = bloğun kendisine ya da ondan çıkan
+    #  stoklara bağlı, maliyete sayılan, tipi "Kesim…" ile başlayan
+    #  en az bir satır.
+    # ══════════════════════════════════════════════════════════
+    def _kesim_maliyeti_eksik_bloklar():
+        _blok_hedef = {}
+        for _ks in Kesim.query.filter(
+                db.func.upper(Kesim.kaynak_tip) == 'BLOK').all():
+            _idler = [_ks.kaynak_id]
+            try:
+                _idler += [x for x in (json.loads(_ks.kaynak_ids_json)
+                                       if _ks.kaynak_ids_json else [])
+                           if x]
+            except Exception:
+                pass
+            _hedefler = [dt.hedef_stok_id for dt in
+                         KesimDetay.query.filter_by(kesim_id=_ks.id).all()
+                         if dt.hedef_stok_id]
+            for _bid in dict.fromkeys(_idler):
+                _k = _blok_hedef.setdefault(
+                    _bid, {'hedef': set(), 'tarih': None})
+                _k['hedef'].update(_hedefler)
+                if _ks.kesim_tarihi and (_k['tarih'] is None
+                                         or _ks.kesim_tarihi > _k['tarih']):
+                    _k['tarih'] = _ks.kesim_tarihi
+        if not _blok_hedef:
+            return []
+        _aday = set(_blok_hedef)
+        for _v in _blok_hedef.values():
+            _aday |= _v['hedef']
+        _aday = list(_aday)
+        _var = set()
+        for _i in range(0, len(_aday), 400):
+            for (_bid,) in db.session.query(Maliyet.baglanti_id).filter(
+                    Maliyet.baglanti_tip == 'stok',
+                    Maliyet.baglanti_id.in_(_aday[_i:_i + 400]),
+                    Maliyet.maliyet_tip.like('Kesim%'),
+                    *_maliyet_sayilir()).distinct().all():
+                _var.add(_bid)
+        _eksik = []
+        for _bid, _v in _blok_hedef.items():
+            if _bid in _var or (_v['hedef'] & _var):
+                continue
+            _b = BlokStok.query.get(_bid)
+            if _b is None:
+                continue
+            _eksik.append({
+                'id': _b.id, 'blok_no': _b.blok_no, 'cins': _b.cins,
+                'uretici': _b.uretici, 'tonaj': float(_b.tonaj or 0),
+                'kesim_tarihi': (_v['tarih'].isoformat()
+                                 if _v['tarih'] else None),
+                'urun_sayisi': len(_v['hedef'])})
+        _eksik.sort(key=lambda x: (x['kesim_tarihi'] or '', x['id']))
+        return _eksik
+
+    @app.route('/api/maliyet/uyarilar', methods=['GET'])
+    def api_maliyet_uyarilar():
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'ok': True,
+                        'kesim_eksik': _kesim_maliyeti_eksik_bloklar()})
+
+    # ══════════════════════════════════════════════════════════
+    #  GD1 · TÜRETİLMİŞ MALİYETLERİ YENİDEN HESAPLA (yönetici)
+    #
+    #  Kesilmiş blokların plaka maliyetleri ve satılmış ürünlerin
+    #  kâr kayıtları hesaplandıkları GÜNÜN kuralıyla yazılı durur.
+    #  Alış bedelinin kur günü değişti (GD1); eski kayıtlar eski
+    #  kuralla, yeniler yeni kuralla dururdu.
+    #
+    #  KULLANICININ KARARI: yama veriye DOKUNMAZ. Önce `onizleme`
+    #  ile ne değişeceği görülür (hesap yapılır, fark çıkarılır,
+    #  GERİ ALINIR); sonra aynı uç onizleme'siz çağrılırsa yazılır.
+    #  Yeni bir hesap yok: maliyet eklenip silindiğinde zaten çalışan
+    #  tazeleme (`_maliyet_etkilenen_stoklari_tazele`) kullanılıyor.
+    #  Yalnız dövizi USD OLMAYAN alışlar taranır — kur kuralı
+    #  yalnız onları etkiler.
+    # ══════════════════════════════════════════════════════════
+    @app.route('/api/maliyet/yeniden_hesapla', methods=['POST'])
+    def api_maliyet_yeniden_hesapla():
+        if _auth_required():
+            return jsonify({'error': 'Unauthorized'}), 401
+        if str(session.get('rol') or '').upper() != 'ADMIN':
+            return jsonify({'ok': False, 'mesaj':
+                            'Bu işlemi yalnız yönetici yapabilir.'}), 403
+        _g = request.get_json(silent=True) or {}
+        _onizleme = bool(_g.get('onizleme'))
+        _idler = []
+        for _M in (BlokStok, PlakaStok, EbatliStok):
+            _idler += [s.id for s in _M.query.filter(
+                _M.doviz.isnot(None), _M.doviz != '',
+                db.func.upper(_M.doviz) != 'USD').all()]
+        _sat_once = {s.id: (float(s.maliyet_usd or 0), float(s.kar_usd or 0))
+                     for s in SatisKaydi.query.all()}
+        _pl_once = {p.id: float(p.alis_fiyati or 0)
+                    for p in PlakaStok.query.all()}
+        _eb_once = {p.id: float(p.alis_fiyati or 0)
+                    for p in EbatliStok.query.all()}
+        if _idler:
+            _maliyet_etkilenen_stoklari_tazele(_idler)
+            db.session.flush()
+        _satis, _urun = [], []
+        for s in SatisKaydi.query.all():
+            _e = _sat_once.get(s.id)
+            if _e is None:
+                continue
+            if abs(float(s.maliyet_usd or 0) - _e[0]) >= 0.005:
+                _satis.append({
+                    'id': s.id, 'stok_id': s.stok_id,
+                    'no': s.blok_no, 'cins': s.cins, 'musteri': s.musteri,
+                    'tarih': (s.satis_tarihi.isoformat()
+                              if getattr(s, 'satis_tarihi', None) else None),
+                    'eski_maliyet': q2(_e[0]),
+                    'yeni_maliyet': q2(s.maliyet_usd or 0),
+                    'eski_kar': q2(_e[1]), 'yeni_kar': q2(s.kar_usd or 0)})
+        for _M, _once, _tip in ((PlakaStok, _pl_once, 'PLAKA'),
+                                (EbatliStok, _eb_once, 'EBATLI')):
+            for p in _M.query.all():
+                _e = _once.get(p.id)
+                if _e is None:
+                    continue
+                if abs(float(p.alis_fiyati or 0) - _e) >= 0.005:
+                    _urun.append({
+                        'id': p.id, 'tip': _tip, 'cins': p.cins,
+                        'no': (getattr(p, 'blok_no', None)
+                               or getattr(p, 'kasa_no', None)),
+                        'eski': q2(_e), 'yeni': q2(p.alis_fiyati or 0),
+                        'doviz': p.doviz})
+        _ozet = {
+            'taranan_stok': len(_idler),
+            'satis_sayisi': len(_satis), 'urun_sayisi': len(_urun),
+            'maliyet_farki_usd': q2(sum(x['yeni_maliyet'] - x['eski_maliyet']
+                                        for x in _satis)),
+            'kar_farki_usd': q2(sum(x['yeni_kar'] - x['eski_kar']
+                                    for x in _satis))}
+        if _onizleme or not (_satis or _urun):
+            db.session.rollback()
+            return jsonify({
+                'ok': True, 'onizleme': True, 'ozet': _ozet,
+                'satislar': _satis, 'urunler': _urun,
+                'mesaj': ('Değişecek kayıt yok; her şey güncel kuralla '
+                          'hesaplanmış.' if not (_satis or _urun) else
+                          f'{len(_urun)} ürünün birim maliyeti ve '
+                          f'{len(_satis)} satış kaydının kârı değişecek.')})
+        _log_audit('GUNCELLE', 'maliyet_yeniden_hesap', 'GD1',
+                   yeni={'ozet': _ozet})
+        ok, hata = _safe_commit('GD1 maliyet yeniden hesaplama')
+        if not ok:
+            return jsonify({'ok': False, 'mesaj': f'Hata: {hata}'}), 500
+        return jsonify({
+            'ok': True, 'onizleme': False, 'ozet': _ozet,
+            'satislar': _satis, 'urunler': _urun,
+            'mesaj': f'{len(_urun)} ürünün birim maliyeti ve {len(_satis)} '
+                     f'satış kaydı yeniden hesaplandı.'})
+
     @app.route('/api/maliyet/toplu_tarih', methods=['POST'])
     def api_maliyet_toplu_tarih():
         if _auth_required(): return jsonify({'error': 'Unauthorized'}), 401
@@ -21140,6 +21397,10 @@ def create_app():
         m = Maliyet.query.get(maliyet_id)
         if not m: return jsonify({'ok': False, 'mesaj': 'Bulunamadı'}), 404
         data = request.get_json(silent=True) or {}
+        # GD1: tutar değişirse KDV kardeşi AYNI ORANLA güncellenecek;
+        # oran için eski tutar burada saklanıyor.
+        _gd1_eski_tutar = float(m.tutar or 0)
+        _gd1_eski_doviz = (m.doviz or '')
         if 'maliyet_tip' in data:
             m.maliyet_tip = _maliyet_tip_normal(data['maliyet_tip'])   # KV1
         if 'tutar' in data:
@@ -21152,10 +21413,57 @@ def create_app():
             if m.tutar <= 0:
                 return jsonify({'ok': False, 'mesaj': 'Tutar sıfırdan büyük olmalı'}), 400
         if 'doviz' in data: m.doviz = data['doviz']
+        # ══════════════════════════════════════════════════════
+        #  GD1 · FATURANIN SATIRLARI BİRLİKTE DEĞİŞİR
+        #
+        #  Bir maliyet faturası birden çok satırdır (gider + KDV;
+        #  dağıtımda stok başına birer tane). Düzenleme YALNIZ
+        #  tıklanan satırı değiştiriyordu. ÖLÇÜLDÜ — 2.000 USD gider
+        #  + 200 USD KDV:
+        #
+        #    döviz → EUR     gider EUR, KDV USD kaldı; borç
+        #                    "2.200 EUR" yazdı, TL karşılığı aynı  ✗
+        #    fatura no       gider yeni numarada, KDV eskisinde     ✗
+        #    tutar 1→2 bin   KDV 200'de kaldı                       ✗
+        #
+        #  · DÖVİZ ve FATURA NO faturanındır: grubun bütün satırlarına
+        #    yazılır.
+        #  · TUTAR (kullanıcının kararı): gider satırı değişince aynı
+        #    stoğa bağlı KDV satırı ESKİ ORANI koruyacak şekilde
+        #    yeniden hesaplanır. Faturadaki KDV farklıysa KDV satırı
+        #    ayrıca düzenlenebilir — KDV satırının KENDİSİ
+        #    düzenlenirken hiçbir şey zincirlenmez.
+        # ══════════════════════════════════════════════════════
+        _gd1_grup = _maliyet_grubu(m) or [m]
+        _gd1_not = []
+        if 'doviz' in data and (m.doviz or '') != _gd1_eski_doviz:
+            for _gd1_s in _gd1_grup:
+                _gd1_s.doviz = m.doviz
+            if len(_gd1_grup) > 1:
+                _gd1_not.append(f'faturanın {len(_gd1_grup)} satırı da '
+                                f'{m.doviz} oldu')
+        if ('tutar' in data
+                and (m.maliyet_tip or '') not in MALIYET_DISI_TIPLER
+                and _gd1_eski_tutar > 0
+                and abs(float(m.tutar or 0) - _gd1_eski_tutar) >= 0.005):
+            for _gd1_s in _gd1_grup:
+                if (_gd1_s.id != m.id and _gd1_s.aktif
+                        and (_gd1_s.maliyet_tip or '') in MALIYET_DISI_TIPLER
+                        and _gd1_s.baglanti_id == m.baglanti_id
+                        and float(_gd1_s.tutar or 0) > 0):
+                    _gd1_k_eski = float(_gd1_s.tutar or 0)
+                    _gd1_s.tutar = q2(_gd1_k_eski * float(m.tutar)
+                                      / _gd1_eski_tutar)
+                    _gd1_not.append(
+                        f'KDV satırı aynı oranla {_gd1_k_eski:,.2f} → '
+                        f'{float(_gd1_s.tutar):,.2f} {m.doviz} oldu')
         # MD1 — DUZENLEME: bu üç alan modelde vardı ama PUT onları
         # işlemiyordu; yanlış girilen fatura no ya da tarih yalnızca
         # kaydı silip yeniden girerek düzeltilebiliyordu.
-        if 'fatura_no' in data: m.fatura_no = (data.get('fatura_no') or '').strip() or None
+        if 'fatura_no' in data:
+            m.fatura_no = (data.get('fatura_no') or '').strip() or None
+            for _gd1_s in _gd1_grup:        # GD1: numara faturanın
+                _gd1_s.fatura_no = m.fatura_no
         if 'aciklama' in data: m.aciklama = (data.get('aciklama') or '').strip() or None
         # ── MT1 · TARİH: KAPANMIŞ DÖNEME ÇEKİLEMEZ, GRUP BİRLİKTE TAŞINIR ──
         # MK2 kapanmış döneme GİRİŞİ kapattı ama kapsamı stok alışıydı.
@@ -21224,7 +21532,9 @@ def create_app():
                    yeni={'tip': m.maliyet_tip, 'tutar': m.tutar, 'doviz': m.doviz,
                          'fatura_no': m.fatura_no, 'tarih': str(m.maliyet_tarihi or '')})
         db.session.flush()
-        sk_guncel = _maliyet_etkilenen_stoklari_tazele([m.baglanti_id])
+        sk_guncel = _maliyet_etkilenen_stoklari_tazele(
+            [m.baglanti_id] + [s.baglanti_id for s in _gd1_grup
+                               if (s.baglanti_tip or '').lower() == 'stok'])
 
         # DZ1 · TEDARIKCI BORCUNU DA ESITLE
         # Tutari degistirmek maliyeti ve satis karini guncelliyordu
@@ -21238,8 +21548,14 @@ def create_app():
         if len(_hareketler) == 1:
             _h = _hareketler[0]
             _toplam = q2(sum((s.tutar or 0) for s in _grup))
-            if (_h.alacak or 0) != _toplam:
-                _a_try, _a_kur = _gider_cari_alanlari(_toplam, m.doviz)
+            # GD1: döviz değiştiyse tutar aynı kalsa da TL karşılığı
+            # yeniden hesaplanır; kur MALİYETİN tarihinden (FL1) —
+            # eskiden tarih verilmiyor, bugünün kuru yazılıyordu.
+            if ((_h.alacak or 0) != _toplam
+                    or (_h.doviz or '') != (m.doviz or '')):
+                _a_try, _a_kur = _gider_cari_alanlari(
+                    _toplam, m.doviz,
+                    getattr(m, 'maliyet_tarihi', None))
                 _h.alacak = _toplam
                 _h.alacak_try = _a_try
                 _h.kur_uygulanan = _a_kur
@@ -21265,12 +21581,18 @@ def create_app():
         # TARİHE göre çeviriyor, tarih bayat kalırsa tutar doğru
         # ama USD karşılığı yanlış olurdu.
         sermaye_guncel = []
-        for _sm in _maliyet_sermaye_baglari([m.id]):
+        # GD1: grubun ÖBÜR satırları da değişmiş olabilir (döviz, KDV
+        # tutarı); her sermaye satırı KENDİ maliyet satırından okunur.
+        _gd1_sm = []
+        for _gd1_s in (_maliyet_grubu(m) or [m]):
+            for _x in _maliyet_sermaye_baglari([_gd1_s.id]):
+                _gd1_sm.append((_x, _gd1_s))
+        for _sm, _gd1_ms in _gd1_sm:
             _eski = (float(_sm.tutar or 0), _sm.doviz, str(_sm.tarih or ''))
-            _sm.tutar = m.tutar
-            _sm.doviz = m.doviz
-            if getattr(m, 'maliyet_tarihi', None):
-                _sm.tarih = m.maliyet_tarihi
+            _sm.tutar = _gd1_ms.tutar
+            _sm.doviz = _gd1_ms.doviz
+            if getattr(_gd1_ms, 'maliyet_tarihi', None):
+                _sm.tarih = _gd1_ms.maliyet_tarihi
             _yeni = (float(_sm.tutar or 0), _sm.doviz, str(_sm.tarih or ''))
             if _eski == _yeni:
                 continue
@@ -21285,7 +21607,7 @@ def create_app():
                              'eski_tutar': _eski[0],
                              'eski_doviz': _eski[1],
                              'eski_tarih': _eski[2],
-                             'sebep': f'OS1 · maliyet {m.id} guncellendi'})
+                             'sebep': f'OS1 · maliyet {_gd1_ms.id} guncellendi'})
             sermaye_guncel.append({
                 'id': _sm.id, 'ortaklik_id': _sm.ortaklik_id,
                 'tutar': float(_sm.tutar or 0), 'doviz': _sm.doviz})
@@ -21302,6 +21624,8 @@ def create_app():
         if hareket_guncel:
             msg += (f', tedarikçi borcu da {hareket_guncel["yeni_tutar"]:,.2f} '
                     f'{m.doviz} olarak düzeltildi')
+        if _gd1_not:
+            msg += ' · ' + ' · '.join(_gd1_not)
         return jsonify({'ok': True, 'satis_kaydi_guncel': sk_guncel,
                         'hareket_guncel': hareket_guncel,
                         'sermaye_guncel': sermaye_guncel, 'mesaj': msg})
@@ -22744,6 +23068,53 @@ def create_app():
         c = Cek.query.get(cek_id)
         if not c: return jsonify({'ok': False, 'mesaj': 'Çek bulunamadı'}), 404
         d = request.get_json(silent=True) or {}
+        # ══════════════════════════════════════════════════════
+        #  GD1 · ÇEK VE CARİ HAREKETİ BİRLİKTE
+        #
+        #  Çek kaydedilirken cariye bir hareket yazılıyor ("Çek
+        #  Tahsilatı" / "Çek Ödemesi"). Düzenleme yalnız çeki
+        #  değiştiriyordu. ÖLÇÜLDÜ: 5.000 USD verilen çek 7.000 EUR
+        #  yapıldı; carideki hareket 5.000 USD kaldı.
+        #
+        #  KULLANICININ KARARI:
+        #   · Çek İLK durumundaysa (Portföyde / Verildi) tutar, döviz,
+        #     cari, keside tarihi ve çek no değişince cari hareket de
+        #     değişir (TL karşılığı keside gününün kuruyla — kayıttaki
+        #     kuralın aynısı).
+        #   · İşlem görmüş (tahsil, ciro, ödeme…) ya da bir faturaya
+        #     bağlanmış çekte TUTAR / DÖVİZ / CARİ değiştirilemez:
+        #     kasa hareketi ve fatura tahsilatı o rakamdan doğdu.
+        #     Önce işlem geri alınır.
+        # ══════════════════════════════════════════════════════
+        _gd1_once = (float(c.tutar or 0), (c.doviz or ''), (c.cari_id or ''))
+        _gd1_yt = _gd1_once[0]
+        if 'tutar' in d:
+            try:
+                _gd1_yt = float(q2(float(d['tutar'])))
+            except (ValueError, TypeError):
+                pass
+        _gd1_sonra = (
+            _gd1_yt,
+            ((d.get('doviz') or '') if 'doviz' in d else _gd1_once[1]),
+            (((d.get('cari_id') or '').strip()) if 'cari_id' in d
+             else _gd1_once[2]))
+        _gd1_para = (abs(_gd1_sonra[0] - _gd1_once[0]) >= 0.005
+                     or _gd1_sonra[1] != _gd1_once[1]
+                     or _gd1_sonra[2] != _gd1_once[2])
+        _gd1_ilk = (c.durum or '') in ('Portfoyde', 'Verildi')
+        if _gd1_para and not _gd1_ilk:
+            return jsonify({
+                'ok': False, 'error': 'cek_islem_gormus',
+                'mesaj': f'Bu çek "{c.durum}" durumunda; tutarı, dövizi ve '
+                         f'carisi değiştirilemez (kasa ve cari kayıtları bu '
+                         f'rakamdan doğdu). Önce işlemi geri alın.'}), 400
+        if _gd1_para and c.fatura_id:
+            return jsonify({
+                'ok': False, 'error': 'cek_faturaya_bagli',
+                'mesaj': 'Bu çek bir faturanın tahsilatı olarak kayıtlı; '
+                         'tutarı, dövizi ve carisi buradan değiştirilemez. '
+                         'Çeki silip doğru bilgilerle yeniden girin.'}), 400
+        _gd1_eski_no = (c.cek_no or c.id)
         # Sadece temel bilgiler düzenlenebilir (durum ayrı endpoint'ten yönetilir)
         for alan in ['cek_no', 'banka_adi', 'sube', 'hesap_sahibi', 'aciklama']:
             if alan in d: setattr(c, alan, (d.get(alan) or '').strip() or None)
@@ -22763,8 +23134,53 @@ def create_app():
                 c.cari_unvan = cr.unvan if cr else d.get('cari_unvan')
             else:
                 c.cari_unvan = d.get('cari_unvan')
+        _gd1_ek = ''
+        if _gd1_ilk and not c.fatura_id:
+            _gd1_h = CariHareket.query.filter_by(
+                baglanti_tip='cek', baglanti_id=c.id).all()
+            if len(_gd1_h) == 1:
+                _h = _gd1_h[0]
+                _gd1_iz = (float(_h.borc or 0), float(_h.alacak or 0),
+                           _h.doviz, _h.cari_id, _h.hareket_tarihi,
+                           _h.evrak_no)
+                _gd1_gun = c.keside_tarihi or _h.hareket_tarihi or date.today()
+                _gd1_dv = c.doviz or 'TRY'
+                try:
+                    _gd1_kur = (_kur_getir(_gd1_dv, _gd1_gun)
+                                if _gd1_dv != 'TRY' else 1.0)
+                except Exception:
+                    _gd1_kur = None
+                _gd1_kur = _gd1_kur or _h.kur_uygulanan or 1.0
+                _gd1_try = q2(float(c.tutar or 0) * float(_gd1_kur))
+                if (_h.alacak or 0) > 0:
+                    _h.alacak, _h.alacak_try = q2(c.tutar or 0), _gd1_try
+                else:
+                    _h.borc, _h.borc_try = q2(c.tutar or 0), _gd1_try
+                _h.doviz = _gd1_dv
+                _h.kur_uygulanan = _gd1_kur
+                _h.hareket_tarihi = _gd1_gun
+                _h.vade_tarihi = c.vade_tarihi
+                if c.cari_id:
+                    _h.cari_id, _h.cari_unvan = c.cari_id, c.cari_unvan
+                _gd1_yeni_no = (c.cek_no or c.id)
+                if (_h.evrak_no or '') == _gd1_eski_no:
+                    _h.evrak_no = _gd1_yeni_no
+                if _gd1_eski_no != _gd1_yeni_no and _h.aciklama:
+                    _h.aciklama = _h.aciklama.replace(
+                        f'({_gd1_eski_no})', f'({_gd1_yeni_no})')
+                if _gd1_iz != (float(_h.borc or 0), float(_h.alacak or 0),
+                               _h.doviz, _h.cari_id, _h.hareket_tarihi,
+                               _h.evrak_no):
+                    _gd1_ek = ' · carideki çek hareketi de güncellendi'
+                    _log_audit('GUNCELLE', 'cari_hareket', _h.id,
+                               eski={'borc': _gd1_iz[0], 'alacak': _gd1_iz[1],
+                                     'doviz': _gd1_iz[2], 'cari': _gd1_iz[3]},
+                               yeni={'borc': float(_h.borc or 0),
+                                     'alacak': float(_h.alacak or 0),
+                                     'doviz': _h.doviz, 'cari': _h.cari_id,
+                                     'sebep': f'GD1 · çek {c.id} düzenlendi'})
         db.session.commit()
-        return jsonify({'ok': True, 'mesaj': 'Çek güncellendi'})
+        return jsonify({'ok': True, 'mesaj': 'Çek güncellendi' + _gd1_ek})
 
     @app.route('/api/cek/<cek_id>/durum', methods=['POST'])
     def api_cek_durum_degistir(cek_id):
@@ -26010,6 +26426,84 @@ def create_app():
                          'borc': _grup.id if _grup is not None else None})
         return (_not, None)
 
+    def _stok_fatura_doviz_degistir(stok, yeni, onay=False):
+        """GD1 — alışın dövizi FATURANINDIR; bütün olarak değişir.
+
+        Stok kartında döviz değişince stok EUR oluyor, tedarikçi
+        borcu ve alışın KDV satırı USD kalıyordu (ölçüldü). Eski kod
+        bilerek dokunmuyor, yalnız uyarıyordu: borç aynı faturadaki
+        öbür stokları da kapsıyor.
+
+        KULLANICININ KARARI: fatura bütün değişsin. Aynı faturadaki
+        bütün stoklar, borç ve KDV satırları yeni dövize geçer;
+        RAKAM aynı kalır (yanlış seçilmiş dövizin düzeltilmesi, bir
+        çevrim değil), TL ve USD karşılıkları fatura gününün kuruyla
+        yeniden hesaplanır. Faturada başka stok varsa önce SORULUR.
+
+        Döner (durum, veri, stoklar):
+          ('yok',   None, [])     faturalı borcu yok; çağıran yalnız
+                                  stoğu değiştirir
+          ('soru',  sözlük, [])   başka stoklar da var, onay gerek
+          ('ret',   mesaj, [])
+          ('tamam', not, stoklar)
+        """
+        _grup, _fno, _ = _stok_alis_grubu(stok)
+        if _grup is None:
+            return ('yok', None, [])
+        _stoklar = _hd1_alis_stoklari(_grup, _fno)
+        if stok.id not in [s.id for s in _stoklar]:
+            _stoklar = [stok] + list(_stoklar)
+        if _grup.kapatildi:
+            return ('ret', 'Bu alışın borcu bir ödemeyle kapatılmış; '
+                           'dövizi değiştirmeden önce cari ekranından o '
+                           'eşleşmeyi çözün.', [])
+        _kdv_var = any((getattr(s, 'kdv_tutar', 0) or 0) > 0
+                       for s in _stoklar)
+        if _kdv_var:
+            _kapali, _sebep = _kdv_donemi_kapali(
+                _grup.hareket_tarihi or getattr(stok, 'alis_tarihi', None)
+                or date.today())
+            if _kapali:
+                return ('ret', f'{_sebep} Bu alışın KDV\'sinin TL karşılığı '
+                               f'değişeceği için döviz değiştirilemez.', [])
+        _diger = [s for s in _stoklar if s.id != stok.id]
+        if _diger and not onay:
+            return ('soru', {
+                'ok': False, 'error': 'fatura_doviz',
+                'fatura_no': _fno, 'stok_sayisi': len(_stoklar),
+                'mesaj': f'{_fno} numaralı faturada bu stokla birlikte '
+                         f'{len(_stoklar)} stok var. Bir faturanın tek '
+                         f'dövizi olur.\n\nFaturanın TAMAMI '
+                         f'{_grup.doviz} → {yeni} yapılsın mı? '
+                         f'{len(_stoklar)} stok kartı, tedarikçi borcu '
+                         f'({q2(_grup.alacak or 0):,.2f}) ve KDV satırları '
+                         f'birlikte değişir; rakamlar aynı kalır.'}, [])
+        _eski = _grup.doviz
+        for _s in _stoklar:
+            _s.doviz = yeni
+        _grup.doviz = yeni
+        _tv, _kr = _try_karsilik(_grup.alacak or 0, yeni,
+                                 tarih=_grup.hareket_tarihi)
+        _grup.alacak_try = _tv
+        _grup.kur_uygulanan = _kr
+        _sid = [s.id for s in _stoklar]
+        for _k in Maliyet.query.filter(
+                Maliyet.baglanti_id.in_(_sid),
+                Maliyet.maliyet_tip.in_(MALIYET_DISI_TIPLER),
+                Maliyet.grup_id.is_(None),
+                Maliyet.fatura_no == _fno).all():
+            _k.doviz = yeni
+            _k.usd_karsilik = q2(_usd_cevrim(_k.tutar, yeni,
+                                             _k.maliyet_tarihi))
+        _log_audit('GUNCELLE', 'stok_fatura_doviz', _grup.id,
+                   eski={'doviz': _eski},
+                   yeni={'doviz': yeni, 'fatura_no': _fno, 'stoklar': _sid})
+        _not = (f'Alışın dövizi {_eski or "—"} → {yeni} yapıldı; tedarikçi '
+                f'borcu ve KDV satırı birlikte değişti')
+        if _diger:
+            _not += f' (aynı faturadaki {len(_stoklar)} stokla birlikte)'
+        return ('tamam', _not, _stoklar)
+
     def _hd1_alis_borcu_mu(h):
         """Hareket bir stok alış faturasının KENDİ borcu mu?
         (Aynı bağı taşıyan ödeme ve karşı kayıt DEĞİL.)"""
@@ -27983,9 +28477,10 @@ def create_app():
                         continue
                     _fb = (getattr(st, 'alis_fiyat_birim', None)
                            or ('ton' if tip == 'BLOK' else 'm2'))
-                    d = _usd(float(getattr(st, 'alis_fiyati', 0) or 0)
-                             * float(_stok_olcu(st, _fb) or 0),
-                             getattr(st, 'doviz', None) or 'USD') + _mal.get(st.id, 0.0)
+                    # GD1: stok değeri = maliyet; alış gününün kuruyla.
+                    d = _stok_alis_usd_cevir(
+                        float(getattr(st, 'alis_fiyati', 0) or 0)
+                        * float(_stok_olcu(st, _fb) or 0), st) + _mal.get(st.id, 0.0)
                     g = grup.setdefault((tip, st.cins or '—'),
                                         {'deger': 0.0, 'adet': 0, 'olcu': 0.0})
                     g['deger'] += d

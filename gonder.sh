@@ -81,7 +81,14 @@ else
     # sorgunun aktif firmaya süzülmesi; süzgeç de damga da otomatik
     # ve otomatik olan şey SESSİZ bozulur. Mixin'i almayan bir
     # model tüm firmalarda görünür ve hiçbir hata vermez.
-    for D in js_denetim form_denetim zincir_denetim akis_denetim sema_denetim firma_denetim; do
+    # GD1: tutarlilik_tara eklendi. Öbür altısı KODU denetler; bu
+    # VERİYİ denetler (maliyet / stok alışı / tedarikçi borcu / çek
+    # birbirini tutuyor mu). 12.11'de iki gerçek hatayı o buldu ve
+    # elle çalıştırılmayı bekliyordu. Salt okunur; bulgu varsa çıkış
+    # kodu 1. "Faturası beklenen" ve "kesim maliyeti eksik" gibi ara
+    # durumlar BİLGİ bölümündedir, gönderimi durdurmaz. Dosya yoksa
+    # (aşağıdaki `-f` denetimi) sessizce atlanır.
+    for D in js_denetim form_denetim zincir_denetim akis_denetim sema_denetim firma_denetim tutarlilik_tara; do
         [ -f "$D.py" ] || continue
         printf "  %-18s " "$D"
         CIKTI=$("$PY" "$D.py" 2>&1); KOD=$?

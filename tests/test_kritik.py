@@ -11642,8 +11642,11 @@ def test_kc1_stok_alim_bedeli_bilinmeyen_dovizi_usd_sanmiyor(kc1_kur):
         # rakam yazdığımda bu test izole koşuda geçip tam takımda
         # düştü. Ölçülen şey ÇEVRİLMİŞ OLMASI.
         getir, yakin = _kc1_kapi('_kur_getir'), _kc1_kapi('_en_yakin_kur')
-        _g = float(getir('GBP') or 0) or float(yakin('GBP') or 0)
-        _u = float(getir('USD') or 0) or float(yakin('USD') or 0)
+        # GD1: alış bedeli stoğun ALIŞ gününün kuruyla çevriliyor
+        # (alış tarihi yoksa giriş tarihi); beklenen de o günden.
+        _gun = _kc1_kapi('_stok_alis_gunu')(b)
+        _g = float(getir('GBP', _gun) or 0) or float(yakin('GBP', _gun) or 0)
+        _u = float(getir('USD', _gun) or 0) or float(yakin('USD', _gun) or 0)
         beklenen = 1000 * _g / _u
         assert abs(usd - beklenen) < 5, (
             f'GBP stok {usd:,.2f} USD değerlendi — {beklenen:,.2f} olmalı')
@@ -19626,3 +19629,367 @@ def test_ft1_pencere():
                   "t.value = (f.tarih || '').slice(0, 10);"):
         assert parca in sayfa, f'{parca} sayfada yok'
     assert 'öbür tedarikçilere dokunulmaz' not in sayfa
+
+
+# ══════════════════════════════════════════════════════════════════
+#  GD1 · GÖZDEN GEÇİRME: İKİ YERDE DURAN BİLGİ BİRLİKTE DEĞİŞİR
+#
+#  Hedefli taramada ölçülen sınıf: bir bilgi iki (ya da yedi) yerde
+#  duruyor, düzenleme yalnız birini değiştiriyor. İstek 200 dönüyor,
+#  ekranda "güncellendi" yazıyor, iki kayıt sessizce ayrışıyor.
+# ══════════════════════════════════════════════════════════════════
+def _gd1_blok(c, blok_no, fatura_no=None, doviz='USD', kdv=20, tarih=None,
+              durum='faturali'):
+    g = {'tip': 'BLOK', 'uretici': 'FL1 BLOK TEDARIKCISI', 'cins': 'GD1 CINS',
+         'blok_no': blok_no, 'boy': 300, 'yukseklik': 150, 'en': 120,
+         'tonaj': 10, 'fiyat': 100, 'fiyat_birim': 'ton', 'doviz': doviz,
+         'kdv_dahil_mi': False, 'kdv_oran': kdv,
+         'alis_tipi': 'yurtici_kdvli' if kdv else 'yurtici_kdvsiz',
+         'alis_tarihi': (tarih or FL1_GUN).isoformat(),
+         'fatura_durumu': durum, 'mense': 'TURKIYE'}
+    if fatura_no:
+        g['fatura_no'] = fatura_no
+    r = c.post('/api/stok/ekle', headers=H, json=g)
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    return r.get_json()['id']
+
+
+def test_gd1_alis_bedeli_alis_gununun_kuruyla_cevriliyor():
+    """EUR ile alınmış bloğun dolar maliyeti ALIŞ gününün kuruyla
+    sabit: stok listesi, maliyet dökümü ve Maliyetler'deki "Alış
+    Bedeli" satırı AYNI rakamı verir. Tabanda liste ve döküm bugünün
+    kurunu kullanıyor, "Alış Bedeli" satırının dolar karşılığı EUR
+    alışta boş geliyordu."""
+    c = _fl1_hazirlik()          # FL1_ESKI: USD 40, EUR 44 → 1 EUR = 1,10 USD
+    sid = _gd1_blok(c, 'GD1-K1', 'GD1-F-K', doviz='EUR', kdv=0, tarih=FL1_ESKI)
+    # "Alış Bedeli" satırı yalnız maliyeti olan stoklarda listelenir.
+    _fl1_maliyet(c, sid, 'Nakliye (Ocak-Fabrika)', 100, 'FLN', 0, 'GD1-K-N')
+    beklenen = 1000 * 44.0 / 40.0
+    with fa.app.app_context():
+        bugun_kuru = _kc1_kapi('_usd_cevrim')(1000, 'EUR')
+        assert abs(bugun_kuru - beklenen) > 5, (
+            'bugünün kuru alış günüyle aynı; test bir şey ölçmez', bugun_kuru)
+        dokum = _kc1_kapi('_stok_maliyet_dokumu')(sid, 'BLOK')
+        assert abs(dokum['alim_usd'] - beklenen) < 0.5, dokum['alim_usd']
+    r = c.get(f'/api/stok?tip=BLOK&id={sid}', headers=H)
+    assert r.status_code == 200, r.status_code
+    satir = [x for x in r.get_json()['data'] if x['id'] == sid][0]
+    assert abs(satir['toplam_maliyet_usd'] - (beklenen + 100)) < 0.5, (
+        satir['toplam_maliyet_usd'], beklenen)
+    assert abs(satir['birim_maliyet_usd'] - (beklenen + 100) / 10) < 0.05
+    alis = [m for m in _fl1_liste(c) if m['id'] == f'ALIS:{sid}'][0]
+    assert alis['usd_karsilik'] is not None, 'EUR alışta dolar karşılığı boş'
+    assert abs(alis['usd_karsilik'] - beklenen) < 0.5, alis['usd_karsilik']
+
+
+def test_gd1_maliyet_faturasinin_satirlari_birlikte_degisiyor():
+    """Tutar değişince KDV satırı aynı oranla; döviz ve fatura no
+    değişince grubun BÜTÜN satırları ve borç birlikte. Tabanda KDV
+    satırı üç durumda da eski hâlinde kalıyordu."""
+    from models import Maliyet
+    c = _fl1_hazirlik()
+    sid = _gd1_blok(c, 'GD1-M1', 'GD1-F-M')
+    mid = _fl1_maliyet(c, sid, 'Nakliye (Ocak-Fabrika)', 1000, 'FLN', 20,
+                       'GD1-NAK')
+
+    def durum():
+        with fa.app.app_context():
+            m = Maliyet.query.get(mid)
+            g = {x.maliyet_tip: x for x in
+                 Maliyet.query.filter_by(grup_id=m.grup_id).all()}
+            h = _fl1_hareket(mid)
+            k = g['Devreden KDV']
+            return (float(m.tutar), m.doviz, m.fatura_no,
+                    float(k.tutar), k.doviz, k.fatura_no,
+                    float(h.alacak), h.doviz, h.evrak_no,
+                    float(h.alacak_try or 0), float(h.kur_uygulanan or 0))
+
+    r = c.put(f'/api/maliyet/{mid}', headers=H, json={'tutar': 2000})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    d = durum()
+    assert (d[0], d[3], d[6]) == (2000.0, 400.0, 2400.0), d
+    assert 'KDV satırı aynı oranla' in r.get_json()['mesaj'], r.get_json()
+    r = c.put(f'/api/maliyet/{mid}', headers=H, json={'doviz': 'EUR'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    d2 = durum()
+    assert (d2[1], d2[4], d2[7]) == ('EUR', 'EUR', 'EUR'), d2
+    assert d2[6] == 2400.0, d2
+    # TL karşılığı EUR kuruyla YENİDEN hesaplandı.
+    assert abs(d2[9] - 2400.0 * d2[10]) < 0.01, d2
+    assert abs(d2[10] - d[10]) > 0.5, ('kur değişmedi', d[10], d2[10])
+    with fa.app.app_context():
+        from models import Maliyet as _M
+        m = _M.query.get(mid)
+        for x in _M.query.filter_by(grup_id=m.grup_id).all():
+            assert abs(float(x.usd_karsilik) - float(x.tutar)) > 0.5, (
+                'USD karşılığı EUR kuruyla yenilenmedi', x.maliyet_tip)
+    r = c.put(f'/api/maliyet/{mid}', headers=H, json={'fatura_no': 'GD1-NAK-2'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    d3 = durum()
+    assert (d3[2], d3[5], d3[8]) == ('GD1-NAK-2',) * 3, d3
+    # KDV satırının KENDİSİ düzenlenince gider satırı zincirlenmez.
+    with fa.app.app_context():
+        kid = [x.id for x in Maliyet.query.filter_by(
+            grup_id=Maliyet.query.get(mid).grup_id).all()
+            if x.maliyet_tip == 'Devreden KDV'][0]
+    r = c.put(f'/api/maliyet/{kid}', headers=H, json={'tutar': 360})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    d4 = durum()
+    assert (d4[0], d4[3], d4[6]) == (2000.0, 360.0, 2360.0), d4
+
+
+def test_gd1_stok_dovizi_faturayi_butun_degistiriyor():
+    """Alışın dövizi faturanındır: stok kartında değişince borç ve
+    KDV satırı birlikte değişir; faturada başka stok varsa önce
+    SORULUR ve reddedilen/sorulan istekte hiçbir şey değişmez."""
+    from models import Maliyet
+    c = _fl1_hazirlik()
+    s1 = _gd1_blok(c, 'GD1-D1', 'GD1-F-D')
+    r = c.put(f'/api/stok/{s1}', headers=H, json={'tip': 'BLOK', 'doviz': 'EUR'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert 'birlikte değişti' in r.get_json()['mesaj'], r.get_json()
+    with fa.app.app_context():
+        s, h = BlokStok.query.get(s1), _hd1_borc('GD1-F-D')
+        k = Maliyet.query.filter_by(baglanti_id=s1,
+                                    maliyet_tip='Devreden KDV').first()
+        assert (s.doviz, h.doviz, k.doviz) == ('EUR',) * 3
+        assert float(h.alacak) == 1200.0 and float(k.tutar) == 200.0
+        assert abs(float(h.alacak_try) - 1200.0 * float(h.kur_uygulanan)) < 0.01
+        assert abs(float(k.usd_karsilik) - 200.0) > 0.5, k.usd_karsilik
+    # İki stoklu fatura: soru → onay.
+    a = _gd1_blok(c, 'GD1-D2', 'GD1-F-D2')
+    b = _gd1_blok(c, 'GD1-D3', 'GD1-F-D2')
+    r = c.put(f'/api/stok/{a}', headers=H,
+              json={'tip': 'BLOK', 'doviz': 'EUR', 'konum': 'GD1 RAF'})
+    assert r.status_code == 409, (r.status_code, r.get_json())
+    assert r.get_json()['error'] == 'fatura_doviz', r.get_json()
+    assert r.get_json()['stok_sayisi'] == 2
+    with fa.app.app_context():
+        assert BlokStok.query.get(a).doviz == 'USD'
+        assert BlokStok.query.get(a).konum != 'GD1 RAF', 'soru yarım iş bıraktı'
+        assert _hd1_borc('GD1-F-D2').doviz == 'USD'
+    r = c.put(f'/api/stok/{a}', headers=H, json={
+        'tip': 'BLOK', 'doviz': 'EUR', 'konum': 'GD1 RAF',
+        'doviz_fatura_onay': True})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    with fa.app.app_context():
+        assert BlokStok.query.get(a).doviz == 'EUR'
+        assert BlokStok.query.get(b).doviz == 'EUR', 'öbür stok eski dövizde'
+        h = _hd1_borc('GD1-F-D2')
+        assert h.doviz == 'EUR' and float(h.alacak) == 2400.0
+        assert {x.doviz for x in Maliyet.query.filter(
+            Maliyet.baglanti_id.in_([a, b]),
+            Maliyet.maliyet_tip == 'Devreden KDV').all()} == {'EUR'}
+
+
+def test_gd1_cek_duzenlenince_cari_hareketi_de_degisiyor():
+    """Çek ilk durumundayken tutar/döviz değişince carideki çek
+    hareketi de değişir; işlem görmüş çekte bu alanlar kilitlidir
+    ama açıklama gibi alanlar düzenlenebilir."""
+    from datetime import timedelta
+    c = _fl1_hazirlik()
+    r = c.post('/api/cek', headers=H, json={
+        'yon': 'verilen', 'tip': 'cek', 'cek_no': 'GD1-CK', 'tutar': 5000,
+        'doviz': 'USD', 'keside_tarihi': date.today().isoformat(),
+        'vade_tarihi': (date.today() + timedelta(days=30)).isoformat(),
+        'cari_id': 'FLT'})
+    assert r.status_code in (200, 201), r.get_json()
+    cid = r.get_json()['id']
+
+    def hareket():
+        with fa.app.app_context():
+            h = CariHareket.query.filter_by(baglanti_tip='cek',
+                                            baglanti_id=cid).one()
+            return (float(h.borc or 0), h.doviz, float(h.borc_try or 0),
+                    float(h.kur_uygulanan or 0), h.evrak_no)
+
+    assert hareket()[:2] == (5000.0, 'USD')
+    r = c.put(f'/api/cek/{cid}', headers=H,
+              json={'tutar': 7000, 'doviz': 'EUR', 'cek_no': 'GD1-CK-2'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert 'çek hareketi de güncellendi' in r.get_json()['mesaj']
+    h = hareket()
+    assert h[:2] == (7000.0, 'EUR'), h
+    assert abs(h[2] - 7000.0 * h[3]) < 0.01, h
+    assert h[4] == 'GD1-CK-2', h
+    # İşlem gördü: para alanları kilitli.
+    r = c.post(f'/api/cek/{cid}/durum', headers=H,
+               json={'islem': 'karsiliksiz', 'cari_hareket_olustur': False})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    r = c.put(f'/api/cek/{cid}', headers=H, json={'tutar': 9000})
+    assert r.status_code == 400, (r.status_code, r.get_json())
+    assert r.get_json()['error'] == 'cek_islem_gormus', r.get_json()
+    with fa.app.app_context():
+        assert float(Cek.query.get(cid).tutar) == 7000.0
+    r = c.put(f'/api/cek/{cid}', headers=H,
+              json={'tutar': 7000, 'aciklama': 'GD1 not'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+
+
+def test_gd1_cari_ekranindan_faturalandirma_ayni_kapilardan_geciyor():
+    """Faturasız stoğu CARİ ekranından faturalandırmak, stok
+    ekranındaki iki denetimi atlıyordu: aynı numara başka tarihle
+    ikinci borç açıyor, KDV'li alış kapanmış KDV dönemine yazılıyordu."""
+    from datetime import timedelta
+    c = _fl1_hazirlik()
+    _gd1_blok(c, 'GD1-C0', 'GD1-F-C')
+    s1 = _gd1_blok(c, 'GD1-C1', durum='faturasiz')
+    gun = (date.today() - timedelta(days=3)).isoformat()
+
+    def faturala(sid, no, tarih):
+        return c.post('/api/cari/hareket', headers=H, json={
+            'cari_id': 'FLT', 'islem_tip': 'Fatura (Alis)', 'tutar': 1200,
+            'alacak': 1200, 'borc': 0, 'doviz': 'USD', 'stok_id': sid,
+            'evrak_no': no, 'hareket_tarihi': tarih, 'fatura_tarihi': tarih,
+            'vade_tarihi': tarih})
+
+    r = faturala(s1, 'GD1-F-C', gun)
+    assert r.status_code == 400, (r.status_code, r.get_json())
+    assert r.get_json()['error'] == 'fatura_tarih_cakismasi', r.get_json()
+    r = faturala(s1, 'GD1-F-ESKI', FL1_ESKI.isoformat())
+    assert r.status_code in (400, 409), (r.status_code, r.get_json())
+    with fa.app.app_context():
+        assert BlokStok.query.get(s1).fatura_durumu == 'faturasiz'
+        assert CariHareket.query.filter_by(
+            baglanti_tip='stok_fatura', baglanti_id='GD1-F-C',
+            cari_id='FLT', kaynak='stok').count() == 1
+    # Doğru tarihle faturalandırma eskisi gibi çalışıyor.
+    r = faturala(s1, 'GD1-F-C2', gun)
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    with fa.app.app_context():
+        assert BlokStok.query.get(s1).fatura_durumu == 'faturali'
+
+
+def test_gd1_kesim_maliyeti_eksik_blok_uyarisi():
+    """Kesilmiş ama kesim/fason maliyeti girilmemiş blok uyarı
+    listesinde; maliyet girilince (bloğa ya da ürününe) listeden
+    çıkar. İptal edilmiş maliyet sayılmaz."""
+    from models import Maliyet
+    c = _fl1_hazirlik()
+    bid, _kid, plakalar = _dz4_kesim(c, 'GD1KS', tonaj=20, alis=300)
+
+    def eksik():
+        r = c.get('/api/maliyet/uyarilar', headers=H)
+        assert r.status_code == 200, r.status_code
+        return {x['id']: x for x in r.get_json()['kesim_eksik']}
+
+    e = eksik()
+    assert bid in e, 'kesilmiş blok uyarıda yok'
+    assert e[bid]['urun_sayisi'] == 2 and e[bid]['kesim_tarihi'] == '2026-10-01'
+    # Nakliye kesim maliyeti DEĞİLDİR.
+    _fl1_maliyet(c, bid, 'Nakliye (Ocak-Fabrika)', 100, 'FLN', 0, 'GD1-KS-N')
+    assert bid in eksik()
+    mid = _fl1_maliyet(c, bid, 'Kesim / Fason / Üretim', 500, 'FLN', 0,
+                       'GD1-KS-F')
+    assert bid not in eksik()
+    with fa.app.app_context():
+        Maliyet.query.get(mid).aktif = False
+        db.session.commit()
+    assert bid in eksik(), 'iptal edilmiş maliyet sayıldı'
+    # Ürüne (plakaya) bağlanan kesim maliyeti de bloğu kapatır.
+    _fl1_maliyet(c, plakalar[0], 'Kesim / Fason / Üretim', 50, 'FLN', 0,
+                 'GD1-KS-P')
+    assert bid not in eksik()
+
+
+def test_gd1_yeniden_hesapla_once_gosterir_sonra_yazar():
+    """Önizleme hesaplar, farkı döker ve HİÇBİR ŞEY yazmaz; aynı uç
+    onizleme'siz çağrılınca yazar. Yalnız yönetici."""
+    from models import SatisKaydi
+    c = _fl1_hazirlik()
+    sid = _gd1_blok(c, 'GD1-Y1', 'GD1-F-Y', doviz='EUR', kdv=0, tarih=FL1_ESKI)
+    with fa.app.app_context():
+        db.session.add(SatisKaydi(
+            id='SK-GD1-Y', stok_id=sid, stok_tip='BLOK', cins='GD1 CINS',
+            blok_no='GD1-Y1', musteri='ACIK CARI', satis_tarihi=date.today(),
+            doviz='USD', tutar=5000, tutar_usd=5000, maliyet_usd=1,
+            kar_usd=4999))
+        db.session.commit()
+    yol = '/api/maliyet/yeniden_hesapla'
+    c2 = _oy1_kullanici('gd1hesap', {'maliyet': 'yazma'})
+    assert c2.post(yol, headers=H, json={'onizleme': True}).status_code == 403
+    r = c.post(yol, headers=H, json={'onizleme': True})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    d = r.get_json()
+    assert d['onizleme'] is True
+    s = {x['id']: x for x in d['satislar']}['SK-GD1-Y']
+    assert s['eski_maliyet'] == 1.0 and abs(s['yeni_maliyet'] - 1100.0) < 1, s
+    assert abs(s['yeni_kar'] - 3900.0) < 1, s
+    with fa.app.app_context():
+        assert float(SatisKaydi.query.get('SK-GD1-Y').maliyet_usd) == 1.0, (
+            'önizleme veriyi değiştirdi')
+    r = c.post(yol, headers=H, json={'onizleme': False, 'tur': 2})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    assert r.get_json()['onizleme'] is False
+    with fa.app.app_context():
+        sk = SatisKaydi.query.get('SK-GD1-Y')
+        assert abs(float(sk.maliyet_usd) - 1100.0) < 1, sk.maliyet_usd
+        assert abs(float(sk.kar_usd) - 3900.0) < 1, sk.kar_usd
+    # İkinci kez: bu kayıt için değişecek bir şey kalmadı.
+    r = c.post(yol, headers=H, json={'onizleme': True, 'tur': 3})
+    assert 'SK-GD1-Y' not in {x['id'] for x in r.get_json()['satislar']}
+
+
+def test_gd1_ekran_baglari():
+    import io as _io
+    oku = lambda ad: _io.open(os.path.join(KOK, 'templates', ad),
+                              encoding='utf-8').read()
+    stok = oku('stok.html')
+    for parca in ('async function duzenleKaydet(maliIslem, dovizOnay)',
+                  'doviz_fatura_onay: true', "y.error === 'fatura_doviz'"):
+        assert parca in stok, f'{parca} stok.html içinde yok'
+    mal = oku('maliyet.html')
+    for parca in ('id="gdUyari"', 'async function gdUyariYukle(',
+                  "fetch('/api/maliyet/uyarilar'",
+                  'async function gdYenidenHesapla(',
+                  'onizleme: true', 'onizleme: false'):
+        assert parca in mal, f'{parca} maliyet.html içinde yok'
+    c = istemci('admin', 'ADMIN')
+    assert 'onclick="gdYenidenHesapla()"' in c.get('/maliyet').get_data(as_text=True)
+    c2 = _oy1_kullanici('gd1ekran', {'maliyet': 'yazma'})
+    g = c2.get('/maliyet')
+    assert g.status_code == 200
+    assert 'onclick="gdYenidenHesapla()"' not in g.get_data(as_text=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+#  IT1 · İTHALATTA TARİH ALANI BEYANNAME TESCİL TARİHİNİ İSTER
+#
+#  "Alış tarihi" borcun tarihini ve maliyetin kur gününü belirliyor
+#  (GD1). İthalatta doğru gün satıcı faturasının değil beyannamenin
+#  tescil tarihi; form bunu söylemiyordu ve K6461–K6464 fatura
+#  tarihiyle (05.09) girilmişti, beyanname 14.09'du.
+# ══════════════════════════════════════════════════════════════════
+def test_it1_ithalatta_tarih_alani_beyanname_tarihini_istiyor():
+    import io as _io
+    s = _io.open(os.path.join(KOK, 'templates', 'stok.html'),
+                 encoding='utf-8').read()
+    assert 'function ithalatTarihYonlendir(onek, varsayilan, ithalat)' in s
+    # Üç formun üçünde de etiket + not yuvası var.
+    for onek in ('s', 't', 'duz'):
+        assert f'id="{onek}AlisTarihEtiket"' in s, onek
+        assert f'id="{onek}AlisTarihNot"' in s, onek
+    assert s.count('beyannamenin tescil tarihini girin') == 3
+    # Üç formun üçü de kuralı çağırıyor; düzenleme stoğun KENDİ alış
+    # tipine bakıyor (formda alış tipi kutusu yok).
+    for cagri in ("ithalatTarihYonlendir('s', 'Fatura Tarihi');",
+                  "ithalatTarihYonlendir('t', 'Alış / Fatura Tarihi');",
+                  "ithalatTarihYonlendir('duz', 'Alış / Fatura Tarihi', "
+                  "s.alis_tipi === 'ithalat');"):
+        assert cagri in s, f'{cagri} yok'
+    # Üretimde not gizlenir (fatura da beyanname de yok).
+    assert "ithalatTarihYonlendir('s', 'Üretim Tarihi', false);" in s
+    assert "ithalatTarihYonlendir('t', 'Üretim Tarihi', false);" in s
+    # Düzenleme formunun okuduğu alan listede geliyor.
+    c = _fl1_hazirlik()
+    r = c.post('/api/stok/ekle', headers=H, json={
+        'tip': 'BLOK', 'uretici': 'FL1 BLOK TEDARIKCISI', 'cins': 'IT1 CINS',
+        'blok_no': 'IT1-A1', 'boy': 300, 'yukseklik': 150, 'en': 120,
+        'tonaj': 10, 'fiyat': 100, 'fiyat_birim': 'ton', 'doviz': 'EUR',
+        'kdv_oran': 0, 'alis_tipi': 'ithalat', 'fatura_no': 'IT1-F-A',
+        'alis_tarihi': FL1_GUN.isoformat(), 'fatura_durumu': 'faturali',
+        'mense': 'ARNAVUTLUK'})
+    assert r.status_code == 200, (r.status_code, r.get_json())
+    sid = r.get_json()['id']
+    d = c.get(f'/api/stok?tip=BLOK&id={sid}', headers=H).get_json()['data']
+    assert [x for x in d if x['id'] == sid][0]['alis_tipi'] == 'ithalat'

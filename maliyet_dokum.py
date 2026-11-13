@@ -126,6 +126,7 @@ with motor.connect() as b:
             print('  ' + '-' * 104)
             print(f'  EK MALİYET (sayılanlar): {ek:,.2f} USD'
                   + (f'  →  {ek / ton:,.2f} USD/ton' if ton else ''))
-            print('  (Listedeki "giydirilmiş maliyet" = alış bedelinin BUGÜNKÜ '
-                  'kurla dolar karşılığı + bu ek maliyet, tona bölünmüş.)')
+            print('  (Listedeki "giydirilmiş maliyet" = alış bedelinin ALIŞ '
+                  'GÜNÜNDEKİ kurla dolar karşılığı + bu ek maliyet, tona '
+                  'bölünmüş. GD1\'den önce bugünkü kur kullanılıyordu.)')
 print('\nHiçbir şey değiştirilmedi.')
